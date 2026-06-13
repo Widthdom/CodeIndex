@@ -295,6 +295,110 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizeCli_RejectsTooManyPackageArguments()
+    {
+        var args = Enumerable
+            .Range(0, PackageNormalizeOptions.MaxPackageArgumentCount + 1)
+            .Select(index => $"package-{index}.nupkg")
+            .ToArray();
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => PackageNormalizeCli.Run(args));
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains($"at most {PackageNormalizeOptions.MaxPackageArgumentCount} package paths", stderr);
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_JsonReportsBoundedFriendlyFailure()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonReportsBoundedFriendlyFailure));
+        try
+        {
+            var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                PackageNormalizeCli.Run(["--json", missingPackagePath]));
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
+            var error = package.GetProperty("error").GetString();
+            Assert.Contains("missing.nupkg", error);
+            Assert.DoesNotContain(projectRoot, error);
+            Assert.True(error!.Length <= 512);
+            Assert.Empty(package.GetProperty("warnings").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_JsonBoundsZipEntryDiagnostics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonBoundsZipEntryDiagnostics));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "unsafe-entry.nupkg");
+            var longEntryName = new string('a', 260) + "\\payload.txt";
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                (longEntryName, "payload"));
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                PackageNormalizeCli.Run(["--json", packagePath]));
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var error = doc.RootElement.GetProperty("packages").EnumerateArray().Single().GetProperty("error").GetString();
+            Assert.Contains("aaa", error);
+            Assert.Contains("...", error);
+            Assert.DoesNotContain(longEntryName, error);
+            Assert.True(error!.Length <= 512);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "cleanup-warning.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            var limits = PackageNormalizeLimits.Default with { MaxXmlTextChars = 5 };
+            var warnings = new List<string>();
+
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                PackageCorePropertiesNormalizer.NormalizePackage(
+                    packagePath,
+                    limits,
+                    warnings,
+                    _ => throw new IOException("delete failed at /private/path")));
+
+            Assert.Contains("[Content_Types].xml", exception.Message);
+            var warning = Assert.Single(warnings);
+            Assert.Contains("Could not delete temporary normalized package", warning);
+            Assert.Contains("cleanup-warning.nupkg.normalize-tmp", warning);
+            Assert.DoesNotContain(projectRoot, warning);
+            Assert.DoesNotContain("/private/path", warning);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
@@ -452,7 +556,7 @@ public class ReleaseWorkflowTests
 
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
             Assert.Contains("docs/./readme.txt", exception.Message);
-            Assert.Contains("duplicate destination name docs/readme.txt", exception.Message);
+            Assert.Contains("duplicate destination name 'docs/readme.txt'", exception.Message);
             Assert.False(File.Exists(packagePath + ".normalize-tmp"));
         }
         finally

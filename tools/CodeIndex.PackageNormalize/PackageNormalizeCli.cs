@@ -27,6 +27,7 @@ public static class PackageNormalizeCli
         foreach (var packagePath in options.PackagePaths)
         {
             summary.Inspected++;
+            var warnings = new List<string>();
             try
             {
                 if (options.DryRun)
@@ -35,33 +36,40 @@ public static class PackageNormalizeCli
                     if (inspection.NeedsNormalization)
                     {
                         summary.Skipped++;
-                        results.Add(new PackageNormalizePackageResult(packagePath, "would_normalize", null));
+                        results.Add(new PackageNormalizePackageResult(packagePath, "would_normalize", null, warnings));
                         if (!options.Json)
                             Console.WriteLine($"Would normalize {packagePath}");
                     }
                     else
                     {
                         summary.Unchanged++;
-                        results.Add(new PackageNormalizePackageResult(packagePath, "unchanged", null));
+                        results.Add(new PackageNormalizePackageResult(packagePath, "unchanged", null, warnings));
                         if (!options.Json)
                             Console.WriteLine($"Unchanged {packagePath}");
                     }
                 }
                 else
                 {
-                    PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+                    PackageCorePropertiesNormalizer.NormalizePackage(packagePath, PackageNormalizeLimits.Default, warnings);
                     summary.Normalized++;
-                    results.Add(new PackageNormalizePackageResult(packagePath, "normalized", null));
+                    results.Add(new PackageNormalizePackageResult(packagePath, "normalized", null, warnings));
                     if (!options.Json)
+                    {
                         Console.WriteLine($"Normalized {packagePath}");
+                        WriteWarnings(warnings);
+                    }
                 }
             }
             catch (Exception ex)
             {
+                var error = PackageNormalizeDiagnostics.FormatException(packagePath, ex);
                 summary.Failed++;
-                results.Add(new PackageNormalizePackageResult(packagePath, "failed", ex.Message));
+                results.Add(new PackageNormalizePackageResult(packagePath, "failed", error, warnings));
                 if (!options.Json)
-                    Console.Error.WriteLine($"Failed {packagePath}: {ex.Message}");
+                {
+                    Console.Error.WriteLine($"Failed {PackageNormalizeDiagnostics.FormatPath(packagePath)}: {error}");
+                    WriteWarnings(warnings);
+                }
 
                 if (!options.ContinueOnError)
                     break;
@@ -95,10 +103,18 @@ public static class PackageNormalizeCli
     {
         Console.Error.WriteLine("Usage: dotnet run --project tools/CodeIndex.PackageNormalize -- [--dry-run|--check] [--summary] [--json] [--continue-on-error] <package.nupkg|package.snupkg> [...]");
     }
+
+    private static void WriteWarnings(IReadOnlyList<string> warnings)
+    {
+        foreach (var warning in warnings)
+            Console.Error.WriteLine($"Warning: {warning}");
+    }
 }
 
 internal sealed class PackageNormalizeOptions
 {
+    internal const int MaxPackageArgumentCount = 1024;
+
     private PackageNormalizeOptions(bool dryRun, bool summary, bool json, bool continueOnError, IReadOnlyList<string> packagePaths)
     {
         DryRun = dryRun;
@@ -148,6 +164,13 @@ internal sealed class PackageNormalizeOptions
                     }
 
                     packagePaths.Add(arg);
+                    if (packagePaths.Count > MaxPackageArgumentCount)
+                    {
+                        options = null!;
+                        error = $"at most {MaxPackageArgumentCount} package paths are supported per run.";
+                        return false;
+                    }
+
                     break;
             }
         }
@@ -168,7 +191,8 @@ internal sealed class PackageNormalizeOptions
 internal sealed record PackageNormalizePackageResult(
     [property: System.Text.Json.Serialization.JsonPropertyName("path")] string Path,
     [property: System.Text.Json.Serialization.JsonPropertyName("status")] string Status,
-    [property: System.Text.Json.Serialization.JsonPropertyName("error")] string? Error);
+    [property: System.Text.Json.Serialization.JsonPropertyName("error")] string? Error,
+    [property: System.Text.Json.Serialization.JsonPropertyName("warnings")] IReadOnlyList<string> Warnings);
 
 internal sealed record PackageNormalizeJsonResult(
     [property: System.Text.Json.Serialization.JsonPropertyName("dry_run")] bool DryRun,
@@ -182,6 +206,88 @@ internal sealed record PackageNormalizeJsonResult(
 
 [System.Text.Json.Serialization.JsonSerializable(typeof(PackageNormalizeJsonResult))]
 internal sealed partial class PackageNormalizeJsonContext : System.Text.Json.Serialization.JsonSerializerContext;
+
+internal static class PackageNormalizeDiagnostics
+{
+    private const int MaxDiagnosticValueChars = 160;
+    private const int MaxDiagnosticMessageChars = 512;
+
+    internal static string FormatException(string packagePath, Exception exception)
+    {
+        return exception switch
+        {
+            InvalidDataException => $"Package {FormatPath(packagePath)} is not a readable ZIP archive.",
+            IOException => $"Could not read or rewrite package {FormatPath(packagePath)}.",
+            UnauthorizedAccessException => $"Could not access package {FormatPath(packagePath)}.",
+            ArgumentException => FormatMessage(exception.Message),
+            InvalidOperationException => FormatMessage(exception.Message),
+            _ => $"Unexpected package normalization failure for {FormatPath(packagePath)}: {exception.GetType().Name}.",
+        };
+    }
+
+    internal static string FormatPath(string path)
+    {
+        string display;
+        try
+        {
+            display = Path.GetFileName(path);
+        }
+        catch (ArgumentException)
+        {
+            display = path;
+        }
+
+        if (string.IsNullOrEmpty(display))
+            display = path;
+
+        return Quote(FormatValue(display, MaxDiagnosticValueChars));
+    }
+
+    internal static string FormatEntryName(string entryName)
+    {
+        return Quote(FormatValue(entryName, MaxDiagnosticValueChars));
+    }
+
+    internal static string FormatMessage(string message)
+    {
+        return FormatValue(message, MaxDiagnosticMessageChars);
+    }
+
+    internal static string FormatCleanupWarning(string tempPath, Exception exception)
+    {
+        return $"Could not delete temporary normalized package {FormatPath(tempPath)}: {exception.GetType().Name}.";
+    }
+
+    private static string Quote(string value)
+    {
+        return $"'{value}'";
+    }
+
+    private static string FormatValue(string value, int maxChars)
+    {
+        var builder = new StringBuilder(Math.Min(value.Length, maxChars));
+        foreach (var ch in value)
+        {
+            if (builder.Length >= maxChars)
+                break;
+
+            builder.Append(IsSafeDiagnosticChar(ch) ? ch : '?');
+        }
+
+        if (value.Length > maxChars && builder.Length >= 3)
+        {
+            builder.Length -= 3;
+            builder.Append("...");
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsSafeDiagnosticChar(char ch)
+    {
+        return ch >= ' ' && ch != '\u007F';
+    }
+}
 
 public static class PackageCorePropertiesNormalizer
 {
@@ -208,7 +314,22 @@ public static class PackageCorePropertiesNormalizer
 
     internal static void NormalizePackage(string packagePath, PackageNormalizeLimits limits)
     {
+        NormalizePackage(packagePath, limits, warnings: null);
+    }
+
+    internal static void NormalizePackage(string packagePath, PackageNormalizeLimits limits, IList<string>? warnings)
+    {
+        NormalizePackage(packagePath, limits, warnings, File.Delete);
+    }
+
+    internal static void NormalizePackage(
+        string packagePath,
+        PackageNormalizeLimits limits,
+        IList<string>? warnings,
+        Action<string> deleteFile)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+        ArgumentNullException.ThrowIfNull(deleteFile);
         limits.Validate();
 
         var fullPath = Path.GetFullPath(packagePath);
@@ -238,7 +359,7 @@ public static class PackageCorePropertiesNormalizer
                         : sourceEntry.FullName;
 
                     if (!usedNames.Add(destinationName))
-                        throw new InvalidOperationException($"Duplicate ZIP entry after normalization: {destinationName}");
+                        throw new InvalidOperationException($"Duplicate ZIP entry after normalization: {PackageNormalizeDiagnostics.FormatEntryName(destinationName)}");
 
                     var destinationEntry = destinationArchive.CreateEntry(destinationName, CompressionLevel.Optimal);
                     destinationEntry.LastWriteTime = StableZipTimestamp;
@@ -266,7 +387,7 @@ public static class PackageCorePropertiesNormalizer
         finally
         {
             if (!completed)
-                TryDeleteFile(tempPath);
+                TryDeleteFile(tempPath, warnings, deleteFile);
         }
     }
 
@@ -294,7 +415,7 @@ public static class PackageCorePropertiesNormalizer
     private static string ValidateSourceArchive(ZipArchive sourceArchive, string packagePath, PackageNormalizeLimits limits)
     {
         if (sourceArchive.Entries.Count > limits.MaxEntryCount)
-            throw new InvalidOperationException($"Package {packagePath} has {sourceArchive.Entries.Count} ZIP entries, which exceeds the limit of {limits.MaxEntryCount}.");
+            throw new InvalidOperationException($"Package {PackageNormalizeDiagnostics.FormatPath(packagePath)} has {sourceArchive.Entries.Count} ZIP entries, which exceeds the limit of {limits.MaxEntryCount}.");
 
         string? originalCorePropertiesPath = null;
         var corePropertiesEntryCount = 0;
@@ -308,7 +429,7 @@ public static class PackageCorePropertiesNormalizer
             if (totalUncompressedBytes > limits.MaxTotalUncompressedBytes - sourceEntry.Length)
             {
                 throw new InvalidOperationException(
-                    $"ZIP entry {sourceEntry.FullName} makes package uncompressed size exceed the limit of {limits.MaxTotalUncompressedBytes} bytes.");
+                    $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} makes package uncompressed size exceed the limit of {limits.MaxTotalUncompressedBytes} bytes.");
             }
 
             totalUncompressedBytes += sourceEntry.Length;
@@ -321,7 +442,7 @@ public static class PackageCorePropertiesNormalizer
         }
 
         if (corePropertiesEntryCount != 1)
-            throw new InvalidOperationException($"Expected exactly one NuGet core-properties part in {packagePath}, found {corePropertiesEntryCount}.");
+            throw new InvalidOperationException($"Expected exactly one NuGet core-properties part in {PackageNormalizeDiagnostics.FormatPath(packagePath)}, found {corePropertiesEntryCount}.");
 
         return originalCorePropertiesPath!;
     }
@@ -342,7 +463,7 @@ public static class PackageCorePropertiesNormalizer
             if (!normalizedDestinationNames.Add(normalizedDestinationName))
             {
                 throw new InvalidOperationException(
-                    $"ZIP entry {destinationName} normalizes to duplicate destination name {normalizedDestinationName}.");
+                    $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(destinationName)} normalizes to duplicate destination name {PackageNormalizeDiagnostics.FormatEntryName(normalizedDestinationName)}.");
             }
         }
     }
@@ -353,23 +474,23 @@ public static class PackageCorePropertiesNormalizer
             throw new InvalidOperationException($"ZIP {role} entry name must not be empty.");
 
         if (entryName.Contains('\\'))
-            throw new InvalidOperationException($"ZIP {role} entry {entryName} must use '/' separators, not backslashes.");
+            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must use '/' separators, not backslashes.");
 
         if (entryName.Contains('\0'))
-            throw new InvalidOperationException($"ZIP {role} entry {entryName} must not contain NUL characters.");
+            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not contain NUL characters.");
 
         if (entryName[0] == '/' || StartsWithWindowsDrivePrefix(entryName))
-            throw new InvalidOperationException($"ZIP {role} entry {entryName} must be a relative path.");
+            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must be a relative path.");
 
         var segments = entryName.Split('/');
         var normalizedSegments = new List<string>(segments.Length);
         foreach (var segment in segments)
         {
             if (segment.Length == 0)
-                throw new InvalidOperationException($"ZIP {role} entry {entryName} must not contain empty path segments.");
+                throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not contain empty path segments.");
 
             if (segment == "..")
-                throw new InvalidOperationException($"ZIP {role} entry {entryName} must not contain parent-directory segments.");
+                throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not contain parent-directory segments.");
 
             if (segment == ".")
                 continue;
@@ -378,11 +499,11 @@ public static class PackageCorePropertiesNormalizer
         }
 
         if (normalizedSegments.Count == 0)
-            throw new InvalidOperationException($"ZIP {role} entry {entryName} must not normalize to an empty path.");
+            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not normalize to an empty path.");
 
         var normalizedName = string.Join('/', normalizedSegments);
         if (normalizedName[0] == '/' || StartsWithWindowsDrivePrefix(normalizedName))
-            throw new InvalidOperationException($"ZIP {role} entry {entryName} must be a relative path.");
+            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must be a relative path.");
 
         return normalizedName;
     }
@@ -399,7 +520,7 @@ public static class PackageCorePropertiesNormalizer
         if (sourceEntry.Length > limits.MaxEntryUncompressedBytes)
         {
             throw new InvalidOperationException(
-                $"ZIP entry {sourceEntry.FullName} is {sourceEntry.Length} bytes uncompressed, which exceeds the per-entry limit of {limits.MaxEntryUncompressedBytes} bytes.");
+                $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} is {sourceEntry.Length} bytes uncompressed, which exceeds the per-entry limit of {limits.MaxEntryUncompressedBytes} bytes.");
         }
     }
 
@@ -412,7 +533,7 @@ public static class PackageCorePropertiesNormalizer
         if (unixFileType != 0 && unixFileType != UnixRegularFileType)
         {
             throw new InvalidOperationException(
-                $"ZIP entry {sourceEntry.FullName} uses unsafe POSIX file type {DescribeUnixFileType(unixFileType)} in external attributes.");
+                $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} uses unsafe POSIX file type {DescribeUnixFileType(unixFileType)} in external attributes.");
         }
 
         var dosAttributes = externalAttributes & DosAttributeMask;
@@ -420,7 +541,7 @@ public static class PackageCorePropertiesNormalizer
         if (unsafeDosAttributes != 0)
         {
             throw new InvalidOperationException(
-                $"ZIP entry {sourceEntry.FullName} uses unsafe DOS attributes 0x{unsafeDosAttributes:X2}.");
+                $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} uses unsafe DOS attributes 0x{unsafeDosAttributes:X2}.");
         }
     }
 
@@ -453,7 +574,7 @@ public static class PackageCorePropertiesNormalizer
             if (builder.Length > limits.MaxXmlTextChars - charsRead)
             {
                 throw new InvalidOperationException(
-                    $"XML ZIP entry {sourceEntry.FullName} exceeds the text limit of {limits.MaxXmlTextChars} characters.");
+                    $"XML ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} exceeds the text limit of {limits.MaxXmlTextChars} characters.");
             }
 
             builder.Append(buffer, 0, charsRead);
@@ -474,15 +595,16 @@ public static class PackageCorePropertiesNormalizer
         }
     }
 
-    private static void TryDeleteFile(string path)
+    private static void TryDeleteFile(string path, IList<string>? warnings, Action<string> deleteFile)
     {
         try
         {
             if (File.Exists(path))
-                File.Delete(path);
+                deleteFile(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            warnings?.Add(PackageNormalizeDiagnostics.FormatCleanupWarning(path, ex));
         }
     }
 
@@ -504,13 +626,13 @@ public static class PackageCorePropertiesNormalizer
             if (entryBytesRead > _limits.MaxEntryUncompressedBytes - bytesRead)
             {
                 throw new InvalidOperationException(
-                    $"ZIP entry {sourceEntry.FullName} exceeds the per-entry inflated size limit of {_limits.MaxEntryUncompressedBytes} bytes.");
+                    $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} exceeds the per-entry inflated size limit of {_limits.MaxEntryUncompressedBytes} bytes.");
             }
 
             if (_totalBytesRead > _limits.MaxTotalUncompressedBytes - bytesRead)
             {
                 throw new InvalidOperationException(
-                    $"ZIP entry {sourceEntry.FullName} makes actual inflated package size exceed the limit of {_limits.MaxTotalUncompressedBytes} bytes.");
+                    $"ZIP entry {PackageNormalizeDiagnostics.FormatEntryName(sourceEntry.FullName)} makes actual inflated package size exceed the limit of {_limits.MaxTotalUncompressedBytes} bytes.");
             }
 
             _totalBytesRead += bytesRead;

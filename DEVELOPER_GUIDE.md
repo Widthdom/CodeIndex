@@ -117,6 +117,7 @@ bash tools/build-install-sh.sh
 | Work bounds (#2892) | Before rewriting, the normalizer rejects packages with more than 4096 ZIP entries, any entry above 128 MiB uncompressed, total uncompressed content above 512 MiB, or XML reference text above 16 MiB so crafted packages cannot force unbounded normalization work. |
 | Unsafe ZIP names (#2894) | Before creating the destination archive, the normalizer rejects absolute paths, Windows drive roots, backslash separators, empty path segments, parent-directory segments, empty normalized names, and destination names that collide after path normalization. Those entries are not preserved into normalized packages. |
 | Unsafe ZIP attributes (#3552) | Before copying entries, the normalizer rejects POSIX symlink/device/special-file types and unsafe DOS attributes, then writes normalized entries with scrubbed deterministic external attributes instead of preserving source permission bits. |
+| Failure diagnostics (#3458) | The CLI accepts at most 1024 package paths per run, reports bounded package path and ZIP entry diagnostics instead of raw path-heavy exception text, and emits cleanup deletion failures as per-package `warnings` in JSON output. |
 
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
 
@@ -2301,6 +2302,7 @@ bash tools/build-install-sh.sh
 | 作業量の上限 (#2892) | 書き換え前に、normalizer は 4096 を超える ZIP entry、128 MiB を超える uncompressed entry、512 MiB を超える合計 uncompressed content、または 16 MiB を超える XML 参照テキストを持つ package を拒否し、細工された package が無制限の normalize 作業を強制できないようにします。 |
 | unsafe ZIP name (#2894) | destination archive を作る前に、normalizer は absolute path、Windows drive root、backslash separator、空の path segment、parent-directory segment、空に正規化される名前、path 正規化後に衝突する destination 名を拒否します。これらの entry は normalized package に保持されません。 |
 | unsafe ZIP attributes (#3552) | entry のコピー前に、normalizer は POSIX symlink / device / special-file type と unsafe DOS 属性を拒否し、source の permission bit を保持せず deterministic に scrub した external attributes で normalized entry を書き込みます。 |
+| failure diagnostics (#3458) | CLI は 1 回の実行で受け付ける package path を最大 1024 件に制限し、raw な path-heavy exception text ではなく bounded な package path / ZIP entry diagnostics を報告し、cleanup 削除失敗を JSON 出力の package ごとの `warnings` として出します。 |
 
 依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
 
