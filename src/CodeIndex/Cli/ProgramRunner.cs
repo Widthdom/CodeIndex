@@ -79,7 +79,7 @@ internal static class ProgramRunner
         // validation errors so silent typos cannot quietly change behavior.
         // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
         // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
-        var configResult = CdidxConfigFile.LoadAndApply(configStartDirectory ?? Environment.CurrentDirectory);
+        var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
         if (configResult.Failed)
         {
             return CommandErrorWriter.Write(
@@ -88,12 +88,15 @@ internal static class ProgramRunner
                 $"fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
         }
 
-        if (!TryConsumeGlobalLogFlags(ref args, out var globalLogError))
+        using var configEnvironment = CdidxEnvironment.Push(configResult.Settings, configResult.Sources);
+
+        if (!TryConsumeGlobalLogFlags(ref args, out var globalLogEnvironment, out var globalLogError))
         {
             CommandErrorWriter.Write(StripErrorPrefix(globalLogError), "use --log-format <text|json>, --log-retain-count <N>, or --log-max-size-mb <N>.");
             return CommandExitCodes.InvalidArgument;
         }
 
+        using var globalLogFlagEnvironment = CdidxEnvironment.Push(globalLogEnvironment);
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
@@ -1019,8 +1022,13 @@ internal static class ProgramRunner
         return pretty;
     }
 
-    internal static bool TryConsumeGlobalLogFlags(ref string[] args, out string error)
+    internal static bool TryConsumeGlobalLogFlags(
+        ref string[] args,
+        out IReadOnlyDictionary<string, string> environment,
+        out string error)
     {
+        var overrides = new Dictionary<string, string>(StringComparer.Ordinal);
+        environment = overrides;
         error = string.Empty;
         var kept = new List<string>(args.Length);
         var passthrough = false;
@@ -1068,7 +1076,7 @@ internal static class ProgramRunner
                     error = "--log-format must be `text` or `json`.";
                     return false;
                 }
-                Environment.SetEnvironmentVariable(GlobalToolLog.LogFormatEnvironmentVariable, format);
+                overrides[GlobalToolLog.LogFormatEnvironmentVariable] = format;
                 continue;
             }
 
@@ -1079,7 +1087,7 @@ internal static class ProgramRunner
                     error = "--log-retain-count must be a positive integer.";
                     return false;
                 }
-                Environment.SetEnvironmentVariable(GlobalToolLog.LogRetainEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));
+                overrides[GlobalToolLog.LogRetainEnvironmentVariable] = parsed.ToString(CultureInfo.InvariantCulture);
                 continue;
             }
 
@@ -1091,7 +1099,7 @@ internal static class ProgramRunner
                     error = $"--log-max-size-mb must be an integer between 1 and {GlobalToolLog.MaxLogSizeMb}.";
                     return false;
                 }
-                Environment.SetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));
+                overrides[GlobalToolLog.LogMaxSizeMbEnvironmentVariable] = parsed.ToString(CultureInfo.InvariantCulture);
                 continue;
             }
 
@@ -2389,7 +2397,8 @@ internal static class ProgramRunner
         QueryCommandOptions QueryOptions,
         string Transport,
         string? ListenSpec,
-        AuditLogOptions AuditOptions);
+        AuditLogOptions AuditOptions,
+        IReadOnlyDictionary<string, string> EnvironmentOverrides);
 
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {
@@ -2397,6 +2406,7 @@ internal static class ProgramRunner
             return exitCode;
 
         AuditLogSink? auditLog = null;
+        using var mcpEnvironment = CdidxEnvironment.Push(runOptions.EnvironmentOverrides);
         try
         {
             if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
@@ -2451,7 +2461,7 @@ internal static class ProgramRunner
             return false;
         }
 
-        if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var thresholdError))
+        if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var suggestionDedupThreshold, out var thresholdError))
         {
             Console.Error.WriteLine(thresholdError);
             PrintMcpUsage();
@@ -2487,7 +2497,11 @@ internal static class ProgramRunner
         if (!TryResolveMcpTransport(transportSpec, listenSpec, out var transport, out exitCode))
             return false;
 
-        runOptions = new McpRunOptions(options, transport, listenSpec, auditOptions);
+        var environmentOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (suggestionDedupThreshold is not null)
+            environmentOverrides[SuggestionStore.DedupThresholdEnvironmentVariable] = suggestionDedupThreshold;
+
+        runOptions = new McpRunOptions(options, transport, listenSpec, auditOptions, environmentOverrides);
         return true;
     }
 
@@ -2764,8 +2778,9 @@ internal static class ProgramRunner
         Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
-    internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
+    internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string? thresholdValue, out string error)
     {
+        thresholdValue = null;
         error = string.Empty;
         if (args.Length == 0)
             return true;
@@ -2815,7 +2830,7 @@ internal static class ProgramRunner
                 return false;
             }
 
-            Environment.SetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable, value);
+            thresholdValue = value;
         }
 
         args = kept.ToArray();

@@ -1,3 +1,5 @@
+using CodeIndex.Cli;
+
 namespace CodeIndex.Mcp;
 
 /// <summary>
@@ -80,8 +82,8 @@ public sealed class McpToolFilter
     /// </summary>
     public static McpToolFilter FromEnvironment() =>
         Parse(
-            Environment.GetEnvironmentVariable(AllowEnvVarName),
-            Environment.GetEnvironmentVariable(DenyEnvVarName));
+            CdidxEnvironment.GetEnvironmentVariable(AllowEnvVarName),
+            CdidxEnvironment.GetEnvironmentVariable(DenyEnvVarName));
 
     internal static McpToolFilter Parse(string? allowValue, string? denyValue)
     {

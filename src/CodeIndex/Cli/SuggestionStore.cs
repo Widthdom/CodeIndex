@@ -628,7 +628,7 @@ public class SuggestionStore
 
     private static double ResolveDedupThreshold()
     {
-        var raw = Environment.GetEnvironmentVariable(DedupThresholdEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(DedupThresholdEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultDedupThreshold;
 
@@ -927,7 +927,7 @@ public class SuggestionStore
 
     internal static TimeSpan ResolveMaxAge()
     {
-        var raw = Environment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
         return int.TryParse(raw, out var days) && days is > 0 and <= MaximumMaxAgeDays
             ? TimeSpan.FromDays(days)
             : TimeSpan.FromDays(DefaultMaxAgeDays);
@@ -935,7 +935,7 @@ public class SuggestionStore
 
     internal static int ResolveMaxCount()
     {
-        var raw = Environment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
         return int.TryParse(raw, out var count) && count is > 0 and <= MaximumMaxCount
             ? count
             : DefaultMaxCount;

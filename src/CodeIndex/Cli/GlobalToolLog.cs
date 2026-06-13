@@ -161,11 +161,11 @@ internal static class GlobalToolLog
 
     private static bool ShouldEnable()
     {
-        var disabled = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
+        var disabled = CdidxEnvironment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
         if (TryParseEnvBool(disabled, out var disabledValue) && disabledValue)
             return false;
 
-        var forced = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
+        var forced = CdidxEnvironment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
         if (TryParseEnvBool(forced, out var forcedValue) && forcedValue)
             return true;
 
@@ -297,7 +297,7 @@ internal static class GlobalToolLog
 
     private static IEnumerable<string> EnumerateLogDirectoryCandidates()
     {
-        var overrideDirectory = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        var overrideDirectory = CdidxEnvironment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
             yield return ExpandUserLogDirectory(overrideDirectory);
 
@@ -679,21 +679,21 @@ internal static class GlobalToolLog
     {
         public static LogOptions FromEnvironment()
         {
-            var format = Environment.GetEnvironmentVariable(LogFormatEnvironmentVariable)?.Trim().ToLowerInvariant();
+            var format = CdidxEnvironment.GetEnvironmentVariable(LogFormatEnvironmentVariable)?.Trim().ToLowerInvariant();
             if (format is not "json")
                 format = "text";
 
             var retainCount = RetainedLogFileCount;
-            if (int.TryParse(Environment.GetEnvironmentVariable(LogRetainEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedRetain))
+            if (int.TryParse(CdidxEnvironment.GetEnvironmentVariable(LogRetainEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedRetain))
                 retainCount = Math.Clamp(parsedRetain, 1, 10_000);
 
             var maxSizeBytes = DefaultLogMaxSizeBytes;
-            if (int.TryParse(Environment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
+            if (int.TryParse(CdidxEnvironment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
             {
                 if (parsedMb <= MaxLogSizeMb)
                     maxSizeBytes = parsedMb * 1024L * 1024L;
             }
-            else if (long.TryParse(Environment.GetEnvironmentVariable(GlobalToolLogMaxBytesEnvironmentVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBytes)
+            else if (long.TryParse(CdidxEnvironment.GetEnvironmentVariable(GlobalToolLogMaxBytesEnvironmentVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBytes)
                 && parsedBytes is > 0 and <= MaxLogSizeBytes)
             {
                 maxSizeBytes = parsedBytes;

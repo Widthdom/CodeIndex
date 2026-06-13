@@ -8,18 +8,18 @@ namespace CodeIndex.Cli;
 /// <summary>
 /// Project-local configuration file (`.cdidx/config.json` / `.cdidxrc.json`) loader (#1571).
 /// Walks upward from a starting directory looking for the first supported config file,
-/// validates its schema, and
-/// materializes recognized keys as process environment variables so the existing env-var
-/// consumers (debug, metrics, MCP tool/rate-limit gates, persistent log) pick them up
-/// without further changes. A real environment variable always wins over a config-file
-/// value, which yields the documented precedence: CLI &gt; env &gt; config file &gt; defaults.
+/// validates its schema, and returns recognized keys as scoped runtime settings so the
+/// existing env-var consumers (debug, metrics, MCP tool/rate-limit gates, persistent log)
+/// can pick them up without mutating the process environment. A real environment variable
+/// always wins over a config-file value, which yields the documented precedence:
+/// CLI &gt; env &gt; config file &gt; defaults.
 /// Secrets (`CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, `CDIDX_MCP_HTTP_TOKEN`) are
 /// intentionally NOT loadable from the config file to keep tokens out of version control.
 /// プロジェクトローカル設定ファイル `.cdidx/config.json` / `.cdidxrc.json` のローダー (#1571)。
 /// 指定ディレクトリから上方向に走査して最初に見つかった対応 config file をスキーマ検証し、認識済みキーを
-/// プロセス環境変数として展開する。既存の env-var 消費側（debug / metrics / MCP ツール ＆
-/// レート制限ゲート / 永続ログ）は追加変更なしに継承する。実際の環境変数は常に config
-/// ファイル値より優先し、結果として「CLI &gt; env &gt; config file &gt; 既定」の優先順位を満たす。
+/// scoped runtime settings として返す。既存の env-var 消費側（debug / metrics / MCP ツール ＆
+/// レート制限ゲート / 永続ログ）は process environment を変更せずに値を読める。実際の環境変数は
+/// 常に config ファイル値より優先し、結果として「CLI &gt; env &gt; config file &gt; 既定」の優先順位を満たす。
 /// 秘匿値 (`CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, `CDIDX_MCP_HTTP_TOKEN`) は
 /// バージョン管理に漏れないよう、意図的に config ファイルからは読まない。
 /// </summary>
@@ -67,23 +67,26 @@ internal static class CdidxConfigFile
 
     internal sealed record LoadResult(string? Path, string? Error)
     {
+        private static readonly IReadOnlyDictionary<string, string> EmptySettings = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        internal IReadOnlyDictionary<string, string> Settings { get; init; } = EmptySettings;
+        internal IReadOnlyDictionary<string, string> Sources { get; init; } = EmptySettings;
         internal bool Loaded => Path is not null && Error is null;
         internal bool Failed => Error is not null;
     }
 
     /// <summary>
-    /// Walk upward from <paramref name="startingDirectory"/> looking for `.cdidxrc.json`. When
-    /// found, parse it and materialize recognized keys into the process environment (only when
-    /// the matching env var is currently unset). Returns a result describing what happened so
-    /// callers can surface validation errors. No-op when `CDIDX_DISABLE_CONFIG_FILE=1` is set.
+    /// Walk upward from <paramref name="startingDirectory"/> looking for `.cdidxrc.json`.
+    /// When found, parse it and return recognized settings (only when the matching env var is
+    /// currently unset). Returns a result describing what happened so callers can surface
+    /// validation errors. No-op when `CDIDX_DISABLE_CONFIG_FILE=1` is set.
     /// </summary>
-    internal static LoadResult LoadAndApply(string startingDirectory)
-        => LoadAndApply(startingDirectory, Environment.GetEnvironmentVariable, Environment.SetEnvironmentVariable);
+    internal static LoadResult Load(string startingDirectory)
+        => Load(startingDirectory, Environment.GetEnvironmentVariable);
 
-    internal static LoadResult LoadAndApply(
+    internal static LoadResult Load(
         string startingDirectory,
-        Func<string, string?> envReader,
-        Action<string, string?> envWriter)
+        Func<string, string?> envReader)
     {
         if (string.Equals(envReader(DisableEnvVar), "1", StringComparison.Ordinal))
             return new LoadResult(Path: null, Error: null);
@@ -140,14 +143,18 @@ internal static class CdidxConfigFile
             if (errors.Count > 0)
                 return new LoadResult(Path: path, Error: string.Join(Environment.NewLine, errors));
 
-            // Apply only when the matching env var is not present (null), preserving the
+            // Include values only when the matching env var is not present (null), preserving the
             // documented precedence (real env wins over config-file value). An explicit
             // empty string still counts as "set" because several existing consumers
             // (e.g. RateLimiterOptions.FromEnvironment) treat empty as "feature off",
             // so a user clearing a checked-in value must be able to override with `export FOO=`.
-            ApplyPendingEnvironmentSettings(pending, path, envReader, envWriter);
+            var (settings, sources) = BuildScopedEnvironmentSettings(pending, path, envReader);
 
-            return new LoadResult(Path: path, Error: null);
+            return new LoadResult(Path: path, Error: null)
+            {
+                Settings = settings,
+                Sources = sources,
+            };
         }
     }
 
@@ -416,20 +423,23 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void ApplyPendingEnvironmentSettings(
+    private static (IReadOnlyDictionary<string, string> Settings, IReadOnlyDictionary<string, string> Sources) BuildScopedEnvironmentSettings(
         List<(string EnvName, string Value)> pending,
         string path,
-        Func<string, string?> envReader,
-        Action<string, string?> envWriter)
+        Func<string, string?> envReader)
     {
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (name, value) in pending)
         {
             if (envReader(name) is not null)
                 continue;
 
-            envWriter(name, value);
-            envWriter(ConfigSourceEnvironmentVariablePrefix + name, path);
+            settings[name] = value;
+            sources[name] = path;
         }
+
+        return (settings, sources);
     }
 
     private static string? FindConfigFile(string startingDirectory)
@@ -481,7 +491,7 @@ internal static class CdidxConfigFile
             return CommandExitCodes.UsageError;
         }
 
-        var result = LoadAndApply(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name), (_, _) => { });
+        var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name));
         if (result.Failed)
         {
             Console.Error.WriteLine(result.Error);

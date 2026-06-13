@@ -77,7 +77,7 @@ internal static class MetricsSink
         if (!string.IsNullOrWhiteSpace(explicitPath))
             return explicitPath;
 
-        var envValue = Environment.GetEnvironmentVariable(EnvVarName);
+        var envValue = CdidxEnvironment.GetEnvironmentVariable(EnvVarName);
         return string.IsNullOrWhiteSpace(envValue) ? null : envValue;
     }
 

@@ -571,18 +571,44 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void TryConsumeSuggestionDedupThresholdFlag_SetsEnvironmentAndRemovesFlag()
+    public void TryConsumeGlobalLogFlags_ReturnsOverridesAndDoesNotMutateEnvironment()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GlobalToolLog.LogFormatEnvironmentVariable,
+            GlobalToolLog.LogRetainEnvironmentVariable,
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        env.Set(GlobalToolLog.LogFormatEnvironmentVariable, null);
+        env.Set(GlobalToolLog.LogRetainEnvironmentVariable, null);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
+        string[] args = ["--log-format", "json", "--log-retain-count", "4", "--log-max-size-mb", "12", "status"];
+
+        var ok = ProgramRunner.TryConsumeGlobalLogFlags(ref args, out var overrides, out var error);
+
+        Assert.True(ok);
+        Assert.Empty(error);
+        Assert.Equal(["status"], args);
+        Assert.Equal("json", overrides[GlobalToolLog.LogFormatEnvironmentVariable]);
+        Assert.Equal("4", overrides[GlobalToolLog.LogRetainEnvironmentVariable]);
+        Assert.Equal("12", overrides[GlobalToolLog.LogMaxSizeMbEnvironmentVariable]);
+        Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogFormatEnvironmentVariable));
+        Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogRetainEnvironmentVariable));
+        Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+    }
+
+    [Fact]
+    public void TryConsumeSuggestionDedupThresholdFlag_ReturnsOverrideAndRemovesFlag()
     {
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);
         env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
         string[] args = ["--db", "index.db", "--suggestion-dedup-threshold", "0.7"];
 
-        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var thresholdValue, out var error);
 
         Assert.True(ok);
         Assert.Empty(error);
         Assert.Equal(["--db", "index.db"], args);
-        Assert.Equal("0.7", Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
+        Assert.Equal("0.7", thresholdValue);
+        Assert.Null(Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
     }
 
     [Fact]
@@ -592,10 +618,11 @@ public class ProgramRunnerTests
         env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
         string[] args = ["--suggestion-dedup-threshold=1.5"];
 
-        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var thresholdValue, out var error);
 
         Assert.False(ok);
         Assert.Contains("--suggestion-dedup-threshold", error);
+        Assert.Null(thresholdValue);
         Assert.Null(Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
     }
 
