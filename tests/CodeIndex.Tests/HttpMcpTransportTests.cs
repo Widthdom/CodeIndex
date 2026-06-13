@@ -322,10 +322,10 @@ public class HttpMcpTransportTests : IDisposable
             listen.Host,
             listen.Port,
             bearerToken: null);
-        transport.OutOfBandFrameHandler = _ =>
+        transport.OutOfBandFrameHandler = (_, _) =>
         {
             Interlocked.Increment(ref outOfBandHandlerCalls);
-            return null;
+            return Task.FromResult<string?>(null);
         };
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
@@ -357,10 +357,10 @@ public class HttpMcpTransportTests : IDisposable
             listen.Host,
             listen.Port,
             bearerToken: null);
-        transport.OutOfBandFrameHandler = _ =>
+        transport.OutOfBandFrameHandler = (_, _) =>
         {
             Interlocked.Increment(ref outOfBandHandlerCalls);
-            return null;
+            return Task.FromResult<string?>(null);
         };
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };

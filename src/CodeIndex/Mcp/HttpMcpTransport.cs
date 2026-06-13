@@ -148,7 +148,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal bool RequiresBearerToken => _bearerTokenHash is not null;
 
-    internal Func<string, string?>? OutOfBandFrameHandler { get; set; }
+    internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
     internal Func<string>? HealthJsonProvider { get; set; }
 
@@ -430,7 +430,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         request.Body = body;
         request.RequestId = TryExtractJsonRpcId(body);
-        if (TryHandleOutOfBandFrame(request, body))
+        if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
             return;
 
         if (!TryQueueRequest(request))
@@ -482,7 +482,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return false;
     }
 
-    private bool TryHandleOutOfBandFrame(PendingRequest request, string body)
+    private async Task<bool> TryHandleOutOfBandFrameAsync(PendingRequest request, string body, CancellationToken cancellationToken)
     {
         if (OutOfBandFrameHandler is null || (!IsCancellationNotification(body) && !IsJsonRpcResponse(body)))
             return false;
@@ -490,7 +490,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var context = request.Context;
         try
         {
-            var frame = OutOfBandFrameHandler(body);
+            var frame = await OutOfBandFrameHandler(body, cancellationToken).ConfigureAwait(false);
             if (frame is null)
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
@@ -503,7 +503,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
-            context.Response.OutputStream.Write(payload);
+            await context.Response.OutputStream.WriteAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
             context.Response.OutputStream.Close();
             LogRequest(request, (int)HttpStatusCode.OK);
             return true;

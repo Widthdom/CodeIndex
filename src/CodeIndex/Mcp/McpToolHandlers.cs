@@ -5075,9 +5075,6 @@ public partial class McpServer
         return gaps;
     }
 
-    private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
-        => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();
-
     private sealed record McpIndexUnsupportedMode(string Name, string Reason, bool BlocksIndexing);
 
     private static FileIssue BuildMcpSymbolCountExceededIssue(string path, int symbolCount, int maxSymbolsPerFile) =>
@@ -5528,7 +5525,7 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
+        await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
@@ -5675,7 +5672,7 @@ public partial class McpServer
                 failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "index_file"));
             }
             processed++;
-            EmitProgressNotification(progressToken, processed, files.Count);
+            await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
         writer.OptimizeFts();
@@ -5692,7 +5689,7 @@ public partial class McpServer
         _ = priorMetadataTargetCsharp;
         if (!scanResult.HadErrors && errors == 0)
         {
-            EmitProgressNotification(progressToken, processed, files.Count, "Finalizing index metadata.");
+            await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
             writer.MarkBatchInProgress();
             using var readinessTxn = writer.BeginTransaction();
             writer.MarkGraphReady();
@@ -5826,7 +5823,7 @@ public partial class McpServer
             readinessTxn.Commit();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-        EmitProgressNotification(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.");
+        await EmitProgressNotificationAsync(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.").ConfigureAwait(false);
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
 
@@ -6005,7 +6002,7 @@ public partial class McpServer
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
 
-    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
+    private async Task<JsonNode> ExecuteBackfillFoldAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
         {
@@ -6054,9 +6051,9 @@ public partial class McpServer
             }
             else
             {
-                EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
+                await EmitProgressNotificationAsync(progressToken, 0, null, "Backfilling folded-name keys.").ConfigureAwait(false);
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-                EmitProgressNotification(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.");
+                await EmitProgressNotificationAsync(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.").ConfigureAwait(false);
                 // Row rewrites are intentionally committed before the final FoldReady stamp so
                 // interrupted MCP backfills can resume from the remaining rows.
                 // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
@@ -6067,7 +6064,7 @@ public partial class McpServer
 
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();
-                EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+                await EmitProgressNotificationAsync(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.").ConfigureAwait(false);
             }
 
             var foldMetadataCurrentAfter = dryRun
@@ -6164,9 +6161,6 @@ public partial class McpServer
     /// 構造化された提案を .cdidx/suggestions-*.json に記録する。
     /// description と context にソースコードが含まれていないことを検証する。
     /// </summary>
-    private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
-        => ExecuteSuggestImprovementAsync(id, args).GetAwaiter().GetResult();
-
     private async Task<JsonNode> ExecuteSuggestImprovementAsync(JsonNode? id, JsonNode? args)
     {
         // 1. Validate required parameters / 必須パラメータのバリデーション
