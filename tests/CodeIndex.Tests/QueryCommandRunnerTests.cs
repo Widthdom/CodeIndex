@@ -5386,13 +5386,31 @@ public partial class QueryCommandRunnerTests
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
+        {
+            var output = string.Join(Environment.NewLine, stdout, stderr).Trim();
+            if (IsMissingDotNetRuntimeFailure(output))
+                throw Xunit.Sdk.SkipException.ForSkip(BuildMissingDotNetRuntimeSkipReason(output));
+
+            throw new InvalidOperationException($"dotnet publish failed: {output}");
+        }
 
         var publishedDll = Path.Combine(outputDir, "cdidx.dll");
         if (!File.Exists(publishedDll))
             throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
 
         return publishedDll;
+    }
+
+    private static bool IsMissingDotNetRuntimeFailure(string output)
+        => output.Contains("You must install or update .NET to run this application.", StringComparison.OrdinalIgnoreCase)
+            && output.Contains("Framework: 'Microsoft.NETCore.App'", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildMissingDotNetRuntimeSkipReason(string output)
+    {
+        const string reason = "Skipping trimmed publish test because the SDK/ILLink tool requires a .NET runtime that is not installed (#3571).";
+        var lines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var frameworkLine = lines.FirstOrDefault(line => line.StartsWith("Framework:", StringComparison.OrdinalIgnoreCase));
+        return frameworkLine == null ? reason : $"{reason} {frameworkLine}";
     }
 
     private static string GetBuiltCliDllPath()
