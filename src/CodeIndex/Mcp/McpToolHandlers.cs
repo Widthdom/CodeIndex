@@ -3352,7 +3352,37 @@ public partial class McpServer
             session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
             session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
         }
+        if (_auditLog is not null)
+            session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
         return session;
+    }
+
+    private static bool IsAuditLogDegraded(AuditLogSink.AuditLogDiagnostics? diagnostics)
+        => diagnostics is not null
+            && (diagnostics.DroppedRecordCount > 0 || diagnostics.RotationDegraded);
+
+    private static JsonObject BuildAuditLogStatus(AuditLogSink.AuditLogDiagnostics diagnostics)
+    {
+        var payload = new JsonObject
+        {
+            ["enabled"] = true,
+            ["path"] = diagnostics.Path,
+            ["include_values"] = diagnostics.IncludeValues,
+            ["max_bytes"] = diagnostics.MaxBytes,
+            ["bytes_written"] = diagnostics.BytesWritten,
+            ["disposed"] = diagnostics.Disposed,
+            ["dropped_record_count"] = diagnostics.DroppedRecordCount,
+            ["serialization_failure_count"] = diagnostics.SerializationFailureCount,
+            ["write_failure_count"] = diagnostics.WriteFailureCount,
+            ["rotation_failure_count"] = diagnostics.RotationFailureCount,
+            ["rotation_cleanup_failure_count"] = diagnostics.RotationCleanupFailureCount,
+            ["rotation_degraded"] = diagnostics.RotationDegraded,
+        };
+        if (!string.IsNullOrWhiteSpace(diagnostics.LastDropReason))
+            payload["last_drop_reason"] = diagnostics.LastDropReason;
+        if (!string.IsNullOrWhiteSpace(diagnostics.LastRotationFailure))
+            payload["last_rotation_failure"] = diagnostics.LastRotationFailure;
+        return payload;
     }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)

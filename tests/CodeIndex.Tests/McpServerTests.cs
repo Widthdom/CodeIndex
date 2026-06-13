@@ -1357,6 +1357,44 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void StatusAndPing_ReportAuditLogDiagnostics_Issue3547()
+    {
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_audit_diag_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            sink.RecordRotationFailure("rotation_failure", new IOException("rotation failed"));
+            using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
+
+            var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(status)!;
+            var statusAudit = statusResponse["result"]!["structuredContent"]!["mcp_session"]!["audit_log"]!;
+
+            Assert.True(statusAudit["enabled"]!.GetValue<bool>());
+            Assert.Equal(auditPath, statusAudit["path"]!.GetValue<string>());
+            Assert.False(statusAudit["include_values"]!.GetValue<bool>());
+            Assert.True(statusAudit["rotation_degraded"]!.GetValue<bool>());
+            Assert.Equal(1, statusAudit["rotation_failure_count"]!.GetValue<long>());
+            Assert.Equal(0, statusAudit["dropped_record_count"]!.GetValue<long>());
+            Assert.Equal("rotation_failure:io_error:IOException", statusAudit["last_rotation_failure"]!.GetValue<string>());
+
+            var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"ping"}""")!;
+            var pingResponse = server.HandleMessage(ping)!;
+            var health = pingResponse["result"]!;
+            var healthAudit = health["audit_log"]!;
+
+            Assert.Equal("degraded", health["status"]!.GetValue<string>());
+            Assert.True(healthAudit["rotation_degraded"]!.GetValue<bool>());
+            Assert.Equal(1, healthAudit["rotation_failure_count"]!.GetValue<long>());
+        }
+        finally
+        {
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
+        }
+    }
+
+    [Fact]
     public void LoggingSetLevel_UpdatesSessionLogLevel()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"emergency"}}""")!;

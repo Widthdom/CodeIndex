@@ -1470,9 +1470,11 @@ public partial class McpServer : IDisposable
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
         var httpResponseCleanupDegraded = httpTransport?.ResponseCleanupDegraded ?? false;
+        var auditLogDiagnostics = _auditLog?.SnapshotDiagnostics();
+        var auditLogDegraded = IsAuditLogDegraded(auditLogDiagnostics);
         var result = new JsonObject
         {
-            ["status"] = dbOpen && !httpResponseCleanupDegraded ? "ok" : "degraded",
+            ["status"] = dbOpen && !httpResponseCleanupDegraded && !auditLogDegraded ? "ok" : "degraded",
             ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
             ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["db_open"] = dbOpen,
@@ -1493,6 +1495,8 @@ public partial class McpServer : IDisposable
             if (!string.IsNullOrWhiteSpace(httpTransport.LastResponseCloseCleanupFailure))
                 result["http_response_close_cleanup_last_error"] = httpTransport.LastResponseCloseCleanupFailure;
         }
+        if (auditLogDiagnostics is not null)
+            result["audit_log"] = BuildAuditLogStatus(auditLogDiagnostics);
         if (!string.IsNullOrWhiteSpace(dbError))
             result["db_error"] = dbError;
         return result;
