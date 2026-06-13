@@ -1,6 +1,6 @@
 # Base image digests are multi-arch manifest list digests. Refresh with:
-# docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine
-FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build
+# docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:9.0.301-alpine3.22
+FROM mcr.microsoft.com/dotnet/sdk:9.0.301-alpine3.22@sha256:bdd1c9e2215a71e43d2f0c6978ace0a0652d7ecc21bf6f659d42d840500e1c44 AS build
 
 WORKDIR /src
 COPY Directory.Build.props nuget.config version.json ./

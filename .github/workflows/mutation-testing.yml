@@ -22,14 +22,14 @@ jobs:
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
         with:
           dotnet-version: |
-            8.0.x
-            9.0.x
+            8.0.413
+            9.0.301
 
       - name: Restore
         run: dotnet restore CodeIndex.sln --locked-mode
 
       - name: Install Stryker.NET
-        run: dotnet tool install --global dotnet-stryker
+        run: dotnet tool install --global dotnet-stryker --version 4.14.0
 
       - name: Run DbWriter mutation tests
         run: dotnet stryker --config-file stryker-config.json
