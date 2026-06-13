@@ -45,6 +45,7 @@ internal static class ProgramRunner
     internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
     internal static Action<string>? TestExtractorFileLengthCheckedForTesting { get; set; }
     internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting { get; set; }
+    internal static Action<string>? DeleteUpgradeInstallerScriptForTesting { get; set; }
 
     private sealed record CommandRunContext(
         JsonSerializerOptions JsonOptions,
@@ -3360,7 +3361,7 @@ internal static class ProgramRunner
         finally
         {
             if (scriptPath != null)
-                try { File.Delete(scriptPath); } catch { }
+                TryDeleteUpgradeInstallerScript(scriptPath);
             if (scriptDirectory != null)
                 try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
         }
@@ -3584,6 +3585,24 @@ internal static class ProgramRunner
         var buffer = new char[InstallerSuppressedOutputDrainBufferChars];
         while (await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false) > 0)
         {
+        }
+    }
+
+    private static void TryDeleteUpgradeInstallerScript(string scriptPath)
+    {
+        try
+        {
+            if (!File.Exists(scriptPath))
+                return;
+
+            if (DeleteUpgradeInstallerScriptForTesting != null)
+                DeleteUpgradeInstallerScriptForTesting(scriptPath);
+            else
+                File.Delete(scriptPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 

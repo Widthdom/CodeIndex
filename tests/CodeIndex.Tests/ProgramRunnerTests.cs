@@ -1304,6 +1304,56 @@ exit 0
     }
 
     [Fact]
+    public void RunUpgrade_InstallerScriptCleanupFailure_EmitsWarning_Issue3372()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousDelete = ProgramRunner.DeleteUpgradeInstallerScriptForTesting;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.DeleteUpgradeInstallerScriptForTesting = _ => throw new IOException("delete denied");
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                using var doc = JsonDocument.Parse(stdout);
+                Assert.True(doc.RootElement.GetProperty("install_succeeded").GetBoolean());
+                Assert.Contains("Warning: failed to delete upgrade installer script", stderr);
+                Assert.Contains("IOException", stderr);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.DeleteUpgradeInstallerScriptForTesting = previousDelete;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_WritesCacheWithPrivateModes_Issue3411()
     {
         using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
