@@ -467,6 +467,7 @@ public class ReleaseWorkflowTests
         var root = GetRepositoryRoot();
         var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
         var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
+        var dockerignore = File.ReadAllText(Path.Combine(root, ".dockerignore"));
         var project = File.ReadAllText(Path.Combine(root, "src", "CodeIndex", "CodeIndex.csproj"));
 
         Assert.Contains("publish-container:", workflow);
@@ -488,6 +489,17 @@ public class ReleaseWorkflowTests
         Assert.Contains("adduser -S -D -H -G cdidx -h /repo cdidx", dockerfile);
         Assert.Contains("chown cdidx:cdidx /repo", dockerfile);
         Assert.Contains("USER cdidx:cdidx", dockerfile);
+        Assert.DoesNotContain("COPY . .", dockerfile);
+        Assert.Contains("COPY Directory.Build.props nuget.config version.json ./", dockerfile);
+        Assert.Contains("COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/", dockerfile);
+        Assert.Contains("COPY src/CodeIndex/ src/CodeIndex/", dockerfile);
+        Assert.Contains(".git/", dockerignore);
+        Assert.Contains("tests/", dockerignore);
+        Assert.Contains("tools/", dockerignore);
+        Assert.Contains("docs/", dockerignore);
+        Assert.Contains("changelog.d/", dockerignore);
+        Assert.Contains("*.md", dockerignore);
+        Assert.Contains("!COMMERCIAL_LICENSE.md", dockerignore);
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);

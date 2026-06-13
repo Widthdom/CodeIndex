@@ -3,10 +3,14 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build
 
 WORKDIR /src
-COPY . .
+COPY Directory.Build.props nuget.config version.json ./
+COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/
+RUN dotnet restore src/CodeIndex/CodeIndex.csproj
+COPY src/CodeIndex/ src/CodeIndex/
+COPY LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md ./
+COPY LICENSES/ LICENSES/
 
 ARG TARGETARCH=amd64
-RUN dotnet restore src/CodeIndex/CodeIndex.csproj
 RUN case "$TARGETARCH" in \
       amd64) rid="linux-musl-x64" ;; \
       arm64) rid="linux-musl-arm64" ;; \
