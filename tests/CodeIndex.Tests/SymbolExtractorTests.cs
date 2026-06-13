@@ -18668,7 +18668,34 @@ public partial class SymbolExtractorTests
             Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
             Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
             Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("tsconfig_json_invalid", stderr, StringComparison.Ordinal);
             Assert.Contains("could not be parsed as JSON", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_UnreadableTsconfigSkipsPathAliasesWithReadFailedWarning_Issue3438()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_unreadable_symbols");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tsconfig.json"));
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@/components/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("tsconfig_read_failed", stderr, StringComparison.Ordinal);
+            Assert.Contains("could not be read", stderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -18697,6 +18724,7 @@ public partial class SymbolExtractorTests
             Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
             Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
             Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("tsconfig_json_invalid", stderr, StringComparison.Ordinal);
             Assert.Contains("32-level depth limit", stderr, StringComparison.Ordinal);
         }
         finally
@@ -18733,6 +18761,7 @@ public partial class SymbolExtractorTests
 
             Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "~lib/math");
             Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "lib/math.ts");
+            Assert.Contains("path_alias_depth_limit", stderr, StringComparison.Ordinal);
             Assert.Contains("extends depth", stderr, StringComparison.Ordinal);
         }
         finally
