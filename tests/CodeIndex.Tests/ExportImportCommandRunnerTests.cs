@@ -178,6 +178,34 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportCtags_MissingDatabaseDoesNotCreateDatabase_Issue3368()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_ctags_missing_db_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "missing.db");
+            var outputPath = Path.Combine(workDir, "tags");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    ["ctags", "--db", dbPath, "--output", outputPath],
+                    new JsonSerializerOptions(),
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("database", stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(dbPath));
+            Assert.False(File.Exists(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void IsDatabaseOrSqliteSidecarPath_UsesStampedCaseSensitivity_Issue3368()
     {
         var dbPath = Path.Combine("Project", ".cdidx", "codeindex.db");

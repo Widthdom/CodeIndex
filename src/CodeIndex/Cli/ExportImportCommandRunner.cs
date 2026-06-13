@@ -882,6 +882,14 @@ internal static class ExportImportCommandRunner
     private static string CreateUnpooledConnectionString(string dbPath)
         => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
 
+    private static string CreateReadOnlyUnpooledConnectionString(string dbPath)
+        => new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ConnectionString;
+
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
     {
         var dbBackupPath = MoveExistingReplacementFileToBackup(fullDbPath);
@@ -1034,7 +1042,7 @@ internal static class ExportImportCommandRunner
         pathCaseSensitive = false;
         try
         {
-            using var connection = new SqliteConnection(CreateUnpooledConnectionString(dbPath));
+            using var connection = new SqliteConnection(CreateReadOnlyUnpooledConnectionString(dbPath));
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
