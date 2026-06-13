@@ -996,6 +996,10 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
+            var bytesRead = MeasureReadableFileBytes(
+                targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar))),
+                projectRoot,
+                indexRunDiagnostics);
             StampLastIndexRunMetadata(
                 writer,
                 "update",
@@ -1004,7 +1008,8 @@ public static partial class IndexCommandRunner
                 updated + removed + skipped,
                 skipped,
                 errors,
-                SumReadableFileBytes(targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar)))),
+                bytesRead.BytesRead,
+                bytesRead.SkippedFileCount,
                 updated,
                 removed,
                 memoryTimelineForStamp,

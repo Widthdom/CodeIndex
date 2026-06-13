@@ -30,6 +30,8 @@ public static partial class IndexCommandRunner
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
     private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);
 
+    internal readonly record struct FileByteReadSummary(long BytesRead, long SkippedFileCount);
+
     private sealed record ScanCheckpoint(
         int Version,
         string? GitHead,
@@ -412,6 +414,7 @@ public static partial class IndexCommandRunner
         long filesSkipped,
         long parseErrors,
         long bytesRead,
+        long bytesReadSkippedFileCount,
         long rowsUpserted,
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline)
@@ -424,6 +427,7 @@ public static partial class IndexCommandRunner
             filesSkipped,
             parseErrors,
             bytesRead,
+            bytesReadSkippedFileCount,
             rowsUpserted,
             rowsDeleted,
             memoryTimeline,
@@ -438,6 +442,7 @@ public static partial class IndexCommandRunner
         long filesSkipped,
         long parseErrors,
         long bytesRead,
+        long bytesReadSkippedFileCount,
         long rowsUpserted,
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline,
@@ -450,6 +455,8 @@ public static partial class IndexCommandRunner
         writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesReadSkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
@@ -492,12 +499,31 @@ public static partial class IndexCommandRunner
             : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
     }
 
+    internal static string FormatIndexRunDiagnostic(string code, string? target, Exception ex)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return FormatIndexRunDiagnostic(code, ex);
+
+        var raw = $"{code}: {CollapseLineBreaks(target)}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
+        return raw.Length <= MaxIndexRunDiagnosticLength
+            ? raw
+            : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
+    }
+
     private static void RecordIndexRunDiagnostic(List<string>? diagnostics, string code, Exception ex)
     {
         if (diagnostics == null)
             return;
 
         diagnostics.Add(FormatIndexRunDiagnostic(code, ex));
+    }
+
+    private static void RecordIndexRunDiagnostic(List<string>? diagnostics, string code, string? target, Exception ex)
+    {
+        if (diagnostics == null)
+            return;
+
+        diagnostics.Add(FormatIndexRunDiagnostic(code, target, ex));
     }
 
     private static void TryStampLastFailedIndexRun(
@@ -537,9 +563,10 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static long SumReadableFileBytes(IEnumerable<string> paths)
+    internal static FileByteReadSummary MeasureReadableFileBytes(IEnumerable<string> paths, string? projectRoot = null, List<string>? diagnostics = null)
     {
         long total = 0;
+        long skipped = 0;
         foreach (var path in paths)
         {
             try
@@ -550,10 +577,28 @@ public static partial class IndexCommandRunner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
             {
+                skipped++;
+                RecordIndexRunDiagnostic(diagnostics, "file_size_bytes_skipped", FormatDiagnosticPath(projectRoot, path), ex);
             }
         }
 
-        return total;
+        return new FileByteReadSummary(total, skipped);
+    }
+
+    private static string FormatDiagnosticPath(string? projectRoot, string path)
+    {
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return path;
+
+        try
+        {
+            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            return IsOutsideProjectRoot(relative) ? path : relative;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return path;
+        }
     }
 
     private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(

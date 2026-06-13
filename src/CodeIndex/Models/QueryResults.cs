@@ -1134,6 +1134,10 @@ public sealed class StatusLastIndexRun
     public long? ParseErrors { get; set; }
     [JsonPropertyName("bytes_read")]
     public long? BytesRead { get; set; }
+    [JsonPropertyName("bytes_read_skipped_file_count")]
+    public long? BytesReadSkippedFileCount { get; set; }
+    [JsonPropertyName("bytes_read_incomplete")]
+    public bool? BytesReadIncomplete { get; set; }
     [JsonPropertyName("rows_upserted")]
     public long? RowsUpserted { get; set; }
     [JsonPropertyName("rows_deleted")]

@@ -1501,6 +1501,8 @@ public class DbContext : IDisposable
     public const string LastIndexRunFilesSkippedMetaKey = "last_index_run_files_skipped";
     public const string LastIndexRunParseErrorsMetaKey = "last_index_run_parse_errors";
     public const string LastIndexRunBytesReadMetaKey = "last_index_run_bytes_read";
+    public const string LastIndexRunBytesReadSkippedFileCountMetaKey = "last_index_run_bytes_read_skipped_file_count";
+    public const string LastIndexRunBytesReadIncompleteMetaKey = "last_index_run_bytes_read_incomplete";
     public const string LastIndexRunRowsUpsertedMetaKey = "last_index_run_rows_upserted";
     public const string LastIndexRunRowsDeletedMetaKey = "last_index_run_rows_deleted";
     public const string LastIndexRunPeakMemoryMbMetaKey = "last_index_run_peak_memory_mb";

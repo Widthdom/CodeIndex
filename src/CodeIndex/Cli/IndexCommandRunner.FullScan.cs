@@ -1426,6 +1426,7 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
+            var bytesRead = MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics);
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
@@ -1434,7 +1435,8 @@ public static partial class IndexCommandRunner
                 files.Count,
                 skipped,
                 errors,
-                SumReadableFileBytes(files),
+                bytesRead.BytesRead,
+                bytesRead.SkippedFileCount,
                 processed,
                 purged,
                 memoryTimelineForStamp,

@@ -5487,9 +5487,10 @@ public partial class McpServer
             symbolKindFilterMetaMarkedIncomplete = true;
         }
 
-        static long SumReadableFileBytes(IEnumerable<string> paths)
+        static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(IEnumerable<string> paths, string projectRoot, List<string> diagnostics)
         {
             long total = 0;
+            long skipped = 0;
             foreach (var filePath in paths)
             {
                 try
@@ -5500,10 +5501,32 @@ public partial class McpServer
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
                 {
+                    skipped++;
+                    diagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic(
+                        "file_size_bytes_skipped",
+                        FormatDiagnosticPath(projectRoot, filePath),
+                        ex));
                 }
             }
 
-            return total;
+            return (total, skipped);
+        }
+
+        static string FormatDiagnosticPath(string projectRoot, string path)
+        {
+            try
+            {
+                var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+                return relative == "."
+                    || relative.StartsWith("../", StringComparison.Ordinal)
+                    || Path.IsPathRooted(relative)
+                    ? path
+                    : relative;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+            {
+                return path;
+            }
         }
 
         var indexRunDiagnostics = new List<string>();
@@ -5765,13 +5788,16 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
+            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics);
             writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
             writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.BytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.ClearLastFailedIndexRunMetadata();

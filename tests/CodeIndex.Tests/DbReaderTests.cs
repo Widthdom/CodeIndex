@@ -85,6 +85,8 @@ public class DbReaderTests : IDisposable
         _writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, "1");
         _writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, "0");
         _writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, "4096");
+        _writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, "2");
+        _writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, "true");
         _writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, "2");
         _writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, "1");
         _writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, "64");
@@ -105,6 +107,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal(expectedFreshenedAt, status.LastWorkspaceFreshenedAt);
         Assert.Equal(1234, status.LastIndexRun.DurationMs);
         Assert.Equal(3, status.LastIndexRun.FilesScanned);
+        Assert.Equal(2, status.LastIndexRun.BytesReadSkippedFileCount);
+        Assert.True(status.LastIndexRun.BytesReadIncomplete);
         Assert.Equal(64, status.LastIndexRun.PeakMemoryMb);
         Assert.Equal(["indexed_head_metadata_write_failed: IOException: denied"], status.LastIndexRun.Diagnostics);
         Assert.Equal(1, status.LastIndexRun.DiagnosticCount);
