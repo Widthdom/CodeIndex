@@ -344,6 +344,36 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_TestExtractor_ExpectedSymbolsTooDeep_ReturnsInvalidArgument_Issue3470()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_deep_expect_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "app.py");
+                var expect = Path.Combine(tempDir, "expected.json");
+                File.WriteAllText(file, "def hello():\n    pass\n");
+                File.WriteAllText(expect, BuildNestedJsonArray(ProgramRunner.TestExtractorJsonComparisonMaxDepth + 1));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--expect-symbols", expect],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("test-extractor expected or actual symbols JSON could not be parsed", stderr);
+                Assert.Contains($"{ProgramRunner.TestExtractorJsonComparisonMaxDepth} depth limit", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
     public void TryConsumeQueryTraceFlag_StripsTraceAndPreservesEscapedQuery()
     {
         string[] args = ["needle", "--trace=stderr", "--lang", "csharp", "--", "--trace=file"];
@@ -2809,6 +2839,17 @@ exit 0
         Assert.StartsWith("Hint: ", lines[1]);
         if (lines.Length == 3)
             Assert.StartsWith("Usage: ", lines[2]);
+    }
+
+    private static string BuildNestedJsonArray(int depth)
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < depth; i++)
+            builder.Append('[');
+        builder.Append('0');
+        for (var i = 0; i < depth; i++)
+            builder.Append(']');
+        return builder.ToString();
     }
 
     private sealed class ThrowingResolver : IJsonTypeInfoResolver

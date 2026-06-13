@@ -33,7 +33,12 @@ internal static class ProgramRunner
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
     internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
+    internal const int TestExtractorJsonComparisonMaxDepth = 32;
     private const int TestExtractorReadBufferBytes = 81920;
+    private static readonly JsonDocumentOptions s_testExtractorJsonComparisonOptions = new()
+    {
+        MaxDepth = TestExtractorJsonComparisonMaxDepth,
+    };
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
@@ -517,8 +522,16 @@ internal static class ProgramRunner
             if (!TryReadTestExtractorFile(expect, "expected symbols", out var expected, out readExitCode))
                 return readExitCode;
             var actual = JsonSerializer.Serialize(symbols);
-            if (!JsonEquivalent(expected, actual))
+            if (!TryJsonEquivalent(expected, actual, out var jsonError))
             {
+                if (jsonError is not null)
+                {
+                    return CommandErrorWriter.Write(
+                        $"test-extractor expected or actual symbols JSON could not be parsed within the {TestExtractorJsonComparisonMaxDepth} depth limit: {jsonError.Message}",
+                        CommandExitCodes.InvalidArgument,
+                        "Use a shallower expected-symbols JSON fixture.");
+                }
+
                 Console.Error.WriteLine("Expected symbols did not match extracted symbols.");
                 Console.Error.WriteLine(actual);
                 return CommandExitCodes.InvalidArgument;
@@ -626,11 +639,23 @@ internal static class ProgramRunner
         return true;
     }
 
-    private static bool JsonEquivalent(string expected, string actual)
+    private static bool TryJsonEquivalent(string expected, string actual, out JsonException? error)
     {
-        using var expectedDoc = JsonDocument.Parse(expected);
-        using var actualDoc = JsonDocument.Parse(actual);
-        return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
+        error = null;
+        try
+        {
+            // Both inputs are already bounded: expected JSON is read through
+            // TryReadTestExtractorFile and actual JSON comes from the in-memory
+            // extractor result. Keep parser depth explicit for the comparison.
+            using var expectedDoc = JsonDocument.Parse(expected, s_testExtractorJsonComparisonOptions);
+            using var actualDoc = JsonDocument.Parse(actual, s_testExtractorJsonComparisonOptions);
+            return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
+        }
+        catch (JsonException ex)
+        {
+            error = ex;
+            return false;
+        }
     }
 
     private static int RunDoctor(string[] args, string appVersion)
