@@ -30,6 +30,9 @@ internal sealed class IndexLock : IDisposable
     private readonly string _infoPath;
     private bool _disposed;
 
+    internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
+    internal static Action<LockCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
+
     private IndexLock(FileStream stream, string lockPath, string infoPath)
     {
         _stream = stream;
@@ -99,9 +102,7 @@ internal sealed class IndexLock : IDisposable
         {
             var info = new IndexLockInfo(
                 Pid: Environment.ProcessId,
-                StartedAt: DateTime.UtcNow,
-                Host: Environment.MachineName,
-                ProjectPath: Path.GetFullPath(projectPath));
+                StartedAt: DateTime.UtcNow);
             DataDirectorySecurity.WritePrivateText(infoPath, SerializeInfo(info), Encoding.UTF8);
         }
         catch (Exception)
@@ -148,14 +149,7 @@ internal sealed class IndexLock : IDisposable
             return;
         _disposed = true;
 
-        try
-        {
-            File.Delete(_infoPath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Best-effort. / ベストエフォート。
-        }
+        TryDeleteCleanupTarget(_infoPath, "metadata");
 
         try
         {
@@ -166,16 +160,7 @@ internal sealed class IndexLock : IDisposable
             // Best-effort. / ベストエフォート。
         }
 
-        try
-        {
-            File.Delete(_lockPath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Best-effort cleanup; a leftover empty lockfile does not block future
-            // acquires because the next Acquire opens it with OpenOrCreate.
-            // 残った空 lockfile も次回 Acquire の OpenOrCreate で再利用できる。
-        }
+        TryDeleteCleanupTarget(_lockPath, "lockfile");
     }
 
     // --- Tiny key=value serializer (avoids touching JsonSerializerContext) ---
@@ -186,8 +171,6 @@ internal sealed class IndexLock : IDisposable
         var sb = new StringBuilder();
         sb.Append("pid=").Append(info.Pid.ToString(CultureInfo.InvariantCulture)).Append('\n');
         sb.Append("started_at=").Append(info.StartedAt.ToString("o", CultureInfo.InvariantCulture)).Append('\n');
-        sb.Append("host=").Append(EscapeValue(info.Host)).Append('\n');
-        sb.Append("project=").Append(EscapeValue(info.ProjectPath)).Append('\n');
         return sb.ToString();
     }
 
@@ -195,8 +178,6 @@ internal sealed class IndexLock : IDisposable
     {
         int? pid = null;
         DateTime? started = null;
-        string? host = null;
-        string? project = null;
         foreach (var rawLine in text.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
@@ -217,18 +198,12 @@ internal sealed class IndexLock : IDisposable
                     if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var s))
                         started = s;
                     break;
-                case "host":
-                    host = value;
-                    break;
-                case "project":
-                    project = value;
-                    break;
             }
         }
 
         if (pid is null || started is null)
             return null;
-        return new IndexLockInfo(pid.Value, started.Value, host ?? string.Empty, project ?? string.Empty);
+        return new IndexLockInfo(pid.Value, started.Value);
     }
 
     private static string EscapeValue(string? value)
@@ -264,13 +239,30 @@ internal sealed class IndexLock : IDisposable
         }
         return sb.ToString();
     }
+
+    private static void TryDeleteCleanupTarget(string path, string target)
+    {
+        try
+        {
+            DeleteFileForTesting(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            ReportCleanupFailure(target, ex);
+        }
+    }
+
+    private static void ReportCleanupFailure(string target, Exception exception)
+    {
+        var diagnostic = LockCleanupDiagnostic.Create("index_lock", target, exception);
+        GlobalToolLog.Error(diagnostic.ToLogMessage());
+        CleanupDiagnosticSinkForTesting?.Invoke(diagnostic);
+    }
 }
 
 internal sealed record IndexLockInfo(
     int Pid,
-    DateTime StartedAt,
-    string Host,
-    string ProjectPath);
+    DateTime StartedAt);
 
 internal sealed class IndexLockConflictException : Exception
 {
