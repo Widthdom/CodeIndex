@@ -2299,7 +2299,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         }
 
-        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "solidity", "tcl" })
+        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "tcl" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -2318,6 +2318,14 @@ public partial class QueryCommandRunnerTests
             "yaml must advertise symbol_extraction=true");
         Assert.True(languages["json"].GetProperty("symbol_extraction").GetBoolean(),
             "json must advertise symbol_extraction=true");
+
+        Assert.True(languages.ContainsKey("solidity"), "expected 'solidity' to be listed");
+        Assert.True(languages["solidity"].GetProperty("symbol_extraction").GetBoolean(),
+            "solidity must advertise symbol_extraction=true");
+        Assert.True(languages["solidity"].GetProperty("reference_extraction").GetBoolean(),
+            "solidity must advertise reference_extraction=true");
+        Assert.True(languages["solidity"].GetProperty("graph_queries").GetBoolean(),
+            "solidity must advertise graph_queries=true");
 
         Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
         Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),
