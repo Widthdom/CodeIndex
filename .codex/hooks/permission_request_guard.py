@@ -26,17 +26,37 @@ def load_core():
 core = load_core()
 
 
+def deny(reason: str) -> None:
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "message": f"Blocked by CodeIndex guard: {reason}",
+                    },
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.exit(0)
+
+
 def load_payload() -> dict:
     try:
         return json.load(sys.stdin)
-    except Exception:
-        return {}
+    except Exception as exc:
+        deny(f"failed to parse Codex hook input; failing closed: {exc}")
 
 
 def get_command(payload: dict) -> str:
     tool_input = payload.get("tool_input") or {}
     command = tool_input.get("command")
-    return command if isinstance(command, str) else ""
+    if not isinstance(command, str):
+        deny("Bash command missing from hook input; failing closed")
+    return command
 
 
 def resolve_project_root(cwd: Path) -> Path:
@@ -54,28 +74,10 @@ def resolve_project_root(cwd: Path) -> Path:
             output = (proc.stdout or "").strip()
             if output:
                 return Path(output).resolve()
-    except Exception:
-        pass
-
-    return cwd.resolve()
-
-
-def deny(reason: str) -> None:
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": "deny",
-                        "message": f"Blocked by CodeIndex guard: {reason}",
-                    },
-                }
-            },
-            ensure_ascii=False,
-        )
-    )
-    sys.exit(0)
+        details = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        deny(f"could not resolve git project root from {cwd}; failing closed: {details}")
+    except Exception as exc:
+        deny(f"could not resolve git project root from {cwd}; failing closed: {exc}")
 
 
 def main() -> None:

@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -562,7 +563,11 @@ internal static class PostExtractionHookCallbackWorker
 
     private static IPostExtractionHook CreateHook(string hookAssemblyPath, string hookTypeName)
     {
-        var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(hookAssemblyPath));
+        var fullPath = Path.GetFullPath(hookAssemblyPath);
+        var loadContext = new ExtensionAssemblyLoadContext(
+            $"cdidx-hook-worker:{Path.GetFileNameWithoutExtension(fullPath)}",
+            fullPath);
+        var assembly = loadContext.LoadFromAssemblyPath(fullPath);
         var type = assembly.GetType(hookTypeName, throwOnError: true)
             ?? throw new InvalidOperationException($"hook type `{hookTypeName}` was not found.");
         return Activator.CreateInstance(type) as IPostExtractionHook

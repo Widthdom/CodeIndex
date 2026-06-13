@@ -12,7 +12,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -122,7 +121,7 @@ def main() -> None:
         if not script_decision.allowed:
             emit_deny(script_decision.reason)
 
-    if re.search(r"(?i)(^|[\s;&|()`])git\s+commit\b", command):
+    if core.command_is_git_commit(command):
         commit_decision = core.staged_secret_check(cwd)
         if not commit_decision.allowed:
             emit_deny(commit_decision.reason)

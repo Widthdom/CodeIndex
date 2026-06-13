@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
 namespace CodeIndex.Database;
@@ -890,6 +891,9 @@ public class StatusResult
     public List<string>? GraphSupportedLanguages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }
+    [JsonPropertyName("hook_diagnostics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PostExtractionHookDiagnostic>? HookDiagnostics { get; set; }
     [JsonPropertyName("extractors")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExtractorRegistryStatus? Extractors { get; set; }
