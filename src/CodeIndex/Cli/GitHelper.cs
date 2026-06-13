@@ -452,8 +452,14 @@ public static class GitHelper
         IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
         CancellationToken cancellationToken = default)
     {
-        var repositoryRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides, cancellationToken);
-        if (repositoryRoot == null)
+        var repositoryRoot = TryGetRepositoryRootResult(projectRoot, gitEnvironmentOverrides, cancellationToken);
+        if (repositoryRoot.FailureKind != GitCommandFailureKind.None)
+        {
+            var diagnostic = repositoryRoot.Diagnostic ?? "git could not resolve the repository root";
+            return GitHeadCommitResult.Error(diagnostic, repositoryRoot.FailureKind, diagnostic);
+        }
+
+        if (repositoryRoot.Root == null)
         {
             return HasGitMetadataEntry(projectRoot)
                 ? GitHeadCommitResult.Error("git repository metadata is present, but git could not resolve the repository root")
@@ -712,21 +718,39 @@ public static class GitHelper
         string projectPath,
         IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
         CancellationToken cancellationToken = default)
+        => TryGetRepositoryRootResult(projectPath, gitEnvironmentOverrides, cancellationToken).Root;
+
+    private static GitRepositoryRootResult TryGetRepositoryRootResult(
+        string projectPath,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default)
     {
-        var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--show-cdup");
-        if (cdup != null)
+        var cdup = RunGitCapturingResult(projectPath, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--show-cdup");
+        if (cdup.FailureKind == GitCommandFailureKind.None)
         {
-            var value = cdup.Trim();
-            return string.IsNullOrEmpty(value)
+            var value = cdup.Output?.Trim() ?? string.Empty;
+            var root = string.IsNullOrEmpty(value)
                 ? Path.GetFullPath(projectPath)
                 : Path.GetFullPath(Path.Combine(projectPath, value));
+            return GitRepositoryRootResult.Resolved(root);
         }
+        if (IsGitInfrastructureFailure(cdup.FailureKind))
+            return GitRepositoryRootResult.Failure(cdup.FailureKind, cdup.Diagnostic);
 
-        var isBare = TryRunGit(projectPath, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--is-bare-repository")?.Trim();
-        return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
-            ? Path.GetFullPath(projectPath)
-            : null;
+        var isBare = RunGitCapturingResult(projectPath, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--is-bare-repository");
+        if (isBare.FailureKind == GitCommandFailureKind.None
+            && string.Equals(isBare.Output?.Trim(), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            return GitRepositoryRootResult.Resolved(Path.GetFullPath(projectPath));
+        }
+        if (IsGitInfrastructureFailure(isBare.FailureKind))
+            return GitRepositoryRootResult.Failure(isBare.FailureKind, isBare.Diagnostic);
+
+        return GitRepositoryRootResult.NotARepo;
     }
+
+    private static bool IsGitInfrastructureFailure(GitCommandFailureKind failureKind)
+        => failureKind is not GitCommandFailureKind.None and not GitCommandFailureKind.ExitCode;
 
     private static bool HasGitMetadataEntry(string projectRoot)
     {
@@ -754,6 +778,17 @@ public static class GitHelper
                 or GitCommandFailureKind.Exception
                 ? Diagnostic
                 : null;
+    }
+
+    private readonly record struct GitRepositoryRootResult(
+        string? Root,
+        GitCommandFailureKind FailureKind,
+        string? Diagnostic)
+    {
+        public static GitRepositoryRootResult NotARepo { get; } = new(null, GitCommandFailureKind.None, null);
+        public static GitRepositoryRootResult Resolved(string root) => new(root, GitCommandFailureKind.None, null);
+        public static GitRepositoryRootResult Failure(GitCommandFailureKind failureKind, string? diagnostic)
+            => new(null, failureKind, diagnostic);
     }
 
     private readonly record struct GitProcessCaptureResult(
