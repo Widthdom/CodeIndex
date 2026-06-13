@@ -239,11 +239,13 @@ public class MetricsSinkTests
         // underlying command — sink failure is best-effort and silently degrades.
         // 書き込めない場所でも本体コマンドは継続する。
         var badPath = Path.Combine("/", "definitely-not-a-real-mount", "metrics.jsonl");
-        var (exitCode, _, _) = CaptureConsole(() => ProgramRunner.Run(
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["--metrics", badPath, "definitely-not-a-command"],
             appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Warning: metrics output disabled", stderr);
+        Assert.Contains("failed to open the configured metrics path", stderr);
     }
 
     [Fact]

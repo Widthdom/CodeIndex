@@ -26,12 +26,12 @@ internal static class MetricsSink
     internal const int MaxSerializedEventBytes = 8 * 1024;
 
     internal static IDisposable? TryStart(string? explicitPath) =>
-        TryStart(explicitPath, DefaultMaxBytes);
+        TryStart(explicitPath, DefaultMaxBytes, CommandErrorWriter.WriteWarning);
 
     internal static IDisposable? TryStartForTesting(string? explicitPath, long maxBytes) =>
-        TryStart(explicitPath, maxBytes);
+        TryStart(explicitPath, maxBytes, warningSink: null);
 
-    private static IDisposable? TryStart(string? explicitPath, long maxBytes)
+    private static IDisposable? TryStart(string? explicitPath, long maxBytes, Action<string>? warningSink)
     {
         var path = ResolvePath(explicitPath);
         if (string.IsNullOrWhiteSpace(path))
@@ -55,10 +55,13 @@ internal static class MetricsSink
             CurrentSession.Value = session;
             return session;
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort: a metrics sink that cannot open its file must not block the command.
             // メトリクス出力先が開けなくても本体コマンドはブロックしない。
+            warningSink?.Invoke(
+                "metrics output disabled; failed to open the configured metrics path "
+                + $"({CommandErrorWriter.FormatSanitizedException(ex)}).");
             CurrentSession.Value = null;
             return null;
         }
