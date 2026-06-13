@@ -10466,6 +10466,48 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void McpIndexRunLock_Dispose_WhenInfoCleanupFails_ReportsSanitizedDiagnostic_Issue3462()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_cleanup_diag_{Guid.NewGuid():N}.db");
+        var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
+        var infoPath = lockPath + ".info";
+        var diagnostics = new List<LockCleanupDiagnostic>();
+        try
+        {
+            McpIndexRunLock.CleanupDiagnosticSinkForTesting = diagnostics.Add;
+            McpIndexRunLock.DeleteFileForTesting = path =>
+            {
+                if (string.Equals(path, infoPath, StringComparison.Ordinal))
+                    throw new IOException($"sensitive cleanup path {path}");
+                File.Delete(path);
+            };
+
+            Assert.True(McpIndexRunLock.TryAcquire(dbPath, out var runLock, out var error), error);
+            using (runLock!)
+            {
+            }
+
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Equal("mcp_index_lock", diagnostic.Component);
+            Assert.Equal("metadata", diagnostic.Target);
+            Assert.Equal("io_error", diagnostic.Reason);
+            Assert.DoesNotContain("sensitive", diagnostic.ToLogMessage(), StringComparison.Ordinal);
+            Assert.DoesNotContain(infoPath, diagnostic.ToLogMessage(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpIndexRunLock.CleanupDiagnosticSinkForTesting = null;
+            McpIndexRunLock.DeleteFileForTesting = File.Delete;
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_WhenDbLockInfoTooLarge_ReturnsBusyWithoutHolderDetails()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_large_lock_fixture_{Guid.NewGuid():N}");

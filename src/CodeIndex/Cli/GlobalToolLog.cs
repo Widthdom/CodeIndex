@@ -26,6 +26,7 @@ internal static class GlobalToolLog
     internal const int RedactionArgumentLengthLimit = 8192;
     internal const string RedactionTruncationMarker = "<truncated>";
     private const string RedactedValue = "<redacted>";
+    private const int PrivateLogDiagnosticEmitLimit = 16;
     private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
@@ -68,15 +69,16 @@ internal static class GlobalToolLog
             if (!ShouldEnable())
                 return null;
 
+            var privateLogDiagnostics = new List<PrivateLogFileDiagnostic>();
             var logDirectory = ResolveLogDirectory();
             Directory.CreateDirectory(logDirectory);
-            HardenLogFiles(logDirectory);
+            HardenLogFiles(logDirectory, privateLogDiagnostics.Add);
             var options = LogOptions.FromEnvironment();
             var logPath = ResolveLogPath(logDirectory, options);
             writer = createWriter?.Invoke(logPath) ?? CreateLogWriter(logPath);
             afterWriterCreated?.Invoke();
-            SetLogFilePermissions(logPath);
-            PruneOldLogs(logDirectory, options.RetainCount);
+            SetLogFilePermissions(logPath, privateLogDiagnostics.Add);
+            PruneOldLogs(logDirectory, options.RetainCount, privateLogDiagnostics.Add);
 
             var session = new Session(writer, logPath, options.Format);
             writer = null;
@@ -87,6 +89,7 @@ internal static class GlobalToolLog
             session.Write("INFO", $"base_dir={AppContext.BaseDirectory}");
             session.Write("INFO", $"cwd={Environment.CurrentDirectory}");
             session.Write("INFO", $"args={FormatArgs(args)}");
+            WritePrivateLogDiagnostics(session, privateLogDiagnostics);
             return session;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -410,11 +413,14 @@ internal static class GlobalToolLog
         return FormattableString.Invariant($"p{Environment.ProcessId}-{startTime}");
     }
 
-    private static void PruneOldLogs(string logDirectory, int retainedLogFileCount)
+    private static void PruneOldLogs(
+        string logDirectory,
+        int retainedLogFileCount,
+        Action<PrivateLogFileDiagnostic>? diagnosticSink)
     {
         try
         {
-            PrivateLogFile.PruneOldFiles(logDirectory, "stderr-*.log", retainedLogFileCount);
+            PrivateLogFile.PruneOldFiles(logDirectory, "stderr-*.log", retainedLogFileCount, diagnosticSink);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -422,14 +428,14 @@ internal static class GlobalToolLog
         }
     }
 
-    private static void HardenLogFiles(string logDirectory)
+    private static void HardenLogFiles(string logDirectory, Action<PrivateLogFileDiagnostic>? diagnosticSink)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         try
         {
-            PrivateLogFile.HardenExisting(logDirectory, "stderr-*.log");
+            PrivateLogFile.HardenExisting(logDirectory, "stderr-*.log", diagnosticSink);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -437,18 +443,41 @@ internal static class GlobalToolLog
         }
     }
 
-    private static void SetLogFilePermissions(string logPath)
+    private static void SetLogFilePermissions(string logPath, Action<PrivateLogFileDiagnostic>? diagnosticSink)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         try
         {
-            PrivateLogFile.TrySetPrivatePermissions(logPath);
+            PrivateLogFile.TrySetPrivatePermissions(logPath, diagnosticSink);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort only / ベストエフォートのみ
+        }
+    }
+
+    private static void WritePrivateLogDiagnostics(Session session, IReadOnlyList<PrivateLogFileDiagnostic> diagnostics)
+    {
+        var emitted = Math.Min(diagnostics.Count, PrivateLogDiagnosticEmitLimit);
+        for (var i = 0; i < emitted; i++)
+        {
+            var diagnostic = diagnostics[i];
+            session.Write(
+                "WARN",
+                "private_log_diagnostic"
+                    + $" operation={QuoteLogValue(diagnostic.Operation)}"
+                    + $" reason={QuoteLogValue(diagnostic.Reason)}"
+                    + $" target={QuoteLogValue(diagnostic.Target)}");
+        }
+
+        if (diagnostics.Count > emitted)
+        {
+            session.Write(
+                "WARN",
+                "private_log_diagnostics_truncated"
+                    + $" omitted={(diagnostics.Count - emitted).ToString(CultureInfo.InvariantCulture)}");
         }
     }
 
