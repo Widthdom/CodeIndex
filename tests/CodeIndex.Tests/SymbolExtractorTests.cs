@@ -6735,6 +6735,83 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_IgnoresHeredocBodies_Issue3510()
+    {
+        var content = """
+            setup() {
+              python3 <<'PY'
+            def main():
+                pass
+            main() {
+              echo not-shell
+            }
+            PY
+              cat <<-EOF
+            function fake_heredoc_function() {
+            }
+            EOF
+              echo done
+            }
+            real_after() { echo done; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_after");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake_heredoc_function");
+    }
+
+    [Fact]
+    public void Extract_Shell_BoundsFunctionRanges_Issue3510()
+    {
+        var content = """
+            info() { printf '%s\n' "$*"; }
+            warn() { printf '%s\n' "$*"; }
+            extract_release_tag_name() {
+              local tag
+              tag="${1#refs/tags/}"
+              printf '%s\n' "$tag"
+            }
+            verify_payload_manifest() {
+              cat <<'PY'
+            main() {
+              pass
+            }
+            PY
+              echo done
+            }
+            after() { echo done; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        var info = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "info");
+        Assert.Equal(1, info.EndLine);
+        Assert.Equal(1, info.BodyStartLine);
+        Assert.Equal(1, info.BodyEndLine);
+
+        var warn = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "warn");
+        Assert.Equal(2, warn.EndLine);
+        Assert.Equal(2, warn.BodyStartLine);
+        Assert.Equal(2, warn.BodyEndLine);
+
+        var extractTag = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "extract_release_tag_name");
+        Assert.Equal(7, extractTag.EndLine);
+        Assert.Equal(3, extractTag.BodyStartLine);
+        Assert.Equal(7, extractTag.BodyEndLine);
+
+        var verifyManifest = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "verify_payload_manifest");
+        Assert.Equal(15, verifyManifest.EndLine);
+        Assert.Equal(8, verifyManifest.BodyStartLine);
+        Assert.Equal(15, verifyManifest.BodyEndLine);
+
+        var after = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "after");
+        Assert.Equal(16, after.EndLine);
+        Assert.Equal(16, after.BodyStartLine);
+        Assert.Equal(16, after.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_ShellLargeAliasSet_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();

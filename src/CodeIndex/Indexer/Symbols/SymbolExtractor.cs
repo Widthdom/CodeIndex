@@ -42,6 +42,9 @@ public static partial class SymbolExtractor
     private static readonly Regex JavaScriptTypeScriptModuleDocRegex = new(
         @"@module(?:\s+(?<name>[^\s*]+))?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ShellHeredocRedirectRegex = new(
+        @"(?<!<)<<-?(?!<)\s*(?:""(?<dq>[^""]+)""|'(?<sq>[^']+)'|\\?(?<bare>[A-Za-z_][A-Za-z0-9_]*))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static int GetContractVersion(string? lang)
     {
@@ -2359,6 +2362,9 @@ public static partial class SymbolExtractor
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        var shellScannerLines = lang == "shell"
+            ? MaskShellHeredocLines(lines)
+            : null;
         int[]?[] csharpMatchColumnToRaw = null!;
         var csharpMatchLines = lang == "csharp"
             ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
@@ -2433,6 +2439,7 @@ public static partial class SymbolExtractor
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
+            var shellScannerLine = shellScannerLines?[i];
             var matchLine = structuralLine;
             if (lang == "css" && cssScannerLine != null)
             {
@@ -2442,6 +2449,10 @@ public static partial class SymbolExtractor
                 // CSS のシンボル名マッチは raw line を使い、引用付きセレクタや @import 値を
                 // 保持する。brace/depth 判定だけ別の scanner line を使う。
                 matchLine = line;
+            }
+            else if (lang == "shell" && shellScannerLine != null)
+            {
+                matchLine = shellScannerLine;
             }
             else if (lang == "csharp")
             {
@@ -2930,6 +2941,8 @@ public static partial class SymbolExtractor
 
                         var rangeLines = lang == "css" && cssScannerLines != null
                             ? cssScannerLines
+                            : lang == "shell" && shellScannerLines != null
+                                ? shellScannerLines
                             : structuralLines;
                         var scalaBracelessClassEndLine = lang == "scala" && pattern.Kind == "class"
                             ? TryFindScalaBracelessClassEndLine(lines, i, absoluteStartColumn)
@@ -5774,6 +5787,7 @@ public static partial class SymbolExtractor
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
             BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace when lang == "shell" => FindShellFunctionRange(lines, startIndex, startColumn),
             BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
@@ -5785,6 +5799,268 @@ public static partial class SymbolExtractor
             BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
+    }
+
+    private readonly record struct ShellHeredocTerminator(string Delimiter, bool StripLeadingTabs);
+
+    private static string[] MaskShellHeredocLines(string[] lines)
+    {
+        var maskedLines = (string[])lines.Clone();
+        var pendingTerminators = new Queue<ShellHeredocTerminator>();
+        ShellHeredocTerminator? activeTerminator = null;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (activeTerminator is { } terminator)
+            {
+                maskedLines[i] = string.Empty;
+                var terminatorLine = terminator.StripLeadingTabs
+                    ? line.TrimStart('\t')
+                    : line;
+                terminatorLine = terminatorLine.TrimEnd('\r');
+                if (string.Equals(terminatorLine, terminator.Delimiter, StringComparison.Ordinal))
+                {
+                    activeTerminator = pendingTerminators.Count > 0
+                        ? pendingTerminators.Dequeue()
+                        : null;
+                }
+
+                continue;
+            }
+
+            foreach (var heredocTerminator in EnumerateShellHeredocTerminators(line))
+                pendingTerminators.Enqueue(heredocTerminator);
+
+            if (pendingTerminators.Count > 0)
+                activeTerminator = pendingTerminators.Dequeue();
+        }
+
+        return maskedLines;
+    }
+
+    private static IEnumerable<ShellHeredocTerminator> EnumerateShellHeredocTerminators(string line)
+    {
+        var ignored = BuildShellIgnoredCharacterMask(line);
+        foreach (Match match in ShellHeredocRedirectRegex.Matches(line))
+        {
+            if (match.Index < ignored.Length && ignored[match.Index])
+                continue;
+
+            var delimiter = match.Groups["dq"].Success
+                ? match.Groups["dq"].Value
+                : match.Groups["sq"].Success
+                    ? match.Groups["sq"].Value
+                    : match.Groups["bare"].Value;
+            if (delimiter.Length == 0)
+                continue;
+
+            var stripLeadingTabs = match.Index + 2 < line.Length && line[match.Index + 2] == '-';
+            yield return new ShellHeredocTerminator(delimiter, stripLeadingTabs);
+        }
+    }
+
+    private static bool[] BuildShellIgnoredCharacterMask(string line)
+    {
+        var ignored = new bool[line.Length];
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inSingleQuote)
+            {
+                ignored[i] = true;
+                if (c == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                ignored[i] = true;
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    ignored[++i] = true;
+                    continue;
+                }
+
+                if (c == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            if (c == '\\' && i + 1 < line.Length)
+            {
+                i++;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                ignored[i] = true;
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                ignored[i] = true;
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (c == '#' && IsShellCommentStart(line, i))
+            {
+                Array.Fill(ignored, true, i, line.Length - i);
+                break;
+            }
+        }
+
+        return ignored;
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindShellFunctionRange(string[] lines, int startIndex, int startColumn)
+    {
+        var depth = 0;
+        var opened = false;
+        int? bodyStartLine = null;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        for (var i = startIndex; i < lines.Length; i++)
+        {
+            var scanLine = i == startIndex && startColumn > 0 && startColumn < lines[i].Length
+                ? lines[i][startColumn..]
+                : i == startIndex && startColumn >= lines[i].Length
+                    ? string.Empty
+                    : lines[i];
+
+            var closeColumn = ScanShellBraceLine(
+                scanLine,
+                ref depth,
+                ref opened,
+                ref bodyStartLine,
+                i + 1,
+                ref inSingleQuote,
+                ref inDoubleQuote);
+            if (closeColumn >= 0)
+                return (i + 1, bodyStartLine, i + 1);
+        }
+
+        if (!opened)
+            return (startIndex + 1, null, null);
+
+        var boundedEndLine = bodyStartLine.HasValue
+            ? Math.Max(startIndex + 1, bodyStartLine.Value)
+            : startIndex + 1;
+        return (boundedEndLine, bodyStartLine, boundedEndLine);
+    }
+
+    private static int FindShellSameLineBraceEndColumn(string line, int startColumn)
+    {
+        var depth = 0;
+        var opened = false;
+        int? bodyStartLine = null;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        return ScanShellBraceLine(
+            startColumn > 0 && startColumn < line.Length
+                ? line[startColumn..]
+                : startColumn >= line.Length
+                    ? string.Empty
+                    : line,
+            ref depth,
+            ref opened,
+            ref bodyStartLine,
+            1,
+            ref inSingleQuote,
+            ref inDoubleQuote) is var relativeCloseColumn && relativeCloseColumn >= 0
+                ? startColumn + relativeCloseColumn
+                : -1;
+    }
+
+    private static int ScanShellBraceLine(
+        string line,
+        ref int depth,
+        ref bool opened,
+        ref int? bodyStartLine,
+        int currentLine,
+        ref bool inSingleQuote,
+        ref bool inDoubleQuote)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inSingleQuote)
+            {
+                if (c == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            if (c == '\\' && i + 1 < line.Length)
+            {
+                i++;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (c == '#' && IsShellCommentStart(line, i))
+                break;
+
+            if (c == '{')
+            {
+                depth++;
+                if (!opened)
+                {
+                    opened = true;
+                    bodyStartLine = currentLine;
+                }
+            }
+            else if (c == '}' && opened)
+            {
+                depth--;
+                if (depth <= 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsShellCommentStart(string line, int index)
+    {
+        if (index == 0)
+            return true;
+
+        var previous = line[index - 1];
+        return char.IsWhiteSpace(previous) || previous is ';' or '|' or '&' or '(' or '{';
     }
 
 
