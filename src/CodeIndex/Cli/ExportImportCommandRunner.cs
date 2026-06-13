@@ -884,10 +884,93 @@ internal static class ExportImportCommandRunner
 
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
     {
-        File.Move(tempPath, fullDbPath, overwrite: true);
-        DataDirectorySecurity.ApplyPrivateFileMode(fullDbPath);
-        DeleteSqliteSidecars(fullDbPath);
+        var dbBackupPath = MoveExistingReplacementFileToBackup(fullDbPath);
+        var sidecarBackups = new List<ReplacementBackup>(capacity: 2);
+        try
+        {
+            AddReplacementBackup(sidecarBackups, fullDbPath + "-wal");
+            AddReplacementBackup(sidecarBackups, fullDbPath + "-shm");
+
+            File.Move(tempPath, fullDbPath, overwrite: false);
+            ApplyImportedDatabasePrivateFileMode(fullDbPath);
+        }
+        catch (Exception ex) when (IsRecoverableReplacementException(ex))
+        {
+            try
+            {
+                RollBackImportedDatabaseReplacement(fullDbPath, dbBackupPath, sidecarBackups);
+            }
+            catch (Exception rollbackEx) when (IsRecoverableReplacementException(rollbackEx))
+            {
+                Console.Error.WriteLine($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+            }
+
+            throw new IOException("import database replacement failed; rolled back the previous destination database when possible.", ex);
+        }
+
+        DeleteReplacementBackup(dbBackupPath, "import replaced database backup");
+        foreach (var backup in sidecarBackups)
+            DeleteReplacementBackup(backup.BackupPath, "import replaced database sidecar backup", DeleteSqliteSidecarForTesting);
     }
+
+    private static void ApplyImportedDatabasePrivateFileMode(string fullDbPath)
+    {
+        if (ApplyPrivateFileModeForTesting != null)
+        {
+            ApplyPrivateFileModeForTesting(fullDbPath);
+            return;
+        }
+
+        DataDirectorySecurity.ApplyPrivateFileMode(fullDbPath);
+    }
+
+    private static void AddReplacementBackup(List<ReplacementBackup> backups, string path)
+    {
+        var backupPath = MoveExistingReplacementFileToBackup(path);
+        if (backupPath != null)
+            backups.Add(new ReplacementBackup(path, backupPath));
+    }
+
+    private static string? MoveExistingReplacementFileToBackup(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+
+        var backupPath = $"{path}.replace-backup-{Guid.NewGuid():N}";
+        File.Move(path, backupPath, overwrite: false);
+        return backupPath;
+    }
+
+    private static void RollBackImportedDatabaseReplacement(
+        string fullDbPath,
+        string? dbBackupPath,
+        IReadOnlyList<ReplacementBackup> sidecarBackups)
+    {
+        if (dbBackupPath != null)
+        {
+            File.Move(dbBackupPath, fullDbPath, overwrite: true);
+        }
+        else if (File.Exists(fullDbPath))
+        {
+            File.Delete(fullDbPath);
+        }
+
+        foreach (var backup in sidecarBackups)
+            File.Move(backup.BackupPath, backup.OriginalPath, overwrite: true);
+    }
+
+    private static void DeleteReplacementBackup(string? path, string cleanupDescription, Action<string>? deleteOverride = null)
+    {
+        if (path != null)
+            TryDeleteFile(path, cleanupDescription, deleteOverride);
+    }
+
+    private static bool IsRecoverableReplacementException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     private static void DeleteSqliteSidecars(string dbPath, string? cleanupDescription = null)
     {
@@ -934,6 +1017,9 @@ internal static class ExportImportCommandRunner
 
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string>? DeleteSqliteSidecarForTesting { get; set; }
+    internal static Action<string>? ApplyPrivateFileModeForTesting { get; set; }
+
+    private readonly record struct ReplacementBackup(string OriginalPath, string BackupPath);
 
     internal static StringComparison ResolveDatabasePathComparison(string dbPath)
     {

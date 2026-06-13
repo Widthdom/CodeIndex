@@ -721,7 +721,7 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
-    public void ReplaceImportedDatabase_SidecarCleanupFailureDoesNotFailAfterMove_Issue3125()
+    public void ReplaceImportedDatabase_SidecarBackupCleanupFailureLeavesReplacementActive_Issue3410()
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cleanup_{Guid.NewGuid():N}");
         Directory.CreateDirectory(workDir);
@@ -735,16 +735,53 @@ public class ExportImportCommandRunnerTests
             File.WriteAllText(tempPath, "imported db");
             ExportImportCommandRunner.DeleteSqliteSidecarForTesting = _ => throw new IOException("simulated sidecar cleanup failure");
 
-            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+                return 0;
+            });
 
             Assert.Equal("imported db", File.ReadAllText(dbPath));
             Assert.False(File.Exists(tempPath));
-            Assert.True(File.Exists(dbPath + "-wal"));
-            Assert.True(File.Exists(dbPath + "-shm"));
+            Assert.False(File.Exists(dbPath + "-wal"));
+            Assert.False(File.Exists(dbPath + "-shm"));
+            Assert.Contains("Warning: failed to delete import replaced database sidecar backup", stderr);
         }
         finally
         {
             ExportImportCommandRunner.DeleteSqliteSidecarForTesting = null;
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReplaceImportedDatabase_PostMoveFailureRollsBackDestination_Issue3410()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_rollback_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var tempPath = Path.Combine(workDir, "staged.db");
+            File.WriteAllText(dbPath, "existing db");
+            File.WriteAllText(dbPath + "-wal", "existing wal");
+            File.WriteAllText(dbPath + "-shm", "existing shm");
+            File.WriteAllText(tempPath, "imported db");
+            ExportImportCommandRunner.ApplyPrivateFileModeForTesting = _ =>
+                throw new IOException("simulated post-move failure");
+
+            var ex = Assert.Throws<IOException>(() =>
+                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath));
+
+            Assert.Contains("rolled back", ex.Message, StringComparison.Ordinal);
+            Assert.Equal("existing db", File.ReadAllText(dbPath));
+            Assert.Equal("existing wal", File.ReadAllText(dbPath + "-wal"));
+            Assert.Equal("existing shm", File.ReadAllText(dbPath + "-shm"));
+            Assert.False(File.Exists(tempPath));
+        }
+        finally
+        {
+            ExportImportCommandRunner.ApplyPrivateFileModeForTesting = null;
             Directory.Delete(workDir, recursive: true);
         }
     }
