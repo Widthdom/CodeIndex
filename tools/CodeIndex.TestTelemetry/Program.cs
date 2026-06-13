@@ -83,6 +83,8 @@ public static class TrxTelemetry
 {
     public const int MaxTop = 100;
     public const int MaxTrxFiles = 256;
+    public const int MaxTraversalDirectories = 256;
+    public const int MaxTraversalEntries = 4096;
     public const long MaxTrxFileBytes = 16 * 1024 * 1024;
 
     public static TrxTelemetrySummary Load(string resultsDirectory, int top)
@@ -107,12 +109,7 @@ public static class TrxTelemetry
 
         var warnings = new List<string>();
         var trxFiles = EnumerateTrxFiles(resultsDirectory, warnings);
-        var slowest = new List<TrxTestResult>(Math.Min(top, 16));
-        var failures = new List<TrxTestResult>(Math.Min(top, 16));
-        var total = 0;
-        var passed = 0;
-        var failed = 0;
-        var skipped = 0;
+        var results = new TrxResultAccumulator(top);
 
         foreach (var path in trxFiles)
         {
@@ -121,26 +118,13 @@ public static class TrxTelemetry
 
             try
             {
+                var fileResults = new TrxResultAccumulator(top);
                 foreach (var result in ReadResults(path))
                 {
-                    total++;
-
-                    if (IsOutcome(result, "Passed"))
-                    {
-                        passed++;
-                    }
-                    else if (IsFailureOutcome(result))
-                    {
-                        failed++;
-                        AddTopResult(failures, result, top);
-                    }
-                    else if (IsOutcome(result, "NotExecuted") || IsOutcome(result, "Skipped"))
-                    {
-                        skipped++;
-                    }
-
-                    AddTopResult(slowest, result, top);
+                    fileResults.Add(result);
                 }
+
+                results.Merge(fileResults);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException)
             {
@@ -148,45 +132,127 @@ public static class TrxTelemetry
             }
         }
 
-        var other = total - passed - failed - skipped;
-
         return new TrxTelemetrySummary(
             ResultsDirectory: resultsDirectory,
             TrxFileCount: trxFiles.Count,
-            Total: total,
-            Passed: passed,
-            Failed: failed,
-            Skipped: skipped,
-            Other: other,
-            Slowest: slowest,
-            Failures: failures,
+            Total: results.Total,
+            Passed: results.Passed,
+            Failed: results.Failed,
+            Skipped: results.Skipped,
+            Other: results.Other,
+            Slowest: results.Slowest,
+            Failures: results.Failures,
             Warnings: warnings);
     }
 
     private static List<string> EnumerateTrxFiles(string resultsDirectory, List<string> warnings)
     {
         var trxFiles = new List<string>(MaxTrxFiles);
+        var pendingDirectories = new Queue<string>();
+        pendingDirectories.Enqueue(resultsDirectory);
+        var visitedDirectories = 0;
+        var visitedEntries = 0;
 
-        try
+        while (pendingDirectories.Count > 0)
         {
-            foreach (var path in Directory.EnumerateFiles(resultsDirectory, "*.trx", SearchOption.AllDirectories))
+            if (visitedDirectories >= MaxTraversalDirectories)
             {
+                warnings.Add($"TRX directory traversal cap reached: visited first {MaxTraversalDirectories} directories.");
+                break;
+            }
+
+            var directory = pendingDirectories.Dequeue();
+            visitedDirectories++;
+
+            foreach (var entry in EnumerateDirectoryEntries(directory, warnings))
+            {
+                visitedEntries++;
+                if (visitedEntries > MaxTraversalEntries)
+                {
+                    warnings.Add($"TRX entry traversal cap reached: visited first {MaxTraversalEntries} entries.");
+                    trxFiles.Sort(StringComparer.Ordinal);
+                    return trxFiles;
+                }
+
+                if (!TryGetAttributes(entry, warnings, out var attributes))
+                    continue;
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    continue;
+
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    pendingDirectories.Enqueue(entry);
+                    continue;
+                }
+
+                if (!string.Equals(Path.GetExtension(entry), ".trx", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 if (trxFiles.Count >= MaxTrxFiles)
                 {
                     warnings.Add($"TRX file cap reached: using first {MaxTrxFiles} files.");
-                    break;
+                    trxFiles.Sort(StringComparer.Ordinal);
+                    return trxFiles;
                 }
 
-                trxFiles.Add(path);
+                trxFiles.Add(entry);
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            warnings.Add($"Could not enumerate TRX files: {GetWarningReason(ex)}");
         }
 
         trxFiles.Sort(StringComparer.Ordinal);
         return trxFiles;
+    }
+
+    private static IEnumerable<string> EnumerateDirectoryEntries(string directory, List<string> warnings)
+    {
+        IEnumerator<string>? enumerator;
+        try
+        {
+            enumerator = Directory.EnumerateFileSystemEntries(directory).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"Could not enumerate TRX directory: {GetWarningReason(ex)}");
+            yield break;
+        }
+
+        using (enumerator)
+        {
+            while (true)
+            {
+                string entry;
+                try
+                {
+                    if (!enumerator.MoveNext())
+                        yield break;
+
+                    entry = enumerator.Current;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    warnings.Add($"Could not enumerate TRX directory: {GetWarningReason(ex)}");
+                    yield break;
+                }
+
+                yield return entry;
+            }
+        }
+    }
+
+    private static bool TryGetAttributes(string path, List<string> warnings, out FileAttributes attributes)
+    {
+        try
+        {
+            attributes = File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"Could not inspect TRX traversal entry: {GetWarningReason(ex)}");
+            attributes = default;
+            return false;
+        }
     }
 
     private static bool CanReadTrxFile(string resultsDirectory, string path, List<string> warnings)
@@ -289,6 +355,71 @@ public static class TrxTelemetry
         return duration != 0
             ? duration
             : string.Compare(left.TestName, right.TestName, StringComparison.Ordinal);
+    }
+
+    private sealed class TrxResultAccumulator
+    {
+        private readonly int _top;
+
+        public TrxResultAccumulator(int top)
+        {
+            _top = top;
+            Slowest = new List<TrxTestResult>(Math.Min(top, 16));
+            Failures = new List<TrxTestResult>(Math.Min(top, 16));
+        }
+
+        public int Total { get; private set; }
+
+        public int Passed { get; private set; }
+
+        public int Failed { get; private set; }
+
+        public int Skipped { get; private set; }
+
+        public int Other => Total - Passed - Failed - Skipped;
+
+        public List<TrxTestResult> Slowest { get; }
+
+        public List<TrxTestResult> Failures { get; }
+
+        public void Add(TrxTestResult result)
+        {
+            Total++;
+
+            if (IsOutcome(result, "Passed"))
+            {
+                Passed++;
+            }
+            else if (IsFailureOutcome(result))
+            {
+                Failed++;
+                AddTopResult(Failures, result, _top);
+            }
+            else if (IsOutcome(result, "NotExecuted") || IsOutcome(result, "Skipped"))
+            {
+                Skipped++;
+            }
+
+            AddTopResult(Slowest, result, _top);
+        }
+
+        public void Merge(TrxResultAccumulator other)
+        {
+            Total += other.Total;
+            Passed += other.Passed;
+            Failed += other.Failed;
+            Skipped += other.Skipped;
+
+            foreach (var result in other.Slowest)
+            {
+                AddTopResult(Slowest, result, _top);
+            }
+
+            foreach (var result in other.Failures)
+            {
+                AddTopResult(Failures, result, _top);
+            }
+        }
     }
 
     private static TimeSpan ParseDuration(string? value)

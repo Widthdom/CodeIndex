@@ -113,6 +113,33 @@ public sealed class TestTelemetryTests
     }
 
     [Fact]
+    public void Load_CapsTrxDirectoryTraversal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_telemetry_directory_cap");
+        try
+        {
+            var resultsDirectory = Path.Combine(projectRoot, "TestResults");
+            Directory.CreateDirectory(resultsDirectory);
+
+            for (var i = 0; i < TrxTelemetry.MaxTraversalDirectories + 1; i++)
+            {
+                Directory.CreateDirectory(Path.Combine(resultsDirectory, $"dir-{i:D4}"));
+            }
+
+            var summary = TrxTelemetry.Load(resultsDirectory, top: 1);
+
+            Assert.Equal(0, summary.TrxFileCount);
+            Assert.Equal(0, summary.Total);
+            Assert.Contains(summary.Warnings, warning =>
+                warning.Contains("directory traversal cap", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Load_SkipsTrxFilesAboveSizeCap()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_telemetry_size");
@@ -166,6 +193,37 @@ public sealed class TestTelemetryTests
             Assert.Equal(0, summary.Total);
             Assert.Contains(summary.Warnings, warning =>
                 string.Equals(warning, "Could not parse with-dtd.trx: invalid_xml", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Load_DiscardsPartialResultsFromMalformedTrx()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_telemetry_partial_xml");
+        try
+        {
+            var resultsDirectory = Path.Combine(projectRoot, "TestResults");
+            Directory.CreateDirectory(resultsDirectory);
+            File.WriteAllText(Path.Combine(resultsDirectory, "partial.trx"), """
+                <TestRun>
+                  <Results>
+                    <UnitTestResult testName="ShouldNotCount" outcome="Passed" duration="00:00:09.0000000" />
+                    <UnitTestResult testName="Broken" outcome="Failed">
+                  </Results>
+                </TestRun>
+                """);
+
+            var summary = TrxTelemetry.Load(resultsDirectory, top: 1);
+
+            Assert.Equal(0, summary.Total);
+            Assert.Equal(0, summary.Passed);
+            Assert.Empty(summary.Slowest);
+            Assert.Contains(summary.Warnings, warning =>
+                string.Equals(warning, "Could not parse partial.trx: invalid_xml", StringComparison.Ordinal));
         }
         finally
         {
