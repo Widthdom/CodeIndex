@@ -480,6 +480,12 @@ public class ReleaseWorkflowTests
         Assert.Contains("ghcr.io/widthdom/codeindex:${version}", workflow);
         Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
         Assert.Contains("tags: ${{ steps.image-tags.outputs.tags }}", workflow);
+        Assert.Contains("Extract container build metadata", workflow);
+        Assert.Contains("git rev-parse --short=7 HEAD", workflow);
+        Assert.Contains("git show -s --format=%cd --date=format:%Y-%m-%d HEAD", workflow);
+        Assert.Contains("CDIDX_BUILD_COMMIT=${{ steps.container-metadata.outputs.commit }}", workflow);
+        Assert.Contains("CDIDX_BUILD_DATE=${{ steps.container-metadata.outputs.date }}", workflow);
+        Assert.Contains("CDIDX_BUILD_DIRTY=${{ steps.container-metadata.outputs.dirty }}", workflow);
         Assert.Contains("*-*) ;;", workflow);
         Assert.Contains("docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine", dockerfile);
         Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build", dockerfile);
@@ -493,6 +499,10 @@ public class ReleaseWorkflowTests
         Assert.Contains("COPY Directory.Build.props nuget.config version.json ./", dockerfile);
         Assert.Contains("COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/", dockerfile);
         Assert.Contains("COPY src/CodeIndex/ src/CodeIndex/", dockerfile);
+        Assert.Contains("ARG CDIDX_BUILD_COMMIT=unknown", dockerfile);
+        Assert.Contains("-p:CdidxBuildCommitOverride=\"$CDIDX_BUILD_COMMIT\"", dockerfile);
+        Assert.Contains("-p:CdidxBuildDateOverride=\"$build_date\"", dockerfile);
+        Assert.Contains("-p:CdidxBuildDirtyOverride=\"$CDIDX_BUILD_DIRTY\"", dockerfile);
         Assert.Contains(".git/", dockerignore);
         Assert.Contains("tests/", dockerignore);
         Assert.Contains("tools/", dockerignore);
@@ -504,6 +514,9 @@ public class ReleaseWorkflowTests
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
         Assert.Contains("ENTRYPOINT [\"cdidx\"]", dockerfile);
+        Assert.Contains("CdidxBuildCommitOverride", project);
+        Assert.Contains("CdidxBuildDateOverride", project);
+        Assert.Contains("CdidxBuildDirtyOverride", project);
         Assert.Contains("Microsoft.NET.ILLink.Tasks\" Version=\"8.", project);
         Assert.DoesNotContain("Microsoft.NET.ILLink.Tasks\" Version=\"10.", project);
     }

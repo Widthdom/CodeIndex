@@ -11,17 +11,24 @@ COPY LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md ./
 COPY LICENSES/ LICENSES/
 
 ARG TARGETARCH=amd64
+ARG CDIDX_BUILD_COMMIT=unknown
+ARG CDIDX_BUILD_DATE
+ARG CDIDX_BUILD_DIRTY=unknown
 RUN case "$TARGETARCH" in \
       amd64) rid="linux-musl-x64" ;; \
       arm64) rid="linux-musl-arm64" ;; \
       *) echo "Unsupported container architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
+    build_date="${CDIDX_BUILD_DATE:-$(date -u +%Y-%m-%d)}" && \
     dotnet publish src/CodeIndex/CodeIndex.csproj \
       --configuration Release \
       --runtime "$rid" \
       --self-contained true \
       -p:PublishSingleFile=true \
       -p:PublishTrimmed=true \
+      -p:CdidxBuildCommitOverride="$CDIDX_BUILD_COMMIT" \
+      -p:CdidxBuildDateOverride="$build_date" \
+      -p:CdidxBuildDirtyOverride="$CDIDX_BUILD_DIRTY" \
       --output /out
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime
