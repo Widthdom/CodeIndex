@@ -385,6 +385,28 @@ class CommandGuardCoreTests(TestCase):
 
             self.assertFalse(decision.allowed)
 
+    def test_check_script_file_denies_missing_candidate_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "tools" / "missing.sh"
+
+            decision = core.check_script_file(missing, project_root=root)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("candidate script not found", decision.reason)
+
+    def test_check_script_file_denies_scripts_above_scan_byte_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "large.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(" " * (core.MAX_SCRIPT_SCAN_BYTES + 1), encoding="utf-8")
+
+            decision = core.check_script_file(script, project_root=root)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("scan limit", decision.reason)
+
     def test_check_script_file_denies_forbidden_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

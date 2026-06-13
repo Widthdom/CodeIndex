@@ -1189,7 +1189,7 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 
 def check_script_file(path: Path, project_root: Path) -> GuardDecision:
     if not path.exists():
-        return _allow(f"script not found: {path}")
+        return _deny(f"candidate script not found; failing closed: {path}")
     if not path.is_file():
         return _deny(f"candidate script is not a file: {path}")
 
@@ -1203,9 +1203,14 @@ def check_script_file(path: Path, project_root: Path) -> GuardDecision:
         return _deny(f"script outside project is blocked: {path}")
 
     try:
-        data = resolved.read_bytes()
+        with resolved.open("rb") as handle:
+            data = handle.read(MAX_SCRIPT_SCAN_BYTES + 1)
     except Exception as exc:
         return _deny(f"could not inspect script before execution; failing closed: {path}: {exc}")
+    if len(data) > MAX_SCRIPT_SCAN_BYTES:
+        return _deny(
+            f"candidate script exceeds {MAX_SCRIPT_SCAN_BYTES} byte scan limit; failing closed: {path}"
+        )
 
     text = data.decode("utf-8", errors="ignore")
     if ANSI_C_QUOTE_RE.search(text):
