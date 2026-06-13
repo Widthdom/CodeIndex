@@ -622,6 +622,9 @@ public static partial class IndexCommandRunner
         {
             foreach (var warning in fingerprint.Warnings)
             {
+                if (!IsProjectMarkerFingerprintWarning(warning))
+                    continue;
+
                 var path = string.IsNullOrWhiteSpace(warning.Path)
                     ? "<project_marker_fingerprint>"
                     : warning.Path;
@@ -638,6 +641,10 @@ public static partial class IndexCommandRunner
 
         return added;
     }
+
+    private static bool IsProjectMarkerFingerprintWarning(FileIndexer.ScanError warning) =>
+        warning.Message.StartsWith("Project marker discovery skipped", StringComparison.Ordinal)
+        || warning.Message.StartsWith("Skipped .gitmodules", StringComparison.Ordinal);
 
     private static void RestampHotspotFamilyTrustForUpdate(
         DbWriter writer,
