@@ -728,13 +728,7 @@ public static partial class SymbolExtractor
     }
 
     private static bool HasGoSymbol(List<SymbolRecord> symbols, long fileId, int lineNumber, string kind, string name)
-    {
-        return symbols.Any(symbol =>
-            symbol.FileId == fileId
-            && symbol.Line == lineNumber
-            && symbol.Kind == kind
-            && symbol.Name == name);
-    }
+        => HasSymbolLineIdentity(symbols, fileId, lineNumber, kind, name);
 
     private static void AssignGoMethodReceiverContainers(List<SymbolRecord> symbols)
     {

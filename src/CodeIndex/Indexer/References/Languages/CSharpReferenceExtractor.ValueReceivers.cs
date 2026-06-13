@@ -7,12 +7,15 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private readonly record struct CSharpBlockScope(int StartLineIndex, int StartColumn, int EndLineIndex, int EndColumn);
+
     private static void AddCSharpLambdaParametersBeforeArrow(
         List<CSharpFunctionValueReceiverNameRecord> names,
         string bodyText,
         int arrowIndex,
         int startLineNumber,
-        CSharpLineColumn scopeEnd)
+        CSharpLineColumn scopeEnd,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames = null)
     {
         var leftIndex = SkipWhitespaceBackward(bodyText, arrowIndex - 1);
         if (leftIndex < 0)
@@ -29,7 +32,7 @@ public static partial class ReferenceExtractor
             foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
             {
                 if (TryExtractTrailingCSharpParameterName(segment, out var parameterName))
-                    AddCSharpFunctionValueReceiverName(names, parameterName, scopeStart.Line, scopeStart.Column, scopeEnd.Line, scopeEnd.Column);
+                    AddCSharpFunctionValueReceiverName(names, parameterName, scopeStart.Line, scopeStart.Column, scopeEnd.Line, scopeEnd.Column, seenNames);
             }
 
             return;
@@ -53,23 +56,32 @@ public static partial class ReferenceExtractor
             || (TryReadPreviousIdentifierToken(bodyText, prefixIndex, out var previousToken)
                 && string.Equals(previousToken, "return", StringComparison.Ordinal)))
         {
-            AddCSharpFunctionValueReceiverName(names, parameter, declarationLine, identifierStart - GetLineStartOffset(bodyText, arrowIndex), scopeEnd.Line, scopeEnd.Column);
+            AddCSharpFunctionValueReceiverName(names, parameter, declarationLine, identifierStart - GetLineStartOffset(bodyText, arrowIndex), scopeEnd.Line, scopeEnd.Column, seenNames);
         }
     }
 
-    private static void AddCSharpFunctionValueReceiverName(List<CSharpFunctionValueReceiverNameRecord> names, string name, int scopeStartLine, int scopeStartColumn, int scopeEndLine, int scopeEndColumn)
+    private static void AddCSharpFunctionValueReceiverName(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        string name,
+        int scopeStartLine,
+        int scopeStartColumn,
+        int scopeEndLine,
+        int scopeEndColumn,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             return;
-        if (names.Any(record =>
-            record.ScopeStartLine == scopeStartLine
-            && record.ScopeStartColumn == scopeStartColumn
-            && record.ScopeEndLine == scopeEndLine
-            && record.ScopeEndColumn == scopeEndColumn
-            && string.Equals(record.Name, name, StringComparison.Ordinal)))
-            return;
 
-        names.Add(new CSharpFunctionValueReceiverNameRecord(name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn));
+        var record = new CSharpFunctionValueReceiverNameRecord(name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn);
+        if (seenNames != null)
+        {
+            if (seenNames.Add(record))
+                names.Add(record);
+            return;
+        }
+
+        if (!names.Contains(record))
+            names.Add(record);
     }
 
     private static int GetLineNumberFromOffset(string text, int offset, int startLineNumber)
@@ -85,51 +97,75 @@ public static partial class ReferenceExtractor
         return lineNumber;
     }
 
-    private static int FindInnermostCSharpBlockEndLine(
+    private static List<CSharpBlockScope> BuildCSharpBlockScopes(
         IReadOnlyList<string> structuralLines,
         int bodyStartIndex,
-        int bodyEndIndex,
-        int declarationLineIndex,
-        int declarationColumn)
+        int bodyEndIndex)
     {
-        var depth = 0;
+        var blockScopes = new List<CSharpBlockScope>();
+        var stack = new Stack<(int LineIndex, int Column)>();
         for (var lineIndex = bodyStartIndex; lineIndex <= bodyEndIndex; lineIndex++)
         {
             var line = structuralLines[lineIndex];
-            var limit = lineIndex == declarationLineIndex ? Math.Min(declarationColumn, line.Length) : line.Length;
-            for (var column = 0; column < limit; column++)
+            for (var column = 0; column < line.Length; column++)
             {
                 if (line[column] == '{')
-                    depth++;
-                else if (line[column] == '}' && depth > 0)
-                    depth--;
-            }
-
-            if (lineIndex != declarationLineIndex)
-                continue;
-
-            var declarationDepth = depth;
-            for (var scanLine = declarationLineIndex; scanLine <= bodyEndIndex; scanLine++)
-            {
-                var scan = structuralLines[scanLine];
-                var scanStart = scanLine == declarationLineIndex ? declarationColumn : 0;
-                for (var column = scanStart; column < scan.Length; column++)
                 {
-                    if (scan[column] == '{')
-                        depth++;
-                    else if (scan[column] == '}' && depth > 0)
-                    {
-                        depth--;
-                        if (depth < declarationDepth)
-                            return scanLine + 1;
-                    }
+                    stack.Push((lineIndex, column));
+                }
+                else if (line[column] == '}' && stack.Count > 0)
+                {
+                    var start = stack.Pop();
+                    blockScopes.Add(new CSharpBlockScope(start.LineIndex, start.Column, lineIndex, column));
                 }
             }
-
-            break;
         }
 
-        return bodyEndIndex + 1;
+        return blockScopes;
+    }
+
+    private static int FindInnermostCSharpBlockEndLine(
+        IReadOnlyList<CSharpBlockScope> blockScopes,
+        int fallbackEndLine,
+        int declarationLineIndex,
+        int declarationColumn)
+    {
+        CSharpBlockScope? bestScope = null;
+        foreach (var scope in blockScopes)
+        {
+            if (!ContainsCSharpBlockScope(scope, declarationLineIndex, declarationColumn))
+                continue;
+
+            if (bestScope == null || IsNarrowerCSharpBlockScope(scope, bestScope.Value))
+            {
+                bestScope = scope;
+            }
+        }
+
+        return bestScope?.EndLineIndex + 1 ?? fallbackEndLine;
+    }
+
+    private static bool ContainsCSharpBlockScope(CSharpBlockScope scope, int lineIndex, int column)
+    {
+        var startsBefore = lineIndex > scope.StartLineIndex
+            || (lineIndex == scope.StartLineIndex && column > scope.StartColumn);
+        if (!startsBefore)
+            return false;
+
+        return lineIndex < scope.EndLineIndex
+            || (lineIndex == scope.EndLineIndex && column < scope.EndColumn);
+    }
+
+    private static bool IsNarrowerCSharpBlockScope(CSharpBlockScope candidate, CSharpBlockScope current)
+    {
+        var candidateLineSpan = candidate.EndLineIndex - candidate.StartLineIndex;
+        var currentLineSpan = current.EndLineIndex - current.StartLineIndex;
+        if (candidateLineSpan != currentLineSpan)
+            return candidateLineSpan < currentLineSpan;
+
+        var candidateColumnSpan = candidate.EndColumn - candidate.StartColumn;
+        var currentColumnSpan = current.EndColumn - current.StartColumn;
+        return candidateColumnSpan < currentColumnSpan;
     }
 
     private static CSharpLineColumn FindFollowingCSharpEmbeddedStatementEndPosition(

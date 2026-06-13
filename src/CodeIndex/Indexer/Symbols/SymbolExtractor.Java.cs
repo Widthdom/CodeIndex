@@ -346,16 +346,19 @@ public static partial class SymbolExtractor
                                     && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
                                     && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
                                 .ToList();
+                            var hasCompactConstructorSymbol = false;
                             foreach (var existingSymbol in existingSymbols)
                             {
                                 if (LooksLikeJavaCompactConstructorSymbol(existingSymbol, recordSymbol.Name))
+                                {
+                                    hasCompactConstructorSymbol = true;
                                     continue;
+                                }
+
                                 symbols.Remove(existingSymbol);
                             }
 
-                            if (!symbols.Any(symbol => LooksLikeJavaCompactConstructorSymbol(symbol, recordSymbol.Name)
-                                    && symbol.FileId == fileId
-                                    && symbol.StartLine == i + 1))
+                            if (!hasCompactConstructorSymbol)
                             {
                                 symbols.Add(new SymbolRecord
                                 {

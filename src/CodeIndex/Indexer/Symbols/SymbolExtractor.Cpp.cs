@@ -35,6 +35,14 @@ public static partial class SymbolExtractor
             if (body.Length == 0)
                 continue;
 
+            var existingMemberNames = symbols
+                .Where(symbol =>
+                    symbol.Kind == "function"
+                    && symbol.Line == classSymbol.StartLine
+                    && symbol.ContainerKind == classSymbol.Kind
+                    && symbol.ContainerName == classSymbol.Name)
+                .Select(symbol => symbol.Name)
+                .ToHashSet(StringComparer.Ordinal);
             var segments = body.Split(';');
             var searchStart = 0;
             foreach (var segment in segments)
@@ -53,7 +61,7 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                if (TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, trimmedSegment, lineIndex + 1, symbols))
+                if (TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, trimmedSegment, lineIndex + 1, symbols, existingMemberNames))
                     searchStart = segmentStart + trimmedSegment.Length + 1;
                 else
                     searchStart = segmentStart + trimmedSegment.Length + 1;
@@ -66,7 +74,8 @@ public static partial class SymbolExtractor
         SymbolRecord classSymbol,
         string segment,
         int lineNumber,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        HashSet<string> existingMemberNames)
     {
         foreach (var pattern in PatternCache["cpp"])
         {
@@ -83,15 +92,8 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            if (symbols.Any(symbol =>
-                symbol.Kind == "function"
-                && symbol.Line == lineNumber
-                && symbol.Name == name
-                && symbol.ContainerKind == classSymbol.Kind
-                && symbol.ContainerName == classSymbol.Name))
-            {
+            if (!existingMemberNames.Add(name))
                 return true;
-            }
 
             symbols.Add(new SymbolRecord
             {

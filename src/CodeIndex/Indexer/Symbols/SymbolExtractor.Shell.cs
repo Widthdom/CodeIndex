@@ -10,6 +10,7 @@ public static partial class SymbolExtractor
 {
     private static void ExpandShellAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
@@ -24,25 +25,27 @@ public static partial class SymbolExtractor
                 if (!IsShellAliasName(name))
                     continue;
 
-                if (HasShellAliasSymbol(symbols, fileId, i + 1, name))
+                if (HasSymbolLineIdentity(symbolLineIdentities, fileId, i + 1, "alias", name))
                     continue;
 
+                var symbol = new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "alias",
+                    Name = name,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    StartColumn = tokenStart,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                };
                 AddSymbolRecord(
                     symbols,
                     cssSeenSymbols: null,
                     i + 1,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "alias",
-                        Name = name,
-                        Line = i + 1,
-                        StartLine = i + 1,
-                        StartColumn = tokenStart,
-                        EndLine = i + 1,
-                        Signature = line.Trim(),
-                    },
+                    symbol,
                     line);
+                RecordSymbolLineIdentity(symbolLineIdentities, symbol);
             }
         }
     }
@@ -222,15 +225,6 @@ public static partial class SymbolExtractor
 
         tokenEnd = cursor;
         return tokenEnd > tokenStart;
-    }
-
-    private static bool HasShellAliasSymbol(List<SymbolRecord> symbols, long fileId, int lineNumber, string name)
-    {
-        return symbols.Any(symbol =>
-            symbol.FileId == fileId
-            && symbol.Line == lineNumber
-            && symbol.Kind == "alias"
-            && string.Equals(symbol.Name, name, StringComparison.Ordinal));
     }
 
     private static bool IsShellAliasName(string name) =>

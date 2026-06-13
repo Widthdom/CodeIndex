@@ -10,6 +10,7 @@ public static partial class SymbolExtractor
 {
     private static void ExtractRustUseSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
             if (!TryReadRustUseStatement(lines, i, out var statement, out var lineStarts, out var endLineIndex))
@@ -44,25 +45,27 @@ public static partial class SymbolExtractor
                     continue;
 
                 var name = occurrence.Name;
-                if (HasRustSymbol(symbols, fileId, occurrence.Line, "import", name))
+                if (HasSymbolLineIdentity(symbolLineIdentities, fileId, occurrence.Line, "import", name))
                     continue;
 
+                var symbol = new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = name,
+                    Line = occurrence.Line,
+                    StartLine = occurrence.Line,
+                    StartColumn = occurrence.Column,
+                    EndLine = occurrence.Line,
+                    Signature = statement.Trim(),
+                };
                 AddSymbolRecord(
                     symbols,
                     cssSeenSymbols: null,
                     occurrence.Line,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "import",
-                        Name = name,
-                        Line = occurrence.Line,
-                        StartLine = occurrence.Line,
-                        StartColumn = occurrence.Column,
-                        EndLine = occurrence.Line,
-                        Signature = statement.Trim(),
-                    },
+                    symbol,
                     lines[occurrence.Line - 1]);
+                RecordSymbolLineIdentity(symbolLineIdentities, symbol);
             }
 
             i = endLineIndex;
@@ -71,6 +74,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractRustMultilineImplSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
             if (!TryReadRustImplStatement(lines, i, out var statement, out var lineStarts, out var endLineIndex))
@@ -90,25 +94,27 @@ public static partial class SymbolExtractor
                 continue;
 
             var position = GetRustStatementPosition(match.Groups["name"].Index, lineStarts, i + 1);
-            if (HasRustSymbol(symbols, fileId, position.Line, "class", name))
+            if (HasSymbolLineIdentity(symbolLineIdentities, fileId, position.Line, "class", name))
                 continue;
 
+            var symbol = new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = name,
+                Line = position.Line,
+                StartLine = position.Line,
+                StartColumn = position.Column,
+                EndLine = position.Line,
+                Signature = statement.Trim(),
+            };
             AddSymbolRecord(
                 symbols,
                 cssSeenSymbols: null,
                 position.Line,
-                new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = name,
-                    Line = position.Line,
-                    StartLine = position.Line,
-                    StartColumn = position.Column,
-                    EndLine = position.Line,
-                    Signature = statement.Trim(),
-                },
+                symbol,
                 lines[position.Line - 1]);
+            RecordSymbolLineIdentity(symbolLineIdentities, symbol);
         }
     }
 
@@ -446,15 +452,6 @@ public static partial class SymbolExtractor
         }
 
         return new RustAsKeywordSpan(-1, 0);
-    }
-
-    private static bool HasRustSymbol(List<SymbolRecord> symbols, long fileId, int lineNumber, string kind, string name)
-    {
-        return symbols.Any(symbol =>
-            symbol.FileId == fileId
-            && symbol.Line == lineNumber
-            && symbol.Kind == kind
-            && symbol.Name == name);
     }
 
 }

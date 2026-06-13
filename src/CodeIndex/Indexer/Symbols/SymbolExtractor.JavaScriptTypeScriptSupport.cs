@@ -39,6 +39,7 @@ public static partial class SymbolExtractor
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
         var targets = new List<JavaScriptClassScanTarget>();
+        var targetIdentities = new HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>();
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -122,13 +123,9 @@ public static partial class SymbolExtractor
                 containerName: containerName,
                 isExported: isExported);
 
-            if (!targets.Any(t => t.StartIndex == candidate.StartIndex
-                && t.ScanStartIndex == candidate.ScanStartIndex
-                && t.ScanEndExclusive == candidate.ScanEndExclusive
-                && t.ContainerName == candidate.ContainerName))
-            {
+            var targetIdentity = (candidate.StartIndex, candidate.ScanStartIndex, candidate.ScanEndExclusive, candidate.ContainerName);
+            if (targetIdentities.Add(targetIdentity))
                 targets.Add(candidate);
-            }
         }
 
         return targets
@@ -1861,6 +1858,8 @@ public static partial class SymbolExtractor
     {
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
         var syntheticClassTargets = new List<JavaScriptClassScanTarget>();
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
+        var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1952,6 +1951,8 @@ public static partial class SymbolExtractor
                         lines,
                         symbols,
                         syntheticClassTargets,
+                        symbolLineIdentities,
+                        targetIdentities,
                         i,
                         absoluteMatchIndex,
                         classTokenLineIndex,
@@ -2646,6 +2647,11 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
+        var exportedSymbolNames = symbols
+            .Where(symbol => symbol.Visibility == "export")
+            .Select(symbol => symbol.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
         for (int i = 0; i < sanitizedLines.Length; i++)
         {
             var sanitizedLine = sanitizedLines[i];
@@ -2688,7 +2694,7 @@ public static partial class SymbolExtractor
                     endColumn);
                 foreach (var variableName in variableNames)
                 {
-                    if (symbols.Any(s => s.Visibility == "export" && s.Name == variableName.Name))
+                    if (!exportedSymbolNames.Add(variableName.Name))
                         continue;
 
                     AddSymbolRecord(
@@ -4691,6 +4697,12 @@ public static partial class SymbolExtractor
             var parenDepth = 0;
             var bracketDepth = 0;
             var skippingPropertyValue = false;
+            var existingContainerSymbolNames = symbols
+                .Where(symbol =>
+                    symbol.ContainerKind == "object"
+                    && symbol.ContainerName == target.ContainerName)
+                .Select(symbol => symbol.Name)
+                .ToHashSet(StringComparer.Ordinal);
 
             for (int lineIndex = target.ScanStartIndex; lineIndex < target.ScanEndExclusive; lineIndex++)
             {
@@ -4772,32 +4784,15 @@ public static partial class SymbolExtractor
                         if (propertyMatch.Success)
                         {
                             var propertyName = propertyMatch.Groups["name"].Value;
-                            var hasExistingContainerSymbol = symbols.Any(s =>
-                                s.Name == propertyName
-                                && s.ContainerKind == "object"
-                                && s.ContainerName == target.ContainerName);
-                            if (!hasExistingContainerSymbol)
-                            {
-                                AddSymbolRecord(
-                                    symbols,
-                                    cssSeenSymbols: null,
-                                    lineIndex + 1,
-                                    new SymbolRecord
-                                    {
-                                        FileId = fileId,
-                                        Kind = "property",
-                                        Name = propertyName,
-                                        Line = lineIndex + 1,
-                                        StartLine = lineIndex + 1,
-                                        StartColumn = scanColumn + propertyMatch.Index,
-                                        EndLine = lineIndex + 1,
-                                        Signature = rawLines[lineIndex].Trim(),
-                                        ContainerKind = "object",
-                                        ContainerName = target.ContainerName,
-                                        Visibility = "export",
-                                    },
-                                    rawLines[lineIndex]);
-                            }
+                            AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
+                                fileId,
+                                rawLines,
+                                symbols,
+                                existingContainerSymbolNames,
+                                target.ContainerName,
+                                propertyName,
+                                lineIndex,
+                                scanColumn + propertyMatch.Index);
 
                             scanColumn += propertyMatch.Length;
                             skippingPropertyValue = true;
@@ -4811,32 +4806,15 @@ public static partial class SymbolExtractor
                                 out var literalPropertyName,
                                 out var literalValueStartColumn))
                         {
-                            var hasExistingContainerSymbol = symbols.Any(s =>
-                                s.Name == literalPropertyName
-                                && s.ContainerKind == "object"
-                                && s.ContainerName == target.ContainerName);
-                            if (!hasExistingContainerSymbol)
-                            {
-                                AddSymbolRecord(
-                                    symbols,
-                                    cssSeenSymbols: null,
-                                    lineIndex + 1,
-                                    new SymbolRecord
-                                    {
-                                        FileId = fileId,
-                                        Kind = "property",
-                                        Name = literalPropertyName,
-                                        Line = lineIndex + 1,
-                                        StartLine = lineIndex + 1,
-                                        StartColumn = scanColumn,
-                                        EndLine = lineIndex + 1,
-                                        Signature = rawLines[lineIndex].Trim(),
-                                        ContainerKind = "object",
-                                        ContainerName = target.ContainerName,
-                                        Visibility = "export",
-                                    },
-                                    rawLines[lineIndex]);
-                            }
+                            AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
+                                fileId,
+                                rawLines,
+                                symbols,
+                                existingContainerSymbolNames,
+                                target.ContainerName,
+                                literalPropertyName,
+                                lineIndex,
+                                scanColumn);
 
                             scanColumn = literalValueStartColumn;
                             skippingPropertyValue = true;
@@ -4850,32 +4828,15 @@ public static partial class SymbolExtractor
                                 out var computedLiteralPropertyName,
                                 out var computedLiteralValueStartColumn))
                         {
-                            var hasExistingContainerSymbol = symbols.Any(s =>
-                                s.Name == computedLiteralPropertyName
-                                && s.ContainerKind == "object"
-                                && s.ContainerName == target.ContainerName);
-                            if (!hasExistingContainerSymbol)
-                            {
-                                AddSymbolRecord(
-                                    symbols,
-                                    cssSeenSymbols: null,
-                                    lineIndex + 1,
-                                    new SymbolRecord
-                                    {
-                                        FileId = fileId,
-                                        Kind = "property",
-                                        Name = computedLiteralPropertyName,
-                                        Line = lineIndex + 1,
-                                        StartLine = lineIndex + 1,
-                                        StartColumn = scanColumn,
-                                        EndLine = lineIndex + 1,
-                                        Signature = rawLines[lineIndex].Trim(),
-                                        ContainerKind = "object",
-                                        ContainerName = target.ContainerName,
-                                        Visibility = "export",
-                                    },
-                                    rawLines[lineIndex]);
-                            }
+                            AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
+                                fileId,
+                                rawLines,
+                                symbols,
+                                existingContainerSymbolNames,
+                                target.ContainerName,
+                                computedLiteralPropertyName,
+                                lineIndex,
+                                scanColumn);
 
                             scanColumn = computedLiteralValueStartColumn;
                             skippingPropertyValue = true;
@@ -4892,32 +4853,15 @@ public static partial class SymbolExtractor
                         if (shorthandMatch.Success)
                         {
                             var propertyName = shorthandMatch.Groups["name"].Value;
-                            var hasExistingContainerSymbol = symbols.Any(s =>
-                                s.Name == propertyName
-                                && s.ContainerKind == "object"
-                                && s.ContainerName == target.ContainerName);
-                            if (!hasExistingContainerSymbol)
-                            {
-                                AddSymbolRecord(
-                                    symbols,
-                                    cssSeenSymbols: null,
-                                    lineIndex + 1,
-                                    new SymbolRecord
-                                    {
-                                        FileId = fileId,
-                                        Kind = "property",
-                                        Name = propertyName,
-                                        Line = lineIndex + 1,
-                                        StartLine = lineIndex + 1,
-                                        StartColumn = scanColumn + shorthandMatch.Index,
-                                        EndLine = lineIndex + 1,
-                                        Signature = rawLines[lineIndex].Trim(),
-                                        ContainerKind = "object",
-                                        ContainerName = target.ContainerName,
-                                        Visibility = "export",
-                                    },
-                                    rawLines[lineIndex]);
-                            }
+                            AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
+                                fileId,
+                                rawLines,
+                                symbols,
+                                existingContainerSymbolNames,
+                                target.ContainerName,
+                                propertyName,
+                                lineIndex,
+                                scanColumn + shorthandMatch.Index);
 
                             scanColumn += shorthandMatch.Length;
                             continue;
@@ -4953,6 +4897,40 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static void AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
+        long fileId,
+        string[] rawLines,
+        List<SymbolRecord> symbols,
+        HashSet<string> existingContainerSymbolNames,
+        string containerName,
+        string propertyName,
+        int lineIndex,
+        int startColumn)
+    {
+        if (propertyName.Length == 0 || !existingContainerSymbolNames.Add(propertyName))
+            return;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = propertyName,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = rawLines[lineIndex].Trim(),
+                ContainerKind = "object",
+                ContainerName = containerName,
+                Visibility = "export",
+            },
+            rawLines[lineIndex]);
     }
 
     private static bool TryReadJavaScriptTypeScriptLiteralObjectLiteralKeyName(
@@ -6327,6 +6305,8 @@ public static partial class SymbolExtractor
     private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
         var targets = new List<JavaScriptClassScanTarget>();
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
+        var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -6336,7 +6316,7 @@ public static partial class SymbolExtractor
             var lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
             while (lineOffset >= 0 && lineOffset < sanitizedLine.Length)
             {
-                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, lineOffset, sanitizedLine, privateScopeColumns);
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, symbolLineIdentities, targetIdentities, i, lineOffset, sanitizedLine, privateScopeColumns);
                 lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, lineOffset + 1);
             }
         }
@@ -7484,6 +7464,8 @@ public static partial class SymbolExtractor
         string[] lines,
         List<SymbolRecord> symbols,
         List<JavaScriptClassScanTarget> targets,
+        HashSet<SymbolLineIdentity> symbolLineIdentities,
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)> targetIdentities,
         int startIndex,
         int startColumn,
         string sanitizedLine,
@@ -7517,6 +7499,8 @@ public static partial class SymbolExtractor
                 lines,
                 symbols,
                 targets,
+                symbolLineIdentities,
+                targetIdentities,
                 startIndex,
                 startColumn + anonymousDefaultMatch.Index,
                 classTokenLineIndex,
@@ -7558,6 +7542,8 @@ public static partial class SymbolExtractor
                     lines,
                     symbols,
                     targets,
+                    symbolLineIdentities,
+                    targetIdentities,
                     startIndex,
                     startColumn + exportEqualsMatch.Index,
                     exportEqualsClassTokenLineIndex,
@@ -7609,6 +7595,8 @@ public static partial class SymbolExtractor
             lines,
             symbols,
             targets,
+            symbolLineIdentities,
+            targetIdentities,
             startIndex,
             startColumn + classExpressionBindingMatch.Index,
             classExpressionTokenLineIndex,
@@ -7629,6 +7617,8 @@ public static partial class SymbolExtractor
         string[] lines,
         List<SymbolRecord> symbols,
         List<JavaScriptClassScanTarget> targets,
+        HashSet<SymbolLineIdentity> symbolLineIdentities,
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)> targetIdentities,
         int declarationStartIndex,
         int declarationStartColumn,
         int classTokenLineIndex,
@@ -7640,10 +7630,9 @@ public static partial class SymbolExtractor
         if (bodyStartLine == null || bodyEndLine == null)
             return;
 
-        var existingClass = symbols.FirstOrDefault(s => s.Kind == "class" && s.Line == declarationStartIndex + 1 && s.Name == containerName);
-        if (existingClass == null)
+        if (!HasSymbolLineIdentity(symbolLineIdentities, fileId, declarationStartIndex + 1, "class", containerName))
         {
-            symbols.Add(new SymbolRecord
+            var symbol = new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "class",
@@ -7655,20 +7644,22 @@ public static partial class SymbolExtractor
                 BodyEndLine = bodyEndLine,
                 Signature = BuildJavaScriptTypeScriptSyntheticClassSignature(lines, declarationStartIndex, declarationStartColumn, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, lang),
                 Visibility = visibility,
-            });
+            };
+            symbols.Add(symbol);
+            RecordSymbolLineIdentity(symbolLineIdentities, symbol);
         }
 
         var candidate = CreateJavaScriptClassScanTarget(lines, lang, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, "class", containerName);
-        if (!targets.Any(t => t.StartIndex == candidate.StartIndex
-            && t.StartColumn == candidate.StartColumn
-            && t.ScanStartIndex == candidate.ScanStartIndex
-            && t.ScanEndExclusive == candidate.ScanEndExclusive
-            && t.FirstLineScanOffset == candidate.FirstLineScanOffset
-            && t.ContainerKind == candidate.ContainerKind
-            && t.ContainerName == candidate.ContainerName))
-        {
+        var targetIdentity = (
+            candidate.StartIndex,
+            candidate.StartColumn,
+            candidate.ScanStartIndex,
+            candidate.ScanEndExclusive,
+            candidate.FirstLineScanOffset,
+            candidate.ContainerKind,
+            candidate.ContainerName);
+        if (targetIdentities.Add(targetIdentity))
             targets.Add(candidate);
-        }
     }
 
     private static string BuildJavaScriptTypeScriptSyntheticClassSignature(
@@ -7938,6 +7929,9 @@ public static partial class SymbolExtractor
                                 }
                             }
                         }
+
+                        column = valueStartColumn;
+                        continue;
                     }
                 }
 

@@ -146,12 +146,15 @@ internal static class SwiftReferenceExtractor
                 if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
                     continue;
                 var column = index + 1;
-                if (!references.Any(reference =>
-                        reference.FileId == fileId
-                        && reference.Line == lineNumber
-                        && reference.Column == column
-                        && reference.ReferenceKind == "type_reference"
-                        && string.Equals(reference.SymbolName, alias, StringComparison.Ordinal)))
+                var container = resolveContainerForColumn(index);
+                if (!seen.Contains(ReferenceExtractor.BuildReferenceDedupeKey(
+                        fileId,
+                        "swift",
+                        lineNumber,
+                        column,
+                        "type_reference",
+                        alias,
+                        container)))
                 {
                     continue;
                 }
@@ -169,7 +172,7 @@ internal static class SwiftReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(index),
+                    container,
                     binding.Value.TypeParameters);
             }
         }
