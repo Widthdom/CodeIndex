@@ -45,6 +45,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void BuiltInReferenceRegexes_UseDefaultBacktrackingPolicy_Issue3479()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(ReferenceExtractor).Assembly.GetTypes().Where(IsReferenceRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var backtrackingRegexesWithCustomTimeouts = regexes
+            .Where(item => (item.Regex.Options & RegexOptions.NonBacktracking) == 0)
+            .Where(item => item.Regex.MatchTimeout != BoundedRegex.DefaultMatchTimeout)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            backtrackingRegexesWithCustomTimeouts.Count == 0,
+            "Built-in reference regexes that use backtracking must use BoundedRegex.DefaultMatchTimeout: "
+            + string.Join(", ", backtrackingRegexesWithCustomTimeouts));
+    }
+
+    [Fact]
     public void BuiltInReferenceRegexes_WithIgnoreCaseUseCultureInvariant_Issue3516()
     {
         var regexes = EnumerateStaticRegexValues(
