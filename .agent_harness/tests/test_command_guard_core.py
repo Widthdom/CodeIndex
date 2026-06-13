@@ -560,3 +560,26 @@ class CommandGuardCoreTests(TestCase):
         self.assertFalse(decision.allowed)
         self.assertIn("gitleaks is unavailable", decision.reason)
         self.assertIn("text-only staged diff fallback", decision.reason)
+
+    def test_command_is_git_commit_detects_global_options_and_wrappers(self) -> None:
+        for command in (
+            "git commit -m test",
+            "git -c user.name=Codex commit -m test",
+            "git --no-pager commit -m test",
+            "/usr/bin/git commit -m test",
+            "env git -c user.email=codex@example.invalid commit -m test",
+            "time git commit -m test",
+            "true && git --git-dir .git commit -m test",
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(core.command_is_git_commit(command))
+
+    def test_command_is_git_commit_ignores_non_commit_git_commands(self) -> None:
+        for command in (
+            "git status",
+            "git commit-tree HEAD",
+            "echo git commit",
+            "git -c user.name=Codex status",
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(core.command_is_git_commit(command))

@@ -1179,6 +1179,15 @@ def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
     return _candidate_script_paths_from_tokens(_split_command(command), cwd)
 
 
+def command_is_git_commit(command: str) -> bool:
+    tokens = _expand_env_split_strings(_split_command(command))
+    for segment in _token_segments(tokens):
+        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        if segment and _token_command_name(segment[0]) == "git" and _git_subcommand(segment[1:]) == "commit":
+            return True
+    return False
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
