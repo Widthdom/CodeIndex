@@ -170,6 +170,32 @@ public sealed class TestTelemetryTests
     }
 
     [Fact]
+    public void Load_SkipsUnixFifoTrxEntries()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_telemetry_fifo");
+        try
+        {
+            var resultsDirectory = Path.Combine(projectRoot, "TestResults");
+            Directory.CreateDirectory(resultsDirectory);
+            var fifoPath = Path.Combine(resultsDirectory, "pipe.trx");
+            if (Mkfifo(fifoPath, Convert.ToUInt32("600", 8)) != 0)
+                throw new IOException($"mkfifo failed with errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}.");
+
+            var summary = TrxTelemetry.Load(resultsDirectory, top: 1);
+
+            Assert.Equal(0, summary.TrxFileCount);
+            Assert.Equal(0, summary.Total);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Load_RejectsTrxDtds()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_telemetry_dtd");
@@ -270,4 +296,7 @@ public sealed class TestTelemetryTests
           </Results>
         </TestRun>
         """;
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int Mkfifo(string path, uint mode);
 }

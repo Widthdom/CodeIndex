@@ -186,6 +186,9 @@ public static class TrxTelemetry
                     continue;
                 }
 
+                if (!IsRegularFile(entry, attributes, warnings))
+                    continue;
+
                 if (!string.Equals(Path.GetExtension(entry), ".trx", StringComparison.OrdinalIgnoreCase))
                     continue;
 
@@ -238,6 +241,23 @@ public static class TrxTelemetry
                 yield return entry;
             }
         }
+    }
+
+    private static bool IsRegularFile(string path, FileAttributes attributes, List<string> warnings)
+    {
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+            return false;
+
+        if (OperatingSystem.IsWindows())
+            return true;
+
+        if (!UnixFileStatus.TryGetFileMode(path, out var mode))
+        {
+            warnings.Add("Could not inspect TRX traversal entry: file_type_unavailable");
+            return false;
+        }
+
+        return (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile;
     }
 
     private static bool TryGetAttributes(string path, List<string> warnings, out FileAttributes attributes)
@@ -419,6 +439,67 @@ public static class TrxTelemetry
             {
                 AddTopResult(Failures, result, _top);
             }
+        }
+    }
+
+    private static class UnixFileStatus
+    {
+        internal const int FileTypeMask = 0xF000;
+        internal const int RegularFile = 0x8000;
+
+        internal static bool TryGetFileMode(string filePath, out int mode)
+        {
+            mode = 0;
+            try
+            {
+                if (NativeMethods.Stat(filePath, out var status) != 0)
+                    return false;
+
+                mode = status.Mode;
+                return true;
+            }
+            catch (DllNotFoundException)
+            {
+                return false;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct FileStatus
+        {
+            internal FileStatusFlags Flags;
+            internal int Mode;
+            internal uint Uid;
+            internal uint Gid;
+            internal long Size;
+            internal long ATime;
+            internal long ATimeNsec;
+            internal long MTime;
+            internal long MTimeNsec;
+            internal long CTime;
+            internal long CTimeNsec;
+            internal long BirthTime;
+            internal long BirthTimeNsec;
+            internal long Dev;
+            internal long RDev;
+            internal long Ino;
+            internal uint UserFlags;
+        }
+
+        [System.Flags]
+        private enum FileStatusFlags : uint
+        {
+            None = 0,
+        }
+
+        private static class NativeMethods
+        {
+            [System.Runtime.InteropServices.DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
+            internal static extern int Stat(string path, out FileStatus output);
         }
     }
 
