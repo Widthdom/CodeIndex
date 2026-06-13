@@ -1365,19 +1365,21 @@ public static partial class IndexCommandRunner
 
     private sealed class IndexExtractionStalledException : Exception
     {
-        public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath)
+        public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath, string? workerError = null)
             : base("Index extraction stalled.")
         {
             FilesProcessed = filesProcessed;
             FilesTotal = filesTotal;
             Timeout = timeout;
             ActivePath = activePath;
+            WorkerError = workerError;
         }
 
         public int FilesProcessed { get; }
         public int? FilesTotal { get; }
         public TimeSpan Timeout { get; }
         public string? ActivePath { get; }
+        public string? WorkerError { get; }
     }
 
     private sealed class CancelKeyPressRegistration(ConsoleCancelEventHandler handler) : IDisposable

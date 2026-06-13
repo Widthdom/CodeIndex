@@ -6,6 +6,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -69,9 +70,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             Task<string?> responseTask;
@@ -87,45 +86,39 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             }
             catch (Exception ex)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending hook callback request.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending hook callback request.",
+                    stopwatch);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, out var sendException))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             if (sendException != null)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending hook callback request.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending hook callback request.",
+                    stopwatch);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, out var responseException))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             if (responseException != null)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading hook callback response.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading hook callback response.",
+                    stopwatch);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             stopwatch.Stop();
@@ -146,8 +139,9 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             }
             catch (JsonException ex)
             {
-                KillWorker();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing hook callback response.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing hook callback response.",
+                    stopwatch);
             }
 
             if (response == null)
@@ -190,10 +184,16 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 // Best effort: disposal should not throw after indexing has completed.
             }
 
-            if (!WaitForWorkerExit(process, 1000))
-                KillWorker();
+            var waitResult = WaitForWorkerExit(process, 1000);
+            if (!waitResult.Exited)
+            {
+                var cleanupDiagnostic = WorkerProcessCleanupDiagnostics.Combine(waitResult.Diagnostic, KillWorker());
+                LogCleanupDiagnostic("post_extraction_hook_worker_cleanup_failed", cleanupDiagnostic);
+            }
             else
+            {
                 ClearExitedWorker();
+            }
         }
     }
 
@@ -239,13 +239,14 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         }
     }
 
-    private void KillWorker()
+    private string? KillWorker()
     {
         if (process == null)
-            return;
+            return null;
 
-        PostExtractionHookCallbackWorker.TryKillProcess(process);
+        var cleanupDiagnostic = PostExtractionHookCallbackWorker.TryKillProcess(process);
         ClearExitedWorker();
+        return cleanupDiagnostic;
     }
 
     private void ClearExitedWorker()
@@ -267,11 +268,27 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             Symbols: null,
             References: null);
 
-    private static PostExtractionHookCallbackResult TimedOut(long durationMs)
+    private PostExtractionHookCallbackResult FailureAfterKill(string message, Stopwatch stopwatch)
+    {
+        var cleanupDiagnostic = KillWorker();
+        stopwatch.Stop();
+        return Failure(
+            WorkerProcessCleanupDiagnostics.AppendToMessage(message, cleanupDiagnostic),
+            stopwatch.ElapsedMilliseconds);
+    }
+
+    private PostExtractionHookCallbackResult TimedOutAfterKill(Stopwatch stopwatch)
+    {
+        var cleanupDiagnostic = KillWorker();
+        stopwatch.Stop();
+        return TimedOut(stopwatch.ElapsedMilliseconds, cleanupDiagnostic);
+    }
+
+    private static PostExtractionHookCallbackResult TimedOut(long durationMs, string? workerError = null)
         => new(
             Success: false,
             TimedOut: true,
-            WorkerError: null,
+            WorkerError: workerError,
             CallbackError: null,
             DurationMs: Math.Max(0, durationMs),
             Symbols: null,
@@ -326,16 +343,13 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
-    private static bool WaitForWorkerExit(Process process, int milliseconds)
+    internal static WorkerProcessExitWaitResult WaitForWorkerExit(Process process, int milliseconds)
+        => WorkerProcessCleanupDiagnostics.WaitForExit(process, milliseconds);
+
+    private static void LogCleanupDiagnostic(string message, string? diagnostic)
     {
-        try
-        {
-            return process.WaitForExit(milliseconds);
-        }
-        catch
-        {
-            return false;
-        }
+        if (!string.IsNullOrWhiteSpace(diagnostic))
+            GlobalToolLog.Error($"{message} {diagnostic}");
     }
 }
 
@@ -455,27 +469,8 @@ internal static class PostExtractionHookCallbackWorker
         return true;
     }
 
-    internal static void TryKillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-        }
-        catch
-        {
-            // Best effort: timeout reporting must not fail because cleanup failed.
-        }
-
-        try
-        {
-            process.WaitForExit(WorkerKillWaitMilliseconds);
-        }
-        catch
-        {
-            // Best effort: the parent continues with the timeout diagnostic.
-        }
-    }
+    internal static string? TryKillProcess(Process process)
+        => WorkerProcessCleanupDiagnostics.TryKill(process, WorkerKillWaitMilliseconds);
 
     private static int RunCommand(
         string[] args,

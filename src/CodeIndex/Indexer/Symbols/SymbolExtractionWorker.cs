@@ -54,9 +54,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             Task<string?> responseTask;
@@ -72,45 +70,39 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             }
             catch (Exception ex)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending symbol extraction request.",
+                    stopwatch);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             if (sendException != null)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending symbol extraction request.",
+                    stopwatch);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, cancellationToken, out var responseException))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             if (responseException != null)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading symbol extraction response.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading symbol extraction response.",
+                    stopwatch);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             stopwatch.Stop();
@@ -131,8 +123,9 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             }
             catch (JsonException ex)
             {
-                KillWorker();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.",
+                    stopwatch);
             }
 
             if (response == null)
@@ -172,10 +165,16 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 // Best effort: disposal should not throw after indexing has completed.
             }
 
-            if (!WaitForWorkerExit(process, 1000))
-                KillWorker();
+            var waitResult = WaitForWorkerExit(process, 1000);
+            if (!waitResult.Exited)
+            {
+                var cleanupDiagnostic = WorkerProcessCleanupDiagnostics.Combine(waitResult.Diagnostic, KillWorker());
+                LogCleanupDiagnostic("symbol_extraction_worker_cleanup_failed", cleanupDiagnostic);
+            }
             else
+            {
                 ClearExitedWorker();
+            }
         }
     }
 
@@ -221,13 +220,14 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
     }
 
-    private void KillWorker()
+    private string? KillWorker()
     {
         if (process == null)
-            return;
+            return null;
 
-        SymbolExtractionWorker.TryKillProcess(process);
+        var cleanupDiagnostic = SymbolExtractionWorker.TryKillProcess(process);
         ClearExitedWorker();
+        return cleanupDiagnostic;
     }
 
     private void ClearExitedWorker()
@@ -247,11 +247,27 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
-    private static SymbolExtractionWorkerResult TimedOut(long durationMs)
+    private SymbolExtractionWorkerResult FailureAfterKill(string message, Stopwatch stopwatch)
+    {
+        var cleanupDiagnostic = KillWorker();
+        stopwatch.Stop();
+        return Failure(
+            WorkerProcessCleanupDiagnostics.AppendToMessage(message, cleanupDiagnostic),
+            stopwatch.ElapsedMilliseconds);
+    }
+
+    private SymbolExtractionWorkerResult TimedOutAfterKill(Stopwatch stopwatch)
+    {
+        var cleanupDiagnostic = KillWorker();
+        stopwatch.Stop();
+        return TimedOut(stopwatch.ElapsedMilliseconds, cleanupDiagnostic);
+    }
+
+    private static SymbolExtractionWorkerResult TimedOut(long durationMs, string? workerError = null)
         => new(
             Success: false,
             TimedOut: true,
-            WorkerError: null,
+            WorkerError: workerError,
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
@@ -281,7 +297,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            KillWorker();
+            _ = KillWorker();
             throw;
         }
         catch (Exception ex)
@@ -309,16 +325,13 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
-    private static bool WaitForWorkerExit(Process process, int milliseconds)
+    internal static WorkerProcessExitWaitResult WaitForWorkerExit(Process process, int milliseconds)
+        => WorkerProcessCleanupDiagnostics.WaitForExit(process, milliseconds);
+
+    private static void LogCleanupDiagnostic(string message, string? diagnostic)
     {
-        try
-        {
-            return process.WaitForExit(milliseconds);
-        }
-        catch
-        {
-            return false;
-        }
+        if (!string.IsNullOrWhiteSpace(diagnostic))
+            GlobalToolLog.Error($"{message} {diagnostic}");
     }
 
     private static void ForwardCapturedStderr(string? capturedStderr)
@@ -466,27 +479,8 @@ internal static class SymbolExtractionWorker
         return string.IsNullOrWhiteSpace(runnerAssemblyPath);
     }
 
-    internal static void TryKillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-        }
-        catch
-        {
-            // Best effort: timeout reporting must not fail because cleanup failed.
-        }
-
-        try
-        {
-            process.WaitForExit(WorkerKillWaitMilliseconds);
-        }
-        catch
-        {
-            // Best effort: the parent continues with the timeout diagnostic.
-        }
-    }
+    internal static string? TryKillProcess(Process process)
+        => WorkerProcessCleanupDiagnostics.TryKill(process, WorkerKillWaitMilliseconds);
 
     private static int RunCommand(
         string[] args,

@@ -302,6 +302,34 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void WorkerProcessCleanupDiagnostics_ReturnBoundedProcessStateCategories_Issue3468()
+    {
+        using var symbolProcess = new Process();
+
+        var symbolWait = SymbolExtractionWorkerClient.WaitForWorkerExit(symbolProcess, 1);
+        var symbolKillDiagnostic = SymbolExtractionWorker.TryKillProcess(symbolProcess);
+
+        Assert.False(symbolWait.Exited);
+        Assert.Equal("worker_wait_failed: InvalidOperationException", symbolWait.Diagnostic);
+        Assert.Equal(
+            "worker_kill_failed: InvalidOperationException; worker_kill_wait_failed: InvalidOperationException",
+            symbolKillDiagnostic);
+        Assert.DoesNotContain("No process", symbolKillDiagnostic, StringComparison.Ordinal);
+
+        using var hookProcess = new Process();
+
+        var hookWait = PostExtractionHookCallbackWorkerClient.WaitForWorkerExit(hookProcess, 1);
+        var hookKillDiagnostic = PostExtractionHookCallbackWorker.TryKillProcess(hookProcess);
+
+        Assert.False(hookWait.Exited);
+        Assert.Equal("worker_wait_failed: InvalidOperationException", hookWait.Diagnostic);
+        Assert.Equal(
+            "worker_kill_failed: InvalidOperationException; worker_kill_wait_failed: InvalidOperationException",
+            hookKillDiagnostic);
+        Assert.DoesNotContain("No process", hookKillDiagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398()
     {
         var projectRoot = CreateTempProject();
