@@ -5,6 +5,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Cli;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -347,7 +348,8 @@ internal static class SymbolExtractionWorker
         TextWriter error,
         out int exitCode,
         int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
-        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+        CancellationToken cancellationToken = default)
     {
         if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
         {
@@ -355,7 +357,7 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes, cancellationToken);
         return true;
     }
 
@@ -492,7 +494,8 @@ internal static class SymbolExtractionWorker
         TextWriter output,
         TextWriter error,
         int maxProtocolLineCharacters,
-        int maxProtocolLineUtf8Bytes)
+        int maxProtocolLineUtf8Bytes,
+        CancellationToken cancellationToken)
     {
         if (!TryResolveWorkerOptions(
                 args,
@@ -512,6 +515,7 @@ internal static class SymbolExtractionWorker
         {
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 WorkerResponse response;
                 WorkerRequest request;
                 string? requestJson;
@@ -545,7 +549,11 @@ internal static class SymbolExtractionWorker
 
                 try
                 {
-                    response = InvokeInsideWorker(request, workerOptions);
+                    response = InvokeInsideWorker(request, workerOptions, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -558,6 +566,10 @@ internal static class SymbolExtractionWorker
 
             return 0;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CommandExitCodes.CancelledBySignal;
+        }
         catch (Exception ex)
         {
             error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
@@ -565,7 +577,7 @@ internal static class SymbolExtractionWorker
         }
     }
 
-    private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options)
+    private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options, CancellationToken cancellationToken)
     {
         var originalOut = Console.Out;
         var originalError = Console.Error;
@@ -576,15 +588,19 @@ internal static class SymbolExtractionWorker
             Console.SetOut(capturedOut);
             Console.SetError(capturedError);
             WriteConsoleOutputForTestingIfRequested(options);
-            DelayForTestingIfRequested(options);
+            DelayForTestingIfRequested(options, cancellationToken);
             var symbols = SymbolExtractor.Extract(
                 request.FileId,
                 request.Lang,
                 request.Content,
                 request.FilePath,
                 request.ProjectRoot,
-                CancellationToken.None);
+                cancellationToken);
             return new WorkerResponse(symbols, null, capturedError.GetCapturedText());
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -603,12 +619,13 @@ internal static class SymbolExtractionWorker
             Console.Out.WriteLine(options.ConsoleStdoutForTesting);
     }
 
-    private static void DelayForTestingIfRequested(WorkerOptions options)
+    private static void DelayForTestingIfRequested(WorkerOptions options, CancellationToken cancellationToken)
     {
         if (options.DelayMillisecondsForTesting is not { } milliseconds)
             return;
 
-        Thread.Sleep(milliseconds);
+        if (cancellationToken.WaitHandle.WaitOne(milliseconds))
+            cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)

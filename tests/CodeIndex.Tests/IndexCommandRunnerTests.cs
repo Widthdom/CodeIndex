@@ -261,6 +261,47 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_RunCommand_CancellationTokenStopsDelayedExtraction_Issue3399()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            SymbolExtractionWorker.DelayMillisecondsForTesting = 500;
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                0,
+                "csharp",
+                "public class App { }\n",
+                Path.Combine(projectRoot, "App.cs"),
+                projectRoot);
+            using var input = new StringReader(JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + Environment.NewLine);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+            var stopwatch = Stopwatch.StartNew();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out var exitCode,
+                cancellationToken: cts.Token);
+
+            stopwatch.Stop();
+            Assert.True(handled);
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, output.ToString());
+            Assert.Equal(string.Empty, error.ToString());
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            SymbolExtractionWorker.DelayMillisecondsForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398()
     {
         var projectRoot = CreateTempProject();
