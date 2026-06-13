@@ -462,6 +462,75 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_ScrubsSafeExternalAttributes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ScrubsSafeExternalAttributes));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "external-attributes.nupkg");
+            CreatePackageWithAttributedEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", "", UnixRegularFileAttributes(493)),
+                ("payload.bin", "payload", 0x20));
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.All(archive.Entries, entry => Assert.Equal(0, entry.ExternalAttributes));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsPosixSymlinkExternalAttributes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPosixSymlinkExternalAttributes));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "symlink-attributes.nupkg");
+            CreatePackageWithAttributedEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", "", 0),
+                ("payload.bin", "payload", UnixSymlinkAttributes()));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains("payload.bin", exception.Message);
+            Assert.Contains("unsafe POSIX file type symlink", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsUnsafeDosExternalAttributes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsUnsafeDosExternalAttributes));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "dos-attributes.nupkg");
+            CreatePackageWithAttributedEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", "", 0),
+                ("payload.bin", "payload", 0x04));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains("payload.bin", exception.Message);
+            Assert.Contains("unsafe DOS attributes 0x04", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
         var root = GetRepositoryRoot();
@@ -559,12 +628,32 @@ public class ReleaseWorkflowTests
             WriteZipEntry(archive, entry.EntryName, entry.Content);
     }
 
-    private static void WriteZipEntry(ZipArchive archive, string entryName, string content)
+    private static void CreatePackageWithAttributedEntries(string packagePath, params (string EntryName, string Content, int ExternalAttributes)[] entries)
+    {
+        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
+        foreach (var entry in entries)
+            WriteZipEntry(archive, entry.EntryName, entry.Content, entry.ExternalAttributes);
+    }
+
+    private static void WriteZipEntry(ZipArchive archive, string entryName, string content, int? externalAttributes = null)
     {
         var entry = archive.CreateEntry(entryName);
+        if (externalAttributes.HasValue)
+            entry.ExternalAttributes = externalAttributes.Value;
+
         using var stream = entry.Open();
         using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(content.Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    private static int UnixRegularFileAttributes(int permissions)
+    {
+        return unchecked((int)((0x8000u | (uint)permissions) << 16));
+    }
+
+    private static int UnixSymlinkAttributes()
+    {
+        return unchecked((int)((0xA000u | 511u) << 16));
     }
 
     private static string ReadZipEntryText(ZipArchive archive, string entryName)

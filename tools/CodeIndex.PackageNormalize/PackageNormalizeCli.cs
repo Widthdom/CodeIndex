@@ -187,6 +187,18 @@ public static class PackageCorePropertiesNormalizer
 {
     public const string CanonicalCorePropertiesPath = "package/services/metadata/core-properties/core-properties.psmdcp";
 
+    private const int SafeExternalAttributes = 0;
+    private const int DosAttributeMask = 0xFF;
+    private const int DosArchiveAttribute = 0x20;
+    private const int UnixFileTypeMask = 0xF000;
+    private const int UnixRegularFileType = 0x8000;
+    private const int UnixFifoFileType = 0x1000;
+    private const int UnixCharacterDeviceFileType = 0x2000;
+    private const int UnixDirectoryFileType = 0x4000;
+    private const int UnixBlockDeviceFileType = 0x6000;
+    private const int UnixSymlinkFileType = 0xA000;
+    private const int UnixSocketFileType = 0xC000;
+
     private static readonly DateTimeOffset StableZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     public static void NormalizePackage(string packagePath)
@@ -230,7 +242,7 @@ public static class PackageCorePropertiesNormalizer
 
                     var destinationEntry = destinationArchive.CreateEntry(destinationName, CompressionLevel.Optimal);
                     destinationEntry.LastWriteTime = StableZipTimestamp;
-                    destinationEntry.ExternalAttributes = sourceEntry.ExternalAttributes;
+                    destinationEntry.ExternalAttributes = SafeExternalAttributes;
 
                     using var rawSourceEntryStream = sourceEntry.Open();
                     using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
@@ -290,6 +302,7 @@ public static class PackageCorePropertiesNormalizer
 
         foreach (var sourceEntry in sourceArchive.Entries)
         {
+            ValidateExternalAttributes(sourceEntry);
             ValidateEntrySize(sourceEntry, limits);
 
             if (totalUncompressedBytes > limits.MaxTotalUncompressedBytes - sourceEntry.Length)
@@ -388,6 +401,41 @@ public static class PackageCorePropertiesNormalizer
             throw new InvalidOperationException(
                 $"ZIP entry {sourceEntry.FullName} is {sourceEntry.Length} bytes uncompressed, which exceeds the per-entry limit of {limits.MaxEntryUncompressedBytes} bytes.");
         }
+    }
+
+    private static void ValidateExternalAttributes(ZipArchiveEntry sourceEntry)
+    {
+        var externalAttributes = sourceEntry.ExternalAttributes;
+        var unixMode = (externalAttributes >> 16) & 0xFFFF;
+        var unixFileType = unixMode & UnixFileTypeMask;
+
+        if (unixFileType != 0 && unixFileType != UnixRegularFileType)
+        {
+            throw new InvalidOperationException(
+                $"ZIP entry {sourceEntry.FullName} uses unsafe POSIX file type {DescribeUnixFileType(unixFileType)} in external attributes.");
+        }
+
+        var dosAttributes = externalAttributes & DosAttributeMask;
+        var unsafeDosAttributes = dosAttributes & ~DosArchiveAttribute;
+        if (unsafeDosAttributes != 0)
+        {
+            throw new InvalidOperationException(
+                $"ZIP entry {sourceEntry.FullName} uses unsafe DOS attributes 0x{unsafeDosAttributes:X2}.");
+        }
+    }
+
+    private static string DescribeUnixFileType(int fileType)
+    {
+        return fileType switch
+        {
+            UnixFifoFileType => "fifo",
+            UnixCharacterDeviceFileType => "character-device",
+            UnixDirectoryFileType => "directory",
+            UnixBlockDeviceFileType => "block-device",
+            UnixSymlinkFileType => "symlink",
+            UnixSocketFileType => "socket",
+            _ => $"0x{fileType:X4}",
+        };
     }
 
     private static string ReadXmlEntryText(ZipArchiveEntry sourceEntry, Stream sourceEntryStream, PackageNormalizeLimits limits)
