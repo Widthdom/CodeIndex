@@ -257,8 +257,7 @@ internal static class ExportImportCommandRunner
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
-        var dbPathComparison = ResolveDatabasePathComparison(normalizedDbPath);
-        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath, dbPathComparison))
+        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
         {
             return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
         }
@@ -341,8 +340,7 @@ internal static class ExportImportCommandRunner
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
-        var dbPathComparison = ResolveDatabasePathComparison(normalizedDbPath);
-        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath, dbPathComparison))
+        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
         {
             return WriteError("ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", "cdidx export ctags [--output <path>] [--db <path>]");
         }
@@ -1066,6 +1064,22 @@ internal static class ExportImportCommandRunner
         => IsSamePath(path, dbPath, comparison)
             || IsSamePath(path, dbPath + "-wal", comparison)
             || IsSamePath(path, dbPath + "-shm", comparison);
+
+    internal static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath)
+    {
+        var liveComparison = PathCasing.ComparisonFor(dbPath);
+        if (IsDatabaseOrSqliteSidecarPath(path, dbPath, liveComparison))
+            return true;
+
+        if (!TryReadDatabasePathCaseSensitive(dbPath, out var pathCaseSensitive))
+            return false;
+
+        var stampedComparison = pathCaseSensitive
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+        return stampedComparison != liveComparison
+            && IsDatabaseOrSqliteSidecarPath(path, dbPath, stampedComparison);
+    }
 
     private static string SanitizeCtagsField(string value)
         => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');

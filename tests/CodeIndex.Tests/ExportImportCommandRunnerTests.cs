@@ -231,6 +231,32 @@ public class ExportImportCommandRunnerTests
             StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void IsDatabaseOrSqliteSidecarPath_UsesLiveIgnoreCaseForMovedSensitiveStamp_Issue3368()
+    {
+        PathCasing.ResetCacheForTests();
+        var projectRoot = TestProjectHelper.CreateTempProject("export_path_case_moved_stamp");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, bool.TrueString);
+            }
+
+            PathCasing.SeedFromWorkspace(Path.GetDirectoryName(dbPath)!, ignoreCase: true);
+            var outputPath = Path.Combine(Path.GetDirectoryName(dbPath)!, "CODEINDEX.DB");
+
+            Assert.True(ExportImportCommandRunner.IsDatabaseOrSqliteSidecarPath(outputPath, dbPath));
+        }
+        finally
+        {
+            PathCasing.ResetCacheForTests();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("true", StringComparison.Ordinal)]
     [InlineData("false", StringComparison.OrdinalIgnoreCase)]
