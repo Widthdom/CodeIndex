@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeIndex.Changelog;
 
 namespace CodeIndex.Tests;
@@ -33,6 +34,71 @@ public sealed class ChangelogToolTests
                 Directory.SetCurrentDirectory(previousDirectory);
                 Directory.Delete(unrelatedDirectory, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public void ProgramMainPrepareBadVersionReturnsFriendlyError_Issue3444()
+    {
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["prepare", "--version", "not-a-version", "--date", "2026-05-01"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--version must be a version like X.Y.Z.", stderr);
+    }
+
+    [Fact]
+    public void ProgramMainPrepareBadDateReturnsFriendlyError_Issue3444()
+    {
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["prepare", "--version", "1.17.0", "--date", "05/01/2026"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--date must use yyyy-MM-dd.", stderr);
+    }
+
+    [Fact]
+    public void ProgramMainReleaseNotesBadPreviousVersionReturnsFriendlyError_Issue3444()
+    {
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["release-notes", "--version", "1.17.0", "--previous-version", "bad"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--previous-version must be a version like X.Y.Z.", stderr);
+    }
+
+    [Fact]
+    public void ProgramMainRenderUsesInvariantInputsUnderNonInvariantCulture_Issue3444()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CodeIndex.sln", string.Empty);
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var previousCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            var (exitCode, stdout, stderr) = CaptureChangelogMain(
+                ["render", "--version", "1.17.0", "--date", "2026-05-01"]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("### [1.17.0] - 2026-05-01", stdout);
+            Assert.Contains("English release note", stdout);
+            Assert.Contains("Japanese release note", stdout);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
         }
     }
 
@@ -653,6 +719,29 @@ public sealed class ChangelogToolTests
         }
 
         return count;
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) CaptureChangelogMain(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousOut = Console.Out;
+            var previousError = Console.Error;
+            using var outWriter = new StringWriter();
+            using var errorWriter = new StringWriter();
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            try
+            {
+                var exitCode = CodeIndex.Changelog.Program.Main(args);
+                return (exitCode, outWriter.ToString(), errorWriter.ToString());
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousError);
+            }
+        }
     }
 
     private static string OversizedContent(long maxBytes) => new('x', checked((int)maxBytes + 1));

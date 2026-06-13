@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
@@ -259,7 +260,7 @@ public static class DbDebug
         var raw = Environment.GetEnvironmentVariable("CDIDX_SLOW_QUERY_MS");
         if (string.IsNullOrWhiteSpace(raw))
             return null;
-        return long.TryParse(raw, out var value) && value >= 0 ? value : null;
+        return long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value >= 0 ? value : null;
     }
 
     private static string GetStatementOperation(string? sql)

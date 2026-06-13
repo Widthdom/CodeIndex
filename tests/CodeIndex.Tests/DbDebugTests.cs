@@ -50,6 +50,28 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void ExecuteTrackedReader_SlowQueryThresholdIgnoresCurrentCulturePositiveSign_Issue3404()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SLOW_QUERY_MS");
+        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
+        env.Set("CDIDX_SLOW_QUERY_MS", "^0");
+
+        using var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1";
+
+        var stderr = CaptureStderr(() =>
+        {
+            using var reader = cmd.ExecuteTrackedReader();
+            Assert.True(reader.TrackedRead());
+            Assert.Equal(1, reader.GetInt32(0));
+        });
+
+        Assert.DoesNotContain("slow_query", stderr);
+    }
+
+    [Fact]
     public void ExecuteTrackedReader_ProfileCapsQueryPlanRows()
     {
         DbDebug.ResetForTesting();
