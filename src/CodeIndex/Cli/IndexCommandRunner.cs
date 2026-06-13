@@ -25,6 +25,7 @@ public static partial class IndexCommandRunner
     internal const int MaxCommitRefLength = 256;
     internal const int MaxGitExcludeBytes = 256 * 1024;
     internal const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
+    private const int MaxIndexRunDiagnosticLength = 512;
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
     private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);
@@ -262,7 +263,8 @@ public static partial class IndexCommandRunner
                 // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
                 db.InitializeSchema();
-                AddToGitExclude(options.ProjectPath, dbPath);
+                var indexRunDiagnostics = new List<string>();
+                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics);
 
                 var writer = new DbWriter(db);
                 var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
@@ -270,8 +272,8 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
-                    : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
+                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                     db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
@@ -413,6 +415,33 @@ public static partial class IndexCommandRunner
         long rowsUpserted,
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline)
+        => StampLastIndexRunMetadata(
+            writer,
+            mode,
+            startedAtUtc,
+            durationMs,
+            filesScanned,
+            filesSkipped,
+            parseErrors,
+            bytesRead,
+            rowsUpserted,
+            rowsDeleted,
+            memoryTimeline,
+            diagnostics: null);
+
+    private static void StampLastIndexRunMetadata(
+        DbWriter writer,
+        string mode,
+        DateTime startedAtUtc,
+        long durationMs,
+        long filesScanned,
+        long filesSkipped,
+        long parseErrors,
+        long bytesRead,
+        long rowsUpserted,
+        long rowsDeleted,
+        IndexMemoryTimelineJsonResult? memoryTimeline,
+        IReadOnlyList<string>? diagnostics)
     {
         writer.SetMeta(DbContext.LastIndexRunModeMetaKey, mode);
         writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
@@ -426,7 +455,49 @@ public static partial class IndexCommandRunner
         writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
             ? null
             : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        StampLastIndexRunDiagnostics(writer, diagnostics);
         writer.ClearLastFailedIndexRunMetadata();
+    }
+
+    internal static void StampLastIndexRunDiagnostics(DbWriter writer, IReadOnlyList<string>? diagnostics)
+    {
+        var total = diagnostics?.Count ?? 0;
+        if (total == 0)
+        {
+            writer.SetMeta(DbContext.LastIndexRunDiagnosticsMetaKey, null);
+            writer.SetMeta(DbContext.LastIndexRunDiagnosticCountMetaKey, null);
+            writer.SetMeta(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, null);
+            return;
+        }
+
+        var sample = JsonStringListCodec.TakeSerializableSample(
+            diagnostics!,
+            DbContext.LastIndexRunDiagnosticSampleLimit);
+        writer.SetMeta(
+            DbContext.LastIndexRunDiagnosticsMetaKey,
+            JsonStringListCodec.Serialize(sample));
+        writer.SetMeta(
+            DbContext.LastIndexRunDiagnosticCountMetaKey,
+            total.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(
+            DbContext.LastIndexRunDiagnosticsTruncatedMetaKey,
+            (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    internal static string FormatIndexRunDiagnostic(string code, Exception ex)
+    {
+        var raw = $"{code}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
+        return raw.Length <= MaxIndexRunDiagnosticLength
+            ? raw
+            : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
+    }
+
+    private static void RecordIndexRunDiagnostic(List<string>? diagnostics, string code, Exception ex)
+    {
+        if (diagnostics == null)
+            return;
+
+        diagnostics.Add(FormatIndexRunDiagnostic(code, ex));
     }
 
     private static void TryStampLastFailedIndexRun(
@@ -746,7 +817,7 @@ public static partial class IndexCommandRunner
     // the index data itself is valid; the metadata stamp is best-effort. Issue #1509.
     // #1509: 成功 index 末尾で HEAD / branch / timestamp を codeindex_meta に保存する。
     // git 不在時は NULL stamp、stamp 自体の例外は warn せず無視（index 本体は成功）。
-    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot, CancellationToken cancellationToken)
+    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot, List<string>? diagnostics, CancellationToken cancellationToken)
     {
         try
         {
@@ -763,15 +834,16 @@ public static partial class IndexCommandRunner
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
+            RecordIndexRunDiagnostic(diagnostics, "indexed_head_metadata_write_failed", ex);
         }
-        StampWorkspacePathCaseSensitivity(writer, projectRoot, cancellationToken);
+        StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
     }
 
-    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit)
+    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit, List<string>? diagnostics)
     {
         try
         {
@@ -782,10 +854,11 @@ public static partial class IndexCommandRunner
                 : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
+            RecordIndexRunDiagnostic(diagnostics, "commit_scoped_head_metadata_write_failed", ex);
         }
     }
 
@@ -814,7 +887,7 @@ public static partial class IndexCommandRunner
     // an unwritable git config / temp probe never blocks an otherwise-successful index.
     // #1546: workspace FS の大小区別を実プローブして codeindex_meta に保存する。
     // probe 失敗時は黙って null stamp にして index 本体は成功扱いのままとする。
-    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot, CancellationToken cancellationToken)
+    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot, List<string>? diagnostics, CancellationToken cancellationToken)
     {
         try
         {
@@ -827,14 +900,15 @@ public static partial class IndexCommandRunner
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
+            RecordIndexRunDiagnostic(diagnostics, "path_case_sensitivity_metadata_write_failed", ex);
         }
     }
 
-    private static void AddToGitExclude(string projectPath, string dbPath)
+    private static void AddToGitExclude(string projectPath, string dbPath, List<string>? diagnostics)
     {
         try
         {
@@ -889,8 +963,9 @@ public static partial class IndexCommandRunner
             foreach (var pattern in missing)
                 sw.WriteLine(pattern);
         }
-        catch
+        catch (Exception ex)
         {
+            RecordIndexRunDiagnostic(diagnostics, "git_exclude_metadata_write_failed", ex);
         }
     }
 

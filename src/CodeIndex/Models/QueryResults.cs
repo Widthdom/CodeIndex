@@ -1140,6 +1140,12 @@ public sealed class StatusLastIndexRun
     public long? RowsDeleted { get; set; }
     [JsonPropertyName("peak_memory_mb")]
     public long? PeakMemoryMb { get; set; }
+    [JsonPropertyName("diagnostics")]
+    public List<string>? Diagnostics { get; set; }
+    [JsonPropertyName("diagnostic_count")]
+    public long? DiagnosticCount { get; set; }
+    [JsonPropertyName("diagnostics_truncated")]
+    public bool? DiagnosticsTruncated { get; set; }
 }
 
 public sealed class StatusFailedOrPartialIndexRun

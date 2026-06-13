@@ -937,8 +937,12 @@ public partial class DbReader
         var rowsUpserted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsUpsertedMetaKey));
         var rowsDeleted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsDeletedMetaKey));
         var peakMemoryMb = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunPeakMemoryMbMetaKey));
+        var diagnostics = ParseMetaStringList(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsMetaKey));
+        var diagnosticCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticCountMetaKey));
+        var diagnosticsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey));
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
-            && parseErrors == null && bytesRead == null && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null)
+            && parseErrors == null && bytesRead == null && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
+            && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null)
         {
             return null;
         }
@@ -955,6 +959,9 @@ public partial class DbReader
             RowsUpserted = rowsUpserted,
             RowsDeleted = rowsDeleted,
             PeakMemoryMb = peakMemoryMb,
+            Diagnostics = diagnostics,
+            DiagnosticCount = diagnosticCount,
+            DiagnosticsTruncated = diagnosticsTruncated,
         };
     }
 

@@ -550,6 +550,7 @@ public static partial class IndexCommandRunner
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
+        List<string>? indexRunDiagnostics,
         bool showNextSteps,
         CancellationToken cancellationToken)
     {
@@ -1421,7 +1422,7 @@ public static partial class IndexCommandRunner
             // reflects the true HEAD at the time of the most recent successful index.
             // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
-            StampIndexedHeadMetadata(writer, projectRoot, cancellationToken);
+            StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
@@ -1436,7 +1437,8 @@ public static partial class IndexCommandRunner
                 SumReadableFileBytes(files),
                 processed,
                 purged,
-                memoryTimelineForStamp);
+                memoryTimelineForStamp,
+                indexRunDiagnostics);
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();

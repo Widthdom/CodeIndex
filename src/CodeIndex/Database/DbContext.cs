@@ -1504,6 +1504,10 @@ public class DbContext : IDisposable
     public const string LastIndexRunRowsUpsertedMetaKey = "last_index_run_rows_upserted";
     public const string LastIndexRunRowsDeletedMetaKey = "last_index_run_rows_deleted";
     public const string LastIndexRunPeakMemoryMbMetaKey = "last_index_run_peak_memory_mb";
+    public const string LastIndexRunDiagnosticsMetaKey = "last_index_run_diagnostics_json";
+    public const string LastIndexRunDiagnosticCountMetaKey = "last_index_run_diagnostic_count";
+    public const string LastIndexRunDiagnosticsTruncatedMetaKey = "last_index_run_diagnostics_truncated";
+    public const int LastIndexRunDiagnosticSampleLimit = 50;
     public const string LastFailedIndexRunStatusMetaKey = "last_failed_index_run_status";
     public const string LastFailedIndexRunModeMetaKey = "last_failed_index_run_mode";
     public const string LastFailedIndexRunStartedAtMetaKey = "last_failed_index_run_started_at";

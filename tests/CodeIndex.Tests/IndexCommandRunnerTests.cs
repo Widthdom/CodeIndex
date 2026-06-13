@@ -3080,6 +3080,21 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatIndexRunDiagnostic_CollapsesAndBoundsExceptionMessages()
+    {
+        var message = "first line\n" + new string('x', 700);
+
+        var diagnostic = IndexCommandRunner.FormatIndexRunDiagnostic(
+            "indexed_head_metadata_write_failed",
+            new IOException(message));
+
+        Assert.StartsWith("indexed_head_metadata_write_failed: IOException: first line ", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', diagnostic);
+        Assert.EndsWith("...<truncated>", diagnostic, StringComparison.Ordinal);
+        Assert.True(diagnostic.Length <= 512 + "...<truncated>".Length);
+    }
+
+    [Fact]
     public void Run_GitRepo_PersistsIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();

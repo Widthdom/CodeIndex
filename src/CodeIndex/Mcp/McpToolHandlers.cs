@@ -5506,6 +5506,8 @@ public partial class McpServer
             return total;
         }
 
+        var indexRunDiagnostics = new List<string>();
+
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
@@ -5799,9 +5801,10 @@ public partial class McpServer
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort; never fail an otherwise-successful index run.
+                indexRunDiagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic("indexed_head_metadata_write_failed", ex));
             }
             // #1546: stamp workspace path-case-sensitivity so MCP-driven indexes also
             // surface the diagnostic field through `cdidx status` / MCP status.
@@ -5818,10 +5821,12 @@ public partial class McpServer
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort; never fail an otherwise-successful index run.
+                indexRunDiagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic("path_case_sensitivity_metadata_write_failed", ex));
             }
+            IndexCommandRunner.StampLastIndexRunDiagnostics(writer, indexRunDiagnostics);
             writer.ClearBatchInProgress();
             readinessTxn.Commit();
         }

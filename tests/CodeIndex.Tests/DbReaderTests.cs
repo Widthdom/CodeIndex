@@ -88,6 +88,9 @@ public class DbReaderTests : IDisposable
         _writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, "2");
         _writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, "1");
         _writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, "64");
+        _writer.SetMeta(DbContext.LastIndexRunDiagnosticsMetaKey, JsonStringListCodec.Serialize(["indexed_head_metadata_write_failed: IOException: denied"]));
+        _writer.SetMeta(DbContext.LastIndexRunDiagnosticCountMetaKey, "1");
+        _writer.SetMeta(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, "false");
 
         var status = _reader.GetStatus();
 
@@ -103,6 +106,9 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1234, status.LastIndexRun.DurationMs);
         Assert.Equal(3, status.LastIndexRun.FilesScanned);
         Assert.Equal(64, status.LastIndexRun.PeakMemoryMb);
+        Assert.Equal(["indexed_head_metadata_write_failed: IOException: denied"], status.LastIndexRun.Diagnostics);
+        Assert.Equal(1, status.LastIndexRun.DiagnosticCount);
+        Assert.False(status.LastIndexRun.DiagnosticsTruncated);
     }
 
     [Theory]

@@ -34,6 +34,7 @@ public static partial class IndexCommandRunner
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
+        List<string>? indexRunDiagnostics,
         CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
@@ -107,6 +108,7 @@ public static partial class IndexCommandRunner
                 currentHeadCommit,
                 priorSymbolKindFilterSignature,
                 initialCwd,
+                indexRunDiagnostics,
                 showNextSteps: false,
                 cancellationToken);
         }
@@ -989,8 +991,8 @@ public static partial class IndexCommandRunner
         }
         if (errors == 0)
         {
-            StampIndexedHeadMetadata(writer, projectRoot, cancellationToken);
-            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit);
+            StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
+            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit, indexRunDiagnostics);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
@@ -1005,7 +1007,8 @@ public static partial class IndexCommandRunner
                 SumReadableFileBytes(targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar)))),
                 updated,
                 removed,
-                memoryTimelineForStamp);
+                memoryTimelineForStamp,
+                indexRunDiagnostics);
         }
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);
