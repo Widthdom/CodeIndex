@@ -460,8 +460,12 @@ public class GitHelperTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
-        var repoDir = Path.Combine(_tempDir, "repo-timeout");
-        Directory.CreateDirectory(repoDir);
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "tracked\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "base");
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
         var fakeGitDir = Path.Combine(_tempDir, "fake-git-timeout");
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
@@ -473,7 +477,7 @@ public class GitHelperTests : IDisposable
         try
         {
             var ex = Assert.Throws<InvalidOperationException>(
-                () => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef"));
+                () => GitHelper.GetChangedFilesFromCommit(repoDir, commitId));
 
             Assert.Contains("timed out", ex.Message);
         }
