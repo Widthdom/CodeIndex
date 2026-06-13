@@ -224,6 +224,46 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-tmp.*"));
     }
 
+    [Fact]
+    public void PathProfileUpdate_PreservesSymlinkedProfile_Issue3501()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var home = Path.Combine(_tempRoot, "path_profile_symlink_home");
+        var dotfiles = Path.Combine(home, "dotfiles");
+        Directory.CreateDirectory(dotfiles);
+        var targetPath = Path.Combine(dotfiles, "zshrc");
+        File.WriteAllText(targetPath, "export EXISTING=1\n");
+        var profilePath = Path.Combine(home, ".zshrc");
+        File.CreateSymbolicLink(profilePath, Path.Combine("dotfiles", "zshrc"));
+        var installDir = Path.Combine(_tempRoot, "path_profile_symlink_bin");
+        Directory.CreateDirectory(installDir);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            "append_path_to_shell_profile",
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["HOME"] = home,
+                ["SHELL"] = "/bin/zsh",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.NotNull(File.ResolveLinkTarget(profilePath, returnFinalTarget: false));
+        Assert.Contains("Backed up", stdout);
+        Assert.Contains(targetPath, stdout);
+        var backups = Directory.GetFiles(dotfiles, "zshrc.cdidx-backup.*");
+        Assert.Single(backups);
+        Assert.Equal("export EXISTING=1\n", File.ReadAllText(backups[0]));
+        var profile = File.ReadAllText(targetPath);
+        Assert.Contains("export EXISTING=1", profile);
+        Assert.Contains($"export PATH=\"{installDir}:$PATH\"", profile);
+        Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-tmp.*"));
+        Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-backup.*"));
+    }
+
     [Theory]
     [InlineData("/")]
     [InlineData("/usr/local")]
