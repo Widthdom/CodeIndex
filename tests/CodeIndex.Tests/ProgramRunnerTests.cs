@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
+using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
@@ -567,6 +568,43 @@ public class ProgramRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
             if (Directory.Exists(logRoot))
                 Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RuntimeTestHooks_AreScopedToExecutionContext()
+    {
+        Func<HttpClient> upgradeFactory = () => new HttpClient();
+        var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+        try
+        {
+            ProgramRunner.UpgradeHttpClientFactory = upgradeFactory;
+            ProgramRunner.TestExtractorFileLengthCheckedForTesting = _ => { };
+            DbWriter.BatchRowSkipWarningForTesting = _ => { };
+            DbContext.OptimizePragmaExecutedForTesting = _ => { };
+
+            Task<(bool UpgradeFactoryVisible, bool ProgramHookVisible, bool WriterHookVisible, bool ContextHookVisible)> task;
+            using (ExecutionContext.SuppressFlow())
+            {
+                task = Task.Run(() => (
+                    ReferenceEquals(ProgramRunner.UpgradeHttpClientFactory, upgradeFactory),
+                    ProgramRunner.TestExtractorFileLengthCheckedForTesting is not null,
+                    DbWriter.BatchRowSkipWarningForTesting is not null,
+                    DbContext.OptimizePragmaExecutedForTesting is not null));
+            }
+
+            var observed = await task;
+            Assert.False(observed.UpgradeFactoryVisible);
+            Assert.False(observed.ProgramHookVisible);
+            Assert.False(observed.WriterHookVisible);
+            Assert.False(observed.ContextHookVisible);
+        }
+        finally
+        {
+            ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            ProgramRunner.TestExtractorFileLengthCheckedForTesting = null;
+            DbWriter.BatchRowSkipWarningForTesting = null;
+            DbContext.OptimizePragmaExecutedForTesting = null;
         }
     }
 

@@ -40,10 +40,34 @@ internal static class ProgramRunner
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
     private static readonly HashSet<string> TopLevelValueOptionNames =
         CliFlagSchema.GetTopLevelValueOptionNames();
-    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
-    internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
-    internal static Action<string>? TestExtractorFileLengthCheckedForTesting { get; set; }
-    internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting { get; set; }
+    private static readonly AsyncLocal<TimeProvider?> ScopedTimeProviderForTesting = new();
+    private static readonly AsyncLocal<Func<HttpClient>?> ScopedUpgradeHttpClientFactoryForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedTestExtractorFileLengthCheckedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedDeleteInstallDirectoryWriteProbeForTesting = new();
+
+    internal static TimeProvider TimeProvider
+    {
+        get => ScopedTimeProviderForTesting.Value ?? System.TimeProvider.System;
+        set => ScopedTimeProviderForTesting.Value = ReferenceEquals(value, System.TimeProvider.System) ? null : value;
+    }
+
+    internal static Func<HttpClient> UpgradeHttpClientFactory
+    {
+        get => ScopedUpgradeHttpClientFactoryForTesting.Value ?? CreateUpgradeHttpClient;
+        set => ScopedUpgradeHttpClientFactoryForTesting.Value = value == CreateUpgradeHttpClient ? null : value;
+    }
+
+    internal static Action<string>? TestExtractorFileLengthCheckedForTesting
+    {
+        get => ScopedTestExtractorFileLengthCheckedForTesting.Value;
+        set => ScopedTestExtractorFileLengthCheckedForTesting.Value = value;
+    }
+
+    internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting
+    {
+        get => ScopedDeleteInstallDirectoryWriteProbeForTesting.Value;
+        set => ScopedDeleteInstallDirectoryWriteProbeForTesting.Value = value;
+    }
 
     private sealed record CommandRunContext(
         JsonSerializerOptions JsonOptions,
