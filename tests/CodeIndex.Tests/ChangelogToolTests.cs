@@ -296,12 +296,16 @@ public sealed class ChangelogToolTests
             """);
         scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
         var fragmentPath = Path.Combine(scope.Root, "changelog.d/unreleased/195.fixed.md");
+        var fullFragmentPath = Path.GetFullPath(fragmentPath);
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
         var tool = new ChangelogTool(scope.Root);
         ChangelogException? ex = null;
         ChangelogTool.DeleteFileForTesting = path =>
         {
-            if (string.Equals(path, fragmentPath, StringComparison.Ordinal))
+            if (string.Equals(Path.GetFullPath(path), fullFragmentPath, pathComparison))
                 throw new IOException($"raw filesystem detail {path}");
             File.Delete(path);
         };
