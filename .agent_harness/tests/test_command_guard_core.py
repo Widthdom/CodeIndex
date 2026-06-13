@@ -568,6 +568,10 @@ class CommandGuardCoreTests(TestCase):
             "git --no-pager commit -m test",
             "/usr/bin/git commit -m test",
             "env git -c user.email=codex@example.invalid commit -m test",
+            "git -c alias.ci=commit ci -m test",
+            "git -c alias.ci='commit --verbose' ci -m test",
+            "git -c alias.ci='!git commit' ci -m test",
+            "git --config-env=alias.ci=CI_ALIAS ci -m test",
             "time git commit -m test",
             "true && git --git-dir .git commit -m test",
         ):
@@ -580,6 +584,8 @@ class CommandGuardCoreTests(TestCase):
             "git commit-tree HEAD",
             "echo git commit",
             "git -c user.name=Codex status",
+            "git -c alias.ci=status ci",
+            "git -c alias.ci=commit status",
         ):
             with self.subTest(command=command):
                 self.assertFalse(core.command_is_git_commit(command))

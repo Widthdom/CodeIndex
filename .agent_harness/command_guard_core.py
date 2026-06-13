@@ -630,13 +630,38 @@ def _tokenized_forbidden_script_reason(text: str) -> str | None:
     return _tokenized_forbidden_command_reason(text)
 
 
-def _git_subcommand(args: list[str]) -> str:
+def _git_alias_name(config_key: str) -> str | None:
+    key = config_key.split("=", 1)[0].lower()
+    if not key.startswith("alias."):
+        return None
+    name = key[len("alias.") :]
+    return name or None
+
+
+def _collect_git_alias_config(config: str, aliases: dict[str, str | None], *, unknown_value: bool = False) -> None:
+    name = _git_alias_name(config)
+    if name is None:
+        return
+    aliases[name] = None if unknown_value or "=" not in config else config.split("=", 1)[1]
+
+
+def _git_subcommand_and_aliases(args: list[str]) -> tuple[str, dict[str, str | None]]:
+    aliases: dict[str, str | None] = {}
     index = 0
     options_with_values = {"-c", "-C", "--config-env", "--exec-path", "--git-dir", "--work-tree", "--namespace"}
     while index < len(args):
         arg = args[index]
         if arg in options_with_values:
+            if index + 1 < len(args):
+                if arg == "-c":
+                    _collect_git_alias_config(args[index + 1], aliases)
+                elif arg == "--config-env":
+                    _collect_git_alias_config(args[index + 1], aliases, unknown_value=True)
             index += 2
+            continue
+        if arg.startswith("--config-env="):
+            _collect_git_alias_config(arg.split("=", 1)[1], aliases, unknown_value=True)
+            index += 1
             continue
         if any(arg.startswith(option + "=") for option in options_with_values if option.startswith("--")):
             index += 1
@@ -644,8 +669,34 @@ def _git_subcommand(args: list[str]) -> str:
         if arg.startswith("-"):
             index += 1
             continue
-        return arg
-    return ""
+        return arg, aliases
+    return "", aliases
+
+
+def _git_subcommand(args: list[str]) -> str:
+    return _git_subcommand_and_aliases(args)[0]
+
+
+def _git_alias_targets_commit(value: str | None) -> bool:
+    if value is None:
+        return True
+
+    text = value.strip()
+    if text.startswith("!"):
+        text = text[1:].strip()
+
+    tokens = _expand_env_split_strings(_split_command(text))
+    for segment in _token_segments(tokens):
+        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        if not segment:
+            continue
+        command_name = _token_command_name(segment[0])
+        if command_name == "commit":
+            return True
+        if command_name == "git" and _git_subcommand(segment[1:]) == "commit":
+            return True
+
+    return bool(re.search(r"(?i)(^|[^\w./-])git\s+commit(?=$|[^\w./-])", text))
 
 
 def _contains_inline_interpreter(command: str) -> bool:
@@ -1183,7 +1234,15 @@ def command_is_git_commit(command: str) -> bool:
     tokens = _expand_env_split_strings(_split_command(command))
     for segment in _token_segments(tokens):
         segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
-        if segment and _token_command_name(segment[0]) == "git" and _git_subcommand(segment[1:]) == "commit":
+        if not segment or _token_command_name(segment[0]) != "git":
+            continue
+        subcommand, aliases = _git_subcommand_and_aliases(segment[1:])
+        if subcommand == "commit":
+            return True
+        alias = aliases.get(subcommand.lower())
+        if alias is not None and _git_alias_targets_commit(alias):
+            return True
+        if subcommand.lower() in aliases and aliases[subcommand.lower()] is None:
             return True
     return False
 
