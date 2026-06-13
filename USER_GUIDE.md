@@ -1749,7 +1749,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Nim | `.nim`, `.nims` | -- |
 | OCaml | `.ml`, `.mli` | -- |
 | Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
-| Solidity | `.sol` | -- |
+| Solidity | `.sol` | yes |
 | Tcl | `.tcl`, `.tk` | -- |
 | R | `.r`, `.R` | yes |
 | Haskell | `.hs`, `.lhs` | yes |
@@ -4195,7 +4195,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Nim | `.nim`, `.nims` | -- |
 | OCaml | `.ml`, `.mli` | -- |
 | Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
-| Solidity | `.sol` | -- |
+| Solidity | `.sol` | yes |
 | Tcl | `.tcl`, `.tk` | -- |
 | R | `.r`, `.R` | yes |
 | Haskell | `.hs`, `.lhs` | yes |

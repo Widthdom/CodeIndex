@@ -953,7 +953,7 @@ For JavaScript / TypeScript, reference extraction also captures tagged template 
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column. SQL graph extraction emits `reference` edges for named source/target forms such as `FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `TRUNCATE TABLE`, `DELETE FROM`, `DELETE ... USING`, and `MERGE ... USING`; procedure and table-valued-function calls stay on the `call` path.
 
-Additionally, 21 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, solidity, svelte, tcl, toml, vue, xml, yaml.
+Additionally, 20 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, xml, yaml.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -3164,7 +3164,7 @@ JavaScript / TypeScript では、reference extraction が `` gql`...` ``、`` st
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力するが、上の要約表には namespace 専用列はない。SQL graph extraction は `FROM`、`JOIN`、`INSERT INTO`、`UPDATE`、`TRUNCATE TABLE`、`DELETE FROM`、`DELETE ... USING`、`MERGE ... USING` のような source/target 形を `reference` edge として出力し、procedure call と table-valued function 使用は `call` 経路に残す。
 
-他に21言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, solidity, svelte, tcl, toml, vue, xml, yaml。
+他に20言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, xml, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

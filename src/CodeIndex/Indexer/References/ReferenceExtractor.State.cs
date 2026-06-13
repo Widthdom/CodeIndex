@@ -29,7 +29,7 @@ public static partial class ReferenceExtractor
         "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
         "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
         "assembly",
-        "r", "powershell", "shell", "haskell",
+        "r", "powershell", "shell", "haskell", "solidity",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
         "zig", "css", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk"
     ];
