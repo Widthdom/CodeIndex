@@ -58,6 +58,7 @@ public class DbContext : IDisposable
         ("symbols", "visibility"),
         ("symbols", "return_type"),
         ("symbols", "is_metadata_target"),
+        ("symbols", "metadata_target_source"),
         ("symbols", "name_folded"),
     ];
     private static readonly string[] ReadMigrationRequiredIndexes =
@@ -1541,12 +1542,12 @@ public class DbContext : IDisposable
     // `cdidx status` の `path_case_sensitive` で診断できるようにする。
     public const string WorkspacePathCaseSensitiveMetaKey = "workspace_path_case_sensitive";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
-    // end of a successful index pass once the writer's metadata-target resolver has classified
-    // every class-like row for that language. Readers fall back to the legacy heuristic when
-    // the per-language stamp is absent or its version does not match. Issue #435.
-    // 言語別 metadata-target 列の正式 readiness。index 終端で resolver が当該言語の class-like
-    // 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の言語については
-    // reader が legacy ヒューリスティックにフォールバックする。Issue #435。
+    // end of a successful index pass once extractor facts and the writer resolver have
+    // classified every class-like row for that language. Readers fall back to the legacy
+    // heuristic when the per-language stamp is absent or its version does not match. Issue #3524.
+    // 言語別 metadata-target 列の正式 readiness。index 終端で extractor fact と writer resolver が
+    // 当該言語の class-like 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の
+    // 言語については reader が legacy ヒューリスティックにフォールバックする。Issue #3524。
     // Version 2 (#435 iter 5) made the writer-side resolver import-aware: unqualified base
     // identifiers now resolve through the deriving file's `using Namespace;` / `using Alias =
     // FQN;` directives (plus `global using` aggregated across the repo) before falling back
@@ -1632,7 +1633,16 @@ public class DbContext : IDisposable
     // まで抜け落ち、`[FooAttribute]` の edge が落ちていた。iter-8 DB はこの展開なしで
     // index されたため、再 index で `::` 対応の resolver が `is_metadata_target` を
     // republish するまで reader を legacy 経路へ縮退させる。
-    public const int MetadataTargetVersion = 6;
+    // Version 7 (#3524) persists metadata-target provenance in
+    // `symbols.metadata_target_source` so readers and diagnostics can tell direct extractor
+    // facts from writer-resolved transitive targets. Iter-6 DBs only stored the flattened
+    // `is_metadata_target` bit, so they must degrade until reindexed with source-aware
+    // storage.
+    // バージョン 7 (#3524) で `symbols.metadata_target_source` に provenance を保存する。
+    // extractor が直接検出した fact と writer が推移的に解決した target を reader / diagnostics
+    // が区別できるようにするため、平坦な `is_metadata_target` だけを持つ iter-6 DB は
+    // source-aware storage で再 index されるまで縮退させる。
+    public const int MetadataTargetVersion = 7;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
     // Audit trail: cdidx version string (e.g. "1.22.0") that produced the most recent
     // successful end-of-index pass on this DB. Readers use it to surface "DB written by
@@ -1770,7 +1780,8 @@ public class DbContext : IDisposable
                 family_key      TEXT,
                 visibility      TEXT,
                 return_type     TEXT,
-                is_metadata_target INTEGER
+                is_metadata_target INTEGER,
+                metadata_target_source TEXT
             )");
 
                 // Indexed references table / 参照インデックステーブル
@@ -1991,10 +2002,11 @@ public class DbContext : IDisposable
                     visibility      TEXT,
                     return_type     TEXT,
                     is_metadata_target INTEGER,
+                    metadata_target_source TEXT,
                     name_folded     TEXT
                 )
                 """,
-                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded");
+                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded");
             RebuildReferenceLineTablesWithRequiredFileId();
             RebuildTableWithRequiredFileId(
                 "file_issues",
@@ -2263,10 +2275,11 @@ public class DbContext : IDisposable
                 visibility      TEXT,
                 return_type     TEXT,
                 is_metadata_target INTEGER,
+                metadata_target_source TEXT,
                 name_folded     TEXT
             )
             """;
-        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded";
+        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded";
         var symbolReferencesCreateSql =
             $"""
             CREATE TABLE symbol_references (
@@ -2633,6 +2646,7 @@ public class DbContext : IDisposable
         yield return ("EnsureColumn symbols.visibility", () => EnsureColumn("symbols", "visibility", "TEXT"));
         yield return ("EnsureColumn symbols.return_type", () => EnsureColumn("symbols", "return_type", "TEXT"));
         yield return ("EnsureColumn symbols.is_metadata_target", () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));
+        yield return ("EnsureColumn symbols.metadata_target_source", () => EnsureColumn("symbols", "metadata_target_source", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_nocase",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)"));
 

@@ -486,6 +486,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
             IsMetadataTarget = symbol.IsMetadataTarget,
+            MetadataTargetSource = symbol.MetadataTargetSource,
             SameLineSignatureOccurrenceIndex = symbol.SameLineSignatureOccurrenceIndex,
         }).ToList();
 
