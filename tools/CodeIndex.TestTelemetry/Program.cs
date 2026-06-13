@@ -116,7 +116,7 @@ public static class TrxTelemetry
 
         foreach (var path in trxFiles)
         {
-            if (!CanReadTrxFile(path, warnings))
+            if (!CanReadTrxFile(resultsDirectory, path, warnings))
                 continue;
 
             try
@@ -142,9 +142,9 @@ public static class TrxTelemetry
                     AddTopResult(slowest, result, top);
                 }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException)
             {
-                warnings.Add($"Could not parse {path}: {ex.Message}");
+                warnings.Add($"Could not parse {FormatTrxPath(resultsDirectory, path)}: {GetWarningReason(ex)}");
             }
         }
 
@@ -182,21 +182,21 @@ public static class TrxTelemetry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"Could not enumerate TRX files: {ex.Message}");
+            warnings.Add($"Could not enumerate TRX files: {GetWarningReason(ex)}");
         }
 
         trxFiles.Sort(StringComparer.Ordinal);
         return trxFiles;
     }
 
-    private static bool CanReadTrxFile(string path, List<string> warnings)
+    private static bool CanReadTrxFile(string resultsDirectory, string path, List<string> warnings)
     {
         try
         {
             var file = new FileInfo(path);
             if (file.Length > MaxTrxFileBytes)
             {
-                warnings.Add($"TRX file exceeds {MaxTrxFileBytes} byte cap: {path}");
+                warnings.Add($"TRX file exceeds {MaxTrxFileBytes} byte cap: {FormatTrxPath(resultsDirectory, path)}");
                 return false;
             }
 
@@ -204,10 +204,42 @@ public static class TrxTelemetry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"Could not inspect {path}: {ex.Message}");
+            warnings.Add($"Could not inspect {FormatTrxPath(resultsDirectory, path)}: {GetWarningReason(ex)}");
             return false;
         }
     }
+
+    private static string FormatTrxPath(string resultsDirectory, string path)
+    {
+        try
+        {
+            var relativePath = Path.GetRelativePath(resultsDirectory, path);
+            if (!IsParentTraversal(relativePath) && !Path.IsPathFullyQualified(relativePath))
+                return NormalizePath(relativePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+        }
+
+        var fileName = Path.GetFileName(path);
+        return string.IsNullOrWhiteSpace(fileName) ? "<trx-file>" : fileName;
+    }
+
+    private static bool IsParentTraversal(string path) =>
+        path == ".." ||
+        path.StartsWith("../", StringComparison.Ordinal) ||
+        path.StartsWith(@"..\", StringComparison.Ordinal);
+
+    private static string NormalizePath(string path) =>
+        path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+
+    private static string GetWarningReason(Exception ex) => ex switch
+    {
+        XmlException => "invalid_xml",
+        UnauthorizedAccessException => "access_denied",
+        IOException => "io_error",
+        _ => "unknown_error"
+    };
 
     private static IEnumerable<TrxTestResult> ReadResults(string path)
     {

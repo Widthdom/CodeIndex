@@ -119,8 +119,9 @@ public sealed class TestTelemetryTests
         try
         {
             var resultsDirectory = Path.Combine(projectRoot, "TestResults");
-            Directory.CreateDirectory(resultsDirectory);
-            var largeTrx = Path.Combine(resultsDirectory, "too-large.trx");
+            var nestedDirectory = Path.Combine(resultsDirectory, "nested");
+            Directory.CreateDirectory(nestedDirectory);
+            var largeTrx = Path.Combine(nestedDirectory, "too-large.trx");
             using (var stream = File.Create(largeTrx))
             {
                 stream.SetLength(TrxTelemetry.MaxTrxFileBytes + 1);
@@ -130,8 +131,10 @@ public sealed class TestTelemetryTests
 
             Assert.Equal(1, summary.TrxFileCount);
             Assert.Equal(0, summary.Total);
-            Assert.Contains(summary.Warnings, warning =>
-                warning.Contains("byte cap", StringComparison.Ordinal));
+            var warning = Assert.Single(summary.Warnings);
+            Assert.Contains("byte cap", warning, StringComparison.Ordinal);
+            Assert.Contains("nested/too-large.trx", warning, StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, warning, StringComparison.Ordinal);
         }
         finally
         {
@@ -162,7 +165,38 @@ public sealed class TestTelemetryTests
 
             Assert.Equal(0, summary.Total);
             Assert.Contains(summary.Warnings, warning =>
-                warning.Contains("Could not parse", StringComparison.Ordinal));
+                string.Equals(warning, "Could not parse with-dtd.trx: invalid_xml", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Load_SanitizesInvalidXmlWarnings()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_telemetry_xml_warning");
+        try
+        {
+            var resultsDirectory = Path.Combine(projectRoot, "TestResults");
+            var nestedDirectory = Path.Combine(resultsDirectory, "nested");
+            Directory.CreateDirectory(nestedDirectory);
+            File.WriteAllText(Path.Combine(nestedDirectory, "broken.trx"), """
+                <TestRun>
+                  <Results>
+                    <UnitTestResult testName="Broken" outcome="Passed">
+                  </Results>
+                </TestRun>
+                """);
+
+            var summary = TrxTelemetry.Load(resultsDirectory, top: 1);
+
+            var warning = Assert.Single(summary.Warnings);
+            Assert.Equal("Could not parse nested/broken.trx: invalid_xml", warning);
+            Assert.DoesNotContain(projectRoot, warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("Name cannot begin", warning, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("position", warning, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
