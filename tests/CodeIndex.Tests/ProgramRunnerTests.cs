@@ -1036,7 +1036,7 @@ sleep 5
                 var (exitCode, stdout, stderr) = CaptureConsole(() =>
                     ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromMilliseconds(100)));
 
-                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
                 Assert.Empty(stdout);
                 Assert.Contains("install.sh timed out", stderr);
                 Assert.Contains("rerun `install.sh` manually", stderr);
@@ -1124,6 +1124,48 @@ exit 0
             finally
             {
                 TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_JsonPreparationFailure_UsesInstallError_Issue3373()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("missing installer checksum\n"))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
+                Assert.Equal("InvalidDataException", root.GetProperty("error").GetString());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
     }

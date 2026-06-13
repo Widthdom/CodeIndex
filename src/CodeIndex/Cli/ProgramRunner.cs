@@ -3355,7 +3355,7 @@ internal static class ProgramRunner
                 Console.Error.WriteLine($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
                 Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
             }
-            return CommandExitCodes.DatabaseError;
+            return CommandExitCodes.InstallError;
         }
         finally
         {
@@ -3512,7 +3512,7 @@ internal static class ProgramRunner
         {
             if (!suppressOutput)
                 Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
-            return CommandExitCodes.DatabaseError;
+            return CommandExitCodes.InstallError;
         }
 
         var outputDrainTask = suppressOutput
@@ -3571,7 +3571,7 @@ internal static class ProgramRunner
         }
         if (!suppressOutput)
             Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
-        return CommandExitCodes.DatabaseError;
+        return CommandExitCodes.InstallError;
     }
 
     private static Task DrainSuppressedInstallerOutputAsync(Process process)
