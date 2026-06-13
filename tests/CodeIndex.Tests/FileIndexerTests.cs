@@ -550,6 +550,41 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void LanguageMapOverrides_ReadFailureSkipsOverridesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_read_failure_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var unreadablePath = Path.Combine(tempDir, "unreadable-langmap.yaml");
+            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+            File.WriteAllText(unreadablePath, "entries:\n- extension: bad\n  language: ruby\n");
+            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: python\n");
+            LanguageMapOverrides.OpenOverrideFileForTesting = path =>
+                path == unreadablePath
+                    ? throw new IOException("share denied")
+                    : File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { unreadablePath, fallbackPath },
+                warnings.Add);
+
+            Assert.False(map.ContainsKey(".bad"));
+            Assert.Equal("python", map[".ok"]);
+            Assert.Contains(
+                warnings,
+                warning => warning.Contains("could not be read", StringComparison.Ordinal)
+                    && warning.Contains("IOException", StringComparison.Ordinal));
+        }
+        finally
+        {
+            LanguageMapOverrides.OpenOverrideFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_TooManyLinesSkipsOverridesWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_lines_{Guid.NewGuid():N}");

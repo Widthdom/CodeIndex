@@ -11,6 +11,8 @@ internal static class LanguageMapOverrides
     private static readonly object WarningLock = new();
     private static readonly HashSet<string> ReportedWarnings = new(StringComparer.Ordinal);
 
+    internal static Func<string, Stream>? OpenOverrideFileForTesting { get; set; }
+
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMap(string? startPath = null)
         => LoadEffectiveMapFromPaths(EnumerateConfigPaths(startPath), ReportWarningOnce);
 
@@ -110,13 +112,14 @@ internal static class LanguageMapOverrides
 
         try
         {
-            using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                bufferSize: 8192,
-                useAsync: false);
+            using var stream = OpenOverrideFileForTesting?.Invoke(path)
+                ?? new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 8192,
+                    useAsync: false);
 
             if (stream.Length > MaxOverrideFileBytes)
             {
@@ -161,15 +164,20 @@ internal static class LanguageMapOverrides
             lines = result;
             return true;
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            return true;
+            skippedReason = $"it could not be read ({ex.GetType().Name}: {CollapseLineBreaks(ex.Message)})";
+            return false;
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return true;
+            skippedReason = $"it could not be read ({ex.GetType().Name}: {CollapseLineBreaks(ex.Message)})";
+            return false;
         }
     }
+
+    private static string CollapseLineBreaks(string value)
+        => value.Replace('\r', ' ').Replace('\n', ' ');
 
     private static void ReportWarningOnce(string message)
     {
