@@ -47,6 +47,26 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void BuiltInSymbolRegexes_WithIgnoreCaseUseCultureInvariant_Issue3516()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(SymbolExtractor).Assembly.GetTypes().Where(IsSymbolRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var cultureSensitive = regexes
+            .Where(item => (item.Regex.Options & RegexOptions.IgnoreCase) != 0)
+            .Where(item => (item.Regex.Options & RegexOptions.CultureInvariant) == 0)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            cultureSensitive.Count == 0,
+            "Built-in symbol regexes with IgnoreCase must use CultureInvariant: " + string.Join(", ", cultureSensitive));
+    }
+
+    [Fact]
     public void Extract_CSharp_BraceBodiedFunctionSignatureStopsAtDeclarationHeader()
     {
         const string content = """

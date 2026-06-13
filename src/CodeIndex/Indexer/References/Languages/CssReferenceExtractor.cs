@@ -20,9 +20,9 @@ internal static class CssReferenceExtractor
         @"@include\s+(?<name>[A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
-    private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssClassSelectorReferenceRegex = new(@"\.(?<name>[\w-]+)", RegexOptions.Compiled);
     // First char restricted to letter/`_`/`-` so numeric hex colors like `#336699`
     // do not match. Letter-only hex colors (`#fff`) are still ambiguous; the
@@ -33,7 +33,7 @@ internal static class CssReferenceExtractor
     private static readonly Regex CssIdSelectorReferenceRegex = new(@"#(?<name>[A-Za-z_-][\w-]*)", RegexOptions.Compiled);
     private static readonly Regex CssImportReferenceRegex = new(
         @"@import\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
 
     private static readonly ReferencePattern[] CssReferencePatterns =
