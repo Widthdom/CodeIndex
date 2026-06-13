@@ -11,6 +11,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.30.2] - 2026-06-13
+
+#### Fixed
+
+- **Fixed runaway C# reference extraction on very large methods.** Large C# repositories could spend an excessive amount of time in the `references` phase when a file contained a very large method, especially generated code or hand-written methods with thousands of local variables. In affected cases, indexing that previously finished in tens of minutes could continue for hours while making little progress through C# reference extraction.
+- The slowdown came from value receiver tracking. For every local value receiver, the extractor rescanned the method body to find the innermost block end and then performed a linear duplicate check against the receivers already collected for the function. Methods with many locals therefore paid the same body scan and growing duplicate check repeatedly, creating super-linear behavior.
+- C# reference extraction now builds block scope spans once per function body and reuses them when assigning local receiver scopes. It also uses a hash set for duplicate receiver detection. This keeps receiver collection practical for very large methods while preserving block-scoped behavior for locals that shadow enum or type names.
+- Added regression coverage for block-scoped local receiver behavior and a large-method runaway guard so future changes catch this class of performance regression earlier.
+- Documented the extractor performance contract in the developer guide so future language-specific extractor changes avoid per-candidate body rescans and linear duplicate checks in hot paths.
+- **Reduced symbol extraction overhead for large non-C# generated files.** Rust `use` expansion, Shell alias expansion, Go grouped declarations, Java/Kotlin primary-constructor or record components, C++ same-line class members, Dockerfile named stage chains, and JavaScript/TypeScript exported surfaces and object/class scan-target collection now avoid candidate-by-candidate scans over growing lists.
+- The shared symbol-line identity cache preserves the existing duplicate key of file, line, kind, and name for language paths such as Rust, Shell, Go, and JavaScript/TypeScript synthetic class emission. Java/Kotlin record component materialization now tracks existing component names per parent record, Java compact constructor synthesis reuses the already filtered same-line symbols, C++ same-line class-member backfill tracks member names per container, Dockerfile extraction tracks stage names as the file is scanned, and JavaScript/TypeScript export/object-literal supplement passes keep per-file or per-container name sets plus scan-target identity sets.
+- Swift and TypeScript reference extraction also now checks existing type-reference rows through the shared reference dedupe key instead of scanning the accumulated reference list while expanding typealias / type-alias targets.
+- These changes avoid theoretical super-linear hot paths in generated files with thousands of declarations, imports, aliases, constructor components, object-literal properties, export variables, object literal targets, or class expression targets while keeping emitted symbols and duplicate semantics unchanged.
+- Added large-fixture runaway guards for Rust, Shell, Go, Java, Kotlin, C++, Dockerfile, JavaScript, TypeScript, and Swift so future extractor changes catch this class of non-C# performance regression earlier.
+
 ### [1.30.1] - 2026-06-13
 
 #### Fixed
@@ -3768,6 +3783,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.30.2] - 2026-06-13
+
+#### 修正
+
+- **非常に大きなメソッドで C# 参照抽出が暴走する問題を修正しました。** 大型の C# リポジトリで、巨大な生成コードや数千個規模のローカル変数を持つ手書きメソッドが含まれている場合、インデックス作成が `references` フェーズで極端に長く止まることがありました。影響を受けるケースでは、以前は数十分で終わっていたインデックス作成が、C# の参照抽出中に何時間も進みにくくなることがありました。
+- 原因は value receiver 追跡でした。各ローカル value receiver ごとに、最内側ブロックの終端を求めるためメソッド本文を再走査し、その後で関数内に集め済みの receiver に対して線形の重複チェックを行っていました。ローカル変数が多いメソッドでは、同じ本文走査と増え続ける重複チェックを何度も支払うため、super-linear な挙動になっていました。
+- C# 参照抽出では、関数本文ごとのブロックスコープ範囲を一度だけ構築し、ローカル receiver のスコープ判定で再利用するようにしました。また、receiver の重複検出にはハッシュセットを使うようにしました。これにより、巨大なメソッドでも実用的な時間で receiver を収集しつつ、enum や type 名を隠すブロックスコープ付きローカルの扱いは維持されます。
+- ブロックスコープ付きローカル receiver の挙動と、大きなメソッドでの暴走を検出する回帰テストを追加しました。
+- 開発者ガイドに extractor の性能契約を記載し、今後の言語別 extractor 変更で hot path に候補ごとの本文再走査や線形重複チェックを入れないようにしました。
+- **大きな C# 以外の生成ファイルに対する symbol 抽出のオーバーヘッドを減らしました。** Rust の `use` 展開、Shell の alias 展開、Go の grouped declaration、Java/Kotlin の primary constructor / record component、C++ の same-line class member、Dockerfile の named stage chain、JavaScript/TypeScript の exported surface と object/class scan-target collection で、候補ごとに増え続ける list を走査しないようにしました。
+- 共通の symbol-line identity cache は、Rust、Shell、Go、JavaScript/TypeScript の synthetic class emission などの経路で従来どおり file、line、kind、name を重複キーとして使います。Java/Kotlin の record component materialization は親 record ごとの component name set を使い、Java compact constructor synthesis は同一行に絞り込んだ既存 symbol を再利用し、C++ の same-line class member 補完は container ごとの member name set を使い、Dockerfile 抽出はファイル走査中に stage name を追跡し、JavaScript/TypeScript の export / object literal 補完はファイル単位または container 単位の name set と scan-target identity set を使うようにしました。
+- Swift と TypeScript の reference 抽出でも、typealias / type alias target 展開時に accumulated reference list を走査するのではなく、共通の reference dedupe key で既存の type-reference 行を確認するようにしました。
+- これにより、数千個の declaration、import、alias、constructor component、object literal property、export variable、object literal target、class expression target を含む生成ファイルで理論上発生しうる super-linear な hot path を避けます。出力される symbol と重複判定の意味は変えていません。
+- Rust、Shell、Go、Java、Kotlin、C++、Dockerfile、JavaScript、TypeScript、Swift に対する大規模 fixture の runaway guard を追加し、今後の extractor 変更で同種の C# 以外の性能 regression を早く検出できるようにしました。
+
 ### [1.30.1] - 2026-06-13
 
 #### 修正
@@ -7514,7 +7544,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.30.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.30.2...HEAD
+[1.30.2]: https://github.com/Widthdom/CodeIndex/compare/v1.30.1...v1.30.2
 [1.30.1]: https://github.com/Widthdom/CodeIndex/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/Widthdom/CodeIndex/compare/v1.29.1...v1.30.0
 [1.29.1]: https://github.com/Widthdom/CodeIndex/compare/v1.29.0...v1.29.1
