@@ -61,17 +61,11 @@ public class PostExtractionHookTests
             Directory.CreateDirectory(hooksDir);
             File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
 
-            using var runner = PostExtractionHookRunner.Discover(hooksDir);
-
-            var loadContext = Assert.Single(
-                runner.LoadContextsForTests
-                    .Where(context => context != null)
-                    .Distinct());
-            Assert.True(loadContext!.IsCollectible);
-            Assert.NotSame(AssemblyLoadContext.Default, loadContext);
+            AssertHookAssemblyLoadsInCollectibleContext(hooksDir);
         }
         finally
         {
+            CollectUnloadedHookAssemblies();
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -478,6 +472,18 @@ public class PostExtractionHookTests
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
+    }
+
+    private static void AssertHookAssemblyLoadsInCollectibleContext(string hooksDir)
+    {
+        using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+        var loadContext = Assert.Single(
+            runner.LoadContextsForTests
+                .Where(context => context != null)
+                .Distinct());
+        Assert.True(loadContext!.IsCollectible);
+        Assert.NotSame(AssemblyLoadContext.Default, loadContext);
     }
 
     private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
