@@ -138,9 +138,19 @@ public static class GitHelper
             yield break;
         }
 
+        if (OperatingSystem.IsMacOS())
+        {
+            yield return "/Library/Developer/CommandLineTools/usr/bin/git";
+            yield return "/Applications/Xcode.app/Contents/Developer/usr/bin/git";
+            yield break;
+        }
+
         yield return "/usr/bin/git";
         yield return "/bin/git";
     }
+
+    internal static IReadOnlyList<string> TrustedGitExecutableCandidatePathsForTests()
+        => EnumerateTrustedGitExecutableCandidates().ToList();
 
     private static string? NormalizeTrustedGitExecutablePath(string? path)
     {

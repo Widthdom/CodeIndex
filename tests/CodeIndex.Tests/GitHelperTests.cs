@@ -550,6 +550,47 @@ public class GitHelperTests : IDisposable
         }
     }
 
+    [Fact]
+    public void TrustedGitExecutableCandidates_OnMacOS_ExcludeDeveloperToolsShim_Issue3433()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var candidates = GitHelper.TrustedGitExecutableCandidatePathsForTests();
+
+        Assert.DoesNotContain("/usr/bin/git", candidates);
+        Assert.Contains("/Library/Developer/CommandLineTools/usr/bin/git", candidates);
+        Assert.Contains("/Applications/Xcode.app/Contents/Developer/usr/bin/git", candidates);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_OnMacOS_DoesNotUseDeveloperDirShimGit_Issue3433()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var projectDir = Path.Combine(_tempDir, "developer-dir-project");
+        Directory.CreateDirectory(projectDir);
+        var developerDir = Path.Combine(_tempDir, "FakeDeveloper");
+        var developerGitDir = Path.Combine(developerDir, "usr", "bin");
+        Directory.CreateDirectory(developerGitDir);
+        var markerPath = Path.Combine(_tempDir, "developer-dir-git-ran.txt");
+        var fakeGitPath = Path.Combine(developerGitDir, "git");
+        File.WriteAllText(fakeGitPath, $"""
+#!/bin/sh
+printf ran > "{markerPath.Replace("\"", "\\\"", StringComparison.Ordinal)}"
+exit 7
+""");
+        File.SetUnixFileMode(fakeGitPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var env = EnvironmentVariableScope.Capture("DEVELOPER_DIR");
+        env.Set("DEVELOPER_DIR", developerDir);
+
+        _ = GitHelper.TryGetHeadCommitResult(projectDir);
+
+        Assert.False(File.Exists(markerPath), "GitHelper must not execute git selected through DEVELOPER_DIR.");
+    }
+
     [Theory]
     [InlineData("feature")]
     [InlineData("v1.0.0")]
