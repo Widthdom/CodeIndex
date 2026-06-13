@@ -170,6 +170,8 @@ public sealed class ChangelogTool
     public const long MaxChangelogBytes = 8 * 1024 * 1024;
     public const long MaxVersionJsonBytes = 16 * 1024;
     internal static Action<PrepareWritePhase>? PrepareWritePhaseForTesting { get; set; }
+    internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
+    internal static Action<string>? BeforeRestoreTextForTesting { get; set; }
 
     private static readonly string[] AllowedCategories =
     [
@@ -621,7 +623,7 @@ public sealed class ChangelogTool
         return reader.ReadToEnd();
     }
 
-    private static void WritePreparedFiles(
+    private void WritePreparedFiles(
         string changelogPath,
         string originalChangelog,
         string updatedChangelog,
@@ -735,19 +737,23 @@ public sealed class ChangelogTool
         File.Move(stagedPath, targetPath, overwrite: true);
     }
 
-    private static void DeleteConsumedFragment(Fragment fragment)
+    private void DeleteConsumedFragment(Fragment fragment)
     {
         try
         {
-            File.Delete(fragment.AbsolutePath);
+            DeleteFileForTesting(fragment.AbsolutePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new ChangelogException($"{fragment.RelativePath}: failed to delete consumed changelog fragment after CHANGELOG.md and version.json were updated; delete this fragment manually before retrying prepare. {ex.Message}");
+            throw new ChangelogException(BuildCleanupFailureMessage(
+                "fragment_delete_failed",
+                [fragment.RelativePath],
+                ex,
+                "Delete the listed fragment manually before retrying prepare."));
         }
     }
 
-    private static void RollBackPreparedFiles(
+    private void RollBackPreparedFiles(
         string changelogPath,
         string originalChangelog,
         bool changelogReplaced,
@@ -765,12 +771,17 @@ public sealed class ChangelogTool
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new ChangelogException($"prepare failed before fragment deletion and rollback also failed: {ex.Message}");
+            throw new ChangelogException(BuildCleanupFailureMessage(
+                "rollback_failed",
+                GetRollbackAffectedPaths(changelogPath, changelogReplaced, versionPath, versionReplaced),
+                ex,
+                "Restore the listed release files from version control or backup before retrying prepare."));
         }
     }
 
     private static void RestoreText(string targetPath, string contents)
     {
+        BeforeRestoreTextForTesting?.Invoke(targetPath);
         var tempPath = string.Empty;
         try
         {
@@ -806,12 +817,70 @@ public sealed class ChangelogTool
 
         try
         {
-            File.Delete(path);
+            DeleteFileForTesting(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
     }
+
+    private string BuildCleanupFailureMessage(
+        string category,
+        IReadOnlyList<string> affectedPaths,
+        Exception exception,
+        string recoveryHint)
+    {
+        var paths = affectedPaths
+            .Select(FormatRelativePath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .DefaultIfEmpty("<unknown>")
+            .ToArray();
+
+        return $"{category}: affected_paths={string.Join(",", paths)}; reason={ClassifyFileFailure(exception)}; Hint: {recoveryHint}";
+    }
+
+    private IReadOnlyList<string> GetRollbackAffectedPaths(
+        string changelogPath,
+        bool changelogReplaced,
+        string versionPath,
+        bool versionReplaced)
+    {
+        var paths = new List<string>(capacity: 2);
+        if (versionReplaced)
+            paths.Add(versionPath);
+        if (changelogReplaced)
+            paths.Add(changelogPath);
+        return paths;
+    }
+
+    private string FormatRelativePath(string path)
+    {
+        string relative;
+        try
+        {
+            relative = Path.IsPathFullyQualified(path)
+                ? Path.GetRelativePath(_repositoryRoot, path)
+                : path;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return "<invalid>";
+        }
+
+        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            relative = Path.GetFileName(path);
+        return relative.Replace('\\', '/');
+    }
+
+    private static string ClassifyFileFailure(Exception exception) =>
+        exception switch
+        {
+            UnauthorizedAccessException => "permission_denied",
+            FileNotFoundException or DirectoryNotFoundException => "not_found",
+            IOException => "io_error",
+            _ => "operation_failed",
+        };
 
     private static List<VersionBlock> PrepareLanguageSection(
         IReadOnlyList<VersionBlock> existingBlocks,
