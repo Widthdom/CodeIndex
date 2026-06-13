@@ -285,6 +285,93 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void PrepareConsumedFragmentDeleteFailureReportsSanitizedDiagnostic_Issue3457()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var fragmentPath = Path.Combine(scope.Root, "changelog.d/unreleased/195.fixed.md");
+        var fullFragmentPath = Path.GetFullPath(fragmentPath);
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.DeleteFileForTesting = path =>
+        {
+            if (string.Equals(Path.GetFullPath(path), fullFragmentPath, pathComparison))
+                throw new IOException($"raw filesystem detail {path}");
+            File.Delete(path);
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.DeleteFileForTesting = File.Delete;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("fragment_delete_failed", ex.Message);
+        Assert.Contains("affected_paths=changelog.d/unreleased/195.fixed.md", ex.Message);
+        Assert.Contains("reason=io_error", ex.Message);
+        Assert.Contains("Hint: Delete the listed fragment manually before retrying prepare.", ex.Message);
+        Assert.DoesNotContain("raw filesystem detail", ex.Message);
+        Assert.DoesNotContain(scope.Root, ex.Message);
+    }
+
+    [Fact]
+    public void PrepareRollbackFailureReportsSanitizedDiagnostic_Issue3457()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var versionPath = Path.Combine(scope.Root, "version.json");
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.PrepareWritePhaseForTesting = phase =>
+        {
+            if (phase == PrepareWritePhase.BeforeFragmentsDeleted)
+                throw new ChangelogException("injected fragment deletion failure");
+        };
+        ChangelogTool.BeforeRestoreTextForTesting = path =>
+        {
+            if (string.Equals(path, versionPath, StringComparison.Ordinal))
+                throw new IOException($"raw rollback detail {path}");
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.PrepareWritePhaseForTesting = null;
+            ChangelogTool.BeforeRestoreTextForTesting = null;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("rollback_failed", ex.Message);
+        Assert.Contains("affected_paths=version.json,CHANGELOG.md", ex.Message);
+        Assert.Contains("reason=io_error", ex.Message);
+        Assert.Contains("Hint: Restore the listed release files from version control or backup before retrying prepare.", ex.Message);
+        Assert.DoesNotContain("raw rollback detail", ex.Message);
+        Assert.DoesNotContain(scope.Root, ex.Message);
+    }
+
+    [Fact]
     public void RenderReleaseNotesUsesProvidedPreviousVersion()
     {
         using var scope = new TestRepositoryScope();

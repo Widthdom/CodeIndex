@@ -331,12 +331,14 @@ internal static class SymbolExtractionWorker
 {
     internal const string CommandName = "__cdidx-symbol-extraction";
     internal const int WorkerKillWaitMilliseconds = 5000;
-    internal const string DelayEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS";
-    internal const string CompletionPathEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH";
-    internal const string ConsoleStdoutEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_STDOUT";
+    internal const int MaxDelayMillisecondsForTesting = 5000;
     private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
+    private const string TestDelayMillisecondsOption = "--test-delay-ms";
+    private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = SymbolExtractionWorkerJsonContext.Default.Options;
+    internal static int? DelayMillisecondsForTesting { get; set; }
+    internal static string? ConsoleStdoutForTesting { get; set; }
 
     internal static bool TryRunCommand(
         string[] args,
@@ -402,6 +404,7 @@ internal static class SymbolExtractionWorker
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
             AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
+            AddTestingArguments(startInfo);
             error = string.Empty;
             return true;
         }
@@ -425,6 +428,7 @@ internal static class SymbolExtractionWorker
         startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
         AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
+        AddTestingArguments(startInfo);
         ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
@@ -490,20 +494,19 @@ internal static class SymbolExtractionWorker
         int maxProtocolLineCharacters,
         int maxProtocolLineUtf8Bytes)
     {
-        if (!TryResolveProtocolLineLimit(
+        if (!TryResolveWorkerOptions(
                 args,
                 maxProtocolLineCharacters,
                 maxProtocolLineUtf8Bytes,
-                out var resolvedProtocolLineCharacters,
-                out var resolvedProtocolLineUtf8Bytes,
+                out var workerOptions,
                 out var protocolLimitError))
         {
             error.WriteLine(protocolLimitError);
             return 2;
         }
 
-        maxProtocolLineCharacters = resolvedProtocolLineCharacters;
-        maxProtocolLineUtf8Bytes = resolvedProtocolLineUtf8Bytes;
+        maxProtocolLineCharacters = workerOptions.MaxProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = workerOptions.MaxProtocolLineUtf8Bytes;
 
         try
         {
@@ -542,7 +545,7 @@ internal static class SymbolExtractionWorker
 
                 try
                 {
-                    response = InvokeInsideWorker(request);
+                    response = InvokeInsideWorker(request, workerOptions);
                 }
                 catch (Exception ex)
                 {
@@ -562,7 +565,7 @@ internal static class SymbolExtractionWorker
         }
     }
 
-    private static WorkerResponse InvokeInsideWorker(WorkerRequest request)
+    private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options)
     {
         var originalOut = Console.Out;
         var originalError = Console.Error;
@@ -572,8 +575,8 @@ internal static class SymbolExtractionWorker
         {
             Console.SetOut(capturedOut);
             Console.SetError(capturedError);
-            WriteConsoleOutputForTestingIfRequested();
-            DelayForTestingIfRequested();
+            WriteConsoleOutputForTestingIfRequested(options);
+            DelayForTestingIfRequested(options);
             var symbols = SymbolExtractor.Extract(
                 request.FileId,
                 request.Lang,
@@ -594,26 +597,18 @@ internal static class SymbolExtractionWorker
         }
     }
 
-    private static void WriteConsoleOutputForTestingIfRequested()
+    private static void WriteConsoleOutputForTestingIfRequested(WorkerOptions options)
     {
-        var stdout = Environment.GetEnvironmentVariable(ConsoleStdoutEnvironmentVariable);
-        if (!string.IsNullOrEmpty(stdout))
-            Console.Out.WriteLine(stdout);
+        if (!string.IsNullOrEmpty(options.ConsoleStdoutForTesting))
+            Console.Out.WriteLine(options.ConsoleStdoutForTesting);
     }
 
-    private static void DelayForTestingIfRequested()
+    private static void DelayForTestingIfRequested(WorkerOptions options)
     {
-        var raw = Environment.GetEnvironmentVariable(DelayEnvironmentVariable);
-        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var milliseconds)
-            || milliseconds <= 0)
-        {
+        if (options.DelayMillisecondsForTesting is not { } milliseconds)
             return;
-        }
 
         Thread.Sleep(milliseconds);
-        var completionPath = Environment.GetEnvironmentVariable(CompletionPathEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(completionPath))
-            File.WriteAllText(completionPath, "completed");
     }
 
     private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
@@ -622,33 +617,90 @@ internal static class SymbolExtractionWorker
         startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
     }
 
-    private static bool TryResolveProtocolLineLimit(
+    private static void AddTestingArguments(ProcessStartInfo startInfo)
+    {
+        if (DelayMillisecondsForTesting is { } delayMilliseconds && delayMilliseconds > 0)
+        {
+            var boundedDelay = Math.Min(delayMilliseconds, MaxDelayMillisecondsForTesting);
+            startInfo.ArgumentList.Add(TestDelayMillisecondsOption);
+            startInfo.ArgumentList.Add(boundedDelay.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (!string.IsNullOrEmpty(ConsoleStdoutForTesting))
+        {
+            startInfo.ArgumentList.Add(TestConsoleStdoutOption);
+            startInfo.ArgumentList.Add(ConsoleStdoutForTesting);
+        }
+    }
+
+    private static bool TryResolveWorkerOptions(
         string[] args,
         int fallbackMaxProtocolLineCharacters,
         int fallbackMaxProtocolLineUtf8Bytes,
-        out int maxProtocolLineCharacters,
-        out int maxProtocolLineUtf8Bytes,
+        out WorkerOptions options,
         out string error)
     {
-        maxProtocolLineCharacters = fallbackMaxProtocolLineCharacters;
-        maxProtocolLineUtf8Bytes = fallbackMaxProtocolLineUtf8Bytes;
+        var maxProtocolLineCharacters = fallbackMaxProtocolLineCharacters;
+        var maxProtocolLineUtf8Bytes = fallbackMaxProtocolLineUtf8Bytes;
+        int? delayMillisecondsForTesting = null;
+        string? consoleStdoutForTesting = null;
         error = string.Empty;
-        if (args.Length == 1)
-            return true;
+        options = new WorkerOptions(
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes,
+            delayMillisecondsForTesting,
+            consoleStdoutForTesting);
 
-        if (args.Length == 3
-            && StringComparer.Ordinal.Equals(args[1], ProtocolMaxLineBytesOption)
-            && int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
-            && parsed > 0)
+        for (var index = 1; index < args.Length; index++)
         {
-            maxProtocolLineCharacters = parsed;
-            maxProtocolLineUtf8Bytes = parsed;
-            return true;
+            var option = args[index];
+            if (index + 1 >= args.Length)
+            {
+                error = BuildWorkerOptionError();
+                return false;
+            }
+
+            var value = args[++index];
+            if (StringComparer.Ordinal.Equals(option, ProtocolMaxLineBytesOption)
+                && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var protocolBytes)
+                && protocolBytes > 0)
+            {
+                maxProtocolLineCharacters = protocolBytes;
+                maxProtocolLineUtf8Bytes = protocolBytes;
+                continue;
+            }
+
+            if (StringComparer.Ordinal.Equals(option, TestDelayMillisecondsOption)
+                && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var delay)
+                && delay is > 0 and <= MaxDelayMillisecondsForTesting)
+            {
+                delayMillisecondsForTesting = delay;
+                continue;
+            }
+
+            if (StringComparer.Ordinal.Equals(option, TestConsoleStdoutOption))
+            {
+                consoleStdoutForTesting = value;
+                continue;
+            }
+
+            error = BuildWorkerOptionError();
+            return false;
         }
 
-        error = $"symbol extraction worker accepts only `{ProtocolMaxLineBytesOption} <bytes>`.";
-        return false;
+        options = new WorkerOptions(
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes,
+            delayMillisecondsForTesting,
+            consoleStdoutForTesting);
+        return true;
     }
+
+    private static string BuildWorkerOptionError()
+        => "symbol extraction worker accepts only "
+            + $"`{ProtocolMaxLineBytesOption} <bytes>`, "
+            + $"`{TestDelayMillisecondsOption} <milliseconds>`, or "
+            + $"`{TestConsoleStdoutOption} <text>`.";
 
     private static string? ResolveCurrentRunnerAssemblyPath()
     {
@@ -706,6 +758,12 @@ internal static class SymbolExtractionWorker
         List<SymbolRecord>? Symbols,
         string? WorkerError,
         string? CapturedStderr);
+
+    private sealed record WorkerOptions(
+        int MaxProtocolLineCharacters,
+        int MaxProtocolLineUtf8Bytes,
+        int? DelayMillisecondsForTesting,
+        string? ConsoleStdoutForTesting);
 
     private sealed class BoundedTextWriter(int maxChars) : TextWriter
     {

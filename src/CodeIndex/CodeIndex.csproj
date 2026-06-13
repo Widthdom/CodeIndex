@@ -89,6 +89,7 @@
   -->
   <Target Name="StampCdidxBuildMetadata" BeforeTargets="GetAssemblyAttributes">
     <Exec Command="git rev-parse --short=7 HEAD"
+          Condition="'$(CdidxBuildCommitOverride)' == '' or '$(CdidxBuildDirtyOverride)' == ''"
           ConsoleToMSBuild="true"
           ContinueOnError="true"
           IgnoreExitCode="true"
@@ -99,6 +100,7 @@
       <Output TaskParameter="ExitCode" PropertyName="CdidxGitShaExitCode" />
     </Exec>
     <Exec Command="git show -s --format=%cd --date=format:%Y-%m-%d HEAD"
+          Condition="'$(CdidxBuildDateOverride)' == ''"
           ConsoleToMSBuild="true"
           ContinueOnError="true"
           IgnoreExitCode="true"
@@ -109,6 +111,7 @@
       <Output TaskParameter="ExitCode" PropertyName="CdidxGitDateExitCode" />
     </Exec>
     <Exec Command="git diff-index --quiet HEAD -- &quot;:/&quot; &quot;:(top,exclude,glob)**/packages.lock.json&quot;"
+          Condition="'$(CdidxBuildDirtyOverride)' == ''"
           ContinueOnError="true"
           IgnoreExitCode="true"
           EchoOff="true"
@@ -117,12 +120,15 @@
       <Output TaskParameter="ExitCode" PropertyName="CdidxGitDirtyExitCode" />
     </Exec>
     <PropertyGroup>
-      <CdidxBuildDate Condition="'$(CdidxGitDateExitCode)' == '0' and '$(CdidxGitDateRaw)' != ''">$(CdidxGitDateRaw)</CdidxBuildDate>
+      <CdidxBuildDate Condition="'$(CdidxBuildDateOverride)' != ''">$(CdidxBuildDateOverride)</CdidxBuildDate>
+      <CdidxBuildDate Condition="'$(CdidxBuildDate)' == '' and '$(CdidxGitDateExitCode)' == '0' and '$(CdidxGitDateRaw)' != ''">$(CdidxGitDateRaw)</CdidxBuildDate>
       <CdidxBuildDate Condition="'$(CdidxBuildDate)' == ''">$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</CdidxBuildDate>
-      <CdidxBuildCommit Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitShaRaw)' != ''">$(CdidxGitShaRaw)</CdidxBuildCommit>
+      <CdidxBuildCommit Condition="'$(CdidxBuildCommitOverride)' != ''">$(CdidxBuildCommitOverride)</CdidxBuildCommit>
+      <CdidxBuildCommit Condition="'$(CdidxBuildCommit)' == '' and '$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitShaRaw)' != ''">$(CdidxGitShaRaw)</CdidxBuildCommit>
       <CdidxBuildCommit Condition="'$(CdidxBuildCommit)' == ''">unknown</CdidxBuildCommit>
-      <CdidxBuildDirty Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '0'">clean</CdidxBuildDirty>
-      <CdidxBuildDirty Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '1'">dirty</CdidxBuildDirty>
+      <CdidxBuildDirty Condition="'$(CdidxBuildDirtyOverride)' != ''">$(CdidxBuildDirtyOverride)</CdidxBuildDirty>
+      <CdidxBuildDirty Condition="'$(CdidxBuildDirty)' == '' and '$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '0'">clean</CdidxBuildDirty>
+      <CdidxBuildDirty Condition="'$(CdidxBuildDirty)' == '' and '$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '1'">dirty</CdidxBuildDirty>
       <CdidxBuildDirty Condition="'$(CdidxBuildDirty)' == ''">unknown</CdidxBuildDirty>
     </PropertyGroup>
     <ItemGroup>
