@@ -480,7 +480,14 @@ public class ReleaseWorkflowTests
         Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
         Assert.Contains("tags: ${{ steps.image-tags.outputs.tags }}", workflow);
         Assert.Contains("*-*) ;;", workflow);
-        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
+        Assert.Contains("docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine", dockerfile);
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build", dockerfile);
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime", dockerfile);
+        Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
+        Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime", dockerfile);
+        Assert.Contains("adduser -S -D -H -G cdidx -h /repo cdidx", dockerfile);
+        Assert.Contains("chown cdidx:cdidx /repo", dockerfile);
+        Assert.Contains("USER cdidx:cdidx", dockerfile);
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);

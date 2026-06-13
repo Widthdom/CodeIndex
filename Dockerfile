@@ -1,4 +1,6 @@
-FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
+# Base image digests are multi-arch manifest list digests. Refresh with:
+# docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build
 
 WORKDIR /src
 COPY . .
@@ -18,15 +20,21 @@ RUN case "$TARGETARCH" in \
       -p:PublishTrimmed=true \
       --output /out
 
-FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime
+FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S cdidx \
+    && adduser -S -D -H -G cdidx -h /repo cdidx \
+    && mkdir -p /repo \
+    && chown cdidx:cdidx /repo
 
 WORKDIR /repo
 COPY --from=build /out/ /usr/local/lib/cdidx/
 COPY LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md /usr/local/lib/cdidx/
 COPY LICENSES/ /usr/local/lib/cdidx/LICENSES/
 RUN ln -s /usr/local/lib/cdidx/cdidx /usr/local/bin/cdidx
+
+USER cdidx:cdidx
 
 ENTRYPOINT ["cdidx"]
 CMD ["--help"]
