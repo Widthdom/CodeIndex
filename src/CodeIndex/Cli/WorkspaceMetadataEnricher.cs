@@ -64,23 +64,31 @@ public static class WorkspaceMetadataEnricher
         var runtimeBranch = GitHelper.TryGetHeadBranch(projectRoot);
         var dirty = GitHelper.TryIsWorktreeDirty(projectRoot);
         var indexedHead = DbPathResolver.TryReadIndexedHeadCommit(dbPath);
+        var indexedHeadSha = DbPathResolver.TryReadIndexedHeadSha(dbPath);
+        var indexedHeadBranch = DbPathResolver.TryReadIndexedHeadBranch(dbPath);
+        var hasIndexedHeadBranchStamp = DbPathResolver.TryHasIndexedHeadBranchStamp(dbPath);
         var indexedBranch = DbPathResolver.TryReadIndexedHeadCommitBranch(dbPath);
         var hasIndexedBranchStamp = DbPathResolver.TryHasIndexedHeadCommitBranchStamp(dbPath);
+        var comparisonHead = indexedHeadSha ?? indexedHead;
+        var comparisonBranch = indexedHeadSha != null ? indexedHeadBranch : indexedBranch;
+        var hasComparisonBranchStamp = indexedHeadSha != null ? hasIndexedHeadBranchStamp : hasIndexedBranchStamp;
         // Detect a per-worktree branch / HEAD switch by comparing the runtime HEAD against
-        // the HEAD captured at index time. Also compare the branch stamp when a HEAD stamp is
-        // present so branch <-> detached transitions at the same commit are still visible.
+        // the latest successful index HEAD. Fall back to the older full-scan-only stamp only
+        // for legacy DBs. Also compare the matching branch stamp when a HEAD stamp is present
+        // so branch <-> detached transitions at the same commit are still visible.
         // Only meaningful when enough metadata exists; legacy DBs or projects indexed outside
         // git report null and must not trigger a false-positive switch warning. Issues #1512
-        // and #2094.
-        // worktree 内の branch / HEAD 切替検出。index 時点と現在で HEAD を突き合わせる。
+        // and #2094. Issue #3367.
+        // worktree 内の branch / HEAD 切替検出。最新 index HEAD と現在で HEAD を突き合わせる。
+        // 旧 DB では full-scan-only stamp へ fallback する。
         // 同一 commit の branch/detached 遷移も branch stamp で検出する。
-        var commitChanged = indexedHead != null && runtimeHead != null
-            ? !string.Equals(indexedHead, runtimeHead, StringComparison.OrdinalIgnoreCase)
+        var commitChanged = comparisonHead != null && runtimeHead != null
+            ? !string.Equals(comparisonHead, runtimeHead, StringComparison.OrdinalIgnoreCase)
             : (bool?)null;
-        var branchChanged = indexedHead != null
+        var branchChanged = comparisonHead != null
             && runtimeHead != null
-            && hasIndexedBranchStamp
-            && !string.Equals(indexedBranch, runtimeBranch, StringComparison.Ordinal)
+            && hasComparisonBranchStamp
+            && !string.Equals(comparisonBranch, runtimeBranch, StringComparison.Ordinal)
             ? true
             : (bool?)null;
         bool? headChanged = commitChanged == true || branchChanged == true

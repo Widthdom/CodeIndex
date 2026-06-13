@@ -1672,12 +1672,14 @@ This exercises the entire stack end-to-end.
    otherwise leave `project_root` / `git_head` / `git_is_dirty` /
    `indexed_head_commit` / `worktree_head_changed` unset on legacy DBs that
    have no stored root metadata, even when the explicit path itself
-   looks like `.../.cdidx/codeindex.db`. When `indexed_head_commit` is
-   present, `WorkspaceMetadataEnricher` compares it against the runtime
-   HEAD and surfaces `worktree_head_changed=true` so `status` can WARN
-   that the worktree branch / HEAD switched since the index was built
-   (issue #1512). In addition, after a successful index (full scan AND
-   partial update), `IndexCommandRunner` stamps `codeindex_meta.indexed_head_sha`,
+   looks like `.../.cdidx/codeindex.db`. `WorkspaceMetadataEnricher` compares
+   the runtime HEAD against the latest successful index stamp in
+   `indexed_head_sha` when available, falling back to the older full-scan-only
+   `indexed_head_commit` only for legacy DBs, and surfaces
+   `worktree_head_changed=true` so `status` can WARN that the worktree branch /
+   HEAD switched since the index was built (issues #1512 and #3367). In
+   addition, after a successful index (full scan AND partial update),
+   `IndexCommandRunner` stamps `codeindex_meta.indexed_head_sha`,
    `indexed_head_branch`, and `indexed_head_timestamp` (best-effort; a
    failing `git` invocation never fails the index), and `status` surfaces
    them as `indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp`
@@ -3735,7 +3737,7 @@ flowchart TD
 
 1. **バイナリ起動。** 自己完結型ホストがマネージエントリポイント（`Program.Main`）を解決。
 2. **CLI ルーティング。** `Program.cs` が `IndexCommandRunner.Run(args, jsonOptions)` に振り分け。
-3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。同じヘルパーは `status` / `map` / `inspect` の query-time workspace root 解決も担う。`--db` を付けない query は既定の `.cdidx/codeindex.db` sibling path をそのまま正とし、explicit DB は `codeindex_meta.indexed_project_root` を読む。保存済み root metadata を持たない legacy explicit DB は、明示パス自体が `.../.cdidx/codeindex.db` でも `project_root` / `git_head` / `git_is_dirty` / `indexed_head_commit` / `worktree_head_changed` を未設定のまま返す。`indexed_head_commit` が存在する場合は `WorkspaceMetadataEnricher` が runtime HEAD と突き合わせ、index 構築後に worktree の branch / HEAD が切り替わったときに `worktree_head_changed=true` を surface して `status` が WARN を出せるようにする (issue #1512)。加えて index 成功時 (full scan / partial update 問わず) に `IndexCommandRunner` が `codeindex_meta.indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp` も best-effort で stamp する（`git` 失敗は index 成功を妨げない）。`status` はこれらを `indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp` として返し、query 時に `git merge-base --is-ancestor` + `git rev-list --count` で算出する `commits_ahead_of_indexed_head` も付与する。indexed SHA が未知、または force-push / divergent history で現 `HEAD` の祖先でなくなった場合は `null` を返し、consumer が divergent worktree を「最新」と誤読しないようにする。`indexed_head_commit` (#1508 / #1512、full scan 限定) と異なり、#1509 のトリプルは partial update でも更新されるため cross-session のドリフト検出が常に機能する。
+3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。同じヘルパーは `status` / `map` / `inspect` の query-time workspace root 解決も担う。`--db` を付けない query は既定の `.cdidx/codeindex.db` sibling path をそのまま正とし、explicit DB は `codeindex_meta.indexed_project_root` を読む。保存済み root metadata を持たない legacy explicit DB は、明示パス自体が `.../.cdidx/codeindex.db` でも `project_root` / `git_head` / `git_is_dirty` / `indexed_head_commit` / `worktree_head_changed` を未設定のまま返す。`WorkspaceMetadataEnricher` は利用可能な場合、最新の成功 index stamp である `indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の full-scan 限定 `indexed_head_commit` に fallback する。index 構築後に worktree の branch / HEAD が切り替わったときは `worktree_head_changed=true` を surface して `status` が WARN を出せるようにする (issues #1512 and #3367)。加えて index 成功時 (full scan / partial update 問わず) に `IndexCommandRunner` が `codeindex_meta.indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp` も best-effort で stamp する（`git` 失敗は index 成功を妨げない）。`status` はこれらを `indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp` として返し、query 時に `git merge-base --is-ancestor` + `git rev-list --count` で算出する `commits_ahead_of_indexed_head` も付与する。indexed SHA が未知、または force-push / divergent history で現 `HEAD` の祖先でなくなった場合は `null` を返し、consumer が divergent worktree を「最新」と誤読しないようにする。`indexed_head_commit` (#1508 / #1512、full scan 限定) と異なり、#1509 のトリプルは partial update でも更新されるため cross-session のドリフト検出が常に機能する。
 4. **SQLite オープン。** `IndexCommandRunner` が `new DbContext(dbPath)` を構築し、内部で `new SqliteConnection(...)` が呼ばれる。**ネイティブライブラリの解決はこの時点で行われる。** `SqliteConnection` の静的コンストラクタが `SQLitePCL.Batteries_V2.Init()` を呼び、それが `SQLite3Provider_e_sqlite3` 上で `sqlite3_libversion_number()` を起動し、`e_sqlite3` への P/Invoke に到達する。Linux の .NET 動的ローダは次の順で探す（失敗時のエラーメッセージを参照）:
    - `${apphost_dir}/libe_sqlite3.so`
    - `${apphost_dir}/e_sqlite3.so`（および `lib` プレフィックスなしのバリエーション）

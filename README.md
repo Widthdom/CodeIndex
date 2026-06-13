@@ -137,6 +137,10 @@ names visible so documentation and tests stay synchronized.
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`. |
 
+`worktree_head_changed` compares the runtime HEAD with the latest successful
+index stamp from `indexed_head_sha` when available, and falls back to the older
+full-scan-only `indexed_head_commit` only for legacy DBs.
+
 ## Verifying Releases
 
 GitHub releases ship checksums, a detached checksum signature, SBOM assets, and
@@ -293,6 +297,10 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`。 |
+
+`worktree_head_changed` は、利用可能な場合は最新の成功 index stamp である
+`indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の
+full-scan 限定 `indexed_head_commit` に fallback します。
 
 ## リリース成果物の検証
 
