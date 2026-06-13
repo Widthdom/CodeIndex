@@ -69,7 +69,10 @@ public partial class McpServer
             return true;
         }
 
-        var parts = new List<string> { "cdidx is a code-index server." };
+        var parts = new List<string>
+        {
+            "cdidx is a local-first code-index server. Prefer CodeIndex MCP tools before shell grep/find/cat when investigating indexed repositories; use whole-file reads only after narrowing the target. cdidx は local-first なコード検索・取得サーバーです。インデックス済みリポジトリの調査では shell の grep/find/cat を乱発する前に CodeIndex MCP tools を優先し、ファイル全体の読み取りは対象を絞ってから使ってください。",
+        };
 
         if (On("index"))
             parts.Add("If queries fail because no index exists, run 'index' first to build it.");
@@ -82,6 +85,14 @@ public partial class McpServer
             parts.Add("Use 'search' for text queries.");
         else if (On("definition"))
             parts.Add("Use 'definition' for symbol lookup.");
+
+        var guidedFlowTools = new List<string>();
+        foreach (var name in new[] { "search", "definition", "references", "callers", "callees", "outline", "map", "excerpt" })
+            if (On(name)) guidedFlowTools.Add(name);
+        if (guidedFlowTools.Count > 0)
+        {
+            parts.Add("Investigation flow: search broadly, use definition for declarations, references for usage sites, callers/callees for call graph impact, outline/map for structure, then excerpt or resources/read for focused line ranges. Prefer pagination, path/lang filters, exactName/exactSubstring, and prefix over dumping large files. 調査順序: まず広く search し、宣言は definition、利用箇所は references、呼び出し影響は callers/callees、構造把握は outline/map、その後に excerpt または resources/read で必要な行範囲だけを読んでください。大きなファイルを丸ごと読む前に pagination、path/lang filter、exactName/exactSubstring、prefix で絞り込んでください。");
+        }
 
         if (On("analyze_symbol"))
             parts.Add("Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools.");
@@ -287,17 +298,18 @@ public partial class McpServer
         AddRecoveryHint(
             payload,
             "no_results",
-            $"{toolName} returned no rows; check whether the symbol is indexed, whether filters are too narrow, or whether a broader symbol lookup finds a nearby name.",
+            $"{toolName} returned no rows; relax exactName/path/lang/kind filters, try symbols for nearby names, or search related identifiers/error text before assuming the symbol is absent.",
             "symbols",
             args);
     }
 
-    private static void AddNextStepSuggestion(JsonObject payload, string tool, JsonObject args)
+    private static void AddNextStepSuggestion(JsonObject payload, string tool, JsonObject args, string suggestedAction)
     {
         payload["next_step_suggestion"] = new JsonObject
         {
             ["tool"] = tool,
             ["args"] = args,
+            ["suggested_action"] = suggestedAction,
         };
     }
 
@@ -1097,6 +1109,13 @@ public partial class McpServer
         payload["truncated"] = truncated;
         payload["more_available"] = truncated;
         payload["total"] = total.HasValue ? JsonValue.Create(total.Value) : null;
+        if (truncated)
+        {
+            payload["pagination_hint"] = new JsonObject
+            {
+                ["suggested_action"] = "More rows are available; continue with the provided cursor/next_offset when you need breadth, or narrow with path/lang/kind/excludeTests/format filters before reading details.",
+            };
+        }
     }
 
     private static void AddPaginatedResultEnvelope(JsonObject payload, int returnedCount, int? total, bool truncated, int offset)
@@ -1808,7 +1827,8 @@ public partial class McpServer
             AddNextStepSuggestion(
                 structured,
                 "excerpt",
-                BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
+                BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine),
+                "Use excerpt on the top hit before editing; for symbol changes, follow with definition or references to confirm declarations and usage sites.");
             if (suggestExactSubstring)
                 AddExactSubstringRecoveryHint(structured, query);
             adjustments.ApplyTo(structured);
@@ -2109,6 +2129,12 @@ public partial class McpServer
             }
             if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
+            var topSymbol = results[0];
+            AddNextStepSuggestion(
+                structured,
+                "definition",
+                new JsonObject { ["query"] = topSymbol.Name, ["limit"] = 5, ["exactName"] = true },
+                "Use definition to confirm the declaration for the best symbol candidate; then use references, callers, or callees depending on the change.");
             adjustments.ApplyTo(structured);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "symbol"), structured);
         });
@@ -2194,6 +2220,14 @@ public partial class McpServer
                 AddExactZeroHint(payload, exactZeroHint);
                 AddSymbolRecoveryHint(payload, query, "definition", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
+            }
+            else
+            {
+                AddNextStepSuggestion(
+                    payload,
+                    "references",
+                    new JsonObject { ["query"] = results[0].Name, ["limit"] = 5, ["exactName"] = true },
+                    "Use references to inspect usage sites before changing this definition; then use excerpt for the relevant definition or reference ranges.");
             }
             adjustments.ApplyTo(payload);
             return CreateToolResult(id,
@@ -2324,7 +2358,8 @@ public partial class McpServer
                 AddNextStepSuggestion(
                     payload,
                     "excerpt",
-                    BuildExcerptArgs(topReference.Path, topReference.Line, topReference.Line));
+                    BuildExcerptArgs(topReference.Path, topReference.Line, topReference.Line),
+                    "Use excerpt on representative usage sites before editing; use callers or callees when you need call graph impact.");
             }
             adjustments.ApplyTo(payload);
             return CreateToolResult(id,
@@ -2426,6 +2461,15 @@ public partial class McpServer
                 AddSymbolRecoveryHint(payload, query, "callers", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
+            else
+            {
+                var topCaller = results[0];
+                AddNextStepSuggestion(
+                    payload,
+                    "excerpt",
+                    BuildExcerptArgs(topCaller.Path, topCaller.FirstLine, topCaller.FirstLine),
+                    "Use excerpt on a caller row to understand the concrete call site before widening impact analysis or editing.");
+            }
             adjustments.ApplyTo(payload);
             return CreateToolResult(id,
                 BuildGraphSummary("caller", "callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
@@ -2525,6 +2569,15 @@ public partial class McpServer
                 AddExactZeroHint(payload, exactZeroHint);
                 AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
+            }
+            else
+            {
+                var topCallee = results[0];
+                AddNextStepSuggestion(
+                    payload,
+                    "excerpt",
+                    BuildExcerptArgs(topCallee.Path, topCallee.FirstLine, topCallee.FirstLine),
+                    "Use excerpt on a callee row to inspect the concrete dependency before changing the caller or callee.");
             }
             adjustments.ApplyTo(payload);
             return CreateToolResult(id,
@@ -3361,6 +3414,11 @@ public partial class McpServer
             }
 
             var structured = JsonSerializer.SerializeToNode(outline, _jsonOptions)!.AsObject();
+            AddNextStepSuggestion(
+                structured,
+                "excerpt",
+                new JsonObject { ["path"] = path, ["startLine"] = 1, ["endLine"] = Math.Min(outline.TotalLines, 80) },
+                "Use excerpt for only the relevant outline range instead of reading the whole file.");
             return CreateToolResult(id, $"Outline: {ConsoleUi.Counted(outline.SymbolCount, "symbol")} in {ConsoleUi.Counted(outline.TotalLines, "line")}.", structured);
         });
     }
@@ -3475,7 +3533,8 @@ public partial class McpServer
             AddNextStepSuggestion(
                 payload,
                 "outline",
-                new JsonObject { ["path"] = excerpt.Path });
+                new JsonObject { ["path"] = excerpt.Path },
+                "Use outline to navigate neighboring symbols before requesting more ranges from the same file.");
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
