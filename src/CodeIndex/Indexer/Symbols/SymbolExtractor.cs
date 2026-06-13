@@ -2387,6 +2387,9 @@ public static partial class SymbolExtractor
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
+        var dockerfileStageNames = lang == "dockerfile"
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
         var csharpSuppressedContinuationUntil = -1;
         var goImportBlock = false;
 
@@ -2418,7 +2421,7 @@ public static partial class SymbolExtractor
                 AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
                 AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols, dockerfileStageNames!);
                 AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileCopyDestinationSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileAddDestinationSymbol(fileId, line, i + 1, symbols);
@@ -3615,6 +3618,9 @@ public static partial class SymbolExtractor
                                             ReturnType = NormalizeMetadata(rawReturnType),
                                         },
                                     line);
+
+                                if (dockerfileStageNames != null && kind == "stage")
+                                    dockerfileStageNames.Add(name);
 
                                 if (lang == "objc"
                                     && pattern.Kind == "class"
@@ -5492,6 +5498,65 @@ public static partial class SymbolExtractor
         {
         }
     }
+
+    private readonly record struct SymbolLineIdentity(long FileId, int Line, string Kind, string Name);
+
+    private static readonly ConditionalWeakTable<List<SymbolRecord>, SymbolLineIdentityState> SymbolLineIdentityStates = new();
+
+    private sealed class SymbolLineIdentityState
+    {
+        private readonly HashSet<SymbolLineIdentity> _identities = [];
+        private int _knownCount;
+
+        public bool Contains(List<SymbolRecord> symbols, SymbolLineIdentity identity)
+        {
+            Sync(symbols);
+            return _identities.Contains(identity);
+        }
+
+        private void Sync(List<SymbolRecord> symbols)
+        {
+            if (_knownCount > symbols.Count)
+            {
+                _identities.Clear();
+                _knownCount = 0;
+            }
+
+            for (; _knownCount < symbols.Count; _knownCount++)
+                _identities.Add(GetSymbolLineIdentity(symbols[_knownCount]));
+        }
+    }
+
+    private static HashSet<SymbolLineIdentity> BuildSymbolLineIdentities(IEnumerable<SymbolRecord> symbols)
+    {
+        var identities = new HashSet<SymbolLineIdentity>();
+        foreach (var symbol in symbols)
+            identities.Add(GetSymbolLineIdentity(symbol));
+        return identities;
+    }
+
+    private static SymbolLineIdentity GetSymbolLineIdentity(SymbolRecord symbol)
+        => new(symbol.FileId, symbol.Line, symbol.Kind, symbol.Name);
+
+    private static bool HasSymbolLineIdentity(
+        HashSet<SymbolLineIdentity> identities,
+        long fileId,
+        int lineNumber,
+        string kind,
+        string name)
+        => identities.Contains(new SymbolLineIdentity(fileId, lineNumber, kind, name));
+
+    private static bool HasSymbolLineIdentity(
+        List<SymbolRecord> symbols,
+        long fileId,
+        int lineNumber,
+        string kind,
+        string name)
+        => SymbolLineIdentityStates.GetValue(symbols, _ => new SymbolLineIdentityState())
+            .Contains(symbols, new SymbolLineIdentity(fileId, lineNumber, kind, name));
+
+    private static void RecordSymbolLineIdentity(HashSet<SymbolLineIdentity> identities, SymbolRecord symbol)
+        => identities.Add(GetSymbolLineIdentity(symbol));
 
     private readonly record struct SameLineSignatureKey(int Line, int StartLine, string Signature);
     private static bool TryAddRPacmanPackageLoaderSymbols(
@@ -7958,19 +8023,21 @@ public static partial class SymbolExtractor
             if (parentSymbol == null)
                 continue;
 
-            foreach (var component in pending.Components)
-            {
-                if (symbols.Any(symbol =>
+            var existingComponentNames = symbols
+                .Where(symbol =>
                     symbol.FileId == pending.FileId
                     && symbol.Kind == "property"
-                    && symbol.Name == component.Name
                     && symbol.ContainerKind == pending.Kind
                     && symbol.ContainerName == pending.RecordName
                     && symbol.StartLine >= parentSymbol.StartLine
-                    && symbol.EndLine <= parentSymbol.EndLine))
-                {
+                    && symbol.EndLine <= parentSymbol.EndLine)
+                .Select(symbol => symbol.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var component in pending.Components)
+            {
+                if (!existingComponentNames.Add(component.Name))
                     continue;
-                }
 
                 symbols.Add(new SymbolRecord
                 {

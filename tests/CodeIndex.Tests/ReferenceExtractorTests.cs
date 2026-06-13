@@ -2627,6 +2627,36 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptLargeTypeAliasUseSet_CompletesWithinPracticalBudget()
+    {
+        var uses = string.Join('\n', Enumerable.Range(0, 5_000).Select(index => $"let v{index}: MyAlias = value;"));
+        var content = $$"""
+            class SomeType {}
+            type MyAlias = SomeType;
+            {{uses}}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var stopwatch = Stopwatch.StartNew();
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+        stopwatch.Stop();
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "let v0: MyAlias = value;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "let v4999: MyAlias = value;");
+        var runawayBudget = TimeSpan.FromSeconds(10);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Large TypeScript type alias reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeAliasWithGenericDefault_EmitsUnderlyingTypeReference()
     {
         const string content = """

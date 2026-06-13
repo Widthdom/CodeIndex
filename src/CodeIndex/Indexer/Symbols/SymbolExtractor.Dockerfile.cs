@@ -368,14 +368,15 @@ public static partial class SymbolExtractor
         long fileId,
         string line,
         int lineNumber,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        HashSet<string> stageNames)
     {
         var match = DockerfileNamedFromImageRegex.Match(line);
         if (!match.Success)
             return;
 
         var name = match.Groups["name"].Value;
-        if (symbols.Any(symbol => symbol.Kind == "stage" && symbol.Name == name))
+        if (stageNames.Contains(name))
             return;
 
         AddSymbolRecord(
