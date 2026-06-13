@@ -33,6 +33,9 @@ _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
 _INLINE_INTERPRETERS = {"python", "python3", "ruby", "perl", "node", "deno", "php"}
 _INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
 _INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
+_PYTHON_MODULES_WITHOUT_SCRIPT_OPERANDS = {"pytest", "unittest"}
+_PYTHON_MODULES_WITH_SCRIPT_OPERANDS = {"cProfile", "pdb", "profile", "trace"}
+_PYTHON_MODULE_SCRIPT_OPTION_VALUES = {"-m", "-o", "-s", "--file", "--coverdir", "--ignore-dir"}
 _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND = "__unknown_global_option__"
 _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON = "unrecognized global option before high-risk CLI subcommand is blocked"
 _TRANSPARENT_SCRIPT_WRAPPERS = {"time", "timeout", "gtimeout", "command", "exec", "nice", "nohup"}
@@ -1214,6 +1217,26 @@ def _command_is_safe_cdidx_mcp_init_smoke(command: str, cwd: Path) -> bool:
     return bool(match and _token_is_expanded_installed_cdidx(match.group("cdidx"), cwd))
 
 
+def _python_module_script_operand(args: list[str], cwd: Path) -> Path | None:
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            index += 1
+            continue
+        if token in _PYTHON_MODULE_SCRIPT_OPTION_VALUES:
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in _PYTHON_MODULE_SCRIPT_OPTION_VALUES if option.startswith("--")):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return _token_path(token, cwd)
+    return None
+
+
 def should_skip_script_scan(decision: GuardDecision, path: Path, project_root: Path) -> bool:
     return (
         decision.allowed
@@ -1308,6 +1331,19 @@ def _candidate_script_paths_from_tokens(tokens: list[str], cwd: Path) -> list[Pa
         while index < len(tokens):
             token = tokens[index]
             if first in {"python", "python3"} and token == "-m":
+                if index + 1 >= len(tokens):
+                    return result
+                module = tokens[index + 1]
+                if module in _PYTHON_MODULES_WITHOUT_SCRIPT_OPERANDS:
+                    return result
+                if module in _PYTHON_MODULES_WITH_SCRIPT_OPERANDS:
+                    path = _python_module_script_operand(tokens[index + 2 :], cwd)
+                    if path is not None:
+                        result.append(path)
+                    return result
+                path = _token_path(module, cwd)
+                if path is not None:
+                    result.append(path)
                 return result
             if first in {"python", "python3"} and token in {"-W", "-X"}:
                 index += 2

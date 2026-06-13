@@ -387,6 +387,21 @@ class CommandGuardCoreTests(TestCase):
                 with self.subTest(command=command):
                     self.assertEqual([], core.candidate_script_paths(command, cwd=root))
 
+    def test_candidate_script_paths_scans_python_module_script_runners(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.py"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("print('ok')", encoding="utf-8")
+
+            for command in (
+                "python3 -m cProfile tools/guard.py",
+                "python3 -m trace --trace tools/guard.py",
+                "python3 -m pdb tools/guard.py",
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual([script.resolve()], core.candidate_script_paths(command, cwd=root))
+
     def test_check_script_file_denies_outside_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
