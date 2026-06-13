@@ -527,10 +527,20 @@ public class IndexCommandRunnerTests
     public void DotnetHostPathResolver_RejectsMissingDotnetHost_Issue3455()
     {
         var missingDotnetPath = Path.Combine(Path.GetTempPath(), $"cdidx_missing_dotnet_{Guid.NewGuid():N}", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        var originalCandidatesOverride = DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride;
 
-        var resolved = DotnetHostPathResolver.Resolve(missingDotnetPath);
+        try
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = [];
 
-        Assert.Null(resolved);
+            var resolved = DotnetHostPathResolver.Resolve(missingDotnetPath);
+
+            Assert.Null(resolved);
+        }
+        finally
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = originalCandidatesOverride;
+        }
     }
 
     [Fact]
