@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -108,6 +109,16 @@ public class GitHubIssueReporterTests : IDisposable
         _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", tooLarge.ToString(CultureInfo.InvariantCulture));
 
         Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
+    }
+
+    [Fact]
+    public void DefaultHttpClient_UsesExplicitTimeout()
+    {
+        var field = typeof(GitHubIssueReporter).GetField("s_defaultHttpClient", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(field);
+        var client = Assert.IsType<HttpClient>(field.GetValue(null));
+        Assert.Equal(GitHubIssueReporter.DefaultTimeout, client.Timeout);
     }
 
     [Theory]
@@ -713,6 +724,81 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_SearchFailureFailsClosedWithoutCreate()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.BadGateway)
+            {
+                Content = MakeJsonContent("""{ "message": "search unavailable" }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/12345" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during search", result.Error);
+            Assert.Contains("502", result.Error);
+            Assert.Equal(1, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_LabelListFailureFailsClosedWithoutCreate()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                Content = MakeJsonContent("""{ "message": "issue list unavailable" }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/12345" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during label list", result.Error);
+            Assert.Contains("503", result.Error);
+            Assert.Equal(2, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_CreateSuccessBodyOverLimit_ReturnsDiagnosticError()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -751,7 +837,7 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public async Task TryCreateIssueAsync_SearchSuccessBodyOverLimit_StillAttemptsCreate()
+    public async Task TryCreateIssueDetailedAsync_SearchBodyOverLimit_FailsClosedWithoutCreate()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
@@ -776,11 +862,13 @@ public class GitHubIssueReporterTests : IDisposable
         try
         {
             var record = MakeRecordWithKnownHash();
-            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
 
-            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3333", url);
-            Assert.Equal(3, handler.RequestCount);
-            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during search", result.Error);
+            Assert.Contains("HTTP response body exceeded", result.Error);
+            Assert.Equal(1, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
         finally
         {
@@ -823,7 +911,7 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public async Task TryCreateIssueAsync_LabelListJsonOverDepthLimit_StillAttemptsCreate()
+    public async Task TryCreateIssueDetailedAsync_LabelListJsonOverDepthLimit_FailsClosedWithoutCreate()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
@@ -848,11 +936,13 @@ public class GitHubIssueReporterTests : IDisposable
         try
         {
             var record = MakeRecordWithKnownHash();
-            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
 
-            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3334", url);
-            Assert.Equal(3, handler.RequestCount);
-            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during label list", result.Error);
+            Assert.Contains("maximum configured depth", result.Error);
+            Assert.Equal(2, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
         finally
         {
@@ -1042,12 +1132,12 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public async Task TryCreateIssueAsync_SearchApiFails_StillAttemptsCreate()
+    public async Task TryCreateIssueDetailedAsync_SearchApiFails_FailsClosedWithoutCreate()
     {
-        // Search-API failure (e.g. 5xx or rate limited) must not block a
-        // legitimate first submission. The create POST proceeds as before.
-        // 検索 API 失敗（5xx, レート制限など）でも正規の新規送信は阻害しない。
-        // 検索失敗時は通常の POST 作成パスに進むこと。
+        // Search-API failure (e.g. 5xx or rate limited) makes the duplicate
+        // lookup indeterminate, so the reporter must not create a possible duplicate.
+        // 検索 API 失敗（5xx, レート制限など）では重複 lookup が不確定になるため、
+        // 重複の可能性がある Issue 作成には進まないこと。
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
@@ -1066,13 +1156,14 @@ public class GitHubIssueReporterTests : IDisposable
         try
         {
             var record = MakeRecordWithKnownHash();
-            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
 
-            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/777", url);
-            Assert.Equal(3, handler.RequestCount);
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during search", result.Error);
+            Assert.Contains("503", result.Error);
+            Assert.Equal(1, handler.RequestCount);
             Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
-            Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
-            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
         finally
         {
