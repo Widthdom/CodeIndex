@@ -295,6 +295,110 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizeCli_RejectsTooManyPackageArguments()
+    {
+        var args = Enumerable
+            .Range(0, PackageNormalizeOptions.MaxPackageArgumentCount + 1)
+            .Select(index => $"package-{index}.nupkg")
+            .ToArray();
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => PackageNormalizeCli.Run(args));
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains($"at most {PackageNormalizeOptions.MaxPackageArgumentCount} package paths", stderr);
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_JsonReportsBoundedFriendlyFailure()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonReportsBoundedFriendlyFailure));
+        try
+        {
+            var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                PackageNormalizeCli.Run(["--json", missingPackagePath]));
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
+            var error = package.GetProperty("error").GetString();
+            Assert.Contains("missing.nupkg", error);
+            Assert.DoesNotContain(projectRoot, error);
+            Assert.True(error!.Length <= 512);
+            Assert.Empty(package.GetProperty("warnings").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_JsonBoundsZipEntryDiagnostics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonBoundsZipEntryDiagnostics));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "unsafe-entry.nupkg");
+            var longEntryName = new string('a', 260) + "\\payload.txt";
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                (longEntryName, "payload"));
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                PackageNormalizeCli.Run(["--json", packagePath]));
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var error = doc.RootElement.GetProperty("packages").EnumerateArray().Single().GetProperty("error").GetString();
+            Assert.Contains("aaa", error);
+            Assert.Contains("...", error);
+            Assert.DoesNotContain(longEntryName, error);
+            Assert.True(error!.Length <= 512);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "cleanup-warning.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            var limits = PackageNormalizeLimits.Default with { MaxXmlTextChars = 5 };
+            var warnings = new List<string>();
+
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                PackageCorePropertiesNormalizer.NormalizePackage(
+                    packagePath,
+                    limits,
+                    warnings,
+                    _ => throw new IOException("delete failed at /private/path")));
+
+            Assert.Contains("[Content_Types].xml", exception.Message);
+            var warning = Assert.Single(warnings);
+            Assert.Contains("Could not delete temporary normalized package", warning);
+            Assert.Contains("cleanup-warning.nupkg.normalize-tmp", warning);
+            Assert.DoesNotContain(projectRoot, warning);
+            Assert.DoesNotContain("/private/path", warning);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
@@ -452,7 +556,76 @@ public class ReleaseWorkflowTests
 
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
             Assert.Contains("docs/./readme.txt", exception.Message);
-            Assert.Contains("duplicate destination name docs/readme.txt", exception.Message);
+            Assert.Contains("duplicate destination name 'docs/readme.txt'", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_ScrubsSafeExternalAttributes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ScrubsSafeExternalAttributes));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "external-attributes.nupkg");
+            CreatePackageWithAttributedEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", "", UnixRegularFileAttributes(493)),
+                ("payload.bin", "payload", 0x20));
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.All(archive.Entries, entry => Assert.Equal(0, entry.ExternalAttributes));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsPosixSymlinkExternalAttributes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPosixSymlinkExternalAttributes));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "symlink-attributes.nupkg");
+            CreatePackageWithAttributedEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", "", 0),
+                ("payload.bin", "payload", UnixSymlinkAttributes()));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains("payload.bin", exception.Message);
+            Assert.Contains("unsafe POSIX file type symlink", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsUnsafeDosExternalAttributes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsUnsafeDosExternalAttributes));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "dos-attributes.nupkg");
+            CreatePackageWithAttributedEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", "", 0),
+                ("payload.bin", "payload", 0x04));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains("payload.bin", exception.Message);
+            Assert.Contains("unsafe DOS attributes 0x04", exception.Message);
             Assert.False(File.Exists(packagePath + ".normalize-tmp"));
         }
         finally
@@ -467,6 +640,8 @@ public class ReleaseWorkflowTests
         var root = GetRepositoryRoot();
         var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
         var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
+        var dockerignore = File.ReadAllText(Path.Combine(root, ".dockerignore"));
+        var entrypoint = File.ReadAllText(Path.Combine(root, "scripts", "docker-entrypoint.sh"));
         var project = File.ReadAllText(Path.Combine(root, "src", "CodeIndex", "CodeIndex.csproj"));
 
         Assert.Contains("publish-container:", workflow);
@@ -479,12 +654,49 @@ public class ReleaseWorkflowTests
         Assert.Contains("ghcr.io/widthdom/codeindex:${version}", workflow);
         Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
         Assert.Contains("tags: ${{ steps.image-tags.outputs.tags }}", workflow);
+        Assert.Contains("Extract container build metadata", workflow);
+        Assert.Contains("git rev-parse --short=7 HEAD", workflow);
+        Assert.Contains("git show -s --format=%cd --date=format:%Y-%m-%d HEAD", workflow);
+        Assert.Contains("CDIDX_BUILD_COMMIT=${{ steps.container-metadata.outputs.commit }}", workflow);
+        Assert.Contains("CDIDX_BUILD_DATE=${{ steps.container-metadata.outputs.date }}", workflow);
+        Assert.Contains("CDIDX_BUILD_DIRTY=${{ steps.container-metadata.outputs.dirty }}", workflow);
         Assert.Contains("*-*) ;;", workflow);
-        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
+        Assert.Contains("docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine", dockerfile);
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build", dockerfile);
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime", dockerfile);
+        Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
+        Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime", dockerfile);
+        Assert.Contains("COPY scripts/docker-entrypoint.sh /usr/local/bin/cdidx-entrypoint", dockerfile);
+        Assert.Contains("apk add --no-cache ca-certificates su-exec", dockerfile);
+        Assert.Contains("addgroup -S -g 10001 cdidx", dockerfile);
+        Assert.Contains("adduser -S -D -H -u 10001 -G cdidx -h /repo cdidx", dockerfile);
+        Assert.Contains("chown cdidx:cdidx /repo", dockerfile);
+        Assert.DoesNotContain("USER cdidx:cdidx", dockerfile);
+        Assert.Contains("stat -c '%u' /repo", entrypoint);
+        Assert.Contains("stat -c '%g' /repo", entrypoint);
+        Assert.Contains("su-exec \"${target_uid}:${target_gid}\" cdidx \"$@\"", entrypoint);
+        Assert.DoesNotContain("COPY . .", dockerfile);
+        Assert.Contains("COPY Directory.Build.props nuget.config version.json ./", dockerfile);
+        Assert.Contains("COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/", dockerfile);
+        Assert.Contains("COPY src/CodeIndex/ src/CodeIndex/", dockerfile);
+        Assert.Contains("ARG CDIDX_BUILD_COMMIT=unknown", dockerfile);
+        Assert.Contains("-p:CdidxBuildCommitOverride=\"$CDIDX_BUILD_COMMIT\"", dockerfile);
+        Assert.Contains("-p:CdidxBuildDateOverride=\"$build_date\"", dockerfile);
+        Assert.Contains("-p:CdidxBuildDirtyOverride=\"$CDIDX_BUILD_DIRTY\"", dockerfile);
+        Assert.Contains(".git/", dockerignore);
+        Assert.Contains("tests/", dockerignore);
+        Assert.Contains("tools/", dockerignore);
+        Assert.Contains("docs/", dockerignore);
+        Assert.Contains("changelog.d/", dockerignore);
+        Assert.Contains("*.md", dockerignore);
+        Assert.Contains("!COMMERCIAL_LICENSE.md", dockerignore);
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
-        Assert.Contains("ENTRYPOINT [\"cdidx\"]", dockerfile);
+        Assert.Contains("ENTRYPOINT [\"/usr/local/bin/cdidx-entrypoint\"]", dockerfile);
+        Assert.Contains("CdidxBuildCommitOverride", project);
+        Assert.Contains("CdidxBuildDateOverride", project);
+        Assert.Contains("CdidxBuildDirtyOverride", project);
         Assert.Contains("Microsoft.NET.ILLink.Tasks\" Version=\"8.", project);
         Assert.DoesNotContain("Microsoft.NET.ILLink.Tasks\" Version=\"10.", project);
     }
@@ -559,12 +771,32 @@ public class ReleaseWorkflowTests
             WriteZipEntry(archive, entry.EntryName, entry.Content);
     }
 
-    private static void WriteZipEntry(ZipArchive archive, string entryName, string content)
+    private static void CreatePackageWithAttributedEntries(string packagePath, params (string EntryName, string Content, int ExternalAttributes)[] entries)
+    {
+        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
+        foreach (var entry in entries)
+            WriteZipEntry(archive, entry.EntryName, entry.Content, entry.ExternalAttributes);
+    }
+
+    private static void WriteZipEntry(ZipArchive archive, string entryName, string content, int? externalAttributes = null)
     {
         var entry = archive.CreateEntry(entryName);
+        if (externalAttributes.HasValue)
+            entry.ExternalAttributes = externalAttributes.Value;
+
         using var stream = entry.Open();
         using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(content.Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    private static int UnixRegularFileAttributes(int permissions)
+    {
+        return unchecked((int)((0x8000u | (uint)permissions) << 16));
+    }
+
+    private static int UnixSymlinkAttributes()
+    {
+        return unchecked((int)((0xA000u | 511u) << 16));
     }
 
     private static string ReadZipEntryText(ZipArchive archive, string entryName)

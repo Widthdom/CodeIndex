@@ -236,14 +236,9 @@ public class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         lock (TestConsoleLock.Gate)
         {
-            using var env = EnvironmentVariableScope.Capture(
-                SymbolExtractionWorker.DelayEnvironmentVariable,
-                SymbolExtractionWorker.CompletionPathEnvironmentVariable);
             try
             {
-                var completionPath = Path.Combine(projectRoot, "symbol-worker.done");
-                env.Set(SymbolExtractionWorker.DelayEnvironmentVariable, "500");
-                env.Set(SymbolExtractionWorker.CompletionPathEnvironmentVariable, completionPath);
+                SymbolExtractionWorker.DelayMillisecondsForTesting = 500;
 
                 using var worker = new SymbolExtractionWorkerClient();
                 var result = worker.Invoke(
@@ -256,7 +251,42 @@ public class IndexCommandRunnerTests
 
                 Assert.True(result.TimedOut);
                 Assert.False(result.Success);
-                AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
+            }
+            finally
+            {
+                SymbolExtractionWorker.DelayMillisecondsForTesting = null;
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS",
+                "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH");
+            try
+            {
+                var completionPath = Path.Combine(projectRoot, "symbol-worker.done");
+                env.Set("CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS", "500");
+                env.Set("CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH", completionPath);
+
+                using var worker = new SymbolExtractionWorkerClient();
+                var result = worker.Invoke(
+                    0,
+                    "csharp",
+                    "public class App { }\n",
+                    Path.Combine(projectRoot, "App.cs"),
+                    projectRoot,
+                    TimeSpan.FromSeconds(5));
+
+                Assert.True(result.Success, result.WorkerError);
+                Assert.False(result.TimedOut);
+                Assert.False(File.Exists(completionPath));
             }
             finally
             {
@@ -271,13 +301,12 @@ public class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         lock (TestConsoleLock.Gate)
         {
-            using var env = EnvironmentVariableScope.Capture(SymbolExtractionWorker.ConsoleStdoutEnvironmentVariable);
             try
             {
                 WriteSymbolWorkerPatternConfig(
                     projectRoot,
                     "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
-                env.Set(SymbolExtractionWorker.ConsoleStdoutEnvironmentVariable, "not-json-protocol");
+                SymbolExtractionWorker.ConsoleStdoutForTesting = "not-json-protocol";
                 var slowLine = new string('a', 10_000) + "!";
                 SymbolExtractionWorkerResult? result = null;
 
@@ -303,6 +332,7 @@ public class IndexCommandRunnerTests
             }
             finally
             {
+                SymbolExtractionWorker.ConsoleStdoutForTesting = null;
                 ExtractorPluginRegistry.ResetForTests();
                 DeleteDirectory(projectRoot);
             }
@@ -428,6 +458,38 @@ public class IndexCommandRunnerTests
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_BoundsInternalTestDelay_Issue3398()
+    {
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        try
+        {
+            SymbolExtractionWorker.DelayMillisecondsForTesting =
+                SymbolExtractionWorker.MaxDelayMillisecondsForTesting + 1;
+
+            var created = SymbolExtractionWorker.TryCreateStartInfo(
+                currentProcessPath,
+                runnerAssemblyPath: string.Empty,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal(
+                [
+                    SymbolExtractionWorker.CommandName,
+                    "--protocol-max-line-bytes",
+                    WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                    "--test-delay-ms",
+                    SymbolExtractionWorker.MaxDelayMillisecondsForTesting.ToString(CultureInfo.InvariantCulture),
+                ],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            SymbolExtractionWorker.DelayMillisecondsForTesting = null;
+        }
     }
 
     [Fact]
