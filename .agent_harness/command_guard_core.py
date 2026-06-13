@@ -1203,9 +1203,24 @@ def _candidate_script_paths_from_tokens(tokens: list[str], cwd: Path) -> list[Pa
     if first in {"bash", "sh", "zsh", "fish", "python", "python3", "ruby", "perl", "node", "deno", "php"}:
         if any(token in _INLINE_INTERPRETER_FLAGS for token in tokens[1:]):
             return result
-        for token in tokens[1:]:
-            if token.startswith("-"):
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if first in {"python", "python3"} and token == "-m":
+                return result
+            if first in {"python", "python3"} and token in {"-W", "-X"}:
+                index += 2
                 continue
+            if token == "--":
+                index += 1
+                if index >= len(tokens):
+                    return result
+                token = tokens[index]
+            elif token.startswith("-"):
+                index += 1
+                continue
+            if token.startswith("-"):
+                return result
             path = _token_path(token, cwd)
             if path is not None:
                 result.append(path)

@@ -375,6 +375,18 @@ class CommandGuardCoreTests(TestCase):
             self.assertEqual([script.resolve()], env_split)
             self.assertEqual([script.resolve()], env_argv0)
 
+    def test_candidate_script_paths_ignores_python_module_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            for command in (
+                "python -m unittest discover -s .agent_harness/tests",
+                "python3 -I -m unittest .agent_harness.tests.test_command_guard_core",
+                "env python3 -m pytest .agent_harness/tests",
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual([], core.candidate_script_paths(command, cwd=root))
+
     def test_check_script_file_denies_outside_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
