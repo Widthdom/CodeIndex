@@ -462,19 +462,65 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_StartInfo_UsesTrustedDotnetCandidateWhenCurrentProcessIsTestHost_Issue3455()
+    {
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
+        var trustedDotnetPath = CreateTemporaryDotnetHostPath();
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+        var originalCandidatesOverride = DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride;
+
+        try
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = [trustedDotnetPath];
+
+            var created = SymbolExtractionWorker.TryCreateStartInfo(
+                currentProcessPath,
+                runnerAssemblyPath,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal(trustedDotnetPath, startInfo.FileName);
+            Assert.Equal(
+                [
+                    runnerAssemblyPath,
+                    SymbolExtractionWorker.CommandName,
+                    "--protocol-max-line-bytes",
+                    WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                ],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = originalCandidatesOverride;
+            DeleteTemporaryDotnetHostPath(trustedDotnetPath);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_FailsWithoutTrustedDotnetHost_Issue3455()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
         var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+        var originalCandidatesOverride = DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride;
 
-        var created = SymbolExtractionWorker.TryCreateStartInfo(
-            currentProcessPath,
-            runnerAssemblyPath,
-            out _,
-            out var error);
+        try
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = [];
 
-        Assert.False(created);
-        Assert.Contains("trusted dotnet host path", error);
+            var created = SymbolExtractionWorker.TryCreateStartInfo(
+                currentProcessPath,
+                runnerAssemblyPath,
+                out _,
+                out var error);
+
+            Assert.False(created);
+            Assert.Contains("trusted dotnet host path", error);
+        }
+        finally
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = originalCandidatesOverride;
+        }
     }
 
     [Fact]
@@ -583,6 +629,49 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_UsesTrustedDotnetCandidateWhenCurrentProcessIsTestHost_Issue3455()
+    {
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
+        var trustedDotnetPath = CreateTemporaryDotnetHostPath();
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+        var originalCandidatesOverride = DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride;
+
+        try
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = [trustedDotnetPath];
+
+            var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+                hook,
+                currentProcessPath,
+                runnerAssemblyPath,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal(trustedDotnetPath, startInfo.FileName);
+            Assert.Equal(
+                [
+                    runnerAssemblyPath,
+                    PostExtractionHookCallbackWorker.CommandName,
+                    hook.AssemblyPath,
+                    hook.TypeName,
+                    "--protocol-max-line-bytes",
+                    WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                ],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = originalCandidatesOverride;
+            DeleteTemporaryDotnetHostPath(trustedDotnetPath);
+        }
+    }
+
+    [Fact]
     public void PostExtractionHookCallbackWorker_StartInfo_FailsWithoutTrustedDotnetHost_Issue3455()
     {
         var hook = new PostExtractionHookInfo(
@@ -591,16 +680,26 @@ public class IndexCommandRunnerTests
             "Demo.Hook");
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
         var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+        var originalCandidatesOverride = DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride;
 
-        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
-            hook,
-            currentProcessPath,
-            runnerAssemblyPath,
-            out _,
-            out var error);
+        try
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = [];
 
-        Assert.False(created);
-        Assert.Contains("trusted dotnet host path", error);
+            var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+                hook,
+                currentProcessPath,
+                runnerAssemblyPath,
+                out _,
+                out var error);
+
+            Assert.False(created);
+            Assert.Contains("trusted dotnet host path", error);
+        }
+        finally
+        {
+            DotnetHostPathResolver.TrustedDotnetHostCandidatesOverride = originalCandidatesOverride;
+        }
     }
 
     [Fact]
