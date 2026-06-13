@@ -70,25 +70,7 @@ internal static class GitHubIssueReporter
     private static readonly HttpClient s_defaultHttpClient = CreateDefaultHttpClient();
 
     private static HttpClient CreateDefaultHttpClient()
-    {
-        var handler = new HttpClientHandler
-        {
-            UseProxy = true,
-            Proxy = HttpClient.DefaultProxy,
-            DefaultProxyCredentials = CredentialCache.DefaultCredentials,
-        };
-        var client = new HttpClient(handler)
-        {
-            Timeout = Timeout.InfiniteTimeSpan,
-            DefaultRequestHeaders =
-            {
-                { "User-Agent", "cdidx" },
-                { "Accept", "application/vnd.github+json" },
-                { "X-GitHub-Api-Version", "2022-11-28" },
-            }
-        };
-        return client;
-    }
+        => GitHubHttpClientFactory.CreateDefaultHttpClient(Timeout.InfiniteTimeSpan);
 
     // Test seam: when set, replaces the default HttpClient so tests can
     // mock GitHub responses without hitting the network. Production code

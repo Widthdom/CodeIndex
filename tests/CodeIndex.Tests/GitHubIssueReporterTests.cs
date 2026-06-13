@@ -24,7 +24,8 @@ public class GitHubIssueReporterTests : IDisposable
     private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture(
         "CDIDX_GITHUB_TOKEN",
         "GITHUB_TOKEN",
-        "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS");
+        "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS",
+        GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable);
 
     [Fact]
     public void ResolveToken_NeitherSet_ReturnsNull()
@@ -107,6 +108,22 @@ public class GitHubIssueReporterTests : IDisposable
         _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", tooLarge.ToString(CultureInfo.InvariantCulture));
 
         Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("0", false)]
+    [InlineData("false", false)]
+    [InlineData("1", true)]
+    [InlineData("true", true)]
+    [InlineData(" yes ", true)]
+    [InlineData("yes", true)]
+    public void ShouldUseDefaultProxyCredentials_IsExplicitOptIn_Issue3369(string? value, bool expected)
+    {
+        _env.Set(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, value);
+
+        Assert.Equal(expected, GitHubHttpClientFactory.ShouldUseDefaultProxyCredentials());
     }
 
     // --- ScrubInlineCode tests / ScrubInlineCode テスト ---

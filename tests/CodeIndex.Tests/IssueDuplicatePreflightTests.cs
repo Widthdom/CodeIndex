@@ -8,7 +8,10 @@ namespace CodeIndex.Tests;
 public sealed class IssueDuplicatePreflightTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN", "GITHUB_TOKEN");
+    private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture(
+        "CDIDX_GITHUB_TOKEN",
+        "GITHUB_TOKEN",
+        GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable);
 
     public IssueDuplicatePreflightTests()
     {
