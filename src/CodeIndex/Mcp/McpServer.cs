@@ -2211,6 +2211,10 @@ public partial class McpServer : IDisposable
             CreatePromptDefinition("summarize_file", "Summarize the API surface and responsibilities of an indexed file.", "path", "Indexed file path to summarize."),
             CreatePromptDefinition("find_unused", "Find likely unused symbols in an optional language or path scope.", "scope", "Optional language, module, or path scope."),
             CreatePromptDefinition("impact_of_changing", "Plan impact analysis for changing a symbol.", "symbol", "Symbol name to analyze."),
+            CreatePromptDefinition("investigate_before_edit", "Investigate relevant code before making edits.", "topic", "Optional feature, symbol, file, or behavior to investigate."),
+            CreatePromptDefinition("find_existing_pattern", "Find existing implementation and test patterns before adding code.", "topic", "Optional API, behavior, module, or feature pattern to search for."),
+            CreatePromptDefinition("safe_symbol_change", "Plan a safe symbol rename or behavior change using graph-aware tools.", "symbol", "Symbol or behavior being changed."),
+            CreatePromptDefinition("debug_failure", "Debug a failing build, test, or runtime error using indexed evidence.", "failure", "Optional error text, test name, or failing behavior."),
         };
         return CreateSuccessResponse(true, id, new JsonObject { ["prompts"] = prompts });
     }
@@ -2275,6 +2279,38 @@ public partial class McpServer : IDisposable
                     if (argumentError is not null)
                         return argumentError;
                     text = $"Use `impact_analysis` for `{symbol ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.";
+                    break;
+                }
+            case "investigate_before_edit":
+                {
+                    var topic = ReadArg("topic", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Before editing `{topic ?? "<topic>"}`, use `map` for orientation if needed, `search` for broad discovery, `symbols` or `definition` for declarations, `references` for usage and tests, and focused `excerpt` calls for only the relevant ranges.";
+                    break;
+                }
+            case "find_existing_pattern":
+                {
+                    var topic = ReadArg("topic", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Find existing patterns for `{topic ?? "<topic>"}` with `search` and `symbols`, inspect representative files with `outline`, then use focused `excerpt` ranges from implementation and tests before adding new code.";
+                    break;
+                }
+            case "safe_symbol_change":
+                {
+                    var symbol = ReadArg("symbol", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"For `{symbol ?? "<symbol>"}`, confirm identity with `definition` or `symbols exactName:true`, inspect `references`, `callers`, and `callees`, then read focused `excerpt` ranges for declarations, call sites, and tests before changing behavior or names.";
+                    break;
+                }
+            case "debug_failure":
+                {
+                    var failure = ReadArg("failure", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Debug `{failure ?? "<failure>"}` by searching exact error text with `search` or `exactSubstring`, finding related symbols with `definition` and `references`, checking callers/callees for the failing path, and reading focused `excerpt` ranges before proposing a fix.";
                     break;
                 }
             default:

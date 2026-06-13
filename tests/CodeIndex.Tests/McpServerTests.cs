@@ -578,6 +578,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("src/app.cs", suggestion["args"]!["path"]!.GetValue<string>());
         Assert.True(suggestion["args"]!["startLine"]!.GetValue<int>() >= 1);
         Assert.True(suggestion["args"]!["endLine"]!.GetValue<int>() >= suggestion["args"]!["startLine"]!.GetValue<int>());
+        Assert.Contains("excerpt", suggestion["suggested_action"]!.GetValue<string>());
+        Assert.Contains("definition", suggestion["suggested_action"]!.GetValue<string>());
     }
 
     [Fact]
@@ -601,6 +603,7 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("excerpt", suggestion["tool"]!.GetValue<string>());
         Assert.Equal("src/reference-hint.cs", suggestion["args"]!["path"]!.GetValue<string>());
+        Assert.Contains("callers", suggestion["suggested_action"]!.GetValue<string>());
     }
 
     [Fact]
@@ -615,6 +618,7 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("outline", suggestion["tool"]!.GetValue<string>());
         Assert.Equal("src/app.cs", suggestion["args"]!["path"]!.GetValue<string>());
+        Assert.Contains("outline", suggestion["suggested_action"]!.GetValue<string>());
     }
 
     [Fact]
@@ -630,6 +634,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("no_results", hint["reason"]!.GetValue<string>());
         Assert.Equal("symbols", hint["tool"]!.GetValue<string>());
         Assert.Equal("MissingSymbol", hint["args"]!["query"]!.GetValue<string>());
+        Assert.Contains("relax exactName/path/lang/kind filters", hint["suggested_action"]!.GetValue<string>());
+        Assert.Contains("search", hint["suggested_action"]!.GetValue<string>());
     }
 
     // --- Protocol tests / プロトコルテスト ---
@@ -1510,6 +1516,10 @@ public class McpServerTests : IDisposable
         Assert.Contains("summarize_file", names);
         Assert.Contains("find_unused", names);
         Assert.Contains("impact_of_changing", names);
+        Assert.Contains("investigate_before_edit", names);
+        Assert.Contains("find_existing_pattern", names);
+        Assert.Contains("safe_symbol_change", names);
+        Assert.Contains("debug_failure", names);
 
         var get = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"prompts/get","params":{"name":"impact_of_changing","arguments":{"symbol":"Run"}}}""")!;
         var getResponse = _server.HandleMessage(get)!;
@@ -1517,6 +1527,14 @@ public class McpServerTests : IDisposable
         Assert.Equal("user", message["role"]!.GetValue<string>());
         Assert.Contains("impact_analysis", message["content"]!["text"]!.GetValue<string>());
         Assert.Contains("Run", message["content"]!["text"]!.GetValue<string>());
+
+        var investigate = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"investigate_before_edit","arguments":{"topic":"Run"}}}""")!;
+        var investigateResponse = _server.HandleMessage(investigate)!;
+        var investigateText = investigateResponse["result"]!["messages"]!.AsArray().Single()!["content"]!["text"]!.GetValue<string>();
+        Assert.Contains("search", investigateText);
+        Assert.Contains("definition", investigateText);
+        Assert.Contains("references", investigateText);
+        Assert.Contains("excerpt", investigateText);
     }
 
     [Fact]
@@ -2168,6 +2186,14 @@ public class McpServerTests : IDisposable
         Assert.Contains("map", instructions!);
         Assert.Contains("analyze_symbol", instructions);
         Assert.Contains("search", instructions);
+        Assert.Contains("CodeIndex MCP tools", instructions);
+        Assert.Contains("grep/find/cat", instructions);
+        Assert.Contains("resources/read", instructions);
+        Assert.Contains("whole-file reads", instructions);
+        Assert.Contains("definition", instructions);
+        Assert.Contains("references", instructions);
+        Assert.Contains("callers/callees", instructions);
+        Assert.Contains("excerpt", instructions);
         // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
         Assert.Contains("index", instructions);
         Assert.Contains("backfill_fold", instructions);
@@ -4153,6 +4179,46 @@ public class McpServerTests : IDisposable
             foreach (var fragment in fragments)
                 Assert.Contains(fragment, description, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void ToolsList_NavigationDescriptionsExplainWhenAndNextStep()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var name in new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "excerpt", "find_in_file", "map", "outline" })
+        {
+            var description = tools.First(t => t!["name"]!.GetValue<string>() == name)!["description"]!.GetValue<string>();
+            Assert.Contains("Use this", description, StringComparison.Ordinal);
+            Assert.Contains("Prefer", description, StringComparison.Ordinal);
+        }
+
+        var searchDescription = tools.First(t => t!["name"]!.GetValue<string>() == "search")!["description"]!.GetValue<string>();
+        Assert.Contains("before shell grep", searchDescription, StringComparison.Ordinal);
+        Assert.Contains("common next step", searchDescription, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsList_CommonSchemaDescriptionsGuideDisambiguation()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchProperties = tools.First(t => t!["name"]!.GetValue<string>() == "search")!["inputSchema"]!["properties"]!;
+        Assert.Contains("identifiers", searchProperties["query"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("case-sensitive exact text identity", searchProperties["exactSubstring"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("partial tokens", searchProperties["prefix"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("narrow by module", searchProperties["path"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("production-code investigation", searchProperties["excludeTests"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("generated code", searchProperties["includeGenerated"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("large result sets", searchProperties["format"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+
+        var definitionProperties = tools.First(t => t!["name"]!.GetValue<string>() == "definition")!["inputSchema"]!["properties"]!;
+        Assert.Contains("symbol name must match exactly", definitionProperties["exactName"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("Alias of `exactName`", definitionProperties["exact"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]
