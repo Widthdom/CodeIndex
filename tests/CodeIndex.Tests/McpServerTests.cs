@@ -15185,6 +15185,24 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, transport.WriteCalls);
     }
 
+    [Fact]
+    public async Task DrainInFlightTasksAsync_CancelledTokenSkipsEofDelay_Issue3400()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var stopwatch = Stopwatch.StartNew();
+
+        await _server.DrainInFlightTasksAsync(
+            [pending.Task],
+            McpServer.DefaultEofDrainTimeout,
+            McpServer.DefaultEofPostCancelDrainTimeout,
+            cts.Token);
+
+        stopwatch.Stop();
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"EOF drain cancellation took {stopwatch.Elapsed}.");
+    }
+
     private sealed class QueuedFrameTransport : IMcpTransport
     {
         private readonly Queue<string?> _frames;
