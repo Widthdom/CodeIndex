@@ -240,6 +240,28 @@ Query commands that accept path filters (`search`, `definition`, `references`, `
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
+### Extractor performance contract
+
+Symbol and reference extractors run during `cdidx index`, so language-specific
+helpers must assume they will see generated files, very large methods, and
+thousands of declarations or references in one syntactic scope. Avoid helper
+shapes that rescan the same body, line range, or accumulated result list once
+per candidate. If scope or delimiter information is needed for many candidates,
+precompute the ranges once per file, function, or block and reuse that structure
+for the per-candidate lookup.
+
+Duplicate detection in hot extraction loops should use a `HashSet` or another
+constant-time structure keyed by the full emitted record identity. Do not add
+`List.Any(...)`, `List.Contains(...)`, nested regex scans, or repeated string
+joins to loops that can run once per local variable, parameter, call site, type
+reference, or pattern match in a large generated file.
+
+The C# value-receiver path is the reference example: local receiver scopes are
+derived from precomputed block spans for the containing function, and duplicate
+receiver records are tracked with a hash set. Regressions in this area should
+have a focused correctness test for the scoping rule and a large-fixture runaway
+guard that would fail before users see multi-hour indexing stalls.
+
 ### Extractor concurrency contract
 
 `SymbolExtractor` and `ReferenceExtractor` must be safe to call concurrently for different files or repeated calls on the same file content. Shared `Regex` instances and static lookup tables are initialized once by the CLR and treated as immutable after type initialization. Per-extraction state belongs in local variables, method parameters, caller-owned collections, or language-specific state objects created for that extraction call.
@@ -2435,6 +2457,24 @@ path filter を受け付ける query コマンド（`search`, `definition`, `ref
 `cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
+
+### 抽出器の性能契約
+
+symbol / reference extractor は `cdidx index` 中に実行されるため、言語別 helper は
+生成ファイル、非常に大きなメソッド、1 つの構文スコープ内に数千個の宣言や参照がある入力を
+前提にする。候補ごとに同じ本文、行範囲、蓄積済み結果リストを再走査する helper 形状は避ける。
+多数の候補に対して scope や delimiter 情報が必要な場合は、file / function / block 単位で
+範囲情報を一度だけ事前計算し、候補ごとの lookup でその構造を再利用する。
+
+hot な抽出ループでの重複検出には、出力 record の完全な identity を key にした `HashSet` などの
+定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、
+pattern match ごとに実行され得るループへ、`List.Any(...)`、`List.Contains(...)`、nested regex scan、
+繰り返しの string join を追加してはならない。
+
+C# の value receiver 経路を参照例とする。local receiver の scope は containing function 用に
+事前計算した block span から導出し、重複 receiver record は hash set で追跡する。この領域の
+regression には、scope rule の focused correctness test と、ユーザーが multi-hour indexing stall を
+見る前に失敗する大規模 fixture の runaway guard を追加する。
 
 ### 抽出器の並行実行契約
 

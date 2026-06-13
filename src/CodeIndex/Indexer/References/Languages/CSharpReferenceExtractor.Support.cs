@@ -465,13 +465,15 @@ public static partial class ReferenceExtractor
                 continue;
 
             var names = new List<CSharpFunctionValueReceiverNameRecord>();
+            var seenNames = new HashSet<CSharpFunctionValueReceiverNameRecord>();
             if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
                 var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
                 var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
+                var blockScopes = BuildCSharpBlockScopes(structuralLines, start, end);
                 var bodyText = string.Join("\n", structuralLines.Skip(start).Take(end - start + 1));
                 if (symbol.Kind == "function")
-                    AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue);
+                    AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
                 for (var i = start; i <= end; i++)
                 {
                     foreach (Match match in CSharpLocalValueNameRegex.Matches(structuralLines[i]))
@@ -480,8 +482,9 @@ public static partial class ReferenceExtractor
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
                             i + 1,
                             match.Index,
-                            FindInnermostCSharpBlockEndLine(structuralLines, start, end, i, match.Index),
-                            int.MaxValue);
+                            FindInnermostCSharpBlockEndLine(blockScopes, end + 1, i, match.Index),
+                            int.MaxValue,
+                            seenNames);
                     foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
                     {
                         var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
@@ -491,7 +494,8 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
                     {
@@ -509,7 +513,8 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                     foreach (Match match in CSharpDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
                     {
@@ -522,7 +527,8 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                     foreach (Match match in CSharpCaseDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
                     {
@@ -535,10 +541,11 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                     foreach (Match match in CSharpOutValueNameRegex.Matches(structuralLines[i]))
-                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue);
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
                     foreach (Match match in CSharpCatchValueNameRegex.Matches(structuralLines[i]))
                     {
                         var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
@@ -548,7 +555,8 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                     foreach (Match match in CSharpUsingStatementValueNameRegex.Matches(structuralLines[i]))
                     {
@@ -559,7 +567,8 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                     foreach (Match match in CSharpFixedValueNameRegex.Matches(structuralLines[i]))
                     {
@@ -570,16 +579,18 @@ public static partial class ReferenceExtractor
                             i + 1,
                             match.Index,
                             scopeEnd.Line,
-                            scopeEnd.Column);
+                            scopeEnd.Column,
+                            seenNames);
                     }
                 }
 
-                AddCSharpRecursivePatternValueReceiverNames(names, bodyText, structuralLines, start, end);
+                AddCSharpRecursivePatternValueReceiverNames(names, bodyText, structuralLines, start, end, seenNames);
                 AddCSharpLambdaParameterNames(
                     names,
                     bodyText,
                     start + 1,
-                    symbol.BodyEndLine.Value);
+                    symbol.BodyEndLine.Value,
+                    seenNames);
             }
 
             if (names.Count > 0)
@@ -1746,7 +1757,14 @@ public static partial class ReferenceExtractor
             || (lineNumber == record.ScopeEndLine && column < record.ScopeEndColumn);
     }
 
-    private static void AddCSharpParameterNames(List<CSharpFunctionValueReceiverNameRecord> names, string? signature, int scopeStartLine, int scopeStartColumn, int scopeEndLine, int scopeEndColumn)
+    private static void AddCSharpParameterNames(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        string? signature,
+        int scopeStartLine,
+        int scopeStartColumn,
+        int scopeEndLine,
+        int scopeEndColumn,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames = null)
     {
         if (string.IsNullOrWhiteSpace(signature))
             return;
@@ -1760,7 +1778,7 @@ public static partial class ReferenceExtractor
         foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
         {
             if (TryExtractTrailingCSharpParameterName(segment, out var name))
-                AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn);
+                AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn, seenNames);
         }
     }
 
@@ -1844,7 +1862,12 @@ public static partial class ReferenceExtractor
         return !string.IsNullOrWhiteSpace(name);
     }
 
-    private static void AddCSharpLambdaParameterNames(List<CSharpFunctionValueReceiverNameRecord> names, string bodyText, int startLineNumber, int scopeEndLine)
+    private static void AddCSharpLambdaParameterNames(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        string bodyText,
+        int startLineNumber,
+        int scopeEndLine,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames = null)
     {
         if (string.IsNullOrWhiteSpace(bodyText))
             return;
@@ -1857,7 +1880,7 @@ public static partial class ReferenceExtractor
                 break;
 
             var lambdaScopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, arrowIndex, startLineNumber, scopeEndLine);
-            AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber, lambdaScopeEnd);
+            AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber, lambdaScopeEnd, seenNames);
             searchIndex = arrowIndex + 2;
         }
     }
@@ -1867,7 +1890,8 @@ public static partial class ReferenceExtractor
         string bodyText,
         IReadOnlyList<string> structuralLines,
         int bodyStartIndex,
-        int bodyEndIndex)
+        int bodyEndIndex,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames = null)
     {
         if (string.IsNullOrWhiteSpace(bodyText))
             return;
@@ -1880,7 +1904,7 @@ public static partial class ReferenceExtractor
             if (pattern.ArrowIndex >= 0)
             {
                 var scopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, pattern.ArrowIndex, startLineNumber, bodyEndIndex + 1);
-                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column);
+                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column, seenNames);
                 continue;
             }
 
@@ -1889,14 +1913,14 @@ public static partial class ReferenceExtractor
                 if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, bodyEndIndex, declarationLineIndex, position.Column, out var scopeEnd))
                     continue;
 
-                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column);
+                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column, seenNames);
                 continue;
             }
 
             if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, bodyStartIndex, bodyEndIndex, declarationLineIndex, position.Column, out var declarationScopeEnd))
                 continue;
 
-            AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, declarationScopeEnd.Line, declarationScopeEnd.Column);
+            AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, declarationScopeEnd.Line, declarationScopeEnd.Column, seenNames);
         }
     }
 
