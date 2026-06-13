@@ -1202,7 +1202,7 @@ See [Exit codes](USER_GUIDE.md#exit-codes) in USER_GUIDE.
 
 ## Error code taxonomy
 
-Process exit codes are coarse (`0` success including valid zero-row queries, `1` usage, `2` not-found or strict zero-row query, `3` db, `4` feature-unavailable, `5` stale). Query commands return `0` for genuine zero-row results by default and reserve `2` for missing indexed data or callers that opt into `--strict-not-found`. Scripts, oncall runbooks, and AI agents that need to react to *which* failure happened — not just the bucket — should read the stable `Exxx_NAME` taxonomy emitted on every CLI / MCP error path. The user-facing table lives in [Error codes](USER_GUIDE.md#error-codes); this section captures the developer contract.
+Process exit codes are coarse (`0` success including valid zero-row queries, `1` usage, `2` not-found or strict zero-row query, `3` db, `4` feature-unavailable, `5` stale, `6` transient db, `7` invalid argument, `8` signal cancellation, `9` install/upgrade installer failure, `99` unhandled exception). Query commands return `0` for genuine zero-row results by default and reserve `2` for missing indexed data or callers that opt into `--strict-not-found`. Scripts, oncall runbooks, and AI agents that need to react to *which* failure happened — not just the bucket — should read the stable `Exxx_NAME` taxonomy emitted on every CLI / MCP error path. The user-facing table lives in [Error codes](USER_GUIDE.md#error-codes); this section captures the developer contract.
 
 **Where it surfaces**
 
@@ -3415,7 +3415,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 ## エラーコード taxonomy
 
-プロセス終了コード（`0` 成功、`1` 引数、`2` 未検出、`3` DB、`4` 機能未提供、`5` stale）は粗い分類です。スクリプト・オンコール runbook・AI エージェントが「どのバケットか」だけでなく「どの失敗か」で分岐したい場合は、CLI / MCP のすべてのエラー経路で発行される安定した `Exxx_NAME` taxonomy を読んでください。利用者向けの一覧は [エラーコード](USER_GUIDE.md#エラーコード) にあります。本節は開発者向けの契約をまとめます。
+プロセス終了コード（`0` 成功、`1` 引数、`2` 未検出、`3` DB、`4` 機能未提供、`5` stale、`6` 一時的 DB、`7` 不正な引数値、`8` シグナルキャンセル、`9` install / upgrade installer 失敗、`99` 想定外例外）は粗い分類です。スクリプト・オンコール runbook・AI エージェントが「どのバケットか」だけでなく「どの失敗か」で分岐したい場合は、CLI / MCP のすべてのエラー経路で発行される安定した `Exxx_NAME` taxonomy を読んでください。利用者向けの一覧は [エラーコード](USER_GUIDE.md#エラーコード) にあります。本節は開発者向けの契約をまとめます。
 
 **どこに出るか**
 
