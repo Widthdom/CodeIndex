@@ -3521,13 +3521,19 @@ internal static class ProgramRunner
         try
         {
             var waitTask = process.WaitForExitAsync(cancellationToken);
-            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout));
-            if (Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult() == waitTask)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
+            var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
+            if (completedTask == waitTask)
             {
+                timeoutCts.Cancel();
                 waitTask.GetAwaiter().GetResult();
                 outputDrainTask.GetAwaiter().GetResult();
                 return process.ExitCode;
             }
+
+            if (cancellationToken.IsCancellationRequested)
+                waitTask.GetAwaiter().GetResult();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
