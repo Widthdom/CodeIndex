@@ -133,6 +133,31 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(root.GetProperty("http_event_stream_limit").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
+        Assert.False(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
+        Assert.Equal(0, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
+    }
+
+    [Fact]
+    public async Task HttpTransport_Healthz_ReportsResponseCleanupFailures_Issue3452()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        harness.RecordResponseCleanupFailure("abort", "test abort cleanup", new IOException("abort cleanup failed"));
+        harness.RecordResponseCleanupFailure("close", "test close cleanup", new InvalidOperationException("close cleanup failed"));
+
+        using var client = new HttpClient();
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("degraded", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
+        Assert.Equal(1, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
+        Assert.Equal("test abort cleanup:io_error:IOException", root.GetProperty("http_response_abort_cleanup_last_error").GetString());
+        Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", root.GetProperty("http_response_close_cleanup_last_error").GetString());
     }
 
     [Fact]
@@ -1163,6 +1188,9 @@ public class HttpMcpTransportTests : IDisposable
         public bool HasEventStreams => _transport.HasEventStreams;
 
         public int EventStreamCount => _transport.EventStreamCount;
+
+        public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
+            => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
         public static async Task<McpHttpHarness> StartAsync(
             string dbPath,
