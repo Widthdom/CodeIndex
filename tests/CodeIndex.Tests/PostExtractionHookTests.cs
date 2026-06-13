@@ -281,6 +281,65 @@ public class PostExtractionHookTests
     }
 
     [Fact]
+    public void DiscoverDefaultMetadata_ReportsAcceptedHooksDirectoryOverride_3415()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-override-accepted");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+
+                var snapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+
+                Assert.Empty(snapshot.Hooks);
+                Assert.Contains(
+                    snapshot.Diagnostics,
+                    diagnostic => diagnostic.AssemblyPath.EndsWith("hooks", StringComparison.Ordinal)
+                                  && diagnostic.Message.Contains("override accepted", StringComparison.Ordinal));
+                Assert.All(
+                    snapshot.Diagnostics,
+                    diagnostic => Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal));
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void DiscoverDefaultMetadata_RejectsMissingHooksDirectoryOverride_3415()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-override-missing");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "missing-hooks");
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+
+                var snapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+
+                Assert.Empty(snapshot.Hooks);
+                var diagnostic = Assert.Single(snapshot.Diagnostics);
+                Assert.EndsWith("missing-hooks", diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.Contains("override rejected", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("does not exist", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void Discover_CapsHookAssemblyCandidates()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-cap");

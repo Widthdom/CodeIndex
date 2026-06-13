@@ -150,7 +150,7 @@ public partial class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hook_metadata_3142");
         lock (TestConsoleLock.Gate)
         {
-            using var env = EnvironmentVariableScope.Capture("CDIDX_HOOKS_DIR");
+            using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -158,7 +158,7 @@ public partial class QueryCommandRunnerTests
                 Directory.CreateDirectory(hooksDir);
                 var hookPath = Path.Combine(hooksDir, "broken.dll");
                 File.WriteAllText(hookPath, "not a real assembly");
-                env.Set("CDIDX_HOOKS_DIR", hooksDir);
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
 
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                     ["--db", dbPath, "--json"],
@@ -186,7 +186,7 @@ public partial class QueryCommandRunnerTests
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
-                "CDIDX_HOOKS_DIR",
+                PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
                 PostExtractionHookRunner.DiscoveryLimitEnvironmentVariable);
             try
             {
@@ -196,7 +196,7 @@ public partial class QueryCommandRunnerTests
                 File.WriteAllText(Path.Combine(hooksDir, "a.dll"), "not a real assembly");
                 File.WriteAllText(Path.Combine(hooksDir, "b.dll"), "not a real assembly");
                 File.WriteAllText(Path.Combine(hooksDir, "c.dll"), "not a real assembly");
-                env.Set("CDIDX_HOOKS_DIR", hooksDir);
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
                 env.Set(PostExtractionHookRunner.DiscoveryLimitEnvironmentVariable, "2");
 
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -207,10 +207,11 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
                 Assert.Equal(2, document.RootElement.GetProperty("hooks").GetArrayLength());
-                var diagnostic = Assert.Single(document.RootElement.GetProperty("hook_diagnostics").EnumerateArray());
+                var diagnostic = Assert.Single(
+                    document.RootElement.GetProperty("hook_diagnostics").EnumerateArray(),
+                    item => item.GetProperty("message").GetString()!.Contains("candidate limit", StringComparison.Ordinal));
                 Assert.EndsWith("hooks", diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
                 Assert.DoesNotContain(projectRoot, diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
-                Assert.Contains("candidate limit", diagnostic.GetProperty("message").GetString(), StringComparison.Ordinal);
             }
             finally
             {

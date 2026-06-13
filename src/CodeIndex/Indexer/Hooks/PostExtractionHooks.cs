@@ -32,6 +32,7 @@ public sealed record PostExtractionHookDiscoverySnapshot(
 
 public sealed class PostExtractionHookRunner : IDisposable
 {
+    public const string HooksDirectoryEnvironmentVariable = "CDIDX_HOOKS_DIR";
     public const string CallbackBudgetEnvironmentVariable = "CDIDX_HOOK_CALLBACK_BUDGET_MS";
     public const string DiscoveryLimitEnvironmentVariable = "CDIDX_HOOK_DISCOVERY_MAX_DLLS";
     public const string DiscoveryMaxBytesEnvironmentVariable = "CDIDX_HOOK_DISCOVERY_MAX_BYTES";
@@ -55,15 +56,27 @@ public sealed class PostExtractionHookRunner : IDisposable
     }
 
     public static PostExtractionHookRunner DiscoverDefault(long? maxFileSizeBytes = null)
-        => Discover(GetDefaultHooksDirectory(), maxFileSizeBytes);
+    {
+        var resolution = ResolveDefaultHooksDirectory(includeAcceptedOverrideDiagnostic: false);
+        return Discover(resolution.Directory, maxFileSizeBytes, resolution.Diagnostics);
+    }
 
     public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
-        => DiscoverMetadata(GetDefaultHooksDirectory());
+    {
+        var resolution = ResolveDefaultHooksDirectory(includeAcceptedOverrideDiagnostic: true);
+        return DiscoverMetadata(resolution.Directory, resolution.Diagnostics);
+    }
 
     public static PostExtractionHookDiscoverySnapshot DiscoverMetadata(string? hooksDirectory)
+        => DiscoverMetadata(hooksDirectory, []);
+
+    private static PostExtractionHookDiscoverySnapshot DiscoverMetadata(
+        string? hooksDirectory,
+        IReadOnlyList<PostExtractionHookDiagnostic> initialDiagnostics)
     {
         var loaded = new List<LoadedPostExtractionHook>();
         var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        runner.EnqueueDiagnostics(initialDiagnostics);
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget);
 
@@ -82,9 +95,16 @@ public sealed class PostExtractionHookRunner : IDisposable
     }
 
     public static PostExtractionHookRunner Discover(string? hooksDirectory, long? maxFileSizeBytes = null)
+        => Discover(hooksDirectory, maxFileSizeBytes, []);
+
+    private static PostExtractionHookRunner Discover(
+        string? hooksDirectory,
+        long? maxFileSizeBytes,
+        IReadOnlyList<PostExtractionHookDiagnostic> initialDiagnostics)
     {
         var loaded = new List<LoadedPostExtractionHook>();
         var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        runner.EnqueueDiagnostics(initialDiagnostics);
         var maxProtocolLineBytes = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
 
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
@@ -380,12 +400,13 @@ public sealed class PostExtractionHookRunner : IDisposable
         string? callback = null,
         long? durationMs = null)
     {
-        diagnostics.Enqueue(new PostExtractionHookDiagnostic(
-            DiagnosticSanitizer.ForPath(assemblyPath),
-            DiagnosticSanitizer.ForOptionalLabel(typeName),
-            DiagnosticSanitizer.ForMessage(message),
-            DiagnosticSanitizer.ForOptionalLabel(callback),
-            durationMs));
+        diagnostics.Enqueue(CreateDiagnostic(assemblyPath, typeName, message, callback, durationMs));
+    }
+
+    private void EnqueueDiagnostics(IEnumerable<PostExtractionHookDiagnostic> items)
+    {
+        foreach (var item in items)
+            diagnostics.Enqueue(item);
     }
 
     private static TimeSpan ResolveCallbackBudget()
@@ -485,17 +506,119 @@ public sealed class PostExtractionHookRunner : IDisposable
             target.Add(item);
     }
 
-    private static string? GetDefaultHooksDirectory()
+    private static HookDirectoryResolution ResolveDefaultHooksDirectory(bool includeAcceptedOverrideDiagnostic)
     {
-        var overridePath = Environment.GetEnvironmentVariable("CDIDX_HOOKS_DIR");
+        var overridePath = Environment.GetEnvironmentVariable(HooksDirectoryEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(overridePath))
-            return overridePath;
+            return ResolveOverrideHooksDirectory(overridePath, includeAcceptedOverrideDiagnostic);
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return string.IsNullOrWhiteSpace(home)
-            ? null
-            : Path.Combine(home, ".config", "cdidx", "hooks");
+        return new HookDirectoryResolution(
+            string.IsNullOrWhiteSpace(home)
+                ? null
+                : Path.Combine(home, ".config", "cdidx", "hooks"),
+            []);
     }
+
+    private static HookDirectoryResolution ResolveOverrideHooksDirectory(
+        string overridePath,
+        bool includeAcceptedOverrideDiagnostic)
+    {
+        var diagnostics = new List<PostExtractionHookDiagnostic>();
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(overridePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            diagnostics.Add(CreateDiagnostic(
+                overridePath,
+                null,
+                "Hook directory override rejected: path could not be resolved."));
+            return new HookDirectoryResolution(null, diagnostics);
+        }
+
+        try
+        {
+            var directoryInfo = new DirectoryInfo(fullPath);
+            if (!directoryInfo.Exists)
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    fullPath,
+                    null,
+                    "Hook directory override rejected: directory does not exist."));
+                return new HookDirectoryResolution(null, diagnostics);
+            }
+
+            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0
+                || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    fullPath,
+                    null,
+                    "Hook directory override rejected: symbolic links and reparse points are not supported."));
+                return new HookDirectoryResolution(null, diagnostics);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            diagnostics.Add(CreateDiagnostic(
+                fullPath,
+                null,
+                "Hook directory override rejected: directory could not be inspected."));
+            return new HookDirectoryResolution(null, diagnostics);
+        }
+
+        AddUnixPermissionDiagnostic(fullPath, diagnostics);
+        if (includeAcceptedOverrideDiagnostic)
+        {
+            diagnostics.Add(CreateDiagnostic(
+                fullPath,
+                null,
+                "Hook directory override accepted: hook assemblies execute local extension code from this trusted directory."));
+        }
+
+        return new HookDirectoryResolution(fullPath, diagnostics);
+    }
+
+    private static void AddUnixPermissionDiagnostic(string fullPath, List<PostExtractionHookDiagnostic> diagnostics)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            var mode = File.GetUnixFileMode(fullPath);
+            if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    fullPath,
+                    null,
+                    "Hook directory override warning: directory is group- or world-writable; only trusted users should be able to modify hook assemblies."));
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            diagnostics.Add(CreateDiagnostic(
+                fullPath,
+                null,
+                "Hook directory override warning: directory permissions could not be inspected."));
+        }
+    }
+
+    private static PostExtractionHookDiagnostic CreateDiagnostic(
+        string assemblyPath,
+        string? typeName,
+        string message,
+        string? callback = null,
+        long? durationMs = null)
+        => new(
+            DiagnosticSanitizer.ForPath(assemblyPath),
+            DiagnosticSanitizer.ForOptionalLabel(typeName),
+            DiagnosticSanitizer.ForMessage(message),
+            DiagnosticSanitizer.ForOptionalLabel(callback),
+            durationMs);
 
     public void Dispose()
     {
@@ -525,4 +648,8 @@ public sealed class PostExtractionHookRunner : IDisposable
         PostExtractionHookInfo Info,
         AssemblyLoadContext? LoadContext,
         PostExtractionHookCallbackWorkerClient Worker);
+
+    private sealed record HookDirectoryResolution(
+        string? Directory,
+        IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics);
 }
