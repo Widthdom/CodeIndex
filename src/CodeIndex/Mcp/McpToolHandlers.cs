@@ -6830,7 +6830,7 @@ public partial class McpServer
             var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
             pendingPaths.Add(relativePath);
 
-            var detection = FileIndexer.TryDetectLanguage(absolutePath);
+            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
                 || detection.Language != "csharp")
             {

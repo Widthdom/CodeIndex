@@ -276,7 +276,7 @@ public static partial class IndexCommandRunner
             {
                 foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
                 {
-                    var detection = FileIndexer.TryDetectLanguage(filePath);
+                    var detection = indexer.TryDetectLanguageForIndexing(filePath);
                     if (detection.Status == FileIndexer.FileProbeStatus.Supported
                         && detection.Language == "csharp")
                     {
@@ -417,8 +417,8 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var indexability = FileIndexer.GetFileIndexability(absPath);
-                    var detection = FileIndexer.TryDetectLanguage(absPath);
+                    var indexability = indexer.GetFileIndexabilityForIndexing(absPath);
+                    var detection = indexer.TryDetectLanguageForIndexing(absPath);
                     if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
                     {
                         var message = $"{relPath}: skipped because it was deleted during indexing.";
@@ -565,7 +565,7 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var statReusableLanguage = TryDetectStatReusableLanguage(absPath);
+                    var statReusableLanguage = TryDetectStatReusableLanguage(indexer, absPath);
                     var statMatchedId = TryGetUnchangedFileIdFromStat(
                         writer,
                         projectRoot,

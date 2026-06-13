@@ -2003,6 +2003,12 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal(["a/b/c/foo.py"], files);
+            var result = indexer.ScanFilesDetailed();
+            Assert.DoesNotContain("file_symlink.py", result.DanglingSymlinks);
+            Assert.DoesNotContain(
+                result.Errors,
+                error => error.Path == "file_symlink.py"
+                    && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -2012,7 +2018,94 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void GetFileIndexability_RejectsFileSymlinkSoUpdateModeSkipsIt()
+    public void GetFileIndexability_DefaultPolicyRejectsFileSymlinkButFollowPoliciesAllowIt()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(externalDir);
+            var realFile = Path.Combine(tempDir, "real.py");
+            File.WriteAllText(realFile, "x = 1\n");
+            var externalFile = Path.Combine(externalDir, "external.py");
+            File.WriteAllText(externalFile, "x = 2\n");
+            var linkPath = Path.Combine(tempDir, "alias.py");
+            File.CreateSymbolicLink(linkPath, realFile);
+            var externalLinkPath = Path.Combine(tempDir, "external_alias.py");
+            File.CreateSymbolicLink(externalLinkPath, externalFile);
+
+            Assert.True(FileIndexer.CanIndexFile(realFile));
+            Assert.False(FileIndexer.CanIndexFile(linkPath));
+            Assert.Equal(
+                FileIndexer.FileProbeStatus.Supported,
+                FileIndexer.GetFileIndexability(linkPath, FileIndexer.SymlinkPolicy.Internal, tempDir));
+            Assert.Equal(
+                FileIndexer.FileProbeStatus.Supported,
+                FileIndexer.GetFileIndexability(linkPath, FileIndexer.SymlinkPolicy.All, tempDir));
+            Assert.Equal(
+                FileIndexer.FileProbeStatus.Unsupported,
+                FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.Internal, tempDir));
+            Assert.Equal(
+                FileIndexer.FileProbeStatus.Supported,
+                FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.All, tempDir));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksAll_IndexesExternalFileSymlink()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(externalDir);
+            var realFile = Path.Combine(externalDir, "real.py");
+            File.WriteAllText(realFile, "x = 1\n");
+            File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.All);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["alias.py"], files);
+            Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_IndexesInTreeFileSymlink()
     {
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
@@ -2020,20 +2113,28 @@ public class FileIndexerTests
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            var realFile = Path.Combine(tempDir, "real.py");
+            var skippedTargetDir = Path.Combine(tempDir, "node_modules");
+            Directory.CreateDirectory(skippedTargetDir);
+            var realFile = Path.Combine(skippedTargetDir, "real.py");
             File.WriteAllText(realFile, "x = 1\n");
-            // File symlink pointing at the same-tree real file. The Unix stat() path would follow this
-            // symlink and see it as a regular file, so GetFileIndexability must gate on the reparse-point
-            // check to keep --files / --commits update paths symlink-safe.
-            // 同ツリー内の実ファイルを指すファイル symlink。Unix の stat() は symlink を辿ってしまうため、
-            // GetFileIndexability は reparse-point ガードで弾かないと --files / --commits 経路で
-            // 素通りしてしまう。
-            var linkPath = Path.Combine(tempDir, "alias.py");
-            File.CreateSymbolicLink(linkPath, realFile);
+            File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
 
-            Assert.True(FileIndexer.CanIndexFile(realFile));
-            Assert.False(FileIndexer.CanIndexFile(linkPath));
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["alias.py"], files);
+            Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
+            Assert.False(result.HadErrors);
         }
         finally
         {
@@ -3891,6 +3992,57 @@ public class FileIndexerTests
         }
         finally
         {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_ReportsDirectorySymlinkPermissionFailure()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-permission-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var targetDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(targetDir);
+            File.WriteAllText(Path.Combine(targetDir, "target.py"), "print('target')\n");
+            var linkPath = Path.Combine(tempDir, "blocked-link");
+            Directory.CreateSymbolicLink(linkPath, targetDir);
+            FileIndexer.ResolveDirectoryLinkTargetForTesting = path =>
+            {
+                if (string.Equals(path, linkPath, StringComparison.Ordinal))
+                    throw new UnauthorizedAccessException("denied");
+                return new DirectoryInfo(path).ResolveLinkTarget(returnFinalTarget: true);
+            };
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Equal(["src/target.py"], result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList());
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "blocked-link"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("permissions", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain("blocked-link", result.DanglingSymlinks);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            FileIndexer.ResolveDirectoryLinkTargetForTesting = null;
             if (Directory.Exists(tempDir))
                 Directory.Delete(tempDir, true);
         }

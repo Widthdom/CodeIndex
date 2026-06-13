@@ -846,7 +846,7 @@ public static partial class IndexCommandRunner
         lang = string.Empty;
         error = null;
 
-        var indexability = FileIndexer.GetFileIndexability(absolutePath);
+        var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
         if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
         {
             error = "Could not probe file for indexability/language.";
@@ -856,7 +856,7 @@ public static partial class IndexCommandRunner
         if (indexability != FileIndexer.FileProbeStatus.Supported)
             return false;
 
-        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
         {
             error = "Could not probe file for indexability/language.";
@@ -1062,7 +1062,7 @@ public static partial class IndexCommandRunner
             if (!IsOutsideProjectRoot(relativePath))
                 pendingPaths.Add(relativePath);
 
-            var detection = FileIndexer.TryDetectLanguage(absolutePath);
+            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
                 || detection.Language != "csharp")
             {
@@ -1411,12 +1411,12 @@ public static partial class IndexCommandRunner
     private static bool IsCSharpIdentifierPart(char ch)
         => char.IsLetterOrDigit(ch) || ch == '_';
 
-    private static string? TryDetectStatReusableLanguage(string absolutePath)
+    private static string? TryDetectStatReusableLanguage(FileIndexer indexer, string absolutePath)
     {
         if (string.Equals(Path.GetExtension(absolutePath), ".h", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         return detection.Status == FileIndexer.FileProbeStatus.Supported
             ? detection.Language
             : null;

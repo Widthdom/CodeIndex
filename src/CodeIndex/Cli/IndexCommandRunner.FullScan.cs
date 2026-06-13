@@ -1462,7 +1462,7 @@ public static partial class IndexCommandRunner
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var languageCounts = files
-            .Select(static file => FileIndexer.TryDetectLanguage(file))
+            .Select(file => indexer.TryDetectLanguageForIndexing(file))
             .Where(static detection => detection.Status == FileIndexer.FileProbeStatus.Supported && detection.Language != null)
             .GroupBy(static detection => detection.Language!, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.Ordinal);
