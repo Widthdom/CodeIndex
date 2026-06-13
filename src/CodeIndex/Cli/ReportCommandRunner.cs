@@ -166,8 +166,14 @@ public static class ReportCommandRunner
         var redactions = ReportRedactionSummary.Empty;
         if (options.IncludeLog && options.LogLines > 0)
         {
-            var logText = BuildRecentLogTail(options.LogLines, options.IncludeArgs, out var linesIncluded, out redactions);
+            var logText = BuildRecentLogTail(
+                options.LogLines,
+                options.IncludeArgs,
+                out var linesIncluded,
+                out redactions,
+                out var logTailTruncated);
             bundle.LogLinesIncluded = linesIncluded;
+            bundle.LogTailTruncated = logTailTruncated;
             bundle.AddText("log/stderr-recent.log", logText);
         }
 
@@ -311,8 +317,17 @@ public static class ReportCommandRunner
         bool includeArgs,
         out int linesIncluded,
         out ReportRedactionSummary redactions)
+        => BuildRecentLogTail(maxLines, includeArgs, out linesIncluded, out redactions, out _);
+
+    internal static string BuildRecentLogTail(
+        int maxLines,
+        bool includeArgs,
+        out int linesIncluded,
+        out ReportRedactionSummary redactions,
+        out bool logTailTruncated)
     {
         linesIncluded = 0;
+        logTailTruncated = false;
         var redactionCounter = new ReportRedactionCounter();
         var logDir = GlobalToolLog.ResolveLogDirectoryForReport();
         if (string.IsNullOrWhiteSpace(logDir) || !Directory.Exists(logDir))
@@ -322,7 +337,9 @@ public static class ReportCommandRunner
         }
 
         var logFiles = SelectRecentLogFiles(
-            new DirectoryInfo(logDir).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly));
+            new DirectoryInfo(logDir).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly),
+            out var olderLogFilesOmitted);
+        logTailTruncated = olderLogFilesOmitted;
         if (logFiles.Count == 0)
         {
             redactions = redactionCounter.ToSummary();
@@ -333,16 +350,22 @@ public static class ReportCommandRunner
         foreach (var file in logFiles)
         {
             if (collected.Count >= maxLines)
+            {
+                logTailTruncated = true;
                 break;
-            IReadOnlyList<string> lines;
+            }
+            ReportLogTailReadResult result;
             try
             {
-                lines = ReadLogFileTailLines(file.FullName, maxLines - collected.Count);
+                result = ReadLogFileTailLinesResult(file.FullName, maxLines - collected.Count);
             }
             catch (IOException)
             {
                 continue;
             }
+            if (result.LinesTruncated || result.BytesTruncated)
+                logTailTruncated = true;
+            var lines = result.Lines;
             for (var i = lines.Count - 1; i >= 0 && collected.Count < maxLines; i--)
                 collected.AddFirst(lines[i]);
         }
@@ -412,7 +435,7 @@ public static class ReportCommandRunner
             log.Add("lifecycle_log_skipped_by_option");
         else if (bundle.LogLinesIncluded == 0)
             log.Add("lifecycle_log_unavailable_or_empty");
-        else
+        else if (bundle.LogTailTruncated)
             log.Add("older_log_lines_outside_tail_limit");
         if (!options.IncludeArgs)
             log.Add("literal_args");
@@ -595,9 +618,10 @@ public static class ReportCommandRunner
             degradedFields.Add(field);
     }
 
-    private static IReadOnlyList<FileInfo> SelectRecentLogFiles(IEnumerable<FileInfo> files)
+    private static IReadOnlyList<FileInfo> SelectRecentLogFiles(IEnumerable<FileInfo> files, out bool olderLogFilesOmitted)
     {
         var recent = new List<FileInfo>(MaxRecentLogFiles);
+        olderLogFilesOmitted = false;
         foreach (var file in files)
         {
             var insertAt = recent.FindIndex(
@@ -606,21 +630,29 @@ public static class ReportCommandRunner
             {
                 if (recent.Count < MaxRecentLogFiles)
                     recent.Add(file);
+                else
+                    olderLogFilesOmitted = true;
                 continue;
             }
 
             recent.Insert(insertAt, file);
             if (recent.Count > MaxRecentLogFiles)
+            {
+                olderLogFilesOmitted = true;
                 recent.RemoveAt(recent.Count - 1);
+            }
         }
 
         return recent;
     }
 
     internal static IReadOnlyList<string> ReadLogFileTailLines(string path, int maxLines)
+        => ReadLogFileTailLinesResult(path, maxLines).Lines;
+
+    private static ReportLogTailReadResult ReadLogFileTailLinesResult(string path, int maxLines)
     {
         if (maxLines <= 0)
-            return [];
+            return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: false);
 
         using var stream = File.OpenRead(path);
         var startOffset = Math.Max(0, stream.Length - MaxLogFileTailBytes);
@@ -636,11 +668,15 @@ public static class ReportCommandRunner
         {
             var firstNewline = text.IndexOf('\n', StringComparison.Ordinal);
             if (firstNewline < 0)
-                return [];
+                return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: true);
             text = text[(firstNewline + 1)..];
         }
 
-        return TakeLastLines(text, maxLines);
+        var lines = TakeLastLines(text, maxLines + 1);
+        var linesTruncated = lines.Count > maxLines;
+        if (linesTruncated)
+            lines = lines.Skip(1).ToArray();
+        return new ReportLogTailReadResult(lines, linesTruncated, startOffset > 0);
     }
 
     private static IReadOnlyList<string> TakeLastLines(string text, int maxLines)
@@ -798,12 +834,18 @@ internal sealed class ReportBundle
     public bool DbIncluded { get; set; }
     public string? DbPath { get; set; }
     public int LogLinesIncluded { get; set; }
+    public bool LogTailTruncated { get; set; }
 
     public void AddText(string name, string content) =>
         Files.Add((name, Encoding.UTF8.GetBytes(content)));
 }
 
 internal sealed record ReportSchemaTable(string Name, long RowCount, bool RowCountTruncated = false);
+
+internal sealed record ReportLogTailReadResult(
+    IReadOnlyList<string> Lines,
+    bool LinesTruncated,
+    bool BytesTruncated);
 
 internal sealed class ReportRedactionCounter
 {
