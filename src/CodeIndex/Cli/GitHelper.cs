@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -23,13 +24,36 @@ public enum GitHeadCommitState
     Error,
 }
 
-public sealed record GitHeadCommitResult(GitHeadCommitState State, string? Sha = null, string? Reason = null)
+public enum GitCommandFailureKind
+{
+    None,
+    TrustedGitUnavailable,
+    StartFailed,
+    ExitCode,
+    TimedOut,
+    Cancelled,
+    CaptureLimitExceeded,
+    CaptureFailed,
+    OutputCaptureIncomplete,
+    Exception,
+}
+
+public sealed record GitHeadCommitResult(
+    GitHeadCommitState State,
+    string? Sha = null,
+    string? Reason = null,
+    GitCommandFailureKind FailureKind = GitCommandFailureKind.None,
+    string? Diagnostic = null)
 {
     public static GitHeadCommitResult None { get; } = new(GitHeadCommitState.None);
     public static GitHeadCommitResult NotARepo { get; } = new(GitHeadCommitState.NotARepo);
     public static GitHeadCommitResult DetachedHead(string sha) => new(GitHeadCommitState.DetachedHead, sha);
     public static GitHeadCommitResult Resolved(string sha) => new(GitHeadCommitState.Resolved, sha);
-    public static GitHeadCommitResult Error(string reason) => new(GitHeadCommitState.Error, Reason: reason);
+    public static GitHeadCommitResult Error(
+        string reason,
+        GitCommandFailureKind failureKind = GitCommandFailureKind.Exception,
+        string? diagnostic = null)
+        => new(GitHeadCommitState.Error, Reason: reason, FailureKind: failureKind, Diagnostic: diagnostic);
 }
 
 /// <summary>
@@ -54,6 +78,7 @@ public static class GitHelper
     };
 
     internal const int MaxCapturedGitOutputChars = 1024 * 1024;
+    internal const int MaxGitFailureDiagnosticChars = 512;
     private const int GitCaptureReadBufferChars = 8192;
     private static readonly TimeSpan DefaultGitCommandTimeout = TimeSpan.FromSeconds(60);
     private static readonly AsyncLocal<TimeSpan?> GitCommandTimeoutOverride = new();
@@ -437,7 +462,7 @@ public static class GitHelper
 
         var headResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--verify", "HEAD^{commit}");
         if (headResult.StartError != null)
-            return GitHeadCommitResult.Error(headResult.StartError);
+            return GitHeadCommitResult.Error(headResult.StartError, headResult.FailureKind, headResult.Diagnostic);
 
         var sha = headResult.Output?.Trim();
         if (headResult.ExitCode != 0)
@@ -445,7 +470,7 @@ public static class GitHelper
             var reason = NormalizeGitError(headResult.Error);
             return IsMissingHeadError(reason)
                 ? GitHeadCommitResult.None
-                : GitHeadCommitResult.Error(reason);
+                : GitHeadCommitResult.Error(reason, headResult.FailureKind, headResult.Diagnostic);
         }
 
         if (string.IsNullOrWhiteSpace(sha))
@@ -453,9 +478,12 @@ public static class GitHelper
 
         var branchResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--abbrev-ref", "HEAD");
         if (branchResult.StartError != null)
-            return GitHeadCommitResult.Error(branchResult.StartError);
+            return GitHeadCommitResult.Error(branchResult.StartError, branchResult.FailureKind, branchResult.Diagnostic);
         if (branchResult.ExitCode != 0)
-            return GitHeadCommitResult.Error(NormalizeGitError(branchResult.Error));
+            return GitHeadCommitResult.Error(
+                NormalizeGitError(branchResult.Error),
+                branchResult.FailureKind,
+                branchResult.Diagnostic);
 
         var branch = branchResult.Output?.Trim();
         return string.Equals(branch, "HEAD", StringComparison.Ordinal)
@@ -713,7 +741,27 @@ public static class GitHelper
     private static string? TryRunGit(string projectRoot, CancellationToken cancellationToken, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides: null, cancellationToken, args);
 
-    private readonly record struct GitCommandResult(int? ExitCode, string? Output, string? Error, string? StartError);
+    internal readonly record struct GitCommandResult(
+        int? ExitCode,
+        string? Output,
+        string? Error,
+        GitCommandFailureKind FailureKind,
+        string? Diagnostic)
+    {
+        public string? StartError
+            => FailureKind is GitCommandFailureKind.TrustedGitUnavailable
+                or GitCommandFailureKind.StartFailed
+                or GitCommandFailureKind.Exception
+                ? Diagnostic
+                : null;
+    }
+
+    private readonly record struct GitProcessCaptureResult(
+        int? ExitCode,
+        string Output,
+        string Error,
+        GitCommandFailureKind FailureKind,
+        string? Diagnostic);
 
     private static string? TryRunGit(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides, CancellationToken.None, args);
@@ -771,7 +819,15 @@ public static class GitHelper
         {
             var psi = TryCreateGitStartInfo(projectRoot);
             if (psi == null)
-                return new GitCommandResult(null, null, null, TrustedGitUnavailableMessage);
+            {
+                var diagnostic = FormatGitDiagnostic(TrustedGitUnavailableMessage);
+                return new GitCommandResult(
+                    null,
+                    null,
+                    diagnostic,
+                    GitCommandFailureKind.TrustedGitUnavailable,
+                    diagnostic);
+            }
 
             foreach (var arg in args)
                 psi.ArgumentList.Add(arg);
@@ -787,10 +843,15 @@ public static class GitHelper
                 }
             }
 
-            var result = RunProcessCapturingOutput(psi, cancellationToken);
+            var result = RunProcessCapturingResult(psi, cancellationToken);
             return result == null
-                ? new GitCommandResult(null, null, null, "Failed to start git process / gitプロセスの起動に失敗")
-                : new GitCommandResult(result.Value.ExitCode, result.Value.Output, result.Value.Error, null);
+                ? new GitCommandResult(null, null, null, GitCommandFailureKind.StartFailed, "Failed to start git process / gitプロセスの起動に失敗")
+                : new GitCommandResult(
+                    result.Value.ExitCode,
+                    result.Value.Output,
+                    result.Value.Error,
+                    result.Value.FailureKind,
+                    result.Value.Diagnostic);
         }
         catch (OperationCanceledException)
         {
@@ -798,9 +859,17 @@ public static class GitHelper
         }
         catch (Exception ex)
         {
-            return new GitCommandResult(null, null, null, ex.Message);
+            var diagnostic = FormatGitDiagnostic($"git helper exception: {DiagnosticRedactor.ClassifyException(ex)}: {ex.Message}");
+            return new GitCommandResult(null, null, diagnostic, GitCommandFailureKind.Exception, diagnostic);
         }
     }
+
+    internal static GitCommandResult RunGitCapturingResultForTests(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default,
+        params string[] args)
+        => RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, cancellationToken, args);
 
     private static string NormalizeGitError(string? error)
     {
@@ -822,58 +891,117 @@ public static class GitHelper
         ProcessStartInfo psi,
         CancellationToken cancellationToken = default)
     {
+        var result = RunProcessCapturingResult(psi, cancellationToken);
+        if (result == null || result.Value.FailureKind == GitCommandFailureKind.StartFailed)
+            return null;
+
+        return (result.Value.ExitCode ?? GitProcessFailureExitCode, result.Value.Output, result.Value.Error);
+    }
+
+    private static GitProcessCaptureResult? RunProcessCapturingResult(
+        ProcessStartInfo psi,
+        CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        string? failureReason = null;
+        GitCommandFailureKind failureKind = GitCommandFailureKind.None;
+        string? failureDiagnostic = null;
         var failureLock = new object();
 
-        void MarkFailure(string reason)
+        void MarkFailure(GitCommandFailureKind kind, string diagnostic)
         {
             lock (failureLock)
             {
-                if (failureReason != null)
+                if (failureKind != GitCommandFailureKind.None)
                     return;
-                failureReason = reason;
+                failureKind = kind;
+                failureDiagnostic = FormatGitDiagnostic(diagnostic);
             }
             TryKillProcessTree(process);
         }
 
-        if (!process.Start())
-            return null;
+        try
+        {
+            if (!process.Start())
+            {
+                var diagnostic = FormatGitDiagnostic("git process did not start.");
+                return new GitProcessCaptureResult(
+                    null,
+                    string.Empty,
+                    diagnostic,
+                    GitCommandFailureKind.StartFailed,
+                    diagnostic);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            var diagnostic = FormatGitDiagnostic($"git process start failed: {DiagnosticRedactor.ClassifyException(ex)}: {ex.Message}");
+            return new GitProcessCaptureResult(
+                null,
+                string.Empty,
+                diagnostic,
+                GitCommandFailureKind.StartFailed,
+                diagnostic);
+        }
 
         var stdoutTask = Task.Run(() => ReadCapturedStream(process.StandardOutput, stdout, "stdout", MarkFailure));
         var stderrTask = Task.Run(() => ReadCapturedStream(process.StandardError, stderr, "stderr", MarkFailure));
         var exited = WaitForGitExit(process, GitCommandTimeout, cancellationToken, out var cancelled);
         if (!exited)
         {
-            MarkFailure(cancelled
+            MarkFailure(
+                cancelled ? GitCommandFailureKind.Cancelled : GitCommandFailureKind.TimedOut,
+                cancelled
                 ? "git command cancelled."
                 : $"git command timed out after {FormatDuration(GitCommandTimeout)}.");
             if (!process.WaitForExit(ToWaitMilliseconds(GitKillWaitTimeout)))
             {
                 if (cancelled)
                     cancellationToken.ThrowIfCancellationRequested();
-                return (GitProcessFailureExitCode, ReadCaptured(stdout), CombineCapturedError(ReadCaptured(stderr), failureReason!));
+                return new GitProcessCaptureResult(
+                    GitProcessFailureExitCode,
+                    ReadCaptured(stdout),
+                    CombineCapturedError(ReadCaptured(stderr), failureDiagnostic!),
+                    failureKind,
+                    failureDiagnostic);
             }
-            process.WaitForExit();
         }
         else
         {
-            process.WaitForExit();
+            _ = process.WaitForExit(0);
         }
         if (!WaitForCaptureReaders(stdoutTask, stderrTask))
-            MarkFailure("git command output capture did not finish.");
+            MarkFailure(GitCommandFailureKind.OutputCaptureIncomplete, "git command output capture did not finish.");
 
         var output = ReadCaptured(stdout);
         var error = ReadCaptured(stderr);
         if (cancelled)
             cancellationToken.ThrowIfCancellationRequested();
-        if (failureReason != null)
-            return (GitProcessFailureExitCode, output, CombineCapturedError(error, failureReason));
+        if (failureKind != GitCommandFailureKind.None)
+            return new GitProcessCaptureResult(
+                GitProcessFailureExitCode,
+                output,
+                CombineCapturedError(error, failureDiagnostic!),
+                failureKind,
+                failureDiagnostic);
 
-        return (process.ExitCode, output, error);
+        var exitCode = process.ExitCode;
+        if (exitCode != 0)
+        {
+            var diagnostic = FormatGitDiagnostic(string.IsNullOrWhiteSpace(error)
+                ? $"git command exited with {exitCode.ToString(CultureInfo.InvariantCulture)} and no stderr."
+                : error);
+            return new GitProcessCaptureResult(
+                exitCode,
+                output,
+                diagnostic,
+                GitCommandFailureKind.ExitCode,
+                diagnostic);
+        }
+
+        return new GitProcessCaptureResult(exitCode, output, error, GitCommandFailureKind.None, null);
     }
 
     private static bool WaitForGitExit(
@@ -929,7 +1057,7 @@ public static class GitHelper
         TextReader reader,
         StringBuilder builder,
         string streamName,
-        Action<string> markFailure)
+        Action<GitCommandFailureKind, string> markFailure)
     {
         var buffer = new char[GitCaptureReadBufferChars];
         try
@@ -945,7 +1073,9 @@ public static class GitHelper
         }
         catch (IOException ex)
         {
-            markFailure($"git command {streamName} read failed: {ex.Message}");
+            markFailure(
+                GitCommandFailureKind.CaptureFailed,
+                $"git command {streamName} read failed: {DiagnosticRedactor.ClassifyException(ex)}");
         }
         catch (ObjectDisposedException)
         {
@@ -957,14 +1087,14 @@ public static class GitHelper
         StringBuilder builder,
         ReadOnlySpan<char> data,
         string streamName,
-        Action<string> markFailure)
+        Action<GitCommandFailureKind, string> markFailure)
     {
         lock (builder)
         {
             var remaining = MaxCapturedGitOutputChars - builder.Length;
             if (remaining <= 0)
             {
-                markFailure(BuildCaptureLimitMessage(streamName));
+                markFailure(GitCommandFailureKind.CaptureLimitExceeded, BuildCaptureLimitMessage(streamName));
                 return false;
             }
 
@@ -977,17 +1107,22 @@ public static class GitHelper
             builder.Append(data[..Math.Min(data.Length, remaining)]);
         }
 
-        markFailure(BuildCaptureLimitMessage(streamName));
+        markFailure(GitCommandFailureKind.CaptureLimitExceeded, BuildCaptureLimitMessage(streamName));
         return false;
     }
 
     private static string BuildCaptureLimitMessage(string streamName)
         => $"git command captured {streamName} exceeded {MaxCapturedGitOutputChars.ToString(CultureInfo.InvariantCulture)} characters.";
 
+    private static string FormatGitDiagnostic(string diagnostic)
+        => DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(diagnostic, "[redacted]", redactPaths: true),
+            MaxGitFailureDiagnosticChars);
+
     private static string CombineCapturedError(string stderr, string diagnostic)
-        => string.IsNullOrWhiteSpace(stderr)
+        => FormatGitDiagnostic(string.IsNullOrWhiteSpace(stderr)
             ? diagnostic
-            : stderr.TrimEnd('\r', '\n') + "\n" + diagnostic;
+            : stderr.TrimEnd('\r', '\n') + "\n" + diagnostic);
 
     private static int ToWaitMilliseconds(TimeSpan timeout)
     {
