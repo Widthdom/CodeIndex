@@ -622,6 +622,7 @@ public static partial class IndexCommandRunner
         var files = discovery.Files;
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
+        AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var currentHeadForCheckpoint = discovery.CurrentHeadForCheckpoint;
         var scanCheckpointPath = discovery.ScanCheckpointPath;
         var checkpointedDirectories = discovery.CheckpointedDirectories;

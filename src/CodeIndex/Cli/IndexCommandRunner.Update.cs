@@ -120,6 +120,7 @@ public static partial class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
+        warnings += AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();
         var readinessDemoted = false;

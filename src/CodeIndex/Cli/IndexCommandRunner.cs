@@ -611,6 +611,34 @@ public static partial class IndexCommandRunner
         return values;
     }
 
+    private static int AddProjectMarkerFingerprintWarnings(
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints,
+        List<CliJsonMessage> warningList,
+        IndexCommandOptions options)
+    {
+        var added = 0;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fingerprint in currentFingerprints.Values)
+        {
+            foreach (var warning in fingerprint.Warnings)
+            {
+                var path = string.IsNullOrWhiteSpace(warning.Path)
+                    ? "<project_marker_fingerprint>"
+                    : warning.Path;
+                var key = $"{path}\0{warning.Message}";
+                if (!seen.Add(key))
+                    continue;
+
+                warningList.Add(new CliJsonMessage(path, warning.Message));
+                added++;
+                if (!options.Json && !options.Quiet)
+                    ConsoleUi.PrintWarning($"{path}: {warning.Message}");
+            }
+        }
+
+        return added;
+    }
+
     private static void RestampHotspotFamilyTrustForUpdate(
         DbWriter writer,
         IReadOnlyDictionary<string, string?> priorVersions,

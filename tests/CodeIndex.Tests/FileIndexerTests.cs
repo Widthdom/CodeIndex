@@ -838,6 +838,32 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_warning_{Guid.NewGuid():N}");
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw new IOException("blocked");
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 10, maxMarkerFiles: 100);
+
+            Assert.False(result.IsComplete);
+            var warning = Assert.Single(result.Warnings);
+            Assert.Equal(".", warning.Path);
+            Assert.Contains("Project marker discovery skipped this subtree", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void GetProjectMarkerFingerprint_IgnoredGeneratedTreeDoesNotExhaustDirectoryCap()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_ignored_cap_{Guid.NewGuid():N}");
@@ -4230,6 +4256,34 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_GitmodulesReadFailureReportsWarning_Issue3473()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var previousReader = FileIndexer.ReadGitmodulesLinesForTesting;
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitmodules"),
+                "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
+            FileIndexer.ReadGitmodulesLinesForTesting = _ => throw new IOException("blocked");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var result = indexer.ScanFilesDetailed();
+
+            var warning = Assert.Single(result.Errors.Where(static error => error.Path == ".gitmodules"));
+            Assert.False(warning.IsFatal);
+            Assert.Contains("Skipped .gitmodules because it could not be read", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            FileIndexer.ReadGitmodulesLinesForTesting = previousReader;
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
         }
     }
 
