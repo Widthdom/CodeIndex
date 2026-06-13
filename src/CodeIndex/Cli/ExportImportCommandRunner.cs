@@ -89,6 +89,7 @@ internal static class ExportImportCommandRunner
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+        var importTargetProjectRoot = ResolveImportTargetProjectRoot(fullDbPath);
         var dbDirectory = Path.GetDirectoryName(fullDbPath);
         if (string.IsNullOrWhiteSpace(dbDirectory))
             return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_db_directory_unresolved", $"could not resolve destination DB directory for `{dbPath}`.", "pass an explicit `--db <path>`.", ImportUsage);
@@ -148,7 +149,7 @@ internal static class ExportImportCommandRunner
             if (prunePaths)
             {
                 phase = PhasePrunePaths;
-                RewriteImportedProjectRoot(tempPath, Environment.CurrentDirectory);
+                RewriteImportedProjectRoot(tempPath, importTargetProjectRoot);
                 AddImportValidationPhase(validationPhases, PhasePrunePaths);
                 SqliteConnection.ClearAllPools();
             }
@@ -166,13 +167,17 @@ internal static class ExportImportCommandRunner
                             fullDbPath,
                             dryRun,
                             prunePaths,
+                            prunePaths ? importTargetProjectRoot : null,
                             ReplacementWouldBeAllowed: true,
                             validationPhases),
                         CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
                 }
                 else
                 {
-                    Console.WriteLine($"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}");
+                    Console.WriteLine(FormatImportSuccessMessage(
+                        $"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}",
+                        prunePaths,
+                        importTargetProjectRoot));
                 }
 
                 return CommandExitCodes.Success;
@@ -182,11 +187,16 @@ internal static class ExportImportCommandRunner
             ReplaceImportedDatabase(tempPath, fullDbPath);
             if (wantsJson)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new ImportResult("1", fullDbPath, prunePaths), jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new ImportResult("1", fullDbPath, prunePaths, prunePaths ? importTargetProjectRoot : null),
+                    jsonOptions));
             }
             else
             {
-                Console.WriteLine($"Imported CodeIndex database to {fullDbPath}");
+                Console.WriteLine(FormatImportSuccessMessage(
+                    $"Imported CodeIndex database to {fullDbPath}",
+                    prunePaths,
+                    importTargetProjectRoot));
             }
             return CommandExitCodes.Success;
         }
@@ -837,6 +847,27 @@ internal static class ExportImportCommandRunner
         cmd.ExecuteNonQuery();
     }
 
+    internal static string ResolveImportTargetProjectRoot(string fullDbPath)
+    {
+        var normalizedDbPath = Path.GetFullPath(fullDbPath);
+        var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
+        if (!string.IsNullOrWhiteSpace(dbDirectory)
+            && string.Equals(Path.GetFileName(normalizedDbPath), "codeindex.db", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFileName(dbDirectory), ".cdidx", StringComparison.OrdinalIgnoreCase))
+        {
+            var siblingRoot = Path.GetDirectoryName(dbDirectory);
+            if (!string.IsNullOrWhiteSpace(siblingRoot))
+                return Path.GetFullPath(siblingRoot);
+        }
+
+        return Path.GetFullPath(Environment.CurrentDirectory);
+    }
+
+    private static string FormatImportSuccessMessage(string prefix, bool prunePaths, string importTargetProjectRoot)
+        => prunePaths
+            ? $"{prefix}; pruned paths to project root {importTargetProjectRoot}"
+            : prefix;
+
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
     {
         using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
@@ -1092,8 +1123,17 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("db_path")] string DbPath,
         [property: JsonPropertyName("dry_run")] bool DryRun,
         [property: JsonPropertyName("pruned_paths")] bool PrunedPaths,
+        [property: JsonPropertyName("pruned_project_root")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? PrunedProjectRoot,
         [property: JsonPropertyName("replacement_would_be_allowed")] bool ReplacementWouldBeAllowed,
         [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases);
     internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
-    internal sealed record ImportResult(string ApiVersion, string DbPath, bool PrunedPaths);
+    internal sealed record ImportResult(
+        string ApiVersion,
+        string DbPath,
+        bool PrunedPaths,
+        [property: JsonPropertyName("pruned_project_root")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? PrunedProjectRoot);
 }

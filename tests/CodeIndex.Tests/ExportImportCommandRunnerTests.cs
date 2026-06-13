@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -345,6 +346,85 @@ public class ExportImportCommandRunnerTests
             if (cleanupPath != null && File.Exists(cleanupPath))
                 TestProjectHelper.DeleteDirectory(Path.GetDirectoryName(cleanupPath)!);
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImport_PrunePathsJsonUsesDestinationProjectRoot_Issue3459()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var sourceRoot = TestProjectHelper.CreateTempProject("import_prune_source");
+        var targetRoot = TestProjectHelper.CreateTempProject("import_prune_target");
+        var unrelatedCwd = TestProjectHelper.CreateTempProject("import_prune_cwd");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(sourceRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(sourceRoot, "codeindex.cdidx.zip");
+            var targetDbPath = Path.Combine(targetRoot, ".cdidx", "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var exportResult = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([archivePath, "--db", sourceDbPath], jsonOptions, "test"));
+            Assert.Equal(CommandExitCodes.Success, exportResult.ExitCode);
+
+            Directory.SetCurrentDirectory(unrelatedCwd);
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", targetDbPath, "--prune-paths", "--json"], jsonOptions));
+
+            var expectedRoot = Path.GetFullPath(targetRoot);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(Path.GetFullPath(targetDbPath), document.RootElement.GetProperty("db_path").GetString());
+            Assert.True(document.RootElement.GetProperty("pruned_paths").GetBoolean());
+            Assert.Equal(expectedRoot, document.RootElement.GetProperty("pruned_project_root").GetString());
+            Assert.Equal(expectedRoot, ReadMetaValue(targetDbPath, DbContext.IndexedProjectRootMetaKey));
+            Assert.NotEqual(Path.GetFullPath(unrelatedCwd), ReadMetaValue(targetDbPath, DbContext.IndexedProjectRootMetaKey));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(sourceRoot);
+            TestProjectHelper.DeleteDirectory(targetRoot);
+            TestProjectHelper.DeleteDirectory(unrelatedCwd);
+        }
+    }
+
+    [Fact]
+    public void RunImport_PrunePathsHumanOutputReportsDestinationProjectRoot_Issue3459()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var sourceRoot = TestProjectHelper.CreateTempProject("import_prune_human_source");
+        var targetRoot = TestProjectHelper.CreateTempProject("import_prune_human_target");
+        var unrelatedCwd = TestProjectHelper.CreateTempProject("import_prune_human_cwd");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(sourceRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(sourceRoot, "codeindex.cdidx.zip");
+            var targetDbPath = Path.Combine(targetRoot, ".cdidx", "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var exportResult = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([archivePath, "--db", sourceDbPath], jsonOptions, "test"));
+            Assert.Equal(CommandExitCodes.Success, exportResult.ExitCode);
+
+            Directory.SetCurrentDirectory(unrelatedCwd);
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", targetDbPath, "--prune-paths", "--dry-run"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains($"pruned paths to project root {Path.GetFullPath(targetRoot)}", stdout);
+            Assert.False(File.Exists(targetDbPath));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(sourceRoot);
+            TestProjectHelper.DeleteDirectory(targetRoot);
+            TestProjectHelper.DeleteDirectory(unrelatedCwd);
         }
     }
 
@@ -781,5 +861,15 @@ public class ExportImportCommandRunnerTests
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
+    }
+
+    private static string? ReadMetaValue(string dbPath, string key)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+        command.Parameters.AddWithValue("@key", key);
+        return command.ExecuteScalar() as string;
     }
 }
