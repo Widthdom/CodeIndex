@@ -118,7 +118,8 @@ public class GitHubIssueReporterTests : IDisposable
 
         Assert.NotNull(field);
         var client = Assert.IsType<HttpClient>(field.GetValue(null));
-        Assert.Equal(GitHubIssueReporter.DefaultTimeout, client.Timeout);
+        Assert.Equal(TimeSpan.FromSeconds(GitHubIssueReporter.MaxSubmitTimeoutSeconds), client.Timeout);
+        Assert.NotEqual(Timeout.InfiniteTimeSpan, client.Timeout);
     }
 
     [Theory]

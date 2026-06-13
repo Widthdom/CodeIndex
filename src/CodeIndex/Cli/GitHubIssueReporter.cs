@@ -70,7 +70,7 @@ internal static class GitHubIssueReporter
     private static readonly HttpClient s_defaultHttpClient = CreateDefaultHttpClient();
 
     private static HttpClient CreateDefaultHttpClient()
-        => GitHubHttpClientFactory.CreateDefaultHttpClient(DefaultTimeout);
+        => GitHubHttpClientFactory.CreateDefaultHttpClient(TimeSpan.FromSeconds(MaxSubmitTimeoutSeconds));
 
     // Test seam: when set, replaces the default HttpClient so tests can
     // mock GitHub responses without hitting the network. Production code
