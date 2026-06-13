@@ -1,5 +1,5 @@
 using System.Globalization;
-using System.Xml.Linq;
+using System.Xml;
 
 namespace CodeIndex.TestTelemetry;
 
@@ -60,8 +60,12 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new TelemetryException("Missing value for --top.");
 
-                if (!int.TryParse(args[++i], NumberStyles.None, CultureInfo.InvariantCulture, out top) || top <= 0)
-                    throw new TelemetryException("--top must be a positive integer.");
+                if (!int.TryParse(args[++i], NumberStyles.None, CultureInfo.InvariantCulture, out top) ||
+                    top <= 0 ||
+                    top > TrxTelemetry.MaxTop)
+                {
+                    throw new TelemetryException($"--top must be between 1 and {TrxTelemetry.MaxTop}.");
+                }
 
                 continue;
             }
@@ -77,10 +81,14 @@ public static class Program
 
 public static class TrxTelemetry
 {
+    public const int MaxTop = 100;
+    public const int MaxTrxFiles = 256;
+    public const long MaxTrxFileBytes = 16 * 1024 * 1024;
+
     public static TrxTelemetrySummary Load(string resultsDirectory, int top)
     {
-        if (top <= 0)
-            throw new TelemetryException("Top count must be positive.");
+        if (top <= 0 || top > MaxTop)
+            throw new TelemetryException($"Top count must be between 1 and {MaxTop}.");
 
         if (!Directory.Exists(resultsDirectory))
         {
@@ -97,19 +105,42 @@ public static class TrxTelemetry
                 Warnings: [$"Results directory not found: {resultsDirectory}"]);
         }
 
-        var trxFiles = Directory
-            .EnumerateFiles(resultsDirectory, "*.trx", SearchOption.AllDirectories)
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToList();
-
-        var tests = new List<TrxTestResult>();
         var warnings = new List<string>();
+        var trxFiles = EnumerateTrxFiles(resultsDirectory, warnings);
+        var slowest = new List<TrxTestResult>(Math.Min(top, 16));
+        var failures = new List<TrxTestResult>(Math.Min(top, 16));
+        var total = 0;
+        var passed = 0;
+        var failed = 0;
+        var skipped = 0;
 
         foreach (var path in trxFiles)
         {
+            if (!CanReadTrxFile(path, warnings))
+                continue;
+
             try
             {
-                tests.AddRange(ReadResults(path));
+                foreach (var result in ReadResults(path))
+                {
+                    total++;
+
+                    if (IsOutcome(result, "Passed"))
+                    {
+                        passed++;
+                    }
+                    else if (IsFailureOutcome(result))
+                    {
+                        failed++;
+                        AddTopResult(failures, result, top);
+                    }
+                    else if (IsOutcome(result, "NotExecuted") || IsOutcome(result, "Skipped"))
+                    {
+                        skipped++;
+                    }
+
+                    AddTopResult(slowest, result, top);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
             {
@@ -117,28 +148,12 @@ public static class TrxTelemetry
             }
         }
 
-        var passed = tests.Count(result => IsOutcome(result, "Passed"));
-        var failed = tests.Count(IsFailureOutcome);
-        var skipped = tests.Count(result => IsOutcome(result, "NotExecuted") || IsOutcome(result, "Skipped"));
-        var other = tests.Count - passed - failed - skipped;
-
-        var slowest = tests
-            .OrderByDescending(result => result.Duration)
-            .ThenBy(result => result.TestName, StringComparer.Ordinal)
-            .Take(top)
-            .ToList();
-
-        var failures = tests
-            .Where(IsFailureOutcome)
-            .OrderByDescending(result => result.Duration)
-            .ThenBy(result => result.TestName, StringComparer.Ordinal)
-            .Take(top)
-            .ToList();
+        var other = total - passed - failed - skipped;
 
         return new TrxTelemetrySummary(
             ResultsDirectory: resultsDirectory,
             TrxFileCount: trxFiles.Count,
-            Total: tests.Count,
+            Total: total,
             Passed: passed,
             Failed: failed,
             Skipped: skipped,
@@ -148,13 +163,64 @@ public static class TrxTelemetry
             Warnings: warnings);
     }
 
+    private static List<string> EnumerateTrxFiles(string resultsDirectory, List<string> warnings)
+    {
+        var trxFiles = new List<string>(MaxTrxFiles);
+
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(resultsDirectory, "*.trx", SearchOption.AllDirectories))
+            {
+                if (trxFiles.Count >= MaxTrxFiles)
+                {
+                    warnings.Add($"TRX file cap reached: using first {MaxTrxFiles} files.");
+                    break;
+                }
+
+                trxFiles.Add(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"Could not enumerate TRX files: {ex.Message}");
+        }
+
+        trxFiles.Sort(StringComparer.Ordinal);
+        return trxFiles;
+    }
+
+    private static bool CanReadTrxFile(string path, List<string> warnings)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            if (file.Length > MaxTrxFileBytes)
+            {
+                warnings.Add($"TRX file exceeds {MaxTrxFileBytes} byte cap: {path}");
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"Could not inspect {path}: {ex.Message}");
+            return false;
+        }
+    }
+
     private static IEnumerable<TrxTestResult> ReadResults(string path)
     {
-        var document = XDocument.Load(path, LoadOptions.None);
-        foreach (var element in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
+        using var stream = File.OpenRead(path);
+        using var reader = XmlReader.Create(stream, CreateXmlReaderSettings());
+
+        while (reader.Read())
         {
-            var testName = (string?)element.Attribute("testName");
-            var outcome = (string?)element.Attribute("outcome");
+            if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "UnitTestResult")
+                continue;
+
+            var testName = reader.GetAttribute("testName");
+            var outcome = reader.GetAttribute("outcome");
 
             if (string.IsNullOrWhiteSpace(testName) || string.IsNullOrWhiteSpace(outcome))
                 continue;
@@ -162,8 +228,35 @@ public static class TrxTelemetry
             yield return new TrxTestResult(
                 TestName: testName.Trim(),
                 Outcome: outcome.Trim(),
-                Duration: ParseDuration((string?)element.Attribute("duration")));
+                Duration: ParseDuration(reader.GetAttribute("duration")));
         }
+    }
+
+    private static XmlReaderSettings CreateXmlReaderSettings() => new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        IgnoreComments = true,
+        IgnoreProcessingInstructions = true,
+        MaxCharactersFromEntities = 0,
+        MaxCharactersInDocument = MaxTrxFileBytes,
+        XmlResolver = null
+    };
+
+    private static void AddTopResult(List<TrxTestResult> results, TrxTestResult result, int limit)
+    {
+        results.Add(result);
+        results.Sort(CompareByDurationDescendingThenName);
+
+        if (results.Count > limit)
+            results.RemoveAt(limit);
+    }
+
+    private static int CompareByDurationDescendingThenName(TrxTestResult left, TrxTestResult right)
+    {
+        var duration = right.Duration.CompareTo(left.Duration);
+        return duration != 0
+            ? duration
+            : string.Compare(left.TestName, right.TestName, StringComparison.Ordinal);
     }
 
     private static TimeSpan ParseDuration(string? value)
