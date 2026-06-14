@@ -187,7 +187,7 @@ public static class DegradationReasonCodes
                 "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
             CSharpMetadataTargetMissingColumn => new(
                 code,
-                "C# metadata attribute dependency edges are degraded because the symbols.is_metadata_target column is missing.",
+                "C# metadata attribute dependency edges are degraded because metadata-target storage columns are missing.",
                 "Run `cdidx index <projectPath> --rebuild` to recreate the index with metadata-target storage.",
                 "Run `cdidx index <projectPath>` after upgrading if the DB can be migrated in place."),
             CSharpMetadataTargetStampOutdated => new(

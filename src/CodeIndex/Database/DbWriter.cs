@@ -1207,7 +1207,7 @@ public class DbWriter
                     body_start_line, body_end_line, signature,
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
-                    is_metadata_target,
+                    is_metadata_target, metadata_target_source,
                     name_folded
                 )
                 VALUES ");
@@ -1226,7 +1226,7 @@ public class DbWriter
                     @bodyStartLine{suffix}, @bodyEndLine{suffix}, @signature{suffix},
                     @containerKind{suffix}, @containerName{suffix}, @containerQualifiedName{suffix}, @familyKey{suffix},
                     @visibility{suffix}, @returnType{suffix},
-                    @isMetadataTarget{suffix},
+                    @isMetadataTarget{suffix}, @metadataTargetSource{suffix},
                     @nameFolded{suffix}
                 )");
             cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = symbol.FileId;
@@ -1249,6 +1249,7 @@ public class DbWriter
             cmd.Parameters.Add($"@isMetadataTarget{suffix}", SqliteType.Integer).Value = symbol.IsMetadataTarget.HasValue
                 ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                 : (object)DBNull.Value;
+            cmd.Parameters.Add($"@metadataTargetSource{suffix}", SqliteType.Text).Value = (object?)symbol.MetadataTargetSource ?? DBNull.Value;
             cmd.Parameters.Add($"@nameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
         }
 
@@ -2355,16 +2356,14 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Recompute `symbols.is_metadata_target` for every C# class-like row by parsing the
-    /// signature column for inheritance clauses and running a fixed-point iteration that
-    /// promotes any class transitively deriving from `System.Attribute`. Out-of-repo bases
-    /// whose name ends with `Attribute` (the BCL convention) are also treated as targets so
-    /// `class FooAttribute : SomeBaseAttribute` is captured even when `SomeBaseAttribute`
-    /// itself is in the BCL. Non-target rows are written as 0 so reader switching does not
-    /// confuse "no resolver pass yet" with "resolver decided not a target". Issue #435.
-    /// C# class-like 行の `is_metadata_target` を signature の継承句から再計算する。
-    /// `System.Attribute` 由来は再帰的に target、リポ外で末尾が `Attribute` の base 型も
-    /// target 扱い。target でない行は明示的に 0 で書き、reader で「未解決」と区別する。
+    /// Recompute `symbols.is_metadata_target` for every C# class-like row from extractor-owned
+    /// direct facts plus a fixed-point resolver for transitive `System.Attribute` inheritance.
+    /// Out-of-repo bases whose name ends with `Attribute` (the BCL convention) remain a bounded
+    /// resolver fallback. Non-target rows are written as 0 so reader switching does not confuse
+    /// "no resolver pass yet" with "resolver decided not a target". Issue #3524.
+    /// C# class-like 行の `is_metadata_target` を extractor 由来の直接 fact と transitive
+    /// resolver から再計算する。リポ外で末尾が `Attribute` の base 型は bounded fallback として
+    /// target 扱いを残す。target でない行は明示的に 0 で書き、reader で「未解決」と区別する。
     /// </summary>
     public void ResolveCSharpMetadataTargets()
     {
@@ -2433,7 +2432,11 @@ public class DbWriter
         // 集約して、ファイルを跨ぐ拡張も拾う。Issue #435 codex review iter 5。
         var (perFileImports, globalImports) = LoadCSharpImportsByFile();
 
-        var targets = new HashSet<long>();
+        var extractorTargets = rows
+            .Where(row => row.ExtractorMetadataTarget)
+            .Select(row => row.Id)
+            .ToHashSet();
+        var targets = new HashSet<long>(extractorTargets);
         bool changed = true;
         while (changed)
         {
@@ -2455,48 +2458,77 @@ public class DbWriter
 
         using var txn = !IsInTransaction() ? BeginTransaction() : null;
         using var update = _conn.CreateCommand();
-        update.CommandText = "UPDATE symbols SET is_metadata_target = @flag WHERE id = @id";
+        bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
+        update.CommandText = hasMetadataTargetSource
+            ? "UPDATE symbols SET is_metadata_target = @flag, metadata_target_source = @source WHERE id = @id"
+            : "UPDATE symbols SET is_metadata_target = @flag WHERE id = @id";
         var pFlag = update.Parameters.Add("@flag", SqliteType.Integer);
+        var pSource = hasMetadataTargetSource ? update.Parameters.Add("@source", SqliteType.Text) : null;
         var pId = update.Parameters.Add("@id", SqliteType.Integer);
         update.Prepare();
         foreach (var row in rows)
         {
-            pFlag.Value = targets.Contains(row.Id) ? 1 : 0;
+            bool target = targets.Contains(row.Id);
+            pFlag.Value = target ? 1 : 0;
+            if (pSource != null)
+            {
+                pSource.Value = extractorTargets.Contains(row.Id)
+                    ? SymbolRecord.MetadataTargetSourceExtractor
+                    : target
+                        ? SymbolRecord.MetadataTargetSourceResolver
+                        : DBNull.Value;
+            }
             pId.Value = row.Id;
             update.ExecuteNonQuery();
         }
         txn?.Commit();
     }
 
-    private List<(long Id, long FileId, string Name, string? Signature, string? QualifiedName)> LoadCSharpClassRows()
+    private List<CSharpClassRow> LoadCSharpClassRows()
     {
-        var rows = new List<(long Id, long FileId, string Name, string? Signature, string? QualifiedName)>();
+        var rows = new List<CSharpClassRow>();
         if (!ColumnExists("symbols", "signature") || !ColumnExists("symbols", "is_metadata_target"))
             return rows;
         bool hasQualified = ColumnExists("symbols", "container_qualified_name");
+        bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = hasQualified
-            ? @"SELECT s.id, s.file_id, s.name, s.signature, s.container_qualified_name
+            ? $@"SELECT s.id, s.file_id, s.name, s.signature, s.container_qualified_name,
+                    s.is_metadata_target, {(hasMetadataTargetSource ? "s.metadata_target_source" : "NULL")}
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL"
-            : @"SELECT s.id, s.file_id, s.name, s.signature, NULL
+            : $@"SELECT s.id, s.file_id, s.name, s.signature, NULL,
+                    s.is_metadata_target, {(hasMetadataTargetSource ? "s.metadata_target_source" : "NULL")}
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            rows.Add((
+            bool extractorMetadataTarget = !reader.IsDBNull(5)
+                && reader.GetInt64(5) == 1
+                && !reader.IsDBNull(6)
+                && string.Equals(reader.GetString(6), SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
+            rows.Add(new CSharpClassRow(
                 reader.GetInt64(0),
                 reader.GetInt64(1),
                 reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4)));
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                extractorMetadataTarget));
         }
         return rows;
     }
+
+    private sealed record CSharpClassRow(
+        long Id,
+        long FileId,
+        string Name,
+        string? Signature,
+        string? QualifiedName,
+        bool ExtractorMetadataTarget);
 
     // Per-file import set for C# unqualified-base resolution. `Namespaces` lists each
     // `using Foo.Bar;` target so `class X : Base` can probe `Foo.Bar.Base` in the qualified

@@ -283,6 +283,41 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DirectAttributeClassesStampExtractorMetadataTarget_Issue3524()
+    {
+        var content = """
+            public sealed class BareAttribute : Attribute
+            {
+            }
+
+            public sealed class QualifiedAttribute : System.Attribute
+            {
+            }
+
+            public sealed class GlobalQualifiedAttribute : global::System.Attribute
+            {
+            }
+
+            public sealed class GenericConstraintOnly<T> where T : Attribute
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        foreach (var name in new[] { "BareAttribute", "QualifiedAttribute", "GlobalQualifiedAttribute" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == name));
+            Assert.True(symbol.IsMetadataTarget);
+            Assert.Equal(SymbolRecord.MetadataTargetSourceExtractor, symbol.MetadataTargetSource);
+        }
+
+        var constraintOnly = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "GenericConstraintOnly"));
+        Assert.Null(constraintOnly.IsMetadataTarget);
+        Assert.Null(constraintOnly.MetadataTargetSource);
+    }
+
+    [Fact]
     public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
     {
         var content = """""
