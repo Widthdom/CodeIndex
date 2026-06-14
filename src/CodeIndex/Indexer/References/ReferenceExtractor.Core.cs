@@ -216,6 +216,12 @@ public static partial class ReferenceExtractor
             : null;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
+        var sassPreparedCommentState = language == "sass"
+            ? new CssReferenceExtractor.SassLoudCommentState()
+            : null;
+        var sassOriginalCommentState = language == "sass"
+            ? new CssReferenceExtractor.SassLoudCommentState()
+            : null;
         var sassStylusPreparedInBlockComment = false;
         var sassStylusOriginalInBlockComment = false;
 
@@ -228,7 +234,12 @@ public static partial class ReferenceExtractor
             var originalLine = lines[i];
             var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
             var originalLineForLanguage = originalLine;
-            if (language is "sass" or "stylus")
+            if (language == "sass")
+            {
+                preparedLine = CssReferenceExtractor.MaskSassBlockCommentLine(preparedLine, sassPreparedCommentState!);
+                originalLineForLanguage = CssReferenceExtractor.MaskSassBlockCommentLine(originalLine, sassOriginalCommentState!);
+            }
+            else if (language == "stylus")
             {
                 preparedLine = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
                     preparedLine,

@@ -330,6 +330,90 @@ internal static class CssReferenceExtractor
         return names;
     }
 
+    internal sealed class SassLoudCommentState
+    {
+        public bool Active { get; set; }
+        public int Indent { get; set; }
+    }
+
+    internal static string MaskSassBlockCommentLine(string line, SassLoudCommentState state)
+    {
+        var chars = line.ToCharArray();
+        var lineIndent = CountLeadingWhitespace(line);
+        var isBlank = lineIndent == line.Length;
+        var cursor = 0;
+
+        if (state.Active)
+        {
+            var trimmed = isBlank ? "" : line[lineIndent..];
+            if (!isBlank
+                && lineIndent <= state.Indent
+                && !trimmed.StartsWith("*/", StringComparison.Ordinal))
+            {
+                state.Active = false;
+            }
+            else
+            {
+                var commentEnd = line.IndexOf("*/", StringComparison.Ordinal);
+                if (commentEnd < 0)
+                {
+                    for (var j = 0; j < chars.Length; j++)
+                        chars[j] = ' ';
+                    return new string(chars);
+                }
+
+                var stop = commentEnd + 2;
+                for (var j = 0; j < stop; j++)
+                    chars[j] = ' ';
+                cursor = stop;
+                state.Active = false;
+            }
+        }
+
+        var quote = '\0';
+        for (var i = cursor; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                var commentEnd = line.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                var stop = commentEnd >= 0 ? commentEnd + 2 : line.Length;
+                for (var j = i; j < stop; j++)
+                    chars[j] = ' ';
+
+                if (commentEnd < 0)
+                {
+                    state.Active = true;
+                    state.Indent = lineIndent;
+                    break;
+                }
+
+                i = stop - 1;
+            }
+        }
+
+        return new string(chars);
+    }
+
     internal static string MaskSassStylusBlockCommentLine(string line, ref bool inBlockComment)
     {
         var chars = line.ToCharArray();
@@ -381,6 +465,14 @@ internal static class CssReferenceExtractor
         }
 
         return new string(chars);
+    }
+
+    private static int CountLeadingWhitespace(string line)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        return index;
     }
 
     private static void EmitPreprocessorImportReferences(

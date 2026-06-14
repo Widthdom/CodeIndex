@@ -583,6 +583,7 @@ public partial class ReferenceExtractorTests
                     <SolidColorBrush x:Key="PrimaryBrush" Color="Tomato" />
                     <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}" />
                 </Window.Resources>
+                <Border BorderBrush="{DynamicResource ResourceKey={x:Static Member={x:Type local:Keys}.AccentBrush}}" />
                 <!-- <TextBlock Text="{Binding IgnoredCommentBinding}" /> -->
                 <Border Tag="{StaticResource PrimaryBrush}" /><!-- <TextBlock Text="{Binding IgnoredInlineCommentBinding}" /> -->
                 <!-- <TextBlock Text="{Binding IgnoredPrefixCommentBinding}" /> --><TextBlock Text="{Binding AfterInlineComment}" />
@@ -631,6 +632,9 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "PrimaryButtonStyle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "local:Keys.AccentBrush"
             && reference.ReferenceKind == "reference");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "PrimaryButtonStyle"

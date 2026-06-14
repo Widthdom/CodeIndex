@@ -163,11 +163,11 @@ internal static class XamlReferenceExtractor
             }
         }
 
-        foreach (Match match in XamlResourceReferenceRegex.Matches(originalLine))
+        foreach (var resource in EnumerateResourceMarkupExtensions(originalLine))
         {
-            var value = NormalizeNamedMarkupReference(match.Groups["content"].Value);
+            var value = NormalizeNamedMarkupReference(resource.Content);
             if (value.Length > 0)
-                AddReference(references, seen, fileId, value, match.Groups["content"].Index, "reference", context, lineNumber, container);
+                AddReference(references, seen, fileId, value, resource.ContentIndex, "reference", context, lineNumber, container);
         }
 
         foreach (Match match in XamlReferenceRegex.Matches(originalLine))
@@ -623,6 +623,16 @@ internal static class XamlReferenceExtractor
 
     private static IEnumerable<BindingMarkupExtension> EnumerateBindingMarkupExtensions(string line)
     {
+        return EnumerateMarkupExtensions(line, BindingMarkupKinds);
+    }
+
+    private static IEnumerable<BindingMarkupExtension> EnumerateResourceMarkupExtensions(string line)
+    {
+        return EnumerateMarkupExtensions(line, ResourceMarkupKinds);
+    }
+
+    private static IEnumerable<BindingMarkupExtension> EnumerateMarkupExtensions(string line, string[] kinds)
+    {
         var cursor = 0;
         while (cursor < line.Length)
         {
@@ -634,7 +644,7 @@ internal static class XamlReferenceExtractor
             while (kindStart < line.Length && char.IsWhiteSpace(line[kindStart]))
                 kindStart++;
 
-            if (!TryReadBindingKind(line, kindStart, out var kind, out var kindEnd))
+            if (!TryReadMarkupKind(line, kindStart, kinds, out var kind, out var kindEnd))
             {
                 cursor = openBrace + 1;
                 continue;
@@ -681,7 +691,7 @@ internal static class XamlReferenceExtractor
             while (kindStart < line.Length && char.IsWhiteSpace(line[kindStart]))
                 kindStart++;
 
-            if (!TryReadBindingKind(line, kindStart, out var kind, out var kindEnd))
+            if (!TryReadMarkupKind(line, kindStart, BindingMarkupKinds, out var kind, out var kindEnd))
             {
                 cursor = openBrace + 1;
                 continue;
@@ -718,9 +728,9 @@ internal static class XamlReferenceExtractor
         return false;
     }
 
-    private static bool TryReadBindingKind(string line, int kindStart, out string kind, out int kindEnd)
+    private static bool TryReadMarkupKind(string line, int kindStart, string[] kinds, out string kind, out int kindEnd)
     {
-        foreach (var candidate in BindingMarkupKinds)
+        foreach (var candidate in kinds)
         {
             if (kindStart + candidate.Length > line.Length)
                 continue;
@@ -751,6 +761,14 @@ internal static class XamlReferenceExtractor
         "x:Bind",
     ];
 
+    private static readonly string[] ResourceMarkupKinds =
+    [
+        "StaticResourceExtension",
+        "DynamicResourceExtension",
+        "StaticResource",
+        "DynamicResource",
+    ];
+
     private readonly record struct BindingMarkupExtension(string Kind, string Content, int ContentIndex);
     private readonly record struct BindingMarkupExtensionStart(string Kind, string InitialContent, int InitialContentIndex, int InitialBraceDepth);
 
@@ -760,9 +778,17 @@ internal static class XamlReferenceExtractor
         if (value.Length == 0)
             return "";
 
+        if (value.StartsWith("ResourceKey=", StringComparison.Ordinal))
+            value = value["ResourceKey=".Length..].Trim();
+        if (TryNormalizeXStaticMarkup(value, out var staticMember))
+            return staticMember;
+
         var equalsIndex = value.IndexOf('=');
         if (equalsIndex >= 0)
             value = value[(equalsIndex + 1)..].Trim();
+
+        if (TryNormalizeXStaticMarkup(value, out staticMember))
+            return staticMember;
 
         if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
             value = value["{x:Type ".Length..].TrimEnd('}', ' ');
@@ -780,22 +806,49 @@ internal static class XamlReferenceExtractor
         if (value.StartsWith("ResourceKey=", StringComparison.Ordinal))
             value = value["ResourceKey=".Length..].Trim();
 
-        if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
-            value = value["{x:Type ".Length..].TrimEnd('}', ' ');
-        if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
-            value = value["{x:TypeExtension ".Length..].TrimEnd('}', ' ');
-
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
         {
-            var typeStart = value.LastIndexOf(' ', memberTypeEnd);
-            var typeName = typeStart >= 0 ? value[(typeStart + 1)..memberTypeEnd] : "";
+            var typeExpression = value[..(memberTypeEnd + 1)].Trim();
+            var typeName = NormalizeXamlMarkupArgument(typeExpression);
             var memberName = value[(memberTypeEnd + 2)..].Trim();
             if (typeName.Length > 0 && memberName.Length > 0)
                 return $"{typeName}.{memberName}";
         }
 
+        if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
+            value = value["{x:Type ".Length..].TrimEnd('}', ' ');
+        if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
+            value = value["{x:TypeExtension ".Length..].TrimEnd('}', ' ');
+
         return value.Trim().TrimEnd('}', '/', '>');
+    }
+
+    private static bool TryNormalizeXStaticMarkup(string value, out string normalized)
+    {
+        normalized = "";
+        if (!value.StartsWith("{x:Static ", StringComparison.Ordinal))
+            return false;
+
+        value = value["{x:Static ".Length..].TrimEnd('}', ' ');
+        if (value.StartsWith("Member=", StringComparison.Ordinal))
+            value = value["Member=".Length..].Trim();
+
+        var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
+        if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
+        {
+            var typeExpression = value[..(memberTypeEnd + 1)].Trim();
+            var typeName = NormalizeXamlMarkupArgument(typeExpression);
+            var memberName = value[(memberTypeEnd + 2)..].Trim().TrimEnd('}');
+            if (typeName.Length > 0 && memberName.Length > 0)
+            {
+                normalized = $"{typeName}.{memberName}";
+                return true;
+            }
+        }
+
+        normalized = value.Trim().TrimEnd('}');
+        return normalized.Length > 0;
     }
 
     private static IEnumerable<string> SplitMarkupArguments(string content)
@@ -822,10 +875,18 @@ internal static class XamlReferenceExtractor
                 }
 
                 if (ch == '{')
+                {
                     depth++;
-                else if (ch == '}' && depth > 0)
+                    continue;
+                }
+
+                if (ch == '}' && depth > 0)
+                {
                     depth--;
-                else if (ch != ',' || depth != 0)
+                    continue;
+                }
+
+                if (ch != ',' || depth != 0)
                     continue;
             }
 

@@ -417,13 +417,16 @@ public partial class ReferenceExtractorTests
     public void Extract_Sass_IndentedVariablesMixinsAndImports_AreReferenced()
     {
         const string content = """
+            /* Loud comment
+              @use "loud-comment-theme"
+              +loud-commented(4px)
             @use "theme"
             $primary: #3366cc
             $spacing-base: 8px
             $accent: #ffcc00
             /*
-            @use "comment-block-theme"
-            +commented-rounded(4px)
+              @use "comment-block-theme"
+              +commented-rounded(4px)
             */
 
             =rounded($radius)
@@ -463,7 +466,13 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "comment-block-theme"
             && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "loud-comment-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "commented-rounded"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "loud-commented"
             && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "url"

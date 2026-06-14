@@ -2388,7 +2388,7 @@ public static partial class SymbolExtractor
             ? MaskCssScannerLines(lines)
             : null;
         var sassStylusScannerLines = lang is "sass" or "stylus"
-            ? MaskSassStylusBlockCommentLines(lines)
+            ? MaskSassStylusBlockCommentLines(lang, lines)
             : null;
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
@@ -8226,9 +8226,17 @@ public static partial class SymbolExtractor
         return !tagHeadConsumed;
     }
 
-    private static string[] MaskSassStylusBlockCommentLines(string[] originalLines)
+    private static string[] MaskSassStylusBlockCommentLines(string language, string[] originalLines)
     {
         var maskedLines = new string[originalLines.Length];
+        if (language == "sass")
+        {
+            var state = new CssReferenceExtractor.SassLoudCommentState();
+            for (var i = 0; i < originalLines.Length; i++)
+                maskedLines[i] = CssReferenceExtractor.MaskSassBlockCommentLine(originalLines[i], state);
+            return maskedLines;
+        }
+
         var inBlockComment = false;
         for (var i = 0; i < originalLines.Length; i++)
             maskedLines[i] = CssReferenceExtractor.MaskSassStylusBlockCommentLine(originalLines[i], ref inBlockComment);

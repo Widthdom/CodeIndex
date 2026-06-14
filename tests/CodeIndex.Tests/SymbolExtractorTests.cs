@@ -15083,13 +15083,17 @@ public partial class SymbolExtractorTests
     public void Extract_Sass_CapturesIndentedPreprocessorSymbols()
     {
         var content = """
+            /* Loud comment
+              @use "loud-commented-theme"
+              $loud-commented: #fff
+              =loud-commented-rounded()
             @use "theme"
             $primary: #3366cc
             /*
-            @use "commented-theme"
-            $commented: #fff
-            =commented-rounded()
-            .commented
+              @use "commented-theme"
+              $commented: #fff
+              =commented-rounded()
+              .commented
             */
 
             =rounded($radius)
@@ -15114,6 +15118,9 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spacing");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "%button-base");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".button");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"loud-commented-theme\"");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "loud-commented");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "loud-commented-rounded");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"commented-theme\"");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "commented");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "commented-rounded");
