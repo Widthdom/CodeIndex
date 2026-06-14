@@ -11,6 +11,57 @@
   "content": "namespace Demo;\n\npublic static class Lib\n{\n    public static int Add(int a, int b) =\u003E a \u002B b;\n}",
   "content_truncated": false,
   "content_truncation_reasons": [],
+  "semantic_token_coordinate_space": "source",
+  "content_line_spans": [
+    {
+      "content_line": 1,
+      "source_line": 1,
+      "content_start_column": 1,
+      "content_end_column": 16,
+      "source_start_column": 1,
+      "source_end_column": 16
+    },
+    {
+      "content_line": 2,
+      "source_line": 2,
+      "content_start_column": 1,
+      "content_end_column": 1,
+      "source_start_column": 1,
+      "source_end_column": 1
+    },
+    {
+      "content_line": 3,
+      "source_line": 3,
+      "content_start_column": 1,
+      "content_end_column": 24,
+      "source_start_column": 1,
+      "source_end_column": 24
+    },
+    {
+      "content_line": 4,
+      "source_line": 4,
+      "content_start_column": 1,
+      "content_end_column": 2,
+      "source_start_column": 1,
+      "source_end_column": 2
+    },
+    {
+      "content_line": 5,
+      "source_line": 5,
+      "content_start_column": 1,
+      "content_end_column": 50,
+      "source_start_column": 1,
+      "source_end_column": 50
+    },
+    {
+      "content_line": 6,
+      "source_line": 6,
+      "content_start_column": 1,
+      "content_end_column": 2,
+      "source_start_column": 1,
+      "source_end_column": 2
+    }
+  ],
   "semantic_tokens": [
     {
       "start_line": 1,

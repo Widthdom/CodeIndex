@@ -9776,6 +9776,48 @@ public class McpServerTests : IDisposable
         {
             ["content"] = "short\n" + new string('x', 200),
             ["contentTruncated"] = false,
+            ["contentLineSpans"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["contentLine"] = 1,
+                    ["sourceLine"] = 10,
+                    ["contentStartColumn"] = 1,
+                    ["contentEndColumn"] = 6,
+                    ["sourceStartColumn"] = 3,
+                    ["sourceEndColumn"] = 8,
+                },
+                new JsonObject
+                {
+                    ["contentLine"] = 2,
+                    ["sourceLine"] = 11,
+                    ["contentStartColumn"] = 1,
+                    ["contentEndColumn"] = 201,
+                    ["sourceStartColumn"] = 1,
+                    ["sourceEndColumn"] = 201,
+                },
+            },
+            ["semanticTokens"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["startLine"] = 10,
+                    ["startColumn"] = 3,
+                    ["endLine"] = 10,
+                    ["endColumn"] = 8,
+                    ["type"] = "variable",
+                    ["modifiers"] = new JsonArray(),
+                },
+                new JsonObject
+                {
+                    ["startLine"] = 11,
+                    ["startColumn"] = 1,
+                    ["endLine"] = 11,
+                    ["endColumn"] = 5,
+                    ["type"] = "variable",
+                    ["modifiers"] = new JsonArray(),
+                },
+            },
         };
 
         McpServer.ApplyExcerptOutputBudget(payload, 20);
@@ -9784,6 +9826,14 @@ public class McpServerTests : IDisposable
         Assert.Equal("output_size_cap", payload["truncation_reason"]!.GetValue<string>());
         Assert.Equal("short", payload["content"]!.GetValue<string>());
         Assert.True(payload["contentTruncated"]!.GetValue<bool>());
+        var spans = payload["contentLineSpans"]!.AsArray();
+        var span = Assert.Single(spans);
+        Assert.Equal(1, span!["contentLine"]!.GetValue<int>());
+        Assert.Equal(10, span["sourceLine"]!.GetValue<int>());
+        var tokens = payload["semanticTokens"]!.AsArray();
+        var token = Assert.Single(tokens);
+        Assert.Equal(10, token!["startLine"]!.GetValue<int>());
+        Assert.Equal(8, token["endColumn"]!.GetValue<int>());
     }
 
     [Fact]

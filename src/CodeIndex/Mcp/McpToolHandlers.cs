@@ -3564,19 +3564,105 @@ public partial class McpServer
             return;
 
         var builder = new StringBuilder();
+        var retainedLineCount = 0;
+        var firstRetainedLine = true;
         foreach (var line in content.Replace("\r\n", "\n").Split('\n'))
         {
-            var candidate = builder.Length == 0 ? line : builder.ToString() + "\n" + line;
+            var candidate = firstRetainedLine ? line : builder.ToString() + "\n" + line;
             if (Encoding.UTF8.GetByteCount(candidate) > maxOutputBytes)
                 break;
             builder.Clear();
             builder.Append(candidate);
+            retainedLineCount++;
+            firstRetainedLine = false;
         }
         payload[contentKey] = builder.ToString();
+        TrimExcerptCoordinatePayload(payload, retainedLineCount);
         payload["contentTruncated"] = true;
         payload["truncated"] = true;
         payload["truncation_reason"] = "output_size_cap";
     }
+
+    private static void TrimExcerptCoordinatePayload(JsonObject payload, int retainedLineCount)
+    {
+        var spansKey = FirstPayloadKey(payload, "contentLineSpans", "content_line_spans", "ContentLineSpans");
+        var retainedSpans = new List<ExcerptPayloadSpan>();
+        var hasSpanMapping = false;
+        if (spansKey is not null && payload[spansKey] is JsonArray spans)
+        {
+            hasSpanMapping = true;
+            var trimmedSpans = new JsonArray();
+            foreach (var spanNode in spans)
+            {
+                if (spanNode is not JsonObject span)
+                    continue;
+                var contentLine = GetPayloadInt(span, "contentLine", "content_line", "ContentLine");
+                if (!contentLine.HasValue || contentLine.Value > retainedLineCount)
+                    continue;
+
+                trimmedSpans.Add(span.DeepClone());
+                var sourceLine = GetPayloadInt(span, "sourceLine", "source_line", "SourceLine");
+                var sourceStartColumn = GetPayloadInt(span, "sourceStartColumn", "source_start_column", "SourceStartColumn");
+                var sourceEndColumn = GetPayloadInt(span, "sourceEndColumn", "source_end_column", "SourceEndColumn");
+                if (sourceLine.HasValue && sourceStartColumn.HasValue && sourceEndColumn.HasValue)
+                    retainedSpans.Add(new ExcerptPayloadSpan(sourceLine.Value, sourceStartColumn.Value, sourceEndColumn.Value));
+            }
+
+            payload[spansKey] = trimmedSpans;
+        }
+
+        var tokensKey = FirstPayloadKey(payload, "semanticTokens", "semantic_tokens", "SemanticTokens");
+        if (tokensKey is null || payload[tokensKey] is not JsonArray tokens)
+            return;
+        if (!hasSpanMapping)
+        {
+            if (retainedLineCount == 0)
+                payload[tokensKey] = new JsonArray();
+            return;
+        }
+
+        var trimmedTokens = new JsonArray();
+        if (retainedLineCount > 0 && retainedSpans.Count > 0)
+        {
+            foreach (var tokenNode in tokens)
+            {
+                if (tokenNode is not JsonObject token)
+                    continue;
+                var startLine = GetPayloadInt(token, "startLine", "start_line", "StartLine");
+                var endLine = GetPayloadInt(token, "endLine", "end_line", "EndLine");
+                var startColumn = GetPayloadInt(token, "startColumn", "start_column", "StartColumn");
+                var endColumn = GetPayloadInt(token, "endColumn", "end_column", "EndColumn");
+                if (!startLine.HasValue || !endLine.HasValue || !startColumn.HasValue || !endColumn.HasValue)
+                    continue;
+                if (retainedSpans.Any(span =>
+                    startLine.Value == span.SourceLine &&
+                    endLine.Value == span.SourceLine &&
+                    startColumn.Value >= span.SourceStartColumn &&
+                    endColumn.Value <= span.SourceEndColumn))
+                {
+                    trimmedTokens.Add(token.DeepClone());
+                }
+            }
+        }
+
+        payload[tokensKey] = trimmedTokens;
+    }
+
+    private static string? FirstPayloadKey(JsonObject payload, params string[] keys)
+        => keys.FirstOrDefault(payload.ContainsKey);
+
+    private static int? GetPayloadInt(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (obj[key] is JsonNode node)
+                return node.GetValue<int>();
+        }
+
+        return null;
+    }
+
+    private readonly record struct ExcerptPayloadSpan(int SourceLine, int SourceStartColumn, int SourceEndColumn);
 
     private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
     {
