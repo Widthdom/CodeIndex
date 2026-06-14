@@ -432,6 +432,8 @@ public partial class ReferenceExtractorTests
               content: '@use "string-theme"'
               color: $primary
               color: red // @use "comment-theme"
+              background: url("logo.png")
+              border-color: rgb(0, 0, 0)
               padding: $spacing-base * 2
               +rounded(4px)
             """;
@@ -453,6 +455,12 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "commented-rounded"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "rgb"
             && reference.ReferenceKind == "call");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"

@@ -304,10 +304,14 @@ public static partial class ReferenceExtractor
         {
             "all", "clean", "install", "build", "run", "help",
         },
-        // Stylus accepts CSS function syntax without separators; keep common CSS built-ins from
-        // flowing through the shared CallRegex after the language-specific extractor skips them.
-        // Stylus は CSS 関数構文を区切りなしで受け付けるため、言語専用 extractor で除外した
+        // Sass/Stylus accept CSS function syntax without separators; keep common CSS built-ins
+        // from flowing through the shared CallRegex after the language-specific extractors skip them.
+        // Sass/Stylus は CSS 関数構文を区切りなしで受け付けるため、言語専用 extractor で除外した
         // 代表的な CSS built-in を共有 CallRegex 側でも call として残さない。
+        ["sass"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "url", "var", "calc", "rgb", "rgba", "hsl", "hsla",
+        },
         ["stylus"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "url", "var", "calc", "rgb", "rgba", "hsl", "hsla",
