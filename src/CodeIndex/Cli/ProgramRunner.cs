@@ -46,11 +46,41 @@ internal static class ProgramRunner
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
     private static readonly HashSet<string> TopLevelValueOptionNames =
         CliFlagSchema.GetTopLevelValueOptionNames();
-    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
-    internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
-    internal static Action<string>? TestExtractorFileLengthCheckedForTesting { get; set; }
-    internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting { get; set; }
-    internal static Action<string>? DeleteUpgradeInstallerScriptForTesting { get; set; }
+    private static readonly AsyncLocal<TimeProvider?> ScopedTimeProviderForTesting = new();
+    private static readonly AsyncLocal<Func<HttpClient>?> ScopedUpgradeHttpClientFactoryForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedTestExtractorFileLengthCheckedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedDeleteInstallDirectoryWriteProbeForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedDeleteUpgradeInstallerScriptForTesting = new();
+
+    internal static TimeProvider TimeProvider
+    {
+        get => ScopedTimeProviderForTesting.Value ?? System.TimeProvider.System;
+        set => ScopedTimeProviderForTesting.Value = ReferenceEquals(value, System.TimeProvider.System) ? null : value;
+    }
+
+    internal static Func<HttpClient> UpgradeHttpClientFactory
+    {
+        get => ScopedUpgradeHttpClientFactoryForTesting.Value ?? CreateUpgradeHttpClient;
+        set => ScopedUpgradeHttpClientFactoryForTesting.Value = value == CreateUpgradeHttpClient ? null : value;
+    }
+
+    internal static Action<string>? TestExtractorFileLengthCheckedForTesting
+    {
+        get => ScopedTestExtractorFileLengthCheckedForTesting.Value;
+        set => ScopedTestExtractorFileLengthCheckedForTesting.Value = value;
+    }
+
+    internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting
+    {
+        get => ScopedDeleteInstallDirectoryWriteProbeForTesting.Value;
+        set => ScopedDeleteInstallDirectoryWriteProbeForTesting.Value = value;
+    }
+
+    internal static Action<string>? DeleteUpgradeInstallerScriptForTesting
+    {
+        get => ScopedDeleteUpgradeInstallerScriptForTesting.Value;
+        set => ScopedDeleteUpgradeInstallerScriptForTesting.Value = value;
+    }
 
     private sealed record CommandRunContext(
         JsonSerializerOptions JsonOptions,
@@ -73,7 +103,7 @@ internal static class ProgramRunner
         Action? beforeDispatchForTesting = null,
         CancellationToken cancellationToken = default)
     {
-        if (SymbolExtractionWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var symbolWorkerExitCode))
+        if (SymbolExtractionWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var symbolWorkerExitCode, cancellationToken: cancellationToken))
             return symbolWorkerExitCode;
 
         if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
@@ -86,7 +116,7 @@ internal static class ProgramRunner
         // validation errors so silent typos cannot quietly change behavior.
         // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
         // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
-        var configResult = CdidxConfigFile.LoadAndApply(configStartDirectory ?? Environment.CurrentDirectory);
+        var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
         if (configResult.Failed)
         {
             return CommandErrorWriter.Write(
@@ -95,12 +125,15 @@ internal static class ProgramRunner
                 $"fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
         }
 
-        if (!TryConsumeGlobalLogFlags(ref args, out var globalLogError))
+        using var configEnvironment = CdidxEnvironment.Push(configResult.Settings, configResult.Sources);
+
+        if (!TryConsumeGlobalLogFlags(ref args, out var globalLogEnvironment, out var globalLogError))
         {
             CommandErrorWriter.Write(StripErrorPrefix(globalLogError), "use --log-format <text|json>, --log-retain-count <N>, or --log-max-size-mb <N>.");
             return CommandExitCodes.InvalidArgument;
         }
 
+        using var globalLogFlagEnvironment = CdidxEnvironment.Push(globalLogEnvironment);
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
@@ -1046,8 +1079,13 @@ internal static class ProgramRunner
         return pretty;
     }
 
-    internal static bool TryConsumeGlobalLogFlags(ref string[] args, out string error)
+    internal static bool TryConsumeGlobalLogFlags(
+        ref string[] args,
+        out IReadOnlyDictionary<string, string> environment,
+        out string error)
     {
+        var overrides = new Dictionary<string, string>(StringComparer.Ordinal);
+        environment = overrides;
         error = string.Empty;
         var kept = new List<string>(args.Length);
         var passthrough = false;
@@ -1095,7 +1133,7 @@ internal static class ProgramRunner
                     error = "--log-format must be `text` or `json`.";
                     return false;
                 }
-                Environment.SetEnvironmentVariable(GlobalToolLog.LogFormatEnvironmentVariable, format);
+                overrides[GlobalToolLog.LogFormatEnvironmentVariable] = format;
                 continue;
             }
 
@@ -1106,7 +1144,7 @@ internal static class ProgramRunner
                     error = "--log-retain-count must be a positive integer.";
                     return false;
                 }
-                Environment.SetEnvironmentVariable(GlobalToolLog.LogRetainEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));
+                overrides[GlobalToolLog.LogRetainEnvironmentVariable] = parsed.ToString(CultureInfo.InvariantCulture);
                 continue;
             }
 
@@ -1118,7 +1156,7 @@ internal static class ProgramRunner
                     error = $"--log-max-size-mb must be an integer between 1 and {GlobalToolLog.MaxLogSizeMb}.";
                     return false;
                 }
-                Environment.SetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));
+                overrides[GlobalToolLog.LogMaxSizeMbEnvironmentVariable] = parsed.ToString(CultureInfo.InvariantCulture);
                 continue;
             }
 
@@ -2416,7 +2454,8 @@ internal static class ProgramRunner
         QueryCommandOptions QueryOptions,
         string Transport,
         string? ListenSpec,
-        AuditLogOptions AuditOptions);
+        AuditLogOptions AuditOptions,
+        IReadOnlyDictionary<string, string> EnvironmentOverrides);
 
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {
@@ -2424,6 +2463,7 @@ internal static class ProgramRunner
             return exitCode;
 
         AuditLogSink? auditLog = null;
+        using var mcpEnvironment = CdidxEnvironment.Push(runOptions.EnvironmentOverrides);
         try
         {
             if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
@@ -2478,7 +2518,7 @@ internal static class ProgramRunner
             return false;
         }
 
-        if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var thresholdError))
+        if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var suggestionDedupThreshold, out var thresholdError))
         {
             Console.Error.WriteLine(thresholdError);
             PrintMcpUsage();
@@ -2514,7 +2554,11 @@ internal static class ProgramRunner
         if (!TryResolveMcpTransport(transportSpec, listenSpec, out var transport, out exitCode))
             return false;
 
-        runOptions = new McpRunOptions(options, transport, listenSpec, auditOptions);
+        var environmentOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (suggestionDedupThreshold is not null)
+            environmentOverrides[SuggestionStore.DedupThresholdEnvironmentVariable] = suggestionDedupThreshold;
+
+        runOptions = new McpRunOptions(options, transport, listenSpec, auditOptions, environmentOverrides);
         return true;
     }
 
@@ -2791,8 +2835,9 @@ internal static class ProgramRunner
         Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
-    internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
+    internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string? thresholdValue, out string error)
     {
+        thresholdValue = null;
         error = string.Empty;
         if (args.Length == 0)
             return true;
@@ -2842,7 +2887,7 @@ internal static class ProgramRunner
                 return false;
             }
 
-            Environment.SetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable, value);
+            thresholdValue = value;
         }
 
         args = kept.ToArray();
@@ -3466,7 +3511,7 @@ internal static class ProgramRunner
     private static UpdateCheckResult CheckLatestPrerelease(string appVersion, CancellationToken cancellationToken)
     {
         if (UpdateChecker.IsDisabled())
-            return new UpdateCheckResult(appVersion, null, false, FromCache: false, Error: "disabled");
+            return UpdateChecker.CreateDisabledResult(appVersion);
 
         try
         {
@@ -3482,7 +3527,11 @@ internal static class ProgramRunner
                 tag,
                 UpdateChecker.IsNewerRelease(tag, appVersion),
                 FromCache: false,
-                Error: tag is null ? "prerelease_not_found" : null);
+                Error: tag is null ? "prerelease_not_found" : null,
+                ErrorCategory: tag is null ? "release_metadata" : null,
+                ErrorHint: tag is null
+                    ? "Retry later, omit --prerelease, or pass --version to use a known prerelease tag."
+                    : null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3490,7 +3539,15 @@ internal static class ProgramRunner
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(appVersion, null, false, FromCache: false, Error: ex.GetType().Name);
+            var failure = UpdateChecker.ClassifyFailure(ex);
+            return new UpdateCheckResult(
+                appVersion,
+                null,
+                false,
+                FromCache: false,
+                Error: failure.Code,
+                ErrorCategory: failure.Category,
+                ErrorHint: failure.Hint);
         }
     }
 
@@ -3650,6 +3707,8 @@ internal static class ProgramRunner
             selectionSource,
             includePrerelease,
             error ?? result.Error,
+            error is null ? result.ErrorCategory : null,
+            error is null ? result.ErrorHint : null,
             installAttempted,
             installExitCode,
             installExitCode is null ? null : installExitCode == CommandExitCodes.Success,

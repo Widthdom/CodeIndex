@@ -111,7 +111,7 @@ public static class DbDebug
 
     private static DebugMode ResolveMode()
     {
-        var raw = Environment.GetEnvironmentVariable("CDIDX_DEBUG");
+        var raw = CdidxEnvironment.GetEnvironmentVariable("CDIDX_DEBUG");
         if (string.IsNullOrWhiteSpace(raw))
             return DebugMode.Off;
         var value = raw.Trim();

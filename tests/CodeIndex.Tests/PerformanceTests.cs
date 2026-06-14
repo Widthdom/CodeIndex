@@ -14,11 +14,13 @@ namespace CodeIndex.Tests;
 public class PerformanceTests : IDisposable
 {
     private readonly string _dbPath;
+    private readonly string _projectRoot;
     private readonly DbContext _db;
 
     public PerformanceTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_{Guid.NewGuid():N}.db");
+        _projectRoot = TestProjectHelper.CreateTempProject("cdidx_perf_smoke");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
     }
@@ -113,6 +115,29 @@ public class PerformanceTests : IDisposable
     }
 
     [Fact]
+    public void CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget()
+    {
+        WritePerformanceSmokeFixture(_projectRoot, fileCount: 120);
+        var writer = new DbWriter(_db.Connection);
+
+        var indexElapsed = MeasureElapsed(() => IndexScannedFiles(_projectRoot, writer));
+        var (files, chunks, symbols, references) = writer.GetCounts();
+
+        Assert.Equal(120, files);
+        Assert.True(chunks >= 120, $"Expected at least one chunk per file, got {chunks}");
+        Assert.True(symbols >= 240, $"Expected class and method symbols from the smoke fixture, got {symbols}");
+        Assert.True(references > 0, "Expected reference rows from the smoke fixture.");
+        Assert.True(indexElapsed < TimeSpan.FromSeconds(20), $"CI performance smoke indexing took {indexElapsed.TotalSeconds:F1}s");
+
+        var reader = new DbReader(_db.Connection);
+        List<SearchResult> results = [];
+        var searchElapsed = MeasureElapsed(() => results = reader.Search("Execute42", limit: 5));
+
+        Assert.Contains(results, result => result.Path.EndsWith("service42.cs", StringComparison.Ordinal));
+        Assert.True(searchElapsed < TimeSpan.FromSeconds(2), $"CI performance smoke search took {searchElapsed.TotalMilliseconds:F0}ms");
+    }
+
+    [Fact]
     public void SymbolExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 120);
@@ -146,6 +171,60 @@ public class PerformanceTests : IDisposable
         return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
+    private static TimeSpan MeasureElapsed(Action action)
+    {
+        var sw = Stopwatch.StartNew();
+        action();
+        sw.Stop();
+        return sw.Elapsed;
+    }
+
+    private static void WritePerformanceSmokeFixture(string projectRoot, int fileCount)
+    {
+        for (var i = 0; i < fileCount; i++)
+        {
+            var directory = Path.Combine(projectRoot, "src", $"module{i / 20}");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"service{i}.cs"), BuildPerformanceSmokeSource(i));
+        }
+    }
+
+    private static void IndexScannedFiles(string projectRoot, DbWriter writer)
+    {
+        var indexer = new FileIndexer(projectRoot);
+        foreach (var filePath in indexer.ScanFiles())
+        {
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var fileId = writer.UpsertFile(record);
+            writer.DeleteFileData(fileId);
+            writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, record.Path);
+            writer.InsertSymbols(symbols);
+            writer.InsertReferences(ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path));
+            writer.InsertIssues(fileId, FileIndexer.ValidateContent(record.Path, rawBytes, content));
+        }
+    }
+
+    private static string BuildPerformanceSmokeSource(int index) => $$"""
+        namespace PerfSmoke.Module{{index / 20}};
+
+        public sealed class Service{{index}}
+        {
+            private readonly Dependency{{index}} dependency = new();
+
+            public int Execute{{index}}(int value)
+            {
+                var transformed = dependency.Transform(value);
+                return transformed + {{index}};
+            }
+        }
+
+        public sealed class Dependency{{index}}
+        {
+            public int Transform(int value) => value * 2;
+        }
+        """;
+
     private static string BuildCSharpHotPathFixture(int typeCount)
     {
         return string.Join(
@@ -169,5 +248,6 @@ public class PerformanceTests : IDisposable
         _db.Dispose();
         SqliteConnection.ClearAllPools();
         try { File.Delete(_dbPath); } catch { }
+        TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 }

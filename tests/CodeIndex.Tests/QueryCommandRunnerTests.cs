@@ -5381,6 +5381,8 @@ public partial class QueryCommandRunnerTests
         Directory.CreateDirectory(outputDir);
         var buildOutputDir = Path.Combine(outputDir, "bin", "publish") + Path.DirectorySeparatorChar;
         var intermediateDir = Path.Combine(outputDir, "obj", "publish") + Path.DirectorySeparatorChar;
+        Directory.CreateDirectory(intermediateDir);
+        var lockFilePath = Path.Combine(intermediateDir, "packages.lock.json");
 
         var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
@@ -5403,6 +5405,7 @@ public partial class QueryCommandRunnerTests
         psi.ArgumentList.Add("-p:PublishSingleFile=false");
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
+        psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
         psi.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = System.Diagnostics.Process.Start(psi)
@@ -5411,13 +5414,31 @@ public partial class QueryCommandRunnerTests
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
+        {
+            var output = string.Join(Environment.NewLine, stdout, stderr).Trim();
+            if (IsMissingDotNetRuntimeFailure(output))
+                throw Xunit.Sdk.SkipException.ForSkip(BuildMissingDotNetRuntimeSkipReason(output));
+
+            throw new InvalidOperationException($"dotnet publish failed: {output}");
+        }
 
         var publishedDll = Path.Combine(outputDir, "cdidx.dll");
         if (!File.Exists(publishedDll))
             throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
 
         return publishedDll;
+    }
+
+    private static bool IsMissingDotNetRuntimeFailure(string output)
+        => output.Contains("You must install or update .NET to run this application.", StringComparison.OrdinalIgnoreCase)
+            && output.Contains("Framework: 'Microsoft.NETCore.App'", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildMissingDotNetRuntimeSkipReason(string output)
+    {
+        const string reason = "Skipping trimmed publish test because the SDK/ILLink tool requires a .NET runtime that is not installed (#3571).";
+        var lines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var frameworkLine = lines.FirstOrDefault(line => line.StartsWith("Framework:", StringComparison.OrdinalIgnoreCase));
+        return frameworkLine == null ? reason : $"{reason} {frameworkLine}";
     }
 
     private static string GetBuiltCliDllPath()

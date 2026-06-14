@@ -47,6 +47,47 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void BuiltInSymbolRegexes_UseDefaultBacktrackingPolicy_Issue3479()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(SymbolExtractor).Assembly.GetTypes().Where(IsSymbolRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var backtrackingRegexesWithCustomTimeouts = regexes
+            .Where(item => (item.Regex.Options & RegexOptions.NonBacktracking) == 0)
+            .Where(item => item.Regex.MatchTimeout != BoundedRegex.DefaultMatchTimeout)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            backtrackingRegexesWithCustomTimeouts.Count == 0,
+            "Built-in symbol regexes that use backtracking must use BoundedRegex.DefaultMatchTimeout: "
+            + string.Join(", ", backtrackingRegexesWithCustomTimeouts));
+    }
+
+    [Fact]
+    public void BuiltInSymbolRegexes_WithIgnoreCaseUseCultureInvariant_Issue3516()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(SymbolExtractor).Assembly.GetTypes().Where(IsSymbolRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var cultureSensitive = regexes
+            .Where(item => (item.Regex.Options & RegexOptions.IgnoreCase) != 0)
+            .Where(item => (item.Regex.Options & RegexOptions.CultureInvariant) == 0)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            cultureSensitive.Count == 0,
+            "Built-in symbol regexes with IgnoreCase must use CultureInvariant: " + string.Join(", ", cultureSensitive));
+    }
+
+    [Fact]
     public void Extract_CSharp_BraceBodiedFunctionSignatureStopsAtDeclarationHeader()
     {
         const string content = """
@@ -6693,6 +6734,83 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "ll");
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "my-grep");
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "G");
+    }
+
+    [Fact]
+    public void Extract_Shell_IgnoresHeredocBodies_Issue3510()
+    {
+        var content = """
+            setup() {
+              python3 <<'PY'
+            def main():
+                pass
+            main() {
+              echo not-shell
+            }
+            PY
+              cat <<-EOF
+            function fake_heredoc_function() {
+            }
+            EOF
+              echo done
+            }
+            real_after() { echo done; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_after");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake_heredoc_function");
+    }
+
+    [Fact]
+    public void Extract_Shell_BoundsFunctionRanges_Issue3510()
+    {
+        var content = """
+            info() { printf '%s\n' "$*"; }
+            warn() { printf '%s\n' "$*"; }
+            extract_release_tag_name() {
+              local tag
+              tag="${1#refs/tags/}"
+              printf '%s\n' "$tag"
+            }
+            verify_payload_manifest() {
+              cat <<'PY'
+            main() {
+              pass
+            }
+            PY
+              echo done
+            }
+            after() { echo done; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        var info = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "info");
+        Assert.Equal(1, info.EndLine);
+        Assert.Equal(1, info.BodyStartLine);
+        Assert.Equal(1, info.BodyEndLine);
+
+        var warn = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "warn");
+        Assert.Equal(2, warn.EndLine);
+        Assert.Equal(2, warn.BodyStartLine);
+        Assert.Equal(2, warn.BodyEndLine);
+
+        var extractTag = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "extract_release_tag_name");
+        Assert.Equal(7, extractTag.EndLine);
+        Assert.Equal(3, extractTag.BodyStartLine);
+        Assert.Equal(7, extractTag.BodyEndLine);
+
+        var verifyManifest = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "verify_payload_manifest");
+        Assert.Equal(15, verifyManifest.EndLine);
+        Assert.Equal(8, verifyManifest.BodyStartLine);
+        Assert.Equal(15, verifyManifest.BodyEndLine);
+
+        var after = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "after");
+        Assert.Equal(16, after.EndLine);
+        Assert.Equal(16, after.BodyStartLine);
+        Assert.Equal(16, after.BodyEndLine);
     }
 
     [Fact]
@@ -18606,7 +18724,34 @@ public partial class SymbolExtractorTests
             Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
             Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
             Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("tsconfig_json_invalid", stderr, StringComparison.Ordinal);
             Assert.Contains("could not be parsed as JSON", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_UnreadableTsconfigSkipsPathAliasesWithReadFailedWarning_Issue3438()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_unreadable_symbols");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tsconfig.json"));
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@/components/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("tsconfig_read_failed", stderr, StringComparison.Ordinal);
+            Assert.Contains("could not be read", stderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -18635,6 +18780,7 @@ public partial class SymbolExtractorTests
             Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
             Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
             Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("tsconfig_json_invalid", stderr, StringComparison.Ordinal);
             Assert.Contains("32-level depth limit", stderr, StringComparison.Ordinal);
         }
         finally
@@ -18671,6 +18817,7 @@ public partial class SymbolExtractorTests
 
             Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "~lib/math");
             Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "lib/math.ts");
+            Assert.Contains("path_alias_depth_limit", stderr, StringComparison.Ordinal);
             Assert.Contains("extends depth", stderr, StringComparison.Ordinal);
         }
         finally

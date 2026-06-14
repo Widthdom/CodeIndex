@@ -279,7 +279,7 @@ public sealed class DbSchemaCache
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
             columns.Add(reader.GetString(1));

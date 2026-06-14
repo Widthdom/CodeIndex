@@ -262,6 +262,8 @@ public class FileExcerptResult
     public List<string> ContentTruncationReasons { get; set; } = [];
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExcerptRecoveryHint? ContentRecovery { get; set; }
+    public string SemanticTokenCoordinateSpace { get; set; } = "source";
+    public List<ExcerptContentLineSpan> ContentLineSpans { get; set; } = [];
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExcerptSemanticToken>? SemanticTokens { get; set; }
 
@@ -283,6 +285,16 @@ public class FileExcerptResult
 
     private static bool IsSafeCliArgumentChar(char c)
         => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-' or ':';
+}
+
+public class ExcerptContentLineSpan
+{
+    public int ContentLine { get; set; }
+    public int SourceLine { get; set; }
+    public int ContentStartColumn { get; set; }
+    public int ContentEndColumn { get; set; }
+    public int SourceStartColumn { get; set; }
+    public int SourceEndColumn { get; set; }
 }
 
 public class ExcerptSemanticToken
@@ -803,6 +815,9 @@ public class StatusResult
     [JsonPropertyName("mac_profile")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MacProfile { get; set; }
+    [JsonPropertyName("mac_profile_diagnostics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<MacProfileDiagnostic>? MacProfileDiagnostics { get; set; }
     /// <summary>
     /// Git HEAD commit captured at the end of the most recent successful full-scan
     /// index run (Issue #1508). Compared with the runtime `GitHead` to surface a
@@ -977,14 +992,13 @@ public class StatusResult
     public bool CSharpSymbolNameReady { get; set; } = true;
     /// <summary>
     /// True when every indexed C# class row carries an authoritative `is_metadata_target`
-    /// value stamped under the current `metadata_target_version_csharp` contract. False
-    /// means the `deps` / `impact` metadata-attribute edges fall back to the legacy
-    /// `signature LIKE '%: %'` heuristic (or the `name LIKE '%Attribute'` suffix heuristic
-    /// on truly-legacy DBs missing the `is_metadata_target` column), which silently drops
-    /// impostor classes like `class FooAttribute : BaseService`. Run `cdidx index .` once
-    /// to let the authoritative resolver rewrite the stamp (#435).
-    /// true のとき deps / impact の metadata-attribute edge は persisted な
-    /// `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
+    /// value stamped under the current `metadata_target_version_csharp` contract from
+    /// extractor facts plus the writer resolver. False means the `deps` / `impact`
+    /// metadata-attribute edges fall back to the legacy `signature LIKE '%: %'` heuristic
+    /// (or the `name LIKE '%Attribute'` suffix heuristic on truly-legacy DBs missing the
+    /// `is_metadata_target` column). Run `cdidx index .` once to restamp the contract (#3524).
+    /// true のとき deps / impact の metadata-attribute edge は extractor fact と writer resolver が
+    /// stamp した persisted な `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
     /// </summary>
     [JsonPropertyName("csharp_metadata_target_ready")]
     public bool CSharpMetadataTargetReady { get; set; } = true;

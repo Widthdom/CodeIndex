@@ -38,6 +38,8 @@ public static partial class IndexCommandRunner
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
+    internal static Action<string>? WriteScanCheckpointForTesting { get; set; }
+    internal static Action<string>? DeleteScanCheckpointForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
 
@@ -1365,19 +1367,21 @@ public static partial class IndexCommandRunner
 
     private sealed class IndexExtractionStalledException : Exception
     {
-        public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath)
+        public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath, string? workerError = null)
             : base("Index extraction stalled.")
         {
             FilesProcessed = filesProcessed;
             FilesTotal = filesTotal;
             Timeout = timeout;
             ActivePath = activePath;
+            WorkerError = workerError;
         }
 
         public int FilesProcessed { get; }
         public int? FilesTotal { get; }
         public TimeSpan Timeout { get; }
         public string? ActivePath { get; }
+        public string? WorkerError { get; }
     }
 
     private sealed class CancelKeyPressRegistration(ConsoleCancelEventHandler handler) : IDisposable

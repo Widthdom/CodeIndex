@@ -71,7 +71,7 @@ internal static class GitHubIssueReporter
     private static readonly HttpClient s_defaultHttpClient = CreateDefaultHttpClient();
 
     private static HttpClient CreateDefaultHttpClient()
-        => GitHubHttpClientFactory.CreateDefaultHttpClient(Timeout.InfiniteTimeSpan);
+        => GitHubHttpClientFactory.CreateDefaultHttpClient(TimeSpan.FromSeconds(MaxSubmitTimeoutSeconds));
 
     // Test seam: when set, replaces the default HttpClient so tests can
     // mock GitHub responses without hitting the network. Production code
@@ -131,9 +131,15 @@ internal static class GitHubIssueReporter
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
             // 当該提案ハッシュを含む既存 Issue を探す。
-            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token, BuildIssueLabels(record), linkedCts.Token);
-            if (existingUrl != null)
-                return SuggestionStore.SubmitAttemptResult.Success(existingUrl);
+            var existingLookup = await FindExistingIssueByHashDetailedAsync(record.Hash, token, BuildIssueLabels(record), linkedCts.Token);
+            if (existingLookup.Error != null)
+            {
+                Console.Error.WriteLine(BuildSubmissionFailureMessage(existingLookup.Error));
+                return SuggestionStore.SubmitAttemptResult.Failure(existingLookup.Error);
+            }
+
+            if (existingLookup.IssueUrl != null)
+                return SuggestionStore.SubmitAttemptResult.Success(existingLookup.IssueUrl);
 
             return await CreateIssueAsync(record, version, token, linkedCts.Token);
         }
@@ -198,21 +204,20 @@ internal static class GitHubIssueReporter
     /// contains the suggestion hash. The primary check uses GitHub Search;
     /// the backstop lists issues by the labels cdidx would apply so same-second retries
     /// are not exposed to Search indexing latency. Returns the html_url of the
-    /// first match, or null if no match is found or the hash looks unsafe to
-    /// search with. On API failure this returns null — the caller falls through
-    /// to the normal create path so a GitHub-side lookup outage never blocks a
-    /// legitimate first submission.
+    /// first match, or null if no match is found, the hash looks unsafe to
+    /// search with, or the lookup fails. Submission uses the detailed lookup
+    /// result below and fails closed when GitHub lookup state is indeterminate.
     /// 当該提案ハッシュを含む open 既存 Issue を対象リポジトリから検索する。
     /// 主経路は GitHub Search を使い、backstop として cdidx が付ける label の Issue を
     /// 直接一覧取得することで、同秒の再試行が Search の index 遅延に影響されない
-    /// ようにする。一致した最初の Issue の html_url を返す。一致なし、またはハッシュが
-    /// 検索に使えない形の場合は null。API 失敗時も null を返し、GitHub 側 lookup の
-    /// 障害によって新規送信がブロックされないようにする。
+    /// ようにする。一致した最初の Issue の html_url を返す。一致なし、ハッシュが
+    /// 検索に使えない形、または lookup 失敗の場合は null。送信経路では下の詳細
+    /// lookup 結果を使い、GitHub lookup 状態が不確定な場合は fail closed する。
     /// </summary>
     internal static async Task<string?> FindExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken = default)
-        => await FindExistingIssueByHashAsync(hash, token, ExistingSuggestionLookupLabels, cancellationToken);
+        => (await FindExistingIssueByHashDetailedAsync(hash, token, ExistingSuggestionLookupLabels, cancellationToken)).IssueUrl;
 
-    private static async Task<string?> FindExistingIssueByHashAsync(
+    private static async Task<ExistingIssueLookupResult> FindExistingIssueByHashDetailedAsync(
         string hash,
         string token,
         IReadOnlyList<string> lookupLabels,
@@ -222,16 +227,16 @@ internal static class GitHubIssueReporter
         // injecting search operators if the field ever held arbitrary text.
         // 防御的: 検索演算子の混入を避けるため、16進形式のハッシュのみで検索する。
         if (string.IsNullOrEmpty(hash) || !IsHexHash(hash))
-            return null;
+            return ExistingIssueLookupResult.NotFound;
 
-        var searchUrl = await SearchExistingIssueByHashAsync(hash, token, cancellationToken);
-        if (searchUrl != null)
-            return searchUrl;
+        var searchResult = await SearchExistingIssueByHashAsync(hash, token, cancellationToken);
+        if (searchResult.Error != null || searchResult.IssueUrl != null)
+            return searchResult;
 
         return await ListExistingSuggestionIssueByHashAsync(hash, token, lookupLabels, cancellationToken);
     }
 
-    private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
+    private static async Task<ExistingIssueLookupResult> SearchExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
     {
         var query = Uri.EscapeDataString($"repo:{RepoOwner}/{RepoName} is:issue is:open \"{hash}\" in:body");
         var url = $"{ApiBase}/search/issues?q={query}&per_page=1";
@@ -244,7 +249,11 @@ internal static class GitHubIssueReporter
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         if (!response.IsSuccessStatusCode)
-            return null;
+        {
+            var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
+            return ExistingIssueLookupResult.Failure(
+                BuildExistingSuggestionLookupFailure("search", BuildApiErrorDetail((int)response.StatusCode, errorBody)));
+        }
 
         JsonNode? node;
         try
@@ -253,24 +262,39 @@ internal static class GitHubIssueReporter
         }
         catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
         {
-            return null;
+            return ExistingIssueLookupResult.Failure(
+                BuildExistingSuggestionLookupFailure("search", $"{ex.GetType().Name}: {ex.Message}"));
         }
 
         var items = node?["items"] as JsonArray;
-        if (items == null || items.Count == 0)
-            return null;
-
-        foreach (var item in items)
+        if (items == null)
         {
-            var itemUrl = TryGetOpenIssueUrl(item);
-            if (itemUrl != null)
-                return itemUrl;
+            return ExistingIssueLookupResult.Failure(
+                BuildExistingSuggestionLookupFailure("search", "InvalidResponse: missing items array"));
         }
 
-        return null;
+        if (items.Count == 0)
+            return ExistingIssueLookupResult.NotFound;
+
+        try
+        {
+            foreach (var item in items)
+            {
+                var itemUrl = TryGetOpenIssueUrl(item);
+                if (itemUrl != null)
+                    return ExistingIssueLookupResult.Found(itemUrl);
+            }
+        }
+        catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
+        {
+            return ExistingIssueLookupResult.Failure(
+                BuildExistingSuggestionLookupFailure("search", $"{ex.GetType().Name}: {ex.Message}"));
+        }
+
+        return ExistingIssueLookupResult.NotFound;
     }
 
-    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(
+    private static async Task<ExistingIssueLookupResult> ListExistingSuggestionIssueByHashAsync(
         string hash,
         string token,
         IReadOnlyList<string> lookupLabels,
@@ -291,7 +315,13 @@ internal static class GitHubIssueReporter
                     HttpCompletionOption.ResponseHeadersRead,
                     cancellationToken);
                 if (!response.IsSuccessStatusCode)
-                    return null;
+                {
+                    var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
+                    return ExistingIssueLookupResult.Failure(
+                        BuildExistingSuggestionLookupFailure(
+                            $"label list '{label}' page {page}",
+                            BuildApiErrorDetail((int)response.StatusCode, errorBody)));
+                }
 
                 JsonNode? node;
                 try
@@ -300,19 +330,40 @@ internal static class GitHubIssueReporter
                 }
                 catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
                 {
-                    return null;
+                    return ExistingIssueLookupResult.Failure(
+                        BuildExistingSuggestionLookupFailure(
+                            $"label list '{label}' page {page}",
+                            $"{ex.GetType().Name}: {ex.Message}"));
                 }
 
                 var items = node as JsonArray;
-                if (items == null || items.Count == 0)
+                if (items == null)
+                {
+                    return ExistingIssueLookupResult.Failure(
+                        BuildExistingSuggestionLookupFailure(
+                            $"label list '{label}' page {page}",
+                            "InvalidResponse: expected issue array"));
+                }
+
+                if (items.Count == 0)
                     break;
 
-                foreach (var item in items)
+                try
                 {
-                    var body = item?["body"]?.GetValue<string>();
-                    var itemUrl = TryGetOpenIssueUrl(item);
-                    if (itemUrl != null && body != null && body.Contains(hash, StringComparison.Ordinal))
-                        return itemUrl;
+                    foreach (var item in items)
+                    {
+                        var body = item?["body"]?.GetValue<string>();
+                        var itemUrl = TryGetOpenIssueUrl(item);
+                        if (itemUrl != null && body != null && body.Contains(hash, StringComparison.Ordinal))
+                            return ExistingIssueLookupResult.Found(itemUrl);
+                    }
+                }
+                catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
+                {
+                    return ExistingIssueLookupResult.Failure(
+                        BuildExistingSuggestionLookupFailure(
+                            $"label list '{label}' page {page}",
+                            $"{ex.GetType().Name}: {ex.Message}"));
                 }
 
                 if (items.Count < 100)
@@ -323,8 +374,20 @@ internal static class GitHubIssueReporter
             }
         }
 
-        return null;
+        return ExistingIssueLookupResult.NotFound;
     }
+
+    private sealed record ExistingIssueLookupResult(string? IssueUrl, string? Error)
+    {
+        public static ExistingIssueLookupResult NotFound { get; } = new(null, null);
+
+        public static ExistingIssueLookupResult Found(string issueUrl) => new(issueUrl, null);
+
+        public static ExistingIssueLookupResult Failure(string error) => new(null, error);
+    }
+
+    private static string BuildExistingSuggestionLookupFailure(string phase, string detail)
+        => $"GitHub existing-suggestion lookup failed during {phase}: {detail}";
 
     private static void WriteExistingSuggestionLookupPageCapWarning(string label)
     {
@@ -754,7 +817,7 @@ internal static class GitHubIssueReporter
             documentOptions: new JsonDocumentOptions { MaxDepth = MaxGitHubApiResponseJsonDepth });
 
     private static bool IsRecoverableGitHubApiResponseException(Exception ex)
-        => ex is JsonException or InvalidDataException;
+        => ex is JsonException or InvalidDataException or InvalidOperationException;
 
     private static string SanitizeApiErrorBody(string errorBody)
     {

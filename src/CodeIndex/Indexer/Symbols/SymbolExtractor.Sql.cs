@@ -11,7 +11,7 @@ public static partial class SymbolExtractor
     // Regex helpers for SQL procedure body scanning / SQL プロシージャ本体走査用の正規表現ヘルパー
     private static readonly Regex SqlGoSeparatorRegex = new(
         @"^\s*GO\s*(?:;[\s;]*)?(?:--.*)?$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Only close a SQL proc body when the next top-level statement looks like another proc-like
     // header (`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|TRIGGER`, optionally with `OR REPLACE` for
     // PostgreSQL or `OR ALTER` for T-SQL / SQL Server 2016+). Body-internal `CREATE TABLE` /
@@ -25,7 +25,7 @@ public static partial class SymbolExtractor
     // `CREATE OR ALTER PROCEDURE` の隣接宣言でも前の body 範囲を確実に終端させる。issue #429 参照。
     private static readonly Regex SqlTopLevelDdlStartRegex = new(
         @"^\s*(?:CREATE|ALTER|DROP)\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Dollar-quoted body tags: `$$` or `$tagname$` (PostgreSQL). Tag must be empty or an identifier.
     // Dollar-quoted の本体タグ: `$$` または `$タグ名$`（PostgreSQL）。タグは空か識別子のみ。
     private static readonly Regex SqlDollarTagRegex = new(

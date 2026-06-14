@@ -107,6 +107,38 @@ public class CommandErrorCodesTests
     }
 
     [Fact]
+    public void Find_RegexTimeout_StderrIncludesBracketedCode_Issue3559()
+    {
+        var timeout = new System.Text.RegularExpressions.RegexMatchTimeoutException(
+            "aaaaaaaaaaaaaaaa!",
+            "^(a+)+$",
+            TimeSpan.FromMilliseconds(25));
+
+        var (exitCode, _, stderr) = CaptureStreams(() =>
+            QueryCommandRunner.WriteFindRegexTimeoutError(timeout, _jsonOptions, json: false));
+
+        Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+        Assert.Contains("[E014_REGEX_MATCH_TIMEOUT]", stderr);
+        Assert.Contains("regular expression timed out", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Find_RegexTimeout_JsonIncludesRegexTimeoutCode_Issue3559()
+    {
+        var timeout = new System.Text.RegularExpressions.RegexMatchTimeoutException(
+            "aaaaaaaaaaaaaaaa!",
+            "^(a+)+$",
+            TimeSpan.FromMilliseconds(25));
+
+        var (exitCode, json) = RunFindRegexTimeoutCapturingJson(timeout);
+
+        Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Equal("E014_REGEX_MATCH_TIMEOUT", json.GetProperty("error_code").GetString());
+        Assert.Equal("regex_timeout", json.GetProperty("category").GetString());
+    }
+
+    [Fact]
     public void Symbols_InvalidKind_ReturnsInvalidArgumentExitCode()
     {
         var (exitCode, _, stderr) = CaptureStreams(() => QueryCommandRunner.RunSymbols(["--kind", "invalid_kind"], _jsonOptions));
@@ -175,6 +207,14 @@ public class CommandErrorCodesTests
         using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
         var exitCode = QueryCommandRunner.RunSearch(args, _jsonOptions);
         return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
+    }
+
+    private (int ExitCode, JsonElement Json) RunFindRegexTimeoutCapturingJson(System.Text.RegularExpressions.RegexMatchTimeoutException timeout)
+    {
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        var exitCode = QueryCommandRunner.WriteFindRegexTimeoutError(timeout, _jsonOptions, json: true);
+        using var document = JsonDocument.Parse(capture.Out!.ToString()!);
+        return (exitCode, document.RootElement.Clone());
     }
 
     private static (int ExitCode, string StdOut, string StdErr) CaptureStreams(Func<int> run)

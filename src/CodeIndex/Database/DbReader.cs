@@ -108,14 +108,13 @@ public partial class DbReader : IDisposable
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
-    // #435: True when `symbols.is_metadata_target` has been populated for every C# class-like
-    // row by the writer's resolver and the stamp in `codeindex_meta` matches the current
-    // version. Readers that enforce metadata-target eligibility prefer this column over the
-    // legacy `signature LIKE '%: %'` heuristic when the flag is true; otherwise they continue
-    // to fall back to the heuristic so legacy / partial DBs do not silently miss edges.
-    // #435: C# の authoritative `is_metadata_target` が全行 populate されて stamp 一致したときのみ
-    // true。true なら reader は legacy ヒューリスティックではなく列を使う。false の DB では
-    // 従来どおり `signature LIKE '%: %'` にフォールバックする。
+    // #3524: True when `symbols.is_metadata_target` has been populated from extractor facts
+    // plus the writer resolver for every C# class-like row and the stamp in `codeindex_meta`
+    // matches the current version. Readers that enforce metadata-target eligibility prefer
+    // this column over the legacy `signature LIKE '%: %'` heuristic when the flag is true.
+    // #3524: C# の authoritative `is_metadata_target` が extractor fact と writer resolver から
+    // 全行 populate されて stamp 一致したときのみ true。true なら reader は legacy
+    // ヒューリスティックではなく列を使う。
     internal readonly bool _csharpMetadataTargetReady;
     internal readonly string? _csharpMetadataTargetDegradedReason;
     internal readonly bool _sqlGraphContractCurrent;
@@ -540,16 +539,18 @@ public partial class DbReader : IDisposable
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
-        var hasMetadataTargetColumn = _symbolColumns.Contains("is_metadata_target");
+        var hasMetadataTargetStorage =
+            _symbolColumns.Contains("is_metadata_target")
+            && _symbolColumns.Contains("metadata_target_source");
         var metadataTargetStampCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
             DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
-        _csharpMetadataTargetReady = hasMetadataTargetColumn
+        _csharpMetadataTargetReady = hasMetadataTargetStorage
             && metadataTargetStampCurrent;
         _csharpMetadataTargetDegradedReason = _csharpMetadataTargetReady
             ? null
-            : !hasMetadataTargetColumn
+            : !hasMetadataTargetStorage
                 ? DegradationReasonCodes.CSharpMetadataTargetMissingColumn
                 : DegradationReasonCodes.CSharpMetadataTargetStampOutdated;
         _sqlGraphContractCurrent = string.Equals(
