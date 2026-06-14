@@ -11459,12 +11459,61 @@ public class IndexCommandRunnerTests
             using var indexLock = IndexLock.Acquire(lockPath, projectRoot);
 
             Assert.True(File.Exists(infoPath));
+            var info = File.ReadAllText(infoPath);
+            Assert.Contains("pid=", info);
+            Assert.Contains("started_at=", info);
+            Assert.DoesNotContain("host=", info);
+            Assert.DoesNotContain("project=", info);
+            Assert.DoesNotContain(projectRoot, info);
             Assert.Equal(
                 DataDirectorySecurity.PrivateFileMode,
                 File.GetUnixFileMode(infoPath) & DataDirectorySecurity.PermissionBits);
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void IndexLock_Dispose_WhenMetadataCleanupFails_ReportsSanitizedDiagnostic_Issue3462()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_diag_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        var diagnostics = new List<LockCleanupDiagnostic>();
+        try
+        {
+            IndexLock.CleanupDiagnosticSinkForTesting = diagnostics.Add;
+            IndexLock.DeleteFileForTesting = path =>
+            {
+                if (string.Equals(path, infoPath, StringComparison.Ordinal))
+                    throw new IOException($"sensitive cleanup path {path}");
+                File.Delete(path);
+            };
+
+            using (IndexLock.Acquire(lockPath, projectRoot))
+            {
+            }
+
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Equal("index_lock", diagnostic.Component);
+            Assert.Equal("metadata", diagnostic.Target);
+            Assert.Equal("io_error", diagnostic.Reason);
+            Assert.DoesNotContain("sensitive", diagnostic.ToLogMessage(), StringComparison.Ordinal);
+            Assert.DoesNotContain(infoPath, diagnostic.ToLogMessage(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexLock.CleanupDiagnosticSinkForTesting = null;
+            IndexLock.DeleteFileForTesting = File.Delete;
             DeleteDirectory(projectRoot);
             if (File.Exists(infoPath))
                 File.Delete(infoPath);

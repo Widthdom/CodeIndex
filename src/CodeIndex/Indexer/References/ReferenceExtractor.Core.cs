@@ -88,6 +88,9 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = BuildReferenceContainerCandidates(symbols);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
+        if (language == "solidity")
+            return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
+
         var csharpXmlDocAttachmentScopeCandidates = BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols);
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and

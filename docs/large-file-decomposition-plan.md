@@ -47,6 +47,7 @@ focused tests for the behavior it moves.
 
 6. `FileIndexer.cs`
    - Separate path discovery and ignore policy from file content validation and record construction.
+   - Keep content loading, decoding, line normalization, and checksum logic in `FileContentLoader` so `FileIndexer` can stay focused on traversal and record orchestration.
    - Move filesystem-sensitive behavior behind testable helpers before changing indexing flow.
    - Keep cross-platform path, symlink, hidden/system attribute, and cleanup tests attached to each boundary move.
 
@@ -115,6 +116,7 @@ public behavior を維持し、移動した挙動に対応する focused test �
 
 6. `FileIndexer.cs`
    - path discovery と ignore policy を file content validation と record construction から分ける。
+   - content loading、decoding、line normalization、checksum logic は `FileContentLoader` に置き、`FileIndexer` は traversal と record orchestration に集中させる。
    - indexing flow を変更する前に、filesystem-sensitive behavior を testable helper の背後へ移す。
    - cross-platform path、symlink、hidden/system attribute、cleanup test を各 boundary move に付ける。
 

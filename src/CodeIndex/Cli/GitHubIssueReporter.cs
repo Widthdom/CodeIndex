@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -176,7 +177,7 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultTimeout;
 
-        return int.TryParse(raw, out var seconds) && seconds is > 0 and <= MaxSubmitTimeoutSeconds
+        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) && seconds is > 0 and <= MaxSubmitTimeoutSeconds
             ? TimeSpan.FromSeconds(seconds)
             : DefaultTimeout;
     }

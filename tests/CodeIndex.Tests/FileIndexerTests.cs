@@ -4340,6 +4340,30 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Load_CanonicalizesContentBeforeChecksum()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "sample.cs");
+            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("a\r\n\uFEFFb\r"));
+
+            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
+            var loaded = loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
+
+            Assert.Equal("a\nb\n", loaded.Content);
+            Assert.Equal(FileIndexer.CountPhysicalLines(loaded.Content), loaded.LineCount);
+            Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(loaded.Content)), loaded.Checksum);
+            Assert.Null(loaded.Warning);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ComputeChecksum_MixedLineEndings_NormalizesToLf()
     {
         // Direct-call coverage: mixed CRLF / CR / LF lines all collapse to LF before

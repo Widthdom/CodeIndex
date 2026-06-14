@@ -1054,6 +1054,16 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void ResolveMaxAge_IgnoresCurrentCulturePositiveSign_Issue3404()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
+        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
+        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, "^30");
+
+        Assert.Equal(TimeSpan.FromDays(SuggestionStore.DefaultMaxAgeDays), SuggestionStore.ResolveMaxAge());
+    }
+
+    [Fact]
     public void ResolveMaxCount_AcceptsMaximumConfiguredValue()
     {
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
@@ -1068,6 +1078,16 @@ public class SuggestionStoreTests : IDisposable
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
         var tooLarge = SuggestionStore.MaximumMaxCount + 1;
         env.Set(SuggestionStore.MaxCountEnvironmentVariable, tooLarge.ToString(CultureInfo.InvariantCulture));
+
+        Assert.Equal(SuggestionStore.DefaultMaxCount, SuggestionStore.ResolveMaxCount());
+    }
+
+    [Fact]
+    public void ResolveMaxCount_IgnoresCurrentCulturePositiveSign_Issue3404()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "^42");
 
         Assert.Equal(SuggestionStore.DefaultMaxCount, SuggestionStore.ResolveMaxCount());
     }

@@ -110,6 +110,15 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
     }
 
+    [Fact]
+    public void ResolveSubmitTimeout_IgnoresCurrentCulturePositiveSign_Issue3404()
+    {
+        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
+        _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "^3");
+
+        Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
+    }
+
     [Theory]
     [InlineData(null, false)]
     [InlineData("", false)]
