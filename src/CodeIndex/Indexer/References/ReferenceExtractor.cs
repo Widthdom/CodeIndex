@@ -953,6 +953,21 @@ public static partial class ReferenceExtractor
                 });
     }
 
+    private static HashSet<string> BuildAllDefinitionNames(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(GetDefinitionNamesComparer(language));
+        foreach (var symbol in symbols)
+        {
+            names.Add(symbol.Name);
+            if (language == "sql")
+                SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
+        }
+
+        return names;
+    }
+
     private static StringComparer GetDefinitionNamesComparer(string language)
         => language == "sql"
             ? StringComparer.OrdinalIgnoreCase

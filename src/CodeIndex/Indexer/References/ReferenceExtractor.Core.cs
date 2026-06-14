@@ -64,6 +64,7 @@ public static partial class ReferenceExtractor
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols);
+        var allDefinitionNames = BuildAllDefinitionNames(language, symbols);
         var fileDefinitionNames = isRazorFile
             ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
             : null;
@@ -204,6 +205,9 @@ public static partial class ReferenceExtractor
             ? new MarkupSchemaReferenceExtractor.MarkupState()
             : null;
         var xamlInXmlComment = false;
+        var xamlBindingPropertyElementState = language == "xml"
+            ? new XamlReferenceExtractor.BindingPropertyElementState()
+            : null;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
 
@@ -951,11 +955,11 @@ public static partial class ReferenceExtractor
             else if (language == "sass")
                 CssReferenceExtractor.EmitSass(preparedLine, originalLine, references, seen, fileId, context, lineNumber, container);
             else if (language == "stylus")
-                CssReferenceExtractor.EmitStylus(preparedLine, originalLine, references, seen, fileId, context, lineNumber, definitionNames, container);
+                CssReferenceExtractor.EmitStylus(preparedLine, originalLine, references, seen, fileId, context, lineNumber, allDefinitionNames, container);
             else if (language == "xml" && xamlReferenceEnabled)
             {
                 var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);
-                XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container);
+                XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container, xamlBindingPropertyElementState!);
                 continue;
             }
             else if (language == "xml")

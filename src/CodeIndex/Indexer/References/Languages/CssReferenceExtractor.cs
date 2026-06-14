@@ -28,6 +28,10 @@ internal static class CssReferenceExtractor
         @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex StylusBareVariableReferenceRegex = new(
+        @"(?<![$\w.-])(?<name>[A-Za-z_][\w-]*)(?![\w-])",
+        RegexOptions.Compiled);
+
     private static readonly Regex StylusBareFunctionReferenceRegex = new(
         @"(?<![@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
         RegexOptions.Compiled);
@@ -226,6 +230,29 @@ internal static class CssReferenceExtractor
                 context,
                 lineNumber,
                 container);
+        }
+
+        if (definitionNames != null)
+        {
+            foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareVariableReferenceRegex, stylusReferenceLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (!definitionNames.Contains(nameGroup.Value))
+                    continue;
+                if (ShouldSkipStylusBareVariableReference(stylusReferenceLine, nameGroup.Index))
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    nameGroup.Value,
+                    nameGroup.Index,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
 
         foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
@@ -871,6 +898,27 @@ internal static class CssReferenceExtractor
         while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
             cursor++;
 
+        return cursor < preparedLine.Length
+            && (preparedLine[cursor] == '='
+                || (preparedLine[cursor] == ':' && cursor + 1 < preparedLine.Length && preparedLine[cursor + 1] == '='));
+    }
+
+    private static bool ShouldSkipStylusBareVariableReference(string preparedLine, int variableIndex)
+    {
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+        if (variableIndex == firstNonWhitespace)
+            return true;
+
+        var cursor = variableIndex;
+        while (cursor < preparedLine.Length && (char.IsLetterOrDigit(preparedLine[cursor]) || preparedLine[cursor] is '_' or '-'))
+            cursor++;
+        while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor++;
+
+        if (cursor < preparedLine.Length && preparedLine[cursor] == '(')
+            return true;
         return cursor < preparedLine.Length
             && (preparedLine[cursor] == '='
                 || (preparedLine[cursor] == ':' && cursor + 1 < preparedLine.Length && preparedLine[cursor + 1] == '='));

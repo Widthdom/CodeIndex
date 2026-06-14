@@ -473,7 +473,7 @@ public partial class ReferenceExtractorTests
             // rounded(8px)
             .button
               content: "@require 'string-theme'"
-              color $primary
+              color primary
               color red // @require "comment-theme"
               background $accent
               background-image url("logo.png")

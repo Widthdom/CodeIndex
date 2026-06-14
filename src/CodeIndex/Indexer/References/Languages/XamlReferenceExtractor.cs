@@ -35,6 +35,14 @@ internal static class XamlReferenceExtractor
         @"<\s*(?:[A-Za-z_][\w.-]*:)?Binding\.(?<property>Path|ElementName)\s*>\s*(?<value>[^<]+?)\s*</\s*(?:[A-Za-z_][\w.-]*:)?Binding\.\k<property>\s*>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    private static readonly Regex XamlBindingPropertyElementStartRegex = new(
+        @"<\s*(?:[A-Za-z_][\w.-]*:)?Binding\.(?<property>Path|ElementName)\s*>\s*(?<tail>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex XamlBindingPropertyElementEndRegex = new(
+        @"</\s*(?:[A-Za-z_][\w.-]*:)?Binding\.(?<property>Path|ElementName)\s*>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex XamlAttributeRegex = new(
         @"\b(?<name>[A-Za-z_][\w:.-]*)\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -109,8 +117,21 @@ internal static class XamlReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        BindingPropertyElementState bindingPropertyElementState)
     {
+        if (bindingPropertyElementState.Active)
+        {
+            if (bindingPropertyElementState.Advance(originalLine, context, lineNumber, container, out var completed))
+            {
+                var completedValue = NormalizeBindingPath(completed.Value);
+                if (completedValue.Length > 0)
+                    AddReference(references, seen, fileId, completedValue, completed.ValueIndex, "reference", completed.Context, completed.LineNumber, completed.Container);
+            }
+
+            return;
+        }
+
         if (originalLine.Length == 0)
             return;
 
@@ -172,6 +193,8 @@ internal static class XamlReferenceExtractor
                 AddReference(references, seen, fileId, value, match.Groups["value"].Index, "reference", context, lineNumber, container);
         }
 
+        TryStartBindingPropertyElementState(originalLine, context, lineNumber, container, bindingPropertyElementState);
+
         foreach (Match match in XamlEventHandlerRegex.Matches(originalLine))
         {
             var value = match.Groups["value"].Value.Trim();
@@ -179,6 +202,145 @@ internal static class XamlReferenceExtractor
                 AddReference(references, seen, fileId, value, match.Groups["value"].Index, "call", context, lineNumber, container);
         }
     }
+
+    private static void TryStartBindingPropertyElementState(
+        string line,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        BindingPropertyElementState state)
+    {
+        var match = XamlBindingPropertyElementStartRegex.Match(line);
+        if (!match.Success)
+            return;
+
+        var property = match.Groups["property"].Value;
+        var tailGroup = match.Groups["tail"];
+        if (TryFindBindingPropertyElementEnd(tailGroup.Value, property, out _))
+            return;
+
+        state.Start(property, tailGroup.Value, tailGroup.Index, context, lineNumber, container);
+    }
+
+    private static bool TryFindBindingPropertyElementEnd(string line, string property, out Match closingTag)
+    {
+        foreach (Match match in XamlBindingPropertyElementEndRegex.Matches(line))
+        {
+            if (match.Groups["property"].Value.Equals(property, StringComparison.OrdinalIgnoreCase))
+            {
+                closingTag = match;
+                return true;
+            }
+        }
+
+        closingTag = Match.Empty;
+        return false;
+    }
+
+    internal sealed class BindingPropertyElementState
+    {
+        private readonly StringBuilder value = new();
+        private string property = "";
+        private int fallbackValueIndex;
+        private int valueIndex;
+        private int valueLineNumber;
+        private string valueContext = "";
+        private SymbolRecord? valueContainer;
+        private bool hasValueLocation;
+
+        public bool Active { get; private set; }
+
+        public void Start(
+            string property,
+            string initialValue,
+            int initialValueIndex,
+            string context,
+            int lineNumber,
+            SymbolRecord? container)
+        {
+            Active = true;
+            this.property = property;
+            fallbackValueIndex = initialValueIndex;
+            value.Clear();
+            hasValueLocation = false;
+            AppendValue(initialValue, initialValueIndex, context, lineNumber, container);
+        }
+
+        public bool Advance(
+            string line,
+            string context,
+            int lineNumber,
+            SymbolRecord? container,
+            out CompletedBindingPropertyElement completed)
+        {
+            completed = default;
+            if (!TryFindBindingPropertyElementEnd(line, property, out var closingTag))
+            {
+                AppendValue(line, 0, context, lineNumber, container);
+                return false;
+            }
+
+            AppendValue(line[..closingTag.Index], 0, context, lineNumber, container);
+            completed = new CompletedBindingPropertyElement(
+                value.ToString(),
+                hasValueLocation ? valueIndex : fallbackValueIndex,
+                hasValueLocation ? valueLineNumber : lineNumber,
+                hasValueLocation ? valueContext : context,
+                hasValueLocation ? valueContainer : container);
+            Reset();
+            return true;
+        }
+
+        private void AppendValue(
+            string segment,
+            int segmentIndex,
+            string context,
+            int lineNumber,
+            SymbolRecord? container)
+        {
+            var trimmedStart = 0;
+            while (trimmedStart < segment.Length && char.IsWhiteSpace(segment[trimmedStart]))
+                trimmedStart++;
+            var trimmedEnd = segment.Length;
+            while (trimmedEnd > trimmedStart && char.IsWhiteSpace(segment[trimmedEnd - 1]))
+                trimmedEnd--;
+            if (trimmedStart >= trimmedEnd)
+                return;
+
+            if (!hasValueLocation)
+            {
+                valueIndex = segmentIndex + trimmedStart;
+                valueLineNumber = lineNumber;
+                valueContext = context;
+                valueContainer = container;
+                hasValueLocation = true;
+            }
+
+            if (value.Length > 0)
+                value.Append(' ');
+            value.Append(segment, trimmedStart, trimmedEnd - trimmedStart);
+        }
+
+        private void Reset()
+        {
+            Active = false;
+            property = "";
+            fallbackValueIndex = 0;
+            valueIndex = 0;
+            valueLineNumber = 0;
+            valueContext = "";
+            valueContainer = null;
+            hasValueLocation = false;
+            value.Clear();
+        }
+    }
+
+    internal readonly record struct CompletedBindingPropertyElement(
+        string Value,
+        int ValueIndex,
+        int LineNumber,
+        string Context,
+        SymbolRecord? Container);
 
     private static void AddReference(
         List<ReferenceRecord> references,
