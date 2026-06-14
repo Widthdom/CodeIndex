@@ -476,6 +476,7 @@ public partial class ReferenceExtractorTests
               color primary
               color red // @require "comment-theme"
               background $accent
+              background url(http://cdn/a.png) $accent
               background-image url("logo.png")
               border-color rgb(0, 0, 0)
               rounded(4px)
@@ -496,7 +497,7 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
-        Assert.Single(references.Where(reference =>
+        Assert.Equal(2, references.Count(reference =>
             reference.SymbolName == "accent"
             && reference.ReferenceKind == "call"));
         Assert.DoesNotContain(references, reference =>

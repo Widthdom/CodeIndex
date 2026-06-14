@@ -215,7 +215,7 @@ internal static class CssReferenceExtractor
     {
         EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
-        var stylusReferenceLine = StripDoubleSlashComment(preparedLine);
+        var stylusReferenceLine = PrepareStylusReferenceLine(originalLine);
         foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
         {
             if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
@@ -874,12 +874,60 @@ internal static class CssReferenceExtractor
         return trimmed.StartsWith("=", StringComparison.Ordinal);
     }
 
-    private static string StripDoubleSlashComment(string preparedLine)
+    private static string PrepareStylusReferenceLine(string originalLine)
     {
-        var commentIndex = preparedLine.IndexOf("//", StringComparison.Ordinal);
-        return commentIndex >= 0
-            ? preparedLine[..commentIndex]
-            : preparedLine;
+        var chars = originalLine.ToCharArray();
+        char quote = '\0';
+        var parenDepth = 0;
+        for (var i = 0; i < originalLine.Length; i++)
+        {
+            var ch = originalLine[i];
+            if (quote != '\0')
+            {
+                chars[i] = ' ';
+                if (ch == quote && (i == 0 || originalLine[i - 1] != '\\'))
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                chars[i] = ' ';
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '/' && i + 1 < originalLine.Length && originalLine[i + 1] == '*')
+            {
+                var commentEnd = originalLine.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                var stop = commentEnd >= 0 ? commentEnd + 2 : originalLine.Length;
+                for (var j = i; j < stop; j++)
+                    chars[j] = ' ';
+                i = stop - 1;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (parenDepth == 0 && ch == '/' && i + 1 < originalLine.Length && originalLine[i + 1] == '/')
+            {
+                for (var j = i; j < originalLine.Length; j++)
+                    chars[j] = ' ';
+                break;
+            }
+        }
+
+        return new string(chars);
     }
 
     private static bool ShouldSkipStylusVariableReference(string preparedLine, int variableIndex)

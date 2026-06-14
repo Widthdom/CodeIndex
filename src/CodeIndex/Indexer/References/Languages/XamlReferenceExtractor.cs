@@ -574,15 +574,30 @@ internal static class XamlReferenceExtractor
     {
         var start = 0;
         var depth = 0;
+        char quote = '\0';
         for (var i = 0; i <= content.Length; i++)
         {
             if (i < content.Length)
             {
-                if (content[i] == '{')
+                var ch = content[i];
+                if (quote != '\0')
+                {
+                    if (ch == quote && (i == 0 || content[i - 1] != '\\'))
+                        quote = '\0';
+                    continue;
+                }
+
+                if (ch is '\'' or '"')
+                {
+                    quote = ch;
+                    continue;
+                }
+
+                if (ch == '{')
                     depth++;
-                else if (content[i] == '}' && depth > 0)
+                else if (ch == '}' && depth > 0)
                     depth--;
-                else if (content[i] != ',' || depth != 0)
+                else if (ch != ',' || depth != 0)
                     continue;
             }
 
