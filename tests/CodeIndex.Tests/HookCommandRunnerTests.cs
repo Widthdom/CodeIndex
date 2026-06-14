@@ -172,6 +172,114 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_InstallJson_ReportsStagedHookCleanupFailure()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_install_cleanup_warning");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            Directory.CreateDirectory(hooksDir);
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            File.WriteAllText(hookPath, "#!/bin/sh\necho existing\n");
+            HookCommandRunner.ReplaceFileForTesting = (_, _, _) => throw new IOException("replace denied");
+            HookCommandRunner.DeleteFileForTesting = _ => throw new IOException("delete denied");
+
+            var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            var warnings = document.RootElement.GetProperty("warnings");
+            Assert.Equal(2, warnings.GetArrayLength());
+            var warning = warnings[0];
+            Assert.Equal("staged_hook_temp", warning.GetProperty("category").GetString());
+            Assert.Contains(".pre-commit.", warning.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Contains("failed to delete staged_hook_temp", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+            var backupWarning = warnings[1];
+            Assert.Equal("chained_hook_backup", backupWarning.GetProperty("category").GetString());
+            Assert.Contains("pre-commit.cdidx-chain", backupWarning.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Contains("failed to back up existing hook", backupWarning.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            HookCommandRunner.ReplaceFileForTesting = null;
+            HookCommandRunner.DeleteFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_UninstallJson_ReportsManagedHookDeleteFailure()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_cleanup_warning");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var installExit = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            Assert.Equal(CommandExitCodes.Success, installExit);
+            Assert.True(File.Exists(hookPath));
+            HookCommandRunner.DeleteFileForTesting = _ => throw new IOException("delete denied");
+
+            var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(File.Exists(hookPath));
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            var warning = document.RootElement.GetProperty("warnings")[0];
+            Assert.Equal("managed_hook", warning.GetProperty("category").GetString());
+            Assert.Equal(hookPath, warning.GetProperty("path").GetString());
+            Assert.Contains("failed to delete managed_hook", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            HookCommandRunner.DeleteFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_UninstallJson_ReportsChainedHookBackupFailure()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_backup_warning");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            Directory.CreateDirectory(hooksDir);
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            File.WriteAllText(hookPath, "#!/bin/sh\necho existing\n");
+            Assert.Equal(CommandExitCodes.Success, RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
+            Assert.True(File.Exists(chainedHookPath));
+            HookCommandRunner.ReplaceFileForTesting = (_, _, _) => throw new IOException("restore denied");
+
+            var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            var warning = document.RootElement.GetProperty("warnings")[0];
+            Assert.Equal("chained_hook_backup", warning.GetProperty("category").GetString());
+            Assert.Equal(chainedHookPath, warning.GetProperty("path").GetString());
+            Assert.Contains("failed to restore chained hook backup", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            HookCommandRunner.ReplaceFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Hooks_Uninstall_RestoresChainedPreCommitHook()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_chain");
