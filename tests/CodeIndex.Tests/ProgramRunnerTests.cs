@@ -1066,7 +1066,7 @@ sleep 5
                 var (exitCode, stdout, stderr) = CaptureConsole(() =>
                     ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromMilliseconds(100)));
 
-                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
                 Assert.Empty(stdout);
                 Assert.Contains("install.sh timed out", stderr);
                 Assert.Contains("rerun `install.sh` manually", stderr);
@@ -1111,6 +1111,91 @@ sleep 30
             finally
             {
                 TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunInstallerProcess_SuppressedOutputDrainsLargeStreams_Issue3376()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_output_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+i=0
+while [ "$i" -lt 2000 ]; do
+  printf 'stdout-line-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i"
+  printf 'stderr-line-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 0
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(
+                        startInfo,
+                        TimeSpan.FromSeconds(10),
+                        suppressOutput: true));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stdout);
+                Assert.Empty(stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_JsonPreparationFailure_UsesInstallError_Issue3373()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("missing installer checksum\n"))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
+                Assert.Equal("InvalidDataException", root.GetProperty("error").GetString());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
     }
@@ -1243,6 +1328,56 @@ exit 0
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_InstallerScriptCleanupFailure_EmitsWarning_Issue3372()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousDelete = ProgramRunner.DeleteUpgradeInstallerScriptForTesting;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.DeleteUpgradeInstallerScriptForTesting = _ => throw new IOException("delete denied");
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                using var doc = JsonDocument.Parse(stdout);
+                Assert.True(doc.RootElement.GetProperty("install_succeeded").GetBoolean());
+                Assert.Contains("Warning: failed to delete upgrade installer script", stderr);
+                Assert.Contains("IOException", stderr);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.DeleteUpgradeInstallerScriptForTesting = previousDelete;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
