@@ -49,6 +49,8 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("selection_source")] string SelectionSource,
     [property: JsonPropertyName("include_prerelease")] bool IncludePrerelease,
     [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("error_category")] string? ErrorCategory,
+    [property: JsonPropertyName("error_hint")] string? ErrorHint,
     [property: JsonPropertyName("install_attempted")] bool InstallAttempted,
     [property: JsonPropertyName("install_exit_code")] int? InstallExitCode,
     [property: JsonPropertyName("install_succeeded")] bool? InstallSucceeded,

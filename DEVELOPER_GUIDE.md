@@ -399,7 +399,7 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 `cdidx upgrade --json` has a stdout contract suitable for automation. Check-only
 and no-update results use the update-check fields
 (`current_version`, `latest_version`, `update_available`, `from_cache`,
-`error`) plus release-selection fields (`selected_version`,
+`error`, `error_category`, `error_hint`) plus release-selection fields (`selected_version`,
 `selected_channel`, `selection_source`, `include_prerelease`). When an update is
 installed, installer stdout/stderr is captured so stdout remains one JSON
 document, with `install_attempted`, `install_exit_code`, and
@@ -2636,7 +2636,7 @@ latest release の installer を実行します。
 
 `cdidx upgrade --json` は automation 向けの stdout contract を持ちます。check-only と
 no-update の結果は update-check fields (`current_version`, `latest_version`,
-`update_available`, `from_cache`, `error`) に release-selection fields
+`update_available`, `from_cache`, `error`, `error_category`, `error_hint`) に release-selection fields
 (`selected_version`, `selected_channel`, `selection_source`, `include_prerelease`)
 を加えたものを使います。update を install する場合、installer stdout/stderr は
 capture されるため stdout は 1 個の JSON document のままになり、update-check fields に
