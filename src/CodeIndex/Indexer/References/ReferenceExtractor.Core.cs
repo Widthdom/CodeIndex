@@ -208,6 +208,9 @@ public static partial class ReferenceExtractor
         var xamlBindingPropertyElementState = language == "xml"
             ? new XamlReferenceExtractor.BindingPropertyElementState()
             : null;
+        var xamlBindingMarkupExtensionState = language == "xml"
+            ? new XamlReferenceExtractor.BindingMarkupExtensionState()
+            : null;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
         var sassStylusPreparedInBlockComment = false;
@@ -971,7 +974,7 @@ public static partial class ReferenceExtractor
             else if (language == "xml" && xamlReferenceEnabled)
             {
                 var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);
-                XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container, xamlBindingPropertyElementState!);
+                XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container, xamlBindingPropertyElementState!, xamlBindingMarkupExtensionState!);
                 continue;
             }
             else if (language == "xml")

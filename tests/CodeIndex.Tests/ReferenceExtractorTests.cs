@@ -595,6 +595,13 @@ public partial class ReferenceExtractorTests
                     <TextBlock Text="{Binding Path=ViewModel.NestedName, RelativeSource={RelativeSource AncestorType={x:Type local:Vm}}}" />
                     <TextBlock Text="{Binding Path=ViewModel.QuotedName, ConverterParameter='Last, First'}" />
                     <TextBlock Text="{x:Bind ViewModel.LiveTitle, Mode=OneWay}" />
+                    <TextBlock Text="{Binding
+                        Path=ViewModel.WrappedTitle,
+                        RelativeSource={RelativeSource
+                            AncestorType={x:Type local:Vm}}}" />
+                    <TextBlock Tag="{x:Bind
+                        ViewModel.WrappedLiveTitle,
+                        Mode=OneWay}" />
                     <TextBlock Text="{Binding .}" />
                     <!-- helper(arg) -->
                     <TextBlock>helper(arg)</TextBlock>
@@ -640,6 +647,12 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "LiveTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "WrappedTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "WrappedLiveTitle"
             && reference.ReferenceKind == "reference");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "OneWay"

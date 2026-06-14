@@ -114,7 +114,8 @@ internal static class XamlReferenceExtractor
         HashSet<string> seen,
         long fileId,
         SymbolRecord? container,
-        BindingPropertyElementState bindingPropertyElementState)
+        BindingPropertyElementState bindingPropertyElementState,
+        BindingMarkupExtensionState bindingMarkupExtensionState)
     {
         if (bindingPropertyElementState.Active)
         {
@@ -124,6 +125,14 @@ internal static class XamlReferenceExtractor
                 if (completedValue.Length > 0)
                     AddReference(references, seen, fileId, completedValue, completed.ValueIndex, "reference", completed.Context, completed.LineNumber, completed.Container);
             }
+
+            return;
+        }
+
+        if (bindingMarkupExtensionState.Active)
+        {
+            if (bindingMarkupExtensionState.Advance(originalLine, context, lineNumber, container, out var completed))
+                EmitBindingMarkupExtensionReferences(completed.Kind, completed.Content, completed.ContentIndex, references, seen, fileId, completed.Context, completed.LineNumber, completed.Container);
 
             return;
         }
@@ -163,11 +172,10 @@ internal static class XamlReferenceExtractor
 
         foreach (var binding in EnumerateBindingMarkupExtensions(originalLine))
         {
-            foreach (var name in NormalizeBindingReferences(binding.Kind, binding.Content))
-            {
-                AddReference(references, seen, fileId, name, binding.ContentIndex, "reference", context, lineNumber, container);
-            }
+            EmitBindingMarkupExtensionReferences(binding.Kind, binding.Content, binding.ContentIndex, references, seen, fileId, context, lineNumber, container);
         }
+
+        TryStartBindingMarkupExtensionState(originalLine, context, lineNumber, container, bindingMarkupExtensionState);
 
         foreach (Match match in XamlBindingElementRegex.Matches(originalLine))
         {
@@ -197,6 +205,41 @@ internal static class XamlReferenceExtractor
             if (value.Length > 0)
                 AddReference(references, seen, fileId, value, match.Groups["value"].Index, "call", context, lineNumber, container);
         }
+    }
+
+    private static void EmitBindingMarkupExtensionReferences(
+        string kind,
+        string content,
+        int contentIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (var name in NormalizeBindingReferences(kind, content))
+            AddReference(references, seen, fileId, name, contentIndex, "reference", context, lineNumber, container);
+    }
+
+    private static void TryStartBindingMarkupExtensionState(
+        string line,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        BindingMarkupExtensionState state)
+    {
+        if (!TryFindUnclosedBindingMarkupExtension(line, out var start))
+            return;
+
+        state.Start(
+            start.Kind,
+            start.InitialContent,
+            start.InitialContentIndex,
+            start.InitialBraceDepth,
+            context,
+            lineNumber,
+            container);
     }
 
     private static void TryStartBindingPropertyElementState(
@@ -334,6 +377,130 @@ internal static class XamlReferenceExtractor
     internal readonly record struct CompletedBindingPropertyElement(
         string Value,
         int ValueIndex,
+        int LineNumber,
+        string Context,
+        SymbolRecord? Container);
+
+    internal sealed class BindingMarkupExtensionState
+    {
+        private readonly StringBuilder content = new();
+        private string kind = "";
+        private int braceDepth;
+        private int fallbackContentIndex;
+        private int contentIndex;
+        private int contentLineNumber;
+        private string contentContext = "";
+        private SymbolRecord? contentContainer;
+        private bool hasContentLocation;
+
+        public bool Active { get; private set; }
+
+        public void Start(
+            string kind,
+            string initialContent,
+            int initialContentIndex,
+            int initialBraceDepth,
+            string context,
+            int lineNumber,
+            SymbolRecord? container)
+        {
+            Active = true;
+            this.kind = kind;
+            braceDepth = initialBraceDepth;
+            fallbackContentIndex = initialContentIndex;
+            content.Clear();
+            hasContentLocation = false;
+            AppendContent(initialContent, initialContentIndex, context, lineNumber, container);
+        }
+
+        public bool Advance(
+            string line,
+            string context,
+            int lineNumber,
+            SymbolRecord? container,
+            out CompletedBindingMarkupExtension completed)
+        {
+            completed = default;
+            for (var i = 0; i < line.Length; i++)
+            {
+                if (line[i] == '{')
+                {
+                    braceDepth++;
+                    continue;
+                }
+
+                if (line[i] != '}')
+                    continue;
+
+                braceDepth--;
+                if (braceDepth != 0)
+                    continue;
+
+                AppendContent(line[..i], 0, context, lineNumber, container);
+                completed = new CompletedBindingMarkupExtension(
+                    kind,
+                    content.ToString(),
+                    hasContentLocation ? contentIndex : fallbackContentIndex,
+                    hasContentLocation ? contentLineNumber : lineNumber,
+                    hasContentLocation ? contentContext : context,
+                    hasContentLocation ? contentContainer : container);
+                Reset();
+                return true;
+            }
+
+            AppendContent(line, 0, context, lineNumber, container);
+            return false;
+        }
+
+        private void AppendContent(
+            string segment,
+            int segmentIndex,
+            string context,
+            int lineNumber,
+            SymbolRecord? container)
+        {
+            var trimmedStart = 0;
+            while (trimmedStart < segment.Length && char.IsWhiteSpace(segment[trimmedStart]))
+                trimmedStart++;
+            var trimmedEnd = segment.Length;
+            while (trimmedEnd > trimmedStart && char.IsWhiteSpace(segment[trimmedEnd - 1]))
+                trimmedEnd--;
+            if (trimmedStart >= trimmedEnd)
+                return;
+
+            if (!hasContentLocation)
+            {
+                contentIndex = segmentIndex + trimmedStart;
+                contentLineNumber = lineNumber;
+                contentContext = context;
+                contentContainer = container;
+                hasContentLocation = true;
+            }
+
+            if (content.Length > 0)
+                content.Append(' ');
+            content.Append(segment, trimmedStart, trimmedEnd - trimmedStart);
+        }
+
+        private void Reset()
+        {
+            Active = false;
+            kind = "";
+            braceDepth = 0;
+            fallbackContentIndex = 0;
+            contentIndex = 0;
+            contentLineNumber = 0;
+            contentContext = "";
+            contentContainer = null;
+            hasContentLocation = false;
+            content.Clear();
+        }
+    }
+
+    internal readonly record struct CompletedBindingMarkupExtension(
+        string Kind,
+        string Content,
+        int ContentIndex,
         int LineNumber,
         string Context,
         SymbolRecord? Container);
@@ -492,6 +659,56 @@ internal static class XamlReferenceExtractor
         }
     }
 
+    private static bool TryFindUnclosedBindingMarkupExtension(string line, out BindingMarkupExtensionStart start)
+    {
+        var cursor = 0;
+        while (cursor < line.Length)
+        {
+            var openBrace = line.IndexOf('{', cursor);
+            if (openBrace < 0)
+                break;
+
+            var kindStart = openBrace + 1;
+            while (kindStart < line.Length && char.IsWhiteSpace(line[kindStart]))
+                kindStart++;
+
+            if (!TryReadBindingKind(line, kindStart, out var kind, out var kindEnd))
+            {
+                cursor = openBrace + 1;
+                continue;
+            }
+
+            var depth = 1;
+            for (var i = kindEnd; i < line.Length; i++)
+            {
+                if (line[i] == '{')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (line[i] != '}')
+                    continue;
+
+                depth--;
+                if (depth == 0)
+                {
+                    cursor = i + 1;
+                    goto nextBinding;
+                }
+            }
+
+            start = new BindingMarkupExtensionStart(kind, line[kindEnd..], kindEnd, depth);
+            return true;
+
+        nextBinding:
+            continue;
+        }
+
+        start = default;
+        return false;
+    }
+
     private static bool TryReadBindingKind(string line, int kindStart, out string kind, out int kindEnd)
     {
         foreach (var candidate in BindingMarkupKinds)
@@ -526,6 +743,7 @@ internal static class XamlReferenceExtractor
     ];
 
     private readonly record struct BindingMarkupExtension(string Kind, string Content, int ContentIndex);
+    private readonly record struct BindingMarkupExtensionStart(string Kind, string InitialContent, int InitialContentIndex, int InitialBraceDepth);
 
     private static string NormalizeXamlMarkupArgument(string value)
     {
