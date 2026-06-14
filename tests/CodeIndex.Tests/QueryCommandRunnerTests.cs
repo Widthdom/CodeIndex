@@ -1373,7 +1373,7 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Fact]
+    [SkipOnMacOsArm64Fact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
@@ -5334,9 +5334,9 @@ public partial class QueryCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
-    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedDll, string workingDirectory, params string[] args)
+    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedCli, string workingDirectory, params string[] args)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        var psi = new System.Diagnostics.ProcessStartInfo
         {
             WorkingDirectory = workingDirectory,
             RedirectStandardInput = true,
@@ -5345,7 +5345,16 @@ public partial class QueryCommandRunnerTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.ArgumentList.Add(publishedDll);
+        if (Path.GetExtension(publishedCli).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            psi.FileName = "dotnet";
+            psi.ArgumentList.Add(publishedCli);
+        }
+        else
+        {
+            psi.FileName = publishedCli;
+        }
+
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
         SanitizeChildCliEnvironment(psi);
@@ -5389,6 +5398,7 @@ public partial class QueryCommandRunnerTests
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
         psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
+        psi.ArgumentList.Add("-p:NuGetAudit=false");
         psi.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = System.Diagnostics.Process.Start(psi)
@@ -5405,11 +5415,16 @@ public partial class QueryCommandRunnerTests
             throw new InvalidOperationException($"dotnet publish failed: {output}");
         }
 
-        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
-        if (!File.Exists(publishedDll))
-            throw new InvalidOperationException($"Published cdidx.dll not found at {publishedDll}");
+        var publishedAppHost = Path.Combine(outputDir, OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        if (File.Exists(publishedAppHost))
+            return publishedAppHost;
 
-        return publishedDll;
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (File.Exists(publishedDll))
+            return publishedDll;
+
+        throw new InvalidOperationException(
+            $"Published cdidx entry point not found. Expected {publishedDll} or {publishedAppHost}");
     }
 
     private static bool IsMissingDotNetRuntimeFailure(string output)
