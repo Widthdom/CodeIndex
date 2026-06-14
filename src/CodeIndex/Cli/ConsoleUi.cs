@@ -116,7 +116,7 @@ public static class ConsoleUi
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
-        ("export", "cdidx export ctags [--output <path>] [--db <path>]"),
+        ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line; max 1,048,576 chars/line and 256 arguments"),

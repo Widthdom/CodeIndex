@@ -236,6 +236,12 @@ When an error code is available, the first line is `Error [<code>]: <message>`. 
 
 CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
 
+`cdidx export ctags --json` follows the same contract: stdout contains only a
+single JSON summary or structured error, while the tag file itself remains the
+artifact. The summary includes resolved output/database paths, tag/emitted/
+skipped counts, filters, and advertised metadata field names so editor
+integrations can validate filtered exports without parsing human output.
+
 Interactive terminal controls are allowed only when stdout is not redirected or captured, terminal capability hints are present, and the environment has not opted out. Treat `TERM=dumb`, truthy `CI`, missing Unix terminal hints, `NO_COLOR`, and `CLICOLOR=0` as reasons to suppress ANSI/progress controls unless an explicitly human-facing override is documented for that control.
 
 ### C# / .NET integration
@@ -2462,6 +2468,11 @@ CLI JSON output は機械処理向けにきれいでなければなりません�
 場合でも ANSI escape sequence を出してはいけません。JSON-safe styling suppression は
 `ConsoleUi.ColorizeKind` など共有 formatter の近くに置き、将来の query output path も同じ
 invariant を継承できるようにしてください。
+
+`cdidx export ctags --json` も同じ contract に従います。stdout は単一の JSON summary または
+structured error だけを含み、tags file 自体は artifact として残します。summary には解決済みの
+output / database path、tag / emitted / skipped counts、filters、metadata field names を含め、
+editor integration が human output を parse せず filtered export を検証できるようにします。
 
 interactive terminal control は stdout が redirected / captured されておらず、terminal
 capability hint があり、environment が opt out していない場合にだけ許可します。`TERM=dumb`、
