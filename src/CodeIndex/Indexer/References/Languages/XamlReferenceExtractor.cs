@@ -52,6 +52,9 @@ internal static class XamlReferenceExtractor
         foreach (var line in lines)
         {
             if (line.IndexOf("schemas.microsoft.com/winfx/2006/xaml", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("schemas.microsoft.com/winfx/2009/xaml", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("schemas.microsoft.com/dotnet/2021/maui", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("xamarin.com/schemas/2014/forms", StringComparison.OrdinalIgnoreCase) >= 0
                 || line.IndexOf("github.com/avaloniaui", StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;
         }

@@ -286,7 +286,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
         var references = ReferenceExtractor.Extract(1, "css", content, symbols);
 
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
@@ -420,6 +420,7 @@ public partial class ReferenceExtractorTests
             @use "theme"
             $primary: #3366cc
             $spacing-base: 8px
+            $accent: #ffcc00
             /*
             @use "comment-block-theme"
             +commented-rounded(4px)
@@ -434,6 +435,7 @@ public partial class ReferenceExtractorTests
               color: red // @use "comment-theme"
               background: url("logo.png")
               border-color: rgb(0, 0, 0)
+              background: url(http://cdn/a.png) $accent
               padding: $spacing-base * 2
               +rounded(4px)
             """;
@@ -469,6 +471,9 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "spacing-base"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
+            reference.SymbolName == "accent"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
             reference.SymbolName == "radius"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
@@ -491,9 +496,15 @@ public partial class ReferenceExtractorTests
             rounded(radius)
               border-radius radius
 
+            @keyframes fade
+              from
+                opacity 0
+
             // $commentedAccent
             // rounded(8px)
             .button
+              &:hover
+                color primary
               content: "@require 'string-theme'"
               color primary
               color red // @require "comment-theme"
@@ -519,7 +530,7 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "comment-block-theme"
             && reference.ReferenceKind == "import");
-        Assert.Single(references.Where(reference =>
+        Assert.Equal(2, references.Count(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
         Assert.Equal(2, references.Count(reference =>
@@ -529,6 +540,12 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "commentedAccent");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "commentedRounded"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "fade"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "hover"
             && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "url"

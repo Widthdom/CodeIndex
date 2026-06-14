@@ -36,6 +36,10 @@ internal static class CssReferenceExtractor
         @"(?<![@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
         RegexOptions.Compiled);
 
+    private static readonly Regex StylusVariableDefinitionRegex = new(
+        @"^\s*\$?(?<name>[A-Za-z_][\w-]*)\s*(?:=|:=)\s*",
+        RegexOptions.Compiled);
+
     private static readonly Regex SassImportReferenceRegex = new(
         @"^\s*@(?>import|use|forward)\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -182,13 +186,18 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var sassReferenceLine = ShouldSkipSassIndentedDeclarationReferences(preparedLine)
-            ? ""
-            : preparedLine;
+        var sassReferenceLine = PrepareSassStylusReferenceLine(originalLine);
+        if (ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine))
+            sassReferenceLine = "";
+
         EmitScss(sassReferenceLine, references, seen, fileId, context, lineNumber, container);
         EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, preparedLine))
+        var sassMixinReferenceLine = ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine)
+            ? ""
+            : sassReferenceLine;
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, sassMixinReferenceLine))
         {
             ReferenceExtractor.AddReference(
                 references,
@@ -211,11 +220,12 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         HashSet<string>? definitionNames,
+        HashSet<string>? variableDefinitionNames,
         SymbolRecord? container)
     {
         EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
-        var stylusReferenceLine = PrepareStylusReferenceLine(originalLine);
+        var stylusReferenceLine = PrepareSassStylusReferenceLine(originalLine);
         foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
         {
             if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
@@ -232,12 +242,12 @@ internal static class CssReferenceExtractor
                 container);
         }
 
-        if (definitionNames != null)
+        if (variableDefinitionNames != null)
         {
             foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareVariableReferenceRegex, stylusReferenceLine))
             {
                 var nameGroup = match.Groups["name"];
-                if (!definitionNames.Contains(nameGroup.Value))
+                if (!variableDefinitionNames.Contains(nameGroup.Value))
                     continue;
                 if (ShouldSkipStylusBareVariableReference(stylusReferenceLine, nameGroup.Index))
                     continue;
@@ -273,6 +283,23 @@ internal static class CssReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    internal static HashSet<string> BuildStylusVariableDefinitionNames(string[] lines)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var inBlockComment = false;
+
+        foreach (var line in lines)
+        {
+            var blockMaskedLine = MaskSassStylusBlockCommentLine(line, ref inBlockComment);
+            var referenceLine = PrepareSassStylusReferenceLine(blockMaskedLine);
+            var match = StylusVariableDefinitionRegex.Match(referenceLine);
+            if (match.Success)
+                names.Add(match.Groups["name"].Value);
+        }
+
+        return names;
     }
 
     internal static string MaskSassStylusBlockCommentLine(string line, ref bool inBlockComment)
@@ -927,7 +954,7 @@ internal static class CssReferenceExtractor
         return trimmed.StartsWith("=", StringComparison.Ordinal);
     }
 
-    private static string PrepareStylusReferenceLine(string originalLine)
+    private static string PrepareSassStylusReferenceLine(string originalLine)
     {
         var chars = originalLine.ToCharArray();
         char quote = '\0';

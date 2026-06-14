@@ -127,6 +127,9 @@ public static partial class ReferenceExtractor
         var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
         KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
+        var stylusVariableDefinitionNames = language == "stylus"
+            ? CssReferenceExtractor.BuildStylusVariableDefinitionNames(lines)
+            : null;
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
@@ -970,7 +973,7 @@ public static partial class ReferenceExtractor
             else if (language == "sass")
                 CssReferenceExtractor.EmitSass(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, container);
             else if (language == "stylus")
-                CssReferenceExtractor.EmitStylus(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, allDefinitionNames, container);
+                CssReferenceExtractor.EmitStylus(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, allDefinitionNames, stylusVariableDefinitionNames, container);
             else if (language == "xml" && xamlReferenceEnabled)
             {
                 var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);

@@ -718,6 +718,31 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Xml_XamlMauiNamespaces_ReferencesAreEnabled()
+    {
+        const string content = """
+            <ContentPage x:Class="Sample.MainPage"
+                         xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+                <Label Text="{Binding Path=ViewModel.Title}" />
+                <Button Clicked="OnSaveClicked" />
+            </ContentPage>
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "xml", content, []);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Sample.MainPage"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Xml_NonXamlXmlDoesNotEmitXamlReferences()
     {
         const string content = """

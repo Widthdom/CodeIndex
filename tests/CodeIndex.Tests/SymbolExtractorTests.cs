@@ -17773,14 +17773,14 @@ public partial class SymbolExtractorTests
     public void Extract_Xml_XamlCapturesXClassAndXName()
     {
         var content = """
-            <Window x:Class="Sample.MainWindow"
-                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x = "http://schemas.microsoft.com/winfx/2006/xaml">
+            <ContentPage x:Class="Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x = "http://schemas.microsoft.com/winfx/2009/xaml">
                 <Grid>
                     <Button x:Name="SaveButton" Content="Save" />
                     <TextBlock x:Name="StatusText" />
                 </Grid>
-            </Window>
+            </ContentPage>
             """;
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
