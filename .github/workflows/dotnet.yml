@@ -214,6 +214,7 @@ jobs:
         run: dotnet restore CodeIndex.sln --locked-mode
 
       - name: Audit NuGet package vulnerabilities
+        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         shell: pwsh
         run: |
           $auditOutput = dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1
@@ -230,6 +231,7 @@ jobs:
           }
 
       - name: Verify formatting
+        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         run: dotnet format whitespace CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
 
       - name: Verify Release solution build
@@ -261,11 +263,11 @@ jobs:
             "--results-directory", "./TestResults"
           )
 
-          $collectCoverage = "${{ matrix.os }}" -ne "windows-latest" -or "${{ matrix.test-framework }}" -ne "net9.0"
+          $collectCoverage = "${{ matrix.os }}" -eq "ubuntu-latest" -and "${{ matrix.test-framework }}" -eq "net8.0"
           if ($collectCoverage) {
             $testArgs += @("--collect", "XPlat Code Coverage")
           } else {
-            Write-Host "Skipping XPlat Code Coverage for windows-latest/net9.0 to keep the slowest matrix lane under the test session timeout; see #3358."
+            Write-Host "Skipping XPlat Code Coverage outside ubuntu-latest/net8.0 so platform/framework matrix lanes run only the test suite."
           }
 
           New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
@@ -325,7 +327,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}

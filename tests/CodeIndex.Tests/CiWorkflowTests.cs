@@ -9,9 +9,17 @@ public class CiWorkflowTests
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
         var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
+        var normalizedWorkflow = workflow.ReplaceLineEndings("\n");
 
         Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
-        Assert.Contains("Skipping XPlat Code Coverage for windows-latest/net9.0", workflow);
+        Assert.Contains(
+            "- name: Audit NuGet package vulnerabilities\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'",
+            normalizedWorkflow);
+        Assert.Contains(
+            "- name: Verify formatting\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'",
+            normalizedWorkflow);
+        Assert.Contains("\"${{ matrix.os }}\" -eq \"ubuntu-latest\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"", workflow);
+        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-latest/net8.0", workflow);
         Assert.Contains("--blame-crash", workflow);
         Assert.Contains("--blame-hang", workflow);
         Assert.Contains("--blame-hang-timeout\", \"5m", workflow);
@@ -24,7 +32,8 @@ public class CiWorkflowTests
         Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);
         Assert.Contains("TestResults/**/*.dump", workflow);
-        Assert.Contains("always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')", workflow);
+        Assert.Contains("always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
+        Assert.DoesNotContain("always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')", workflow);
     }
 
     [Fact]
