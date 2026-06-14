@@ -592,6 +592,7 @@ public partial class ReferenceExtractorTests
                 <Grid>
                     <TextBox x:Name="SearchBox" />
                     <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
+                    <TextBlock Text="{x:Bind ViewModel.LiveTitle, Mode=OneWay}" />
                     <TextBox x:Name="DetailsBox" />
                     <Binding Path="DetailsModel.Name" ElementName="DetailsBox" />
                     <Binding.Path>SelectedItem.DisplayName</Binding.Path>
@@ -618,6 +619,12 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "LiveTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "OneWay"
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "SearchBox"
@@ -677,6 +684,7 @@ public partial class ReferenceExtractorTests
             <Project>
               <ItemGroup>
                 <Foo x:Class="Not.Xaml" />
+                <Note>helper(arg)</Note>
               </ItemGroup>
             </Project>
             """;

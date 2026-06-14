@@ -957,6 +957,10 @@ public static partial class ReferenceExtractor
                 var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);
                 XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container);
             }
+            else if (language == "xml")
+            {
+                continue;
+            }
 
             if (language == "terraform")
             {

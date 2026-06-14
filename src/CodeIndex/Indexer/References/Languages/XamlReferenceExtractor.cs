@@ -240,10 +240,8 @@ internal static class XamlReferenceExtractor
             if (key.Length == 0
                 || key.Equals("Path", StringComparison.OrdinalIgnoreCase)
                 || key.Equals("ElementName", StringComparison.OrdinalIgnoreCase)
-                || kind.Equals("x:Bind", StringComparison.OrdinalIgnoreCase)
-                || kind.Equals("TemplateBinding", StringComparison.OrdinalIgnoreCase)
-                || kind.Equals("CompiledBinding", StringComparison.OrdinalIgnoreCase)
-                || kind.Equals("ReflectionBinding", StringComparison.OrdinalIgnoreCase))
+                || (kind.Equals("TemplateBinding", StringComparison.OrdinalIgnoreCase)
+                    && key.Equals("Property", StringComparison.OrdinalIgnoreCase)))
             {
                 var normalized = NormalizeBindingPath(value);
                 if (normalized.Length > 0)
