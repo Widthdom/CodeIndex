@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -5130,6 +5132,48 @@ jobs:
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunFind_RegexMatcherUsesSharedTimeoutAndCultureInvariant_Issue3559()
+    {
+        var method = typeof(DbReader).GetMethod("CreateFindRegexMatcher", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var defaultTimeout = typeof(CodeIndex.Indexer.SymbolExtractor).Assembly
+            .GetType("CodeIndex.Indexer.BoundedRegex")!
+            .GetField("DefaultMatchTimeout", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null);
+
+        var insensitive = Assert.IsType<Regex>(method.Invoke(null, ["needle", false]));
+        Assert.Equal(defaultTimeout, insensitive.MatchTimeout);
+        Assert.True((insensitive.Options & RegexOptions.IgnoreCase) != 0);
+        Assert.True((insensitive.Options & RegexOptions.CultureInvariant) != 0);
+
+        var exact = Assert.IsType<Regex>(method.Invoke(null, ["needle", true]));
+        Assert.Equal(defaultTimeout, exact.MatchTimeout);
+        Assert.False((exact.Options & RegexOptions.IgnoreCase) != 0);
+        Assert.True((exact.Options & RegexOptions.CultureInvariant) != 0);
+    }
+
+    [Fact]
+    public void RunFind_RegexTimeoutWritesRuntimeErrorJsonMetadata_Issue3559()
+    {
+        var timeout = new RegexMatchTimeoutException("aaaaaaaaaaaaaaaa!", "^(a+)+$", TimeSpan.FromMilliseconds(25));
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.WriteFindRegexTimeoutError(timeout, _jsonOptions, json: true));
+
+        Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Equal("E014_REGEX_MATCH_TIMEOUT", json.GetProperty("error_code").GetString());
+        Assert.Equal("regex_timeout", json.GetProperty("category").GetString());
+        Assert.Contains("timed out", json.GetProperty("message").GetString());
+        Assert.DoesNotContain("invalid regular expression", json.GetProperty("message").GetString());
+        Assert.Contains("--regex", json.GetProperty("hint").GetString());
     }
 
     [Fact]

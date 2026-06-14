@@ -852,6 +852,25 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ListUsesSharedDataDirResolutionWhenDbIsOmitted()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("symbol_extraction", "csharp", "Shared data-dir suggestion", submitted: false);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(
+            ["suggestions", "list", "--json"],
+            new Dictionary<string, string?>
+            {
+                [DbPathResolver.DataDirEnvironmentVariable] = Path.GetDirectoryName(fixture.DbPath)!,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(record.Hash, doc.RootElement.GetProperty("id").GetString());
+    }
+
+    [Fact]
     public void Suggestions_ShowJsonResolvesShortId()
     {
         using var fixture = SuggestionFixture.Create();

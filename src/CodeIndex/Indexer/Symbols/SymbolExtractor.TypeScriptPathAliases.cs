@@ -16,6 +16,10 @@ public static partial class SymbolExtractor
     private const int MaxTypeScriptPathAliasTargetLength = 1024;
     private const int MaxTypeScriptPathAliasModuleSpecifierLength = 4096;
     private const int MaxTypeScriptPathAliasSubstitutedTargetLength = 4096;
+    private const string TypeScriptPathAliasDiagnosticReadFailed = "tsconfig_read_failed";
+    private const string TypeScriptPathAliasDiagnosticJsonInvalid = "tsconfig_json_invalid";
+    private const string TypeScriptPathAliasDiagnosticSizeLimit = "tsconfig_size_limit";
+    private const string TypeScriptPathAliasDiagnosticDepthLimit = "path_alias_depth_limit";
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
     private static readonly JsonDocumentOptions TypeScriptPathAliasConfigJsonOptions = new()
@@ -28,6 +32,8 @@ public static partial class SymbolExtractor
     private sealed record TypeScriptPathAliasConfig(string ConfigPath, string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
 
     private sealed record TypeScriptPathAliasRule(string Pattern, string BaseDirectory, IReadOnlyList<string> Targets);
+
+    private readonly record struct TypeScriptPathAliasConfigSkippedReason(string Code, string Reason);
 
     private static string ResolveJavaScriptTypeScriptModuleSpecifier(string lang, string? filePath, string? projectRoot, string moduleName)
     {
@@ -97,7 +103,7 @@ public static partial class SymbolExtractor
             foreach (var configFileName in new[] { "tsconfig.json", "jsconfig.json" })
             {
                 var configPath = Path.Combine(directory, configFileName);
-                if (File.Exists(configPath))
+                if (File.Exists(configPath) || Directory.Exists(configPath))
                 {
                     var totalConfigBytesRead = 0L;
                     return ParseTypeScriptPathAliasConfig(
@@ -130,7 +136,10 @@ public static partial class SymbolExtractor
         if (depth > MaxTypeScriptPathAliasExtendsDepth)
         {
             ReportTypeScriptPathAliasWarningOnce(
-                $"Skipped TypeScript path alias config {configPath} because the extends depth exceeds {MaxTypeScriptPathAliasExtendsDepth}.");
+                FormatTypeScriptPathAliasConfigSkippedMessage(
+                    configPath,
+                    TypeScriptPathAliasDiagnosticDepthLimit,
+                    $"the extends depth exceeds {MaxTypeScriptPathAliasExtendsDepth}"));
             return null;
         }
 
@@ -144,7 +153,7 @@ public static partial class SymbolExtractor
                     out var skippedReason))
             {
                 ReportTypeScriptPathAliasWarningOnce(
-                    $"Skipped TypeScript path alias config {configPath} because {skippedReason}.");
+                    FormatTypeScriptPathAliasConfigSkippedMessage(configPath, skippedReason));
                 return null;
             }
 
@@ -155,11 +164,19 @@ public static partial class SymbolExtractor
         catch (JsonException)
         {
             ReportTypeScriptPathAliasWarningOnce(
-                $"Skipped TypeScript path alias config {configPath} because it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit.");
+                FormatTypeScriptPathAliasConfigSkippedMessage(
+                    configPath,
+                    TypeScriptPathAliasDiagnosticJsonInvalid,
+                    $"it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit"));
             return null;
         }
         catch
         {
+            ReportTypeScriptPathAliasWarningOnce(
+                FormatTypeScriptPathAliasConfigSkippedMessage(
+                    configPath,
+                    TypeScriptPathAliasDiagnosticReadFailed,
+                    "it could not be read"));
             return null;
         }
 
@@ -284,10 +301,10 @@ public static partial class SymbolExtractor
         string configPath,
         ref long totalConfigBytesRead,
         out string text,
-        out string skippedReason)
+        out TypeScriptPathAliasConfigSkippedReason skippedReason)
     {
         text = string.Empty;
-        skippedReason = string.Empty;
+        skippedReason = default;
 
         try
         {
@@ -301,13 +318,13 @@ public static partial class SymbolExtractor
 
             if (stream.Length > MaxTypeScriptPathAliasConfigBytes)
             {
-                skippedReason = $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes";
+                skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes");
                 return false;
             }
 
             if (totalConfigBytesRead + stream.Length > MaxTypeScriptPathAliasTotalConfigBytes)
             {
-                skippedReason = $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes";
+                skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes");
                 return false;
             }
 
@@ -320,14 +337,14 @@ public static partial class SymbolExtractor
                 fileBytesRead += read;
                 if (fileBytesRead > MaxTypeScriptPathAliasConfigBytes)
                 {
-                    skippedReason = $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes";
+                    skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes");
                     return false;
                 }
 
                 totalConfigBytesRead += read;
                 if (totalConfigBytesRead > MaxTypeScriptPathAliasTotalConfigBytes)
                 {
-                    skippedReason = $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes";
+                    skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes");
                     return false;
                 }
 
@@ -339,17 +356,23 @@ public static partial class SymbolExtractor
                 text = text[1..];
             return true;
         }
-        catch (IOException)
+        catch (Exception ex) when (IsTypeScriptPathAliasConfigReadException(ex))
         {
-            skippedReason = "it could not be read";
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            skippedReason = "it could not be read";
+            skippedReason = new(TypeScriptPathAliasDiagnosticReadFailed, "it could not be read");
             return false;
         }
     }
+
+    private static string FormatTypeScriptPathAliasConfigSkippedMessage(
+        string configPath,
+        TypeScriptPathAliasConfigSkippedReason reason) =>
+        FormatTypeScriptPathAliasConfigSkippedMessage(configPath, reason.Code, reason.Reason);
+
+    private static string FormatTypeScriptPathAliasConfigSkippedMessage(string configPath, string code, string reason) =>
+        $"Skipped TypeScript path alias config {configPath} [{code}] because {reason}.";
+
+    private static bool IsTypeScriptPathAliasConfigReadException(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or NotSupportedException;
 
     private static void ReportTypeScriptPathAliasWarningOnce(string message)
     {

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Indexer;
@@ -6,6 +7,8 @@ namespace CodeIndex.Cli;
 
 internal static class AtomicFileWriter
 {
+    internal static Action<string>? FlushParentDirectoryForTesting { get; set; }
+
     public static void WriteText(string path, string contents, Encoding encoding, Action<string>? applyFileMode = null)
     {
         Write(
@@ -44,7 +47,7 @@ internal static class AtomicFileWriter
 
             File.Move(ioTempPath, ioTargetPath, overwrite: true);
             moved = true;
-            applyFileMode?.Invoke(ioTargetPath);
+            FlushParentDirectory(path);
         }
         catch
         {
@@ -53,6 +56,49 @@ internal static class AtomicFileWriter
             throw;
         }
     }
+
+    private static void FlushParentDirectory(string path)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (string.IsNullOrEmpty(directory))
+            return;
+
+        if (FlushParentDirectoryForTesting != null)
+        {
+            try
+            {
+                FlushParentDirectoryForTesting(directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw BuildDirectoryFlushException(path, ex);
+            }
+            return;
+        }
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var fd = UnixOpen(directory, flags: 0);
+        if (fd < 0)
+            throw BuildDirectoryFlushException(path, Marshal.GetLastPInvokeError());
+
+        try
+        {
+            if (UnixFsync(fd) != 0)
+                throw BuildDirectoryFlushException(path, Marshal.GetLastPInvokeError());
+        }
+        finally
+        {
+            _ = UnixClose(fd);
+        }
+    }
+
+    private static IOException BuildDirectoryFlushException(string path, int errno)
+        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}, but the parent directory could not be flushed to disk (errno {errno}).");
+
+    private static IOException BuildDirectoryFlushException(string path, Exception inner)
+        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}, but the parent directory could not be flushed to disk ({CommandErrorWriter.FormatSanitizedException(inner)}).", inner);
 
     private static string BuildTempPath(string path)
     {
@@ -74,4 +120,13 @@ internal static class AtomicFileWriter
         {
         }
     }
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int UnixOpen(string path, int flags);
+
+    [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    private static extern int UnixFsync(int fd);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static extern int UnixClose(int fd);
 }

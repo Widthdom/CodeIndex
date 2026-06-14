@@ -43,12 +43,13 @@ internal static class CommandErrorWriter
         int exitCode,
         string? hint = null,
         string? usage = null,
-        string? errorCode = null)
+        string? errorCode = null,
+        string? category = null)
     {
         if (json)
         {
             WriteStdout(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
+                new CommandErrorJsonResult("error", message, hint, errorCode, Category: category),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
             return exitCode;
         }

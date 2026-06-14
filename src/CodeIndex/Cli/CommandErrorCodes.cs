@@ -53,4 +53,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Index extraction made no forward progress within the bounded stall timeout.</summary>
     public const string IndexExtractionStalled = "E013_INDEX_EXTRACTION_STALLED";
+
+    /// <summary>A user-supplied regular expression exceeded the bounded match timeout while executing.</summary>
+    public const string RegexMatchTimeout = "E014_REGEX_MATCH_TIMEOUT";
 }

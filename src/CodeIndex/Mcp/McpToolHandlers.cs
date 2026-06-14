@@ -3635,7 +3635,21 @@ public partial class McpServer
             {
                 results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
             }
-            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+            catch (RegexMatchTimeoutException ex) when (regex)
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    $"regular expression timed out after {QueryCommandRunner.FormatRegexMatchTimeout(ex.MatchTimeout)} while scanning indexed file contents.",
+                    category: McpErrorEnvelope.CategoryRegexTimeout,
+                    suggestion: "Simplify the pattern, narrow the scan with path/lang filters, or disable regex mode for literal text.",
+                    retrySafe: true,
+                    extraData: new JsonObject
+                    {
+                        ["error_code"] = CommandErrorCodes.RegexMatchTimeout,
+                        ["timeout_ms"] = ex.MatchTimeout.TotalMilliseconds,
+                    });
+            }
+            catch (ArgumentException) when (regex)
             {
                 return CreateToolErrorResponse(id, "invalid regular expression. Check regex syntax and retry.");
             }
@@ -6007,7 +6021,8 @@ public partial class McpServer
 
     private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        var requestToken = _currentRequestToken.Value;
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound, requestToken))
         {
             var detail = isNotFound
                 ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."
@@ -6266,16 +6281,16 @@ public partial class McpServer
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
-        Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
+        Func<SuggestionRecord, CancellationToken, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
         var githubTokenConfigured = GitHubIssueReporter.ResolveToken() != null;
+        var cancellationToken = _currentRequestToken.Value;
         if (githubTokenConfigured)
         {
             var version = _version;
-            var cancellationToken = _currentRequestToken.Value;
-            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, cancellationToken);
+            githubCallback = (r, token) => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, token);
         }
 
-        var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
+        var result = await store.TryAddAndSubmitAsync(record, githubCallback, cancellationToken).ConfigureAwait(false);
         var storedHash = result.StoredHash ?? hash;
 
         if (!result.IsNew)

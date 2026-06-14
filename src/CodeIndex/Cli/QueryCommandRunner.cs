@@ -3984,8 +3984,9 @@ public static class QueryCommandRunner
                 }
                 catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
                 {
-                    Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
-                    return CommandExitCodes.UsageError;
+                    return ex is RegexMatchTimeoutException timeout
+                        ? WriteFindRegexTimeoutError(timeout, jsonOptions, options.Json)
+                        : WriteFindInvalidRegexError(ex);
                 }
                 if (counts.Count == 0)
                 {
@@ -4037,13 +4038,11 @@ public static class QueryCommandRunner
             }
             catch (ArgumentException ex) when (options.Regex)
             {
-                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
-                return CommandExitCodes.UsageError;
+                return WriteFindInvalidRegexError(ex);
             }
             catch (RegexMatchTimeoutException ex) when (options.Regex)
             {
-                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
-                return CommandExitCodes.UsageError;
+                return WriteFindRegexTimeoutError(ex, jsonOptions, options.Json);
             }
             var results = findResults.Results;
             if (results.Count == 0)
@@ -4124,6 +4123,32 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static int WriteFindInvalidRegexError(Exception ex)
+    {
+        Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+        return CommandExitCodes.UsageError;
+    }
+
+    internal static int WriteFindRegexTimeoutError(RegexMatchTimeoutException ex, JsonSerializerOptions jsonOptions, bool json)
+    {
+        var timeout = FormatRegexMatchTimeout(ex.MatchTimeout);
+        return CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            $"regular expression timed out after {timeout} while scanning indexed file contents.",
+            CommandExitCodes.RuntimeError,
+            hint: "Simplify the pattern, narrow the scan with --path/--lang, or omit --regex for literal text.",
+            errorCode: CommandErrorCodes.RegexMatchTimeout,
+            category: "regex_timeout");
+    }
+
+    internal static string FormatRegexMatchTimeout(TimeSpan timeout)
+    {
+        if (timeout.TotalMilliseconds < 1000)
+            return timeout.TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture) + "ms";
+        return timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + "s";
     }
 
     private static string? ValidateFindArgs(string[] args)

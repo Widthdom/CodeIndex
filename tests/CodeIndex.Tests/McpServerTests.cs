@@ -15132,6 +15132,27 @@ public class McpServerTests : IDisposable
         Assert.Equal("search", data["tool"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void BuildData_RegexTimeoutCarriesStructuredPayload_Issue3559()
+    {
+        var extra = new JsonObject
+        {
+            ["error_code"] = CommandErrorCodes.RegexMatchTimeout,
+            ["timeout_ms"] = 500.0,
+        };
+
+        var data = McpErrorEnvelope.BuildData(
+            McpErrorEnvelope.CategoryRegexTimeout,
+            "Simplify the pattern.",
+            retrySafe: true,
+            extra);
+
+        Assert.Equal(McpErrorEnvelope.CategoryRegexTimeout, data["category"]!.GetValue<string>());
+        Assert.True(data["retry_safe"]!.GetValue<bool>());
+        Assert.Equal(CommandErrorCodes.RegexMatchTimeout, data["error_code"]!.GetValue<string>());
+        Assert.Equal(500.0, data["timeout_ms"]!.GetValue<double>());
+    }
+
     private static void AssertJsonNullId(JsonNode node)
     {
         var obj = Assert.IsType<JsonObject>(node);
@@ -15225,6 +15246,24 @@ public class McpServerTests : IDisposable
         await runTask.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(0, transport.WriteCalls);
+    }
+
+    [Fact]
+    public async Task DrainInFlightTasksAsync_CancelledTokenSkipsEofDelay_Issue3400()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var stopwatch = Stopwatch.StartNew();
+
+        await _server.DrainInFlightTasksAsync(
+            [pending.Task],
+            McpServer.DefaultEofDrainTimeout,
+            McpServer.DefaultEofPostCancelDrainTimeout,
+            cts.Token);
+
+        stopwatch.Stop();
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"EOF drain cancellation took {stopwatch.Elapsed}.");
     }
 
     private sealed class QueuedFrameTransport : IMcpTransport

@@ -243,51 +243,6 @@ public static class DiffCommandRunner
             value
         """;
 
-    private const string SymbolRowsSql = """
-        SELECT
-            COALESCE(files.path, ''),
-            symbols.kind,
-            symbols.sub_kind,
-            symbols.name,
-            symbols.name_folded,
-            symbols.line,
-            symbols.start_line,
-            symbols.start_column,
-            symbols.end_line,
-            symbols.body_start_line,
-            symbols.body_end_line,
-            symbols.signature,
-            symbols.container_kind,
-            symbols.container_name,
-            symbols.container_qualified_name,
-            symbols.family_key,
-            symbols.visibility,
-            symbols.return_type,
-            symbols.is_metadata_target
-        FROM symbols
-        LEFT JOIN files ON files.id = symbols.file_id
-        ORDER BY
-            COALESCE(files.path, ''),
-            symbols.kind,
-            symbols.sub_kind,
-            symbols.name,
-            symbols.name_folded,
-            symbols.line,
-            symbols.start_line,
-            symbols.start_column,
-            symbols.end_line,
-            symbols.body_start_line,
-            symbols.body_end_line,
-            symbols.signature,
-            symbols.container_kind,
-            symbols.container_name,
-            symbols.container_qualified_name,
-            symbols.family_key,
-            symbols.visibility,
-            symbols.return_type,
-            symbols.is_metadata_target
-        """;
-
     private const string ReferenceRowsSql = """
         SELECT
             COALESCE(files.path, ''),
@@ -345,6 +300,8 @@ public static class DiffCommandRunner
 
         using var leftConnection = OpenReadOnlyConnection(options.LeftDb!);
         using var rightConnection = OpenReadOnlyConnection(options.RightDb!);
+        var leftSymbolRowsSql = BuildSymbolRowsSql(leftConnection);
+        var rightSymbolRowsSql = BuildSymbolRowsSql(rightConnection);
 
         if (!options.SummaryOnly)
         {
@@ -356,7 +313,7 @@ public static class DiffCommandRunner
 
         if (options.Detailed)
         {
-            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, SymbolRowsSql, options.Limit);
+            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, options.Limit);
             symbolsOnlyInLeft = symbolDiff.OnlyInLeft;
             symbolsOnlyInRight = symbolDiff.OnlyInRight;
             identical = identical && symbolDiff.Equal;
@@ -370,7 +327,7 @@ public static class DiffCommandRunner
                 RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql) &&
                 RowsEqual(leftConnection, rightConnection, FileIssueRowsSql) &&
                 RowsEqual(leftConnection, rightConnection, MetaRowsSql) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, SymbolRowsSql)) &&
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql)) &&
                 RowsEqual(leftConnection, rightConnection, ReferenceRowsSql);
         }
 
@@ -419,14 +376,22 @@ public static class DiffCommandRunner
     }
 
     private static OrderedRowsDiff DiffOrderedRows(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit)
+        => DiffOrderedRows(leftConnection, rightConnection, sql, sql, limit);
+
+    private static OrderedRowsDiff DiffOrderedRows(
+        SqliteConnection leftConnection,
+        SqliteConnection rightConnection,
+        string leftSql,
+        string rightSql,
+        int limit)
     {
         if (limit == 0)
-            return new OrderedRowsDiff(RowsEqual(leftConnection, rightConnection, sql), [], []);
+            return new OrderedRowsDiff(RowsEqual(leftConnection, rightConnection, leftSql, rightSql), [], []);
 
         using var leftCommand = leftConnection.CreateCommand();
-        leftCommand.CommandText = sql;
+        leftCommand.CommandText = leftSql;
         using var rightCommand = rightConnection.CreateCommand();
-        rightCommand.CommandText = sql;
+        rightCommand.CommandText = rightSql;
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
@@ -523,11 +488,14 @@ public static class DiffCommandRunner
     }
 
     private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql)
+        => RowsEqual(leftConnection, rightConnection, sql, sql);
+
+    private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string leftSql, string rightSql)
     {
         using var leftCommand = leftConnection.CreateCommand();
-        leftCommand.CommandText = sql;
+        leftCommand.CommandText = leftSql;
         using var rightCommand = rightConnection.CreateCommand();
-        rightCommand.CommandText = sql;
+        rightCommand.CommandText = rightSql;
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
@@ -702,6 +670,76 @@ public static class DiffCommandRunner
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {SqliteIdentifier.Quote(table)}";
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool ColumnExists(SqliteConnection connection, string table, string column)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table})";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (!reader.IsDBNull(1) && string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static string BuildSymbolRowsSql(SqliteConnection connection)
+    {
+        var metadataTargetExpr = ColumnExists(connection, "symbols", "is_metadata_target")
+            ? "symbols.is_metadata_target"
+            : "NULL";
+        var metadataTargetSourceExpr = ColumnExists(connection, "symbols", "metadata_target_source")
+            ? "symbols.metadata_target_source"
+            : "NULL";
+
+        return $$"""
+            SELECT
+                COALESCE(files.path, ''),
+                symbols.kind,
+                symbols.sub_kind,
+                symbols.name,
+                symbols.name_folded,
+                symbols.line,
+                symbols.start_line,
+                symbols.start_column,
+                symbols.end_line,
+                symbols.body_start_line,
+                symbols.body_end_line,
+                symbols.signature,
+                symbols.container_kind,
+                symbols.container_name,
+                symbols.container_qualified_name,
+                symbols.family_key,
+                symbols.visibility,
+                symbols.return_type,
+                {{metadataTargetExpr}},
+                {{metadataTargetSourceExpr}}
+            FROM symbols
+            LEFT JOIN files ON files.id = symbols.file_id
+            ORDER BY
+                COALESCE(files.path, ''),
+                symbols.kind,
+                symbols.sub_kind,
+                symbols.name,
+                symbols.name_folded,
+                symbols.line,
+                symbols.start_line,
+                symbols.start_column,
+                symbols.end_line,
+                symbols.body_start_line,
+                symbols.body_end_line,
+                symbols.signature,
+                symbols.container_kind,
+                symbols.container_name,
+                symbols.container_qualified_name,
+                symbols.family_key,
+                symbols.visibility,
+                symbols.return_type,
+                {{metadataTargetExpr}},
+                {{metadataTargetSourceExpr}}
+            """;
     }
 
     private static string EncodeRow(object?[] values)

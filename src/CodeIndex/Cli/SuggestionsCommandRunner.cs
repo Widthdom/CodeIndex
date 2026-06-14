@@ -188,7 +188,7 @@ internal static class SuggestionsCommandRunner
     private static SuggestionStore CreateStore(string? dbPath)
     {
         var normalizedDbPath = string.IsNullOrWhiteSpace(dbPath)
-            ? Path.Combine(Environment.CurrentDirectory, ".cdidx", "codeindex.db")
+            ? DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath
             : DbPathResolver.NormalizeDbPath(dbPath);
         var fullDbPath = Path.GetFullPath(normalizedDbPath);
         var cdidxDir = Path.GetDirectoryName(fullDbPath) ?? Path.Combine(Environment.CurrentDirectory, ".cdidx");

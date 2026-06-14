@@ -278,6 +278,33 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DetailedJsonHandlesLegacySymbolRowsWithoutMetadataTargetSource_Issue3524()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_metadata_source_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_metadata_source_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { }");
+            RecreateSymbolsTableWithoutMetadataTargetSourceColumn(leftDb);
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("identical", document.RootElement.GetProperty("status").GetString());
+            Assert.True(document.RootElement.GetProperty("identical").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsSuccessForSeparatelyBuiltIdenticalDatabases_Issue1724()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_identical_left");
@@ -713,6 +740,52 @@ public class DiffCommandRunnerTests
             )
             """,
             command => command.Parameters.AddWithValue("$context", context));
+    }
+
+    private static void RecreateSymbolsTableWithoutMetadataTargetSourceColumn(string dbPath)
+    {
+        ExecuteNonQuery(
+            dbPath,
+            """
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE symbols RENAME TO symbols_old;
+            CREATE TABLE symbols (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT,
+                sub_kind        TEXT,
+                name            TEXT,
+                name_folded     TEXT,
+                line            INTEGER,
+                start_line      INTEGER,
+                start_column    INTEGER,
+                end_line        INTEGER,
+                body_start_line INTEGER,
+                body_end_line   INTEGER,
+                signature       TEXT,
+                container_kind  TEXT,
+                container_name  TEXT,
+                container_qualified_name TEXT,
+                family_key      TEXT,
+                visibility      TEXT,
+                return_type     TEXT,
+                is_metadata_target INTEGER
+            );
+            INSERT INTO symbols (
+                id, file_id, kind, sub_kind, name, name_folded, line, start_line,
+                start_column, end_line, body_start_line,
+                body_end_line, signature, container_kind, container_name,
+                container_qualified_name, family_key, visibility, return_type, is_metadata_target
+            )
+            SELECT
+                id, file_id, kind, sub_kind, name, name_folded, line, start_line,
+                start_column, end_line, body_start_line,
+                body_end_line, signature, container_kind, container_name,
+                container_qualified_name, family_key, visibility, return_type, is_metadata_target
+            FROM symbols_old;
+            DROP TABLE symbols_old;
+            PRAGMA foreign_keys = ON;
+            """);
     }
 
     private static void ExecuteNonQuery(string dbPath, string sql, Action<SqliteCommand>? configure = null)

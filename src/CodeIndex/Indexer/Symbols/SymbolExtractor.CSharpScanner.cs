@@ -1435,6 +1435,7 @@ public static partial class SymbolExtractor
             "css" => FindCssSameLineBraceEndColumn(line, startColumn),
             "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
             "java" => FindJavaSameLineBraceEndColumn(line, startColumn),
+            "shell" => FindShellSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
     }

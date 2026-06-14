@@ -499,6 +499,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexWatchRecoveryCommandJsonResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportResult))]
 [JsonSerializable(typeof(HookCommandJsonResult))]
+[JsonSerializable(typeof(HookCommandWarningJsonResult))]
+[JsonSerializable(typeof(List<HookCommandWarningJsonResult>))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
 [JsonSerializable(typeof(LanguagesJsonResult))]

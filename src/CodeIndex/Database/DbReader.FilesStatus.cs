@@ -18,7 +18,7 @@ public partial class DbReader
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexMatcher = regex
-            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            ? CreateFindRegexMatcher(query, exact)
             : null;
 
         using var fileCmd = _conn.CreateCommand();
@@ -167,7 +167,7 @@ public partial class DbReader
 
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexMatcher = regex
-            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            ? CreateFindRegexMatcher(query, exact)
             : null;
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
@@ -349,6 +349,14 @@ public partial class DbReader
 
         lineMatch = new FindLineMatch(rawMatchColumn, rawMatchLength);
         return !focusColumn.HasValue || (focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength);
+    }
+
+    private static Regex CreateFindRegexMatcher(string query, bool exact)
+    {
+        var options = RegexOptions.CultureInvariant;
+        if (!exact)
+            options |= RegexOptions.IgnoreCase;
+        return new Regex(query, options, BoundedRegex.DefaultMatchTimeout);
     }
 
     private static void AddLineToFindWindow(IndexedLine indexedLine, Queue<IndexedLine> snippetWindow, Dictionary<int, string> snippetLinesByNumber)
