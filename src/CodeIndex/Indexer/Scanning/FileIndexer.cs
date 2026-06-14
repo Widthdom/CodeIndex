@@ -217,10 +217,10 @@ public class FileIndexer
         [".less"] = "css",    // Less preprocessor / Less プリプロセッサ
         [".pcss"] = "css",    // PostCSS / PostCSS
         // Sass indented syntax / Stylus use indentation instead of braces, so they live in
-        // separate search-only buckets — the CSS symbol extractor's brace-based patterns do
-        // not apply, but exact-name search still works.
+        // separate buckets with conservative line-level extractors rather than the CSS
+        // brace-scoped extractor.
         // Sass インデント構文と Stylus は波括弧ではなくインデントで構造化するため、
-        // CSS のシンボル抽出（波括弧ベース）は使わず、検索用の別バケットに分ける。
+        // CSS の波括弧スコープ抽出ではなく、保守的な行単位抽出を持つ別バケットに分ける。
         [".sass"] = "sass",
         [".styl"] = "stylus",
         [".vue"] = "vue",

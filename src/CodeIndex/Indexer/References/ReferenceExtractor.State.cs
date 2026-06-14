@@ -31,7 +31,7 @@ public static partial class ReferenceExtractor
         "assembly",
         "r", "powershell", "shell", "haskell", "solidity",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
-        "zig", "css", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk"
+        "zig", "css", "sass", "stylus", "xml", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk"
     ];
 
     private static readonly IReadOnlyDictionary<string, IReferenceExtractor> Extractors =

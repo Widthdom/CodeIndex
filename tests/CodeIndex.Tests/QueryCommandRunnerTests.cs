@@ -2267,14 +2267,12 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
-        // Search-only languages that intentionally live outside the Python / CSS extractors
-        // (Cython .pyx/.pxd, Sass .sass, Stylus .styl, and the newly added extension-only
-        // languages) must advertise
+        // Search-only languages that intentionally live outside richer extractors
+        // (Cython .pyx/.pxd and the newly added extension-only languages) must advertise
         // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
         // between "indexed with symbols" and "indexed for search only".
-        // 意図的に Python / CSS 抽出器の対象外になっている search-only 言語
-        // （Cython の .pyx/.pxd、Sass の .sass、Stylus の .styl、そして新規追加の
-        // 拡張子ベース言語）は、
+        // 意図的に richer な抽出器の対象外になっている search-only 言語
+        // （Cython の .pyx/.pxd と新規追加の拡張子ベース言語）は、
         // symbol_extraction=false / graph_queries=false で広告しなければならない。
         // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
@@ -2285,7 +2283,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
+        foreach (var searchOnly in new[] { "cython" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -2318,6 +2316,25 @@ public partial class QueryCommandRunnerTests
             "yaml must advertise symbol_extraction=true");
         Assert.True(languages["json"].GetProperty("symbol_extraction").GetBoolean(),
             "json must advertise symbol_extraction=true");
+
+        foreach (var stylesheetPreprocessor in new[] { "sass", "stylus" })
+        {
+            Assert.True(languages.ContainsKey(stylesheetPreprocessor), $"expected '{stylesheetPreprocessor}' to be listed");
+            Assert.True(languages[stylesheetPreprocessor].GetProperty("symbol_extraction").GetBoolean(),
+                $"{stylesheetPreprocessor} must advertise symbol_extraction=true");
+            Assert.True(languages[stylesheetPreprocessor].GetProperty("reference_extraction").GetBoolean(),
+                $"{stylesheetPreprocessor} must advertise reference_extraction=true");
+            Assert.True(languages[stylesheetPreprocessor].GetProperty("graph_queries").GetBoolean(),
+                $"{stylesheetPreprocessor} must advertise graph_queries=true");
+            Assert.Empty(languages[stylesheetPreprocessor].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        Assert.True(languages["xml"].GetProperty("symbol_extraction").GetBoolean(),
+            "xml must advertise symbol_extraction=true for XAML/AXAML files");
+        Assert.True(languages["xml"].GetProperty("reference_extraction").GetBoolean(),
+            "xml must advertise reference_extraction=true for XAML/AXAML files");
+        Assert.True(languages["xml"].GetProperty("graph_queries").GetBoolean(),
+            "xml must advertise graph_queries=true for XAML/AXAML files");
 
         Assert.True(languages.ContainsKey("solidity"), "expected 'solidity' to be listed");
         Assert.True(languages["solidity"].GetProperty("symbol_extraction").GetBoolean(),

@@ -412,4 +412,238 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "elevated"
             && reference.ReferenceKind == "call"));
     }
+
+    [Fact]
+    public void Extract_Sass_IndentedVariablesMixinsAndImports_AreReferenced()
+    {
+        const string content = """
+            /* Loud comment
+              @use "loud-comment-theme"
+              +loud-commented(4px)
+            // Silent comment
+              @use "silent-comment-theme"
+              +silent-commented(4px)
+            @use "theme"
+            @import url("reset.css")
+            $primary: #3366cc
+            $spacing-base: 8px
+            $accent: #ffcc00
+            /*
+              @use "comment-block-theme"
+              +commented-rounded(4px)
+            */
+
+            =rounded($radius)
+              border-radius: $radius
+            =rounded-button($button-radius)
+              border-radius: $button-radius
+
+            @function spacing-unit($step)
+              @return $step * 4px
+
+            .button
+              content: '@use "string-theme"'
+              color: $primary
+              color: red // @use "comment-theme"
+              background: url("logo.png")
+              border-color: rgb(0, 0, 0)
+              background: url(http://cdn/a.png) $accent
+              padding: $spacing-base * 2
+              margin: spacing-unit(2)
+              +rounded(4px)
+              +rounded-button(4px)
+            .card:not(.disabled)
+              display: block
+            :is(.button, .link)
+              display: block
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sass", content);
+        var references = ReferenceExtractor.Extract(1, "sass", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "theme"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "reset.css"
+            && reference.ReferenceKind == "import"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "string-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-block-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "loud-comment-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "silent-comment-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "commented-rounded"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "loud-commented"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "silent-commented"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url("
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "rgb"
+            && reference.ReferenceKind == "call");
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-base"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "accent"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "radius"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded-button"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "button"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "unit"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "not"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "is"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_Stylus_VariablesAndFunctionCalls_AreReferenced()
+    {
+        const string content = """
+            @require "theme"
+            @import url("tokens.css")
+            primary = #3366cc
+            $accent = #ffcc00
+            /*
+            @require "comment-block-theme"
+            commentedRounded(8px)
+            */
+
+            rounded(radius)
+              border-radius radius
+            rounded-button(radius)
+              border-radius radius
+            spacing-unit(step)
+              margin step
+
+            @keyframes fade
+              from
+                opacity 0
+
+            // $commentedAccent
+            // rounded(8px)
+            .card:not(.disabled)
+              display block
+            :is(.button, .link)
+              display block
+            .button
+              &:hover
+                color primary
+              content: "@require 'string-theme'"
+              color primary
+              color red // @require "comment-theme"
+              background $accent
+              background url(http://cdn/a.png) $accent
+              background-image url("logo.png")
+              border-color rgb(0, 0, 0)
+              rounded(4px)
+              rounded-button(4px)
+              spacing-unit(2)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "stylus", content);
+        var references = ReferenceExtractor.Extract(1, "stylus", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "theme"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "tokens.css"
+            && reference.ReferenceKind == "import"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "string-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-block-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url("
+            && reference.ReferenceKind == "import");
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "accent"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "commentedAccent");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "commentedRounded"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "fade"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "hover"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "rgb"
+            && reference.ReferenceKind == "call");
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded-button"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "button"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "unit"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "not"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "is"
+            && reference.ReferenceKind == "call");
+    }
 }

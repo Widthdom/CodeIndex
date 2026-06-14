@@ -26,6 +26,7 @@ public static partial class ReferenceExtractor
 
         content = preparedInput.Content;
         var lines = preparedInput.Lines;
+        var xamlReferenceEnabled = language == "xml" && XamlReferenceExtractor.IsXaml(lines);
         var structuralLines = preparedInput.StructuralLines;
         var csharpLinesInsideMultilineStringContent = preparedInput.CSharpLinesInsideMultilineStringContent;
         var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
@@ -63,6 +64,7 @@ public static partial class ReferenceExtractor
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols);
+        var allDefinitionNames = BuildAllDefinitionNames(language, symbols);
         var fileDefinitionNames = isRazorFile
             ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
             : null;
@@ -125,6 +127,9 @@ public static partial class ReferenceExtractor
         var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
         KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
+        var stylusVariableDefinitionNames = language == "stylus"
+            ? CssReferenceExtractor.BuildStylusVariableDefinitionNames(lines)
+            : null;
         var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
@@ -202,8 +207,23 @@ public static partial class ReferenceExtractor
         var markupSchemaState = language is "graphql" or "html" or "markdown"
             ? new MarkupSchemaReferenceExtractor.MarkupState()
             : null;
+        var xamlInXmlComment = false;
+        var xamlBindingPropertyElementState = language == "xml"
+            ? new XamlReferenceExtractor.BindingPropertyElementState()
+            : null;
+        var xamlBindingMarkupExtensionState = language == "xml"
+            ? new XamlReferenceExtractor.BindingMarkupExtensionState()
+            : null;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
+        var sassPreparedCommentState = language == "sass"
+            ? new CssReferenceExtractor.SassLoudCommentState()
+            : null;
+        var sassOriginalCommentState = language == "sass"
+            ? new CssReferenceExtractor.SassLoudCommentState()
+            : null;
+        var sassStylusPreparedInBlockComment = false;
+        var sassStylusOriginalInBlockComment = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -213,6 +233,21 @@ public static partial class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
+            var originalLineForLanguage = originalLine;
+            if (language == "sass")
+            {
+                preparedLine = CssReferenceExtractor.MaskSassBlockCommentLine(preparedLine, sassPreparedCommentState!);
+                originalLineForLanguage = CssReferenceExtractor.MaskSassBlockCommentLine(originalLine, sassOriginalCommentState!);
+            }
+            else if (language == "stylus")
+            {
+                preparedLine = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
+                    preparedLine,
+                    ref sassStylusPreparedInBlockComment);
+                originalLineForLanguage = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
+                    originalLine,
+                    ref sassStylusOriginalInBlockComment);
+            }
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             SymbolRecord? phpLineContainer = null;
@@ -945,6 +980,26 @@ public static partial class ReferenceExtractor
                     fileId,
                     definitionNames,
                     container);
+            }
+            else if (language == "sass")
+            {
+                CssReferenceExtractor.EmitSass(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, container);
+                continue;
+            }
+            else if (language == "stylus")
+            {
+                CssReferenceExtractor.EmitStylus(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, allDefinitionNames, stylusVariableDefinitionNames, container);
+                continue;
+            }
+            else if (language == "xml" && xamlReferenceEnabled)
+            {
+                var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);
+                XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container, xamlBindingPropertyElementState!, xamlBindingMarkupExtensionState!);
+                continue;
+            }
+            else if (language == "xml")
+            {
+                continue;
             }
 
             if (language == "terraform")

@@ -572,6 +572,205 @@ public partial class ReferenceExtractorTests
         Assert.Equal("csharp", razorExtractor.Language);
     }
 
+    [Fact]
+    public void Extract_Xml_XamlReferences_CodeBehindResourcesBindingsAndHandlers()
+    {
+        const string content = """
+            <Window x:Class="Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x = "http://schemas.microsoft.com/winfx/2006/xaml">
+                <Window.Resources>
+                    <SolidColorBrush x:Key="PrimaryBrush" Color="Tomato" />
+                    <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}" />
+                </Window.Resources>
+                <Border BorderBrush="{DynamicResource ResourceKey={x:Static Member={x:Type local:Keys}.AccentBrush}}" />
+                <!-- <TextBlock Text="{Binding IgnoredCommentBinding}" /> -->
+                <Border Tag="{StaticResource PrimaryBrush}" /><!-- <TextBlock Text="{Binding IgnoredInlineCommentBinding}" /> -->
+                <!-- <TextBlock Text="{Binding IgnoredPrefixCommentBinding}" /> --><TextBlock Text="{Binding AfterInlineComment}" />
+                <!--
+                <TextBlock Text="{Binding IgnoredMultilineCommentBinding}" />
+                -->
+                <Grid>
+                    <TextBox x:Name="SearchBox" />
+                    <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
+                    <TextBlock Text="{Binding Path=ViewModel.NestedName, RelativeSource={RelativeSource AncestorType={x:Type local:Vm}}}" />
+                    <TextBlock Text="{Binding Path=ViewModel.QuotedName, ConverterParameter='Last, First'}" />
+                    <TextBlock Text="{x:Bind ViewModel.LiveTitle, Mode=OneWay}" />
+                    <TextBlock Text="{Binding
+                        Path=ViewModel.WrappedTitle,
+                        RelativeSource={RelativeSource
+                            AncestorType={x:Type local:Vm}}}" />
+                    <TextBlock Text="{Binding
+                        Path=ViewModel.WrappedSuffixTitle}" Loaded="OnWrappedLoaded" />
+                    <TextBlock Tag="{x:Bind
+                        ViewModel.WrappedLiveTitle,
+                        Mode=OneWay}" />
+                    <TextBlock Text="{Binding .}" />
+                    <!-- helper(arg) -->
+                    <TextBlock>helper(arg)</TextBlock>
+                    <TextBox x:Name="DetailsBox" />
+                    <Binding Path="DetailsModel.Name" ElementName="DetailsBox" />
+                    <Binding Path="." />
+                    <Binding.Path>SelectedItem.DisplayName</Binding.Path>
+                    <Binding.Path>
+                        SelectedItem.MultiLineName
+                    </Binding.Path>
+                    <Button Clicked="OnSaveClicked" />
+                    <Button Click="OnWpfSaveClicked" />
+                </Grid>
+            </Window>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+        var references = ReferenceExtractor.Extract(1, "xml", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Sample.MainWindow"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Button"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "PrimaryButtonStyle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "local:Keys.AccentBrush"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "PrimaryButtonStyle"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NestedName"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "QuotedName"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "First"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "LiveTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "WrappedTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "WrappedSuffixTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "WrappedLiveTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "OneWay"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "."
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SearchBox"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Name"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DetailsBox"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DisplayName"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MultiLineName"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnWpfSaveClicked"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnWrappedLoaded"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredCommentBinding");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredInlineCommentBinding");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredPrefixCommentBinding");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredMultilineCommentBinding");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "AfterInlineComment"
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlDefaultNamespaceOnly_ReferencesAreEnabled()
+    {
+        const string content = """
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+                <TextBlock Text="{Binding Path=ViewModel.Title}" />
+                <Button Click="OnSaveClicked" />
+            </Window>
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "xml", content, []);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlMauiNamespaces_ReferencesAreEnabled()
+    {
+        const string content = """
+            <ContentPage x:Class="Sample.MainPage"
+                         xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+                <Label Text="{Binding Path=ViewModel.Title}" />
+                <Button Clicked="OnSaveClicked" />
+            </ContentPage>
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "xml", content, []);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Sample.MainPage"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_Xml_NonXamlXmlDoesNotEmitXamlReferences()
+    {
+        const string content = """
+            <Project>
+              <ItemGroup>
+                <Foo x:Class="Not.Xaml" />
+                <Note>helper(arg)</Note>
+              </ItemGroup>
+            </Project>
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "xml", content, []);
+
+        Assert.Empty(references);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]

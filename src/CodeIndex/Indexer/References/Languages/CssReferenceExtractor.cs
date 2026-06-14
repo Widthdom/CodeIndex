@@ -20,6 +20,38 @@ internal static class CssReferenceExtractor
         @"@include\s+(?<name>[A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex SassIndentedMixinReferenceRegex = new(
+        @"(?<![\w-])\+(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex SassBareFunctionReferenceRegex = new(
+        @"(?<![:@+\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
+        RegexOptions.Compiled);
+
+    private static readonly Regex StylusVariableReferenceRegex = new(
+        @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex StylusBareVariableReferenceRegex = new(
+        @"(?<![$\w.-])(?<name>[A-Za-z_][\w-]*)(?![\w-])",
+        RegexOptions.Compiled);
+
+    private static readonly Regex StylusBareFunctionReferenceRegex = new(
+        @"(?<![:@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
+        RegexOptions.Compiled);
+
+    private static readonly Regex StylusVariableDefinitionRegex = new(
+        @"^\s*\$?(?<name>[A-Za-z_][\w-]*)\s*(?:=|:=)\s*",
+        RegexOptions.Compiled);
+
+    private static readonly Regex SassImportReferenceRegex = new(
+        @"^\s*@(?>import|use|forward)\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex StylusImportReferenceRegex = new(
+        @"^\s*@(?>import|require|use)\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -55,6 +87,11 @@ internal static class CssReferenceExtractor
         "infinite", "normal", "reverse", "alternate", "alternate-reverse",
         "none", "forwards", "backwards", "both", "running", "paused",
         "initial", "inherit", "unset", "revert", "revert-layer",
+    };
+
+    private static readonly HashSet<string> CssBuiltInFunctionNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "url", "var", "calc", "rgb", "rgba", "hsl", "hsla",
     };
 
     public static void EmitCss(
@@ -146,6 +183,369 @@ internal static class CssReferenceExtractor
     {
         foreach (var pattern in ScssReferencePatterns)
             EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+    }
+
+    public static void EmitSass(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var sassReferenceLine = PrepareSassStylusReferenceLine(originalLine);
+        if (ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine))
+            sassReferenceLine = "";
+
+        EmitScss(sassReferenceLine, references, seen, fileId, context, lineNumber, container);
+        EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
+
+        var sassMixinReferenceLine = ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine)
+            ? ""
+            : sassReferenceLine;
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, sassMixinReferenceLine))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(SassBareFunctionReferenceRegex, sassReferenceLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (CssBuiltInFunctionNames.Contains(name))
+                continue;
+            if (ShouldSkipSassBareFunctionReference(sassReferenceLine, match.Groups["name"].Index))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitStylus(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        HashSet<string>? definitionNames,
+        HashSet<string>? variableDefinitionNames,
+        SymbolRecord? container)
+    {
+        EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
+
+        var stylusReferenceLine = PrepareSassStylusReferenceLine(originalLine);
+        foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
+        {
+            if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        if (variableDefinitionNames != null)
+        {
+            foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareVariableReferenceRegex, stylusReferenceLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (!variableDefinitionNames.Contains(nameGroup.Value))
+                    continue;
+                if (ShouldSkipStylusBareVariableReference(stylusReferenceLine, nameGroup.Index))
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    nameGroup.Value,
+                    nameGroup.Index,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (CssBuiltInFunctionNames.Contains(name))
+                continue;
+            if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    internal static HashSet<string> BuildStylusVariableDefinitionNames(string[] lines)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var inBlockComment = false;
+
+        foreach (var line in lines)
+        {
+            var blockMaskedLine = MaskSassStylusBlockCommentLine(line, ref inBlockComment);
+            var referenceLine = PrepareSassStylusReferenceLine(blockMaskedLine);
+            var match = StylusVariableDefinitionRegex.Match(referenceLine);
+            if (match.Success)
+                names.Add(match.Groups["name"].Value);
+        }
+
+        return names;
+    }
+
+    internal sealed class SassLoudCommentState
+    {
+        public bool Active { get; set; }
+        public int Indent { get; set; }
+        public bool SilentActive { get; set; }
+        public int SilentIndent { get; set; }
+    }
+
+    internal static string MaskSassBlockCommentLine(string line, SassLoudCommentState state)
+    {
+        var chars = line.ToCharArray();
+        var lineIndent = CountLeadingWhitespace(line);
+        var isBlank = lineIndent == line.Length;
+        var cursor = 0;
+
+        if (state.SilentActive)
+        {
+            if (isBlank || lineIndent > state.SilentIndent)
+            {
+                for (var j = 0; j < chars.Length; j++)
+                    chars[j] = ' ';
+                return new string(chars);
+            }
+
+            state.SilentActive = false;
+        }
+
+        if (state.Active)
+        {
+            var trimmed = isBlank ? "" : line[lineIndent..];
+            if (!isBlank
+                && lineIndent <= state.Indent
+                && !trimmed.StartsWith("*/", StringComparison.Ordinal))
+            {
+                state.Active = false;
+            }
+            else
+            {
+                var commentEnd = line.IndexOf("*/", StringComparison.Ordinal);
+                if (commentEnd < 0)
+                {
+                    for (var j = 0; j < chars.Length; j++)
+                        chars[j] = ' ';
+                    return new string(chars);
+                }
+
+                var stop = commentEnd + 2;
+                for (var j = 0; j < stop; j++)
+                    chars[j] = ' ';
+                cursor = stop;
+                state.Active = false;
+            }
+        }
+
+        var quote = '\0';
+        var parenDepth = 0;
+        for (var i = cursor; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (ch == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                var commentEnd = line.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                var stop = commentEnd >= 0 ? commentEnd + 2 : line.Length;
+                for (var j = i; j < stop; j++)
+                    chars[j] = ' ';
+
+                if (commentEnd < 0)
+                {
+                    state.Active = true;
+                    state.Indent = lineIndent;
+                    break;
+                }
+
+                i = stop - 1;
+                continue;
+            }
+
+            if (parenDepth == 0 && ch == '/' && i + 1 < line.Length && line[i + 1] == '/')
+            {
+                for (var j = i; j < chars.Length; j++)
+                    chars[j] = ' ';
+                if (i == lineIndent)
+                {
+                    state.SilentActive = true;
+                    state.SilentIndent = lineIndent;
+                }
+                break;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    internal static string MaskSassStylusBlockCommentLine(string line, ref bool inBlockComment)
+    {
+        var chars = line.ToCharArray();
+        var quote = '\0';
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+
+            if (inBlockComment)
+            {
+                chars[i] = ' ';
+                if (ch == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    chars[i + 1] = ' ';
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                inBlockComment = true;
+                i++;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static int CountLeadingWhitespace(string line)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        return index;
+    }
+
+    private static void EmitPreprocessorImportReferences(
+        Regex importRegex,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (originalLine.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            return;
+
+        var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
+        foreach (Match match in importRegex.Matches(importScanLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (!nameGroup.Success || nameGroup.Value.Length == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "import",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     private static void EmitMatches(
@@ -706,5 +1106,122 @@ internal static class CssReferenceExtractor
         }
 
         return false;
+    }
+
+    private static bool ShouldSkipSassIndentedDeclarationReferences(string preparedLine)
+    {
+        var trimmed = preparedLine.TrimStart();
+        return trimmed.StartsWith("=", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldSkipSassBareFunctionReference(string preparedLine, int functionIndex)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (!trimmed.StartsWith("@function", StringComparison.Ordinal)
+            && !trimmed.StartsWith("@mixin", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var firstNonWhitespace = preparedLine.Length - trimmed.Length;
+        return functionIndex >= firstNonWhitespace;
+    }
+
+    private static string PrepareSassStylusReferenceLine(string originalLine)
+    {
+        var chars = originalLine.ToCharArray();
+        char quote = '\0';
+        var parenDepth = 0;
+        for (var i = 0; i < originalLine.Length; i++)
+        {
+            var ch = originalLine[i];
+            if (quote != '\0')
+            {
+                chars[i] = ' ';
+                if (ch == quote && (i == 0 || originalLine[i - 1] != '\\'))
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                chars[i] = ' ';
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '/' && i + 1 < originalLine.Length && originalLine[i + 1] == '*')
+            {
+                var commentEnd = originalLine.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                var stop = commentEnd >= 0 ? commentEnd + 2 : originalLine.Length;
+                for (var j = i; j < stop; j++)
+                    chars[j] = ' ';
+                i = stop - 1;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (parenDepth == 0 && ch == '/' && i + 1 < originalLine.Length && originalLine[i + 1] == '/')
+            {
+                for (var j = i; j < originalLine.Length; j++)
+                    chars[j] = ' ';
+                break;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static bool ShouldSkipStylusVariableReference(string preparedLine, int variableIndex)
+    {
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        var dollarIndex = variableIndex - 1;
+        if (dollarIndex != firstNonWhitespace || dollarIndex < 0 || preparedLine[dollarIndex] != '$')
+            return false;
+
+        var cursor = variableIndex;
+        while (cursor < preparedLine.Length && (char.IsLetterOrDigit(preparedLine[cursor]) || preparedLine[cursor] is '_' or '-'))
+            cursor++;
+        while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor++;
+
+        return cursor < preparedLine.Length
+            && (preparedLine[cursor] == '='
+                || (preparedLine[cursor] == ':' && cursor + 1 < preparedLine.Length && preparedLine[cursor + 1] == '='));
+    }
+
+    private static bool ShouldSkipStylusBareVariableReference(string preparedLine, int variableIndex)
+    {
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+        if (variableIndex == firstNonWhitespace)
+            return true;
+
+        var cursor = variableIndex;
+        while (cursor < preparedLine.Length && (char.IsLetterOrDigit(preparedLine[cursor]) || preparedLine[cursor] is '_' or '-'))
+            cursor++;
+        while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor++;
+
+        if (cursor < preparedLine.Length && preparedLine[cursor] == '(')
+            return true;
+        return cursor < preparedLine.Length
+            && (preparedLine[cursor] == '='
+                || (preparedLine[cursor] == ':' && cursor + 1 < preparedLine.Length && preparedLine[cursor + 1] == '='));
     }
 }

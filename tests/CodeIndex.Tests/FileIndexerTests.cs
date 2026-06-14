@@ -1289,8 +1289,8 @@ public class FileIndexerTests
         Assert.Equal("makefile", map["Makefile.<suffix>"]);
         Assert.Equal("makefile", map["GNUmakefile.<suffix>"]);
 
-        // Sass / Stylus are distinct buckets now (indented syntax is incompatible with the CSS extractor).
-        // Sass / Stylus は別バケット（インデント構文が CSS のシンボル抽出と非互換のため）。
+        // Sass / Stylus are distinct buckets with indentation-aware conservative extraction.
+        // Sass / Stylus はインデント構文向けの保守的な抽出を持つ別バケット。
         Assert.Equal("sass", map[".sass"]);
         Assert.Equal("stylus", map[".styl"]);
         Assert.Equal("css", map[".scss"]);

@@ -18,6 +18,7 @@ public static partial class SymbolExtractor
     public const int ExpandedLanguageContractVersion = 2;
     public const int CSharpContractVersion = 2;
     public const int DockerfileContractVersion = 2;
+    public const int StyleAndXamlContractVersion = 2;
     private static readonly Regex GraphQLInputBlockRegex = new(
         @"^\s*(?:extend\s+)?input\s+(?<name>\w+)[^{]*\{(?<body>.*?)^\s*\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Singleline);
@@ -53,6 +54,7 @@ public static partial class SymbolExtractor
             null or "" => DefaultContractVersion,
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
+            "sass" or "stylus" or "xml" => StyleAndXamlContractVersion,
             "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
@@ -2032,6 +2034,29 @@ public static partial class SymbolExtractor
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
             new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
+        ["sass"] =
+        [
+            // Sass indented syntax has no braces, so keep these as line-level anchors.
+            // Sass インデント構文は波括弧を持たないため、行単位のアンカーとして扱う。
+            new("import",   new Regex(@"^\s*@(?:import|use|forward)\s+(?<name>.+?)(?:\s*!default)?\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:@mixin\s+|=)(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>[.#%][\w-]+)(?=[\s\.,:>+~\[]|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))", RegexOptions.Compiled), BodyStyle.None),
+        ],
+        ["stylus"] =
+        [
+            // Stylus supports optional punctuation, so only capture conservative declaration shapes.
+            // Stylus は句読点を省略できるため、保守的な宣言形だけを捕捉する。
+            new("import",   new Regex(@"^\s*@(?:import|require|use)\s+(?<name>.+?)\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^(?<name>[A-Za-z_][\w-]*)\s*\([^)\r\n]*\)\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*\$?(?<name>[A-Za-z_][\w-]*)\s*(?:=|:=)\s*", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>[.#%][\w-]+)(?=[\s\.,:>+~\[]|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))", RegexOptions.Compiled), BodyStyle.None),
+        ],
         // HTML does not use the regex pattern loop — it needs true tag-structure
         // awareness (attribute enumeration, quoted-value handling, custom-element
         // detection) that regex alone can't express without losing outer-tag
@@ -2144,7 +2169,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "razor", "blazor", "cshtml", "solidity" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2362,6 +2387,9 @@ public static partial class SymbolExtractor
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        var sassStylusScannerLines = lang is "sass" or "stylus"
+            ? MaskSassStylusBlockCommentLines(lang, lines)
+            : null;
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
             : null;
@@ -2439,6 +2467,7 @@ public static partial class SymbolExtractor
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
+            var sassStylusScannerLine = sassStylusScannerLines?[i];
             var shellScannerLine = shellScannerLines?[i];
             var matchLine = structuralLine;
             if (lang == "css" && cssScannerLine != null)
@@ -2449,6 +2478,10 @@ public static partial class SymbolExtractor
                 // CSS のシンボル名マッチは raw line を使い、引用付きセレクタや @import 値を
                 // 保持する。brace/depth 判定だけ別の scanner line を使う。
                 matchLine = line;
+            }
+            else if (lang is "sass" or "stylus" && sassStylusScannerLine != null)
+            {
+                matchLine = sassStylusScannerLine;
             }
             else if (lang == "shell" && shellScannerLine != null)
             {
@@ -8191,6 +8224,23 @@ public static partial class SymbolExtractor
             firstCharChecked = false;
         }
         return !tagHeadConsumed;
+    }
+
+    private static string[] MaskSassStylusBlockCommentLines(string language, string[] originalLines)
+    {
+        var maskedLines = new string[originalLines.Length];
+        if (language == "sass")
+        {
+            var state = new CssReferenceExtractor.SassLoudCommentState();
+            for (var i = 0; i < originalLines.Length; i++)
+                maskedLines[i] = CssReferenceExtractor.MaskSassBlockCommentLine(originalLines[i], state);
+            return maskedLines;
+        }
+
+        var inBlockComment = false;
+        for (var i = 0; i < originalLines.Length; i++)
+            maskedLines[i] = CssReferenceExtractor.MaskSassStylusBlockCommentLine(originalLines[i], ref inBlockComment);
+        return maskedLines;
     }
 
     private static bool IsJsTsStyledTagHeadBreakingOperator(char c) => c switch

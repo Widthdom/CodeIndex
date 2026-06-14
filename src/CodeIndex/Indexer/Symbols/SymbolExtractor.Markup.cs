@@ -680,20 +680,7 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string[] lines)
     {
-        var hasXamlNamespace = false;
-        foreach (var line in lines)
-        {
-            if (line.IndexOf("xmlns:x=", StringComparison.OrdinalIgnoreCase) < 0)
-                continue;
-            if (line.IndexOf("schemas.microsoft.com/winfx/2006/xaml", StringComparison.OrdinalIgnoreCase) >= 0
-                || line.IndexOf("github.com/avaloniaui", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                hasXamlNamespace = true;
-                break;
-            }
-        }
-
-        if (!hasXamlNamespace)
+        if (!XamlReferenceExtractor.IsXaml(lines))
             return [];
 
         var rawText = string.Join('\n', lines);
