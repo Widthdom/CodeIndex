@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -91,7 +92,7 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new ChangelogException("Missing value for --version.");
 
-                version = Version.Parse(args[++i]);
+                version = ChangelogValueParser.ParseVersion(args[++i], "--version");
                 continue;
             }
 
@@ -100,7 +101,7 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new ChangelogException("Missing value for --date.");
 
-                releaseDate = DateOnly.Parse(args[++i]);
+                releaseDate = ChangelogValueParser.ParseDate(args[++i], "--date");
                 continue;
             }
 
@@ -109,7 +110,7 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new ChangelogException("Missing value for --previous-version.");
 
-                previousVersion = Version.Parse(args[++i]);
+                previousVersion = ChangelogValueParser.ParseVersion(args[++i], "--previous-version");
                 continue;
             }
 
@@ -161,6 +162,62 @@ public static class Program
     }
 
     private sealed record ParsedOptions(Version Version, DateOnly ReleaseDate, Version? PreviousVersion);
+}
+
+internal static class ChangelogValueParser
+{
+    private const string DateFormat = "yyyy-MM-dd";
+
+    internal static Version ParseVersion(string value, string optionName)
+    {
+        if (!TryParseVersion(value, out var version))
+            throw new ChangelogException($"{optionName} must be a version like X.Y.Z.");
+
+        return version;
+    }
+
+    internal static DateOnly ParseDate(string value, string optionName)
+    {
+        if (!DateOnly.TryParseExact(value, DateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            throw new ChangelogException($"{optionName} must use {DateFormat}.");
+
+        return date;
+    }
+
+    internal static int ParseIssueNumber(string value, string relativePath)
+    {
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var issueNumber) || issueNumber <= 0)
+            throw new ChangelogException($"{relativePath}: invalid issue number '{value}'.");
+
+        return issueNumber;
+    }
+
+    private static bool TryParseVersion(string value, out Version version)
+    {
+        version = new Version(0, 0);
+        var trimmed = value.Trim();
+        var parts = trimmed.Split('.');
+        if (parts.Length is < 2 or > 4)
+            return false;
+
+        Span<int> parsed = stackalloc int[4] { -1, -1, -1, -1 };
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            if (part.Length == 0 || part.Any(ch => ch is < '0' or > '9'))
+                return false;
+            if (!int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out parsed[i]))
+                return false;
+        }
+
+        version = parts.Length switch
+        {
+            2 => new Version(parsed[0], parsed[1]),
+            3 => new Version(parsed[0], parsed[1], parsed[2]),
+            _ => new Version(parsed[0], parsed[1], parsed[2], parsed[3]),
+        };
+        return true;
+    }
 }
 
 public sealed class ChangelogTool
@@ -435,10 +492,7 @@ public sealed class ChangelogTool
                 var item = line[4..].Trim();
                 if (currentKey == "issues")
                 {
-                    if (!int.TryParse(item, out var issueNumber))
-                        throw new ChangelogException($"{relativePath}: invalid issue number '{item}'.");
-
-                    frontMatterIssues.Add(issueNumber);
+                    frontMatterIssues.Add(ChangelogValueParser.ParseIssueNumber(item, relativePath));
                 }
                 else if (currentKey == "affected")
                 {
@@ -467,10 +521,7 @@ public sealed class ChangelogTool
                     {
                         if (currentKey == "issues")
                         {
-                            if (!int.TryParse(value, out var issueNumber))
-                                throw new ChangelogException($"{relativePath}: invalid issue number '{value}'.");
-
-                            frontMatterIssues.Add(issueNumber);
+                            frontMatterIssues.Add(ChangelogValueParser.ParseIssueNumber(value, relativePath));
                         }
                         else
                         {
@@ -578,7 +629,9 @@ public sealed class ChangelogTool
         if (!document.RootElement.TryGetProperty("version", out var versionElement))
             throw new ChangelogException("version.json is missing the version property.");
 
-        return Version.Parse(versionElement.GetString() ?? throw new ChangelogException("version.json contains an empty version."));
+        return ChangelogValueParser.ParseVersion(
+            versionElement.GetString() ?? throw new ChangelogException("version.json contains an empty version."),
+            "version.json version");
     }
 
     private static string ReadAllTextBounded(string absolutePath, string repositoryRoot, long maxBytes)
