@@ -100,9 +100,27 @@ public class DbContext : IDisposable
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
 
-    internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
-    internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting { get; set; }
-    internal static Action<string>? WalCheckpointTruncateExecutedForTesting { get; set; }
+    private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
+
+    internal static Action<string>? OptimizePragmaExecutedForTesting
+    {
+        get => ScopedOptimizePragmaExecutedForTesting.Value;
+        set => ScopedOptimizePragmaExecutedForTesting.Value = value;
+    }
+
+    internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting
+    {
+        get => ScopedPlannerStatisticsCommandExecutedForTesting.Value;
+        set => ScopedPlannerStatisticsCommandExecutedForTesting.Value = value;
+    }
+
+    internal static Action<string>? WalCheckpointTruncateExecutedForTesting
+    {
+        get => ScopedWalCheckpointTruncateExecutedForTesting.Value;
+        set => ScopedWalCheckpointTruncateExecutedForTesting.Value = value;
+    }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;

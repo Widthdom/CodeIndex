@@ -5162,7 +5162,7 @@ public static class QueryCommandRunner
             var staleAfter = (Value: DefaultStaleAfter, Error: (string?)null);
             if (options.CheckWorkspace || options.StaleAfter.HasValue)
             {
-                staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+                staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
                 if (staleAfter.Error != null)
                 {
                     Console.Error.WriteLine(staleAfter.Error);
@@ -5479,7 +5479,7 @@ public static class QueryCommandRunner
             ["value"] = JsonSerializer.SerializeToNode(value),
             ["source"] = source,
         };
-        var staleAfterEnvValue = Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
+        var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
         var payload = new JsonObject
         {
@@ -5518,9 +5518,9 @@ public static class QueryCommandRunner
     {
         if (HasOption(args, primaryFlag) || (aliasFlag != null && HasOption(args, aliasFlag)))
             return "flag";
-        if (Environment.GetEnvironmentVariable(envName) is null)
+        if (CdidxEnvironment.GetEnvironmentVariable(envName) is null)
             return "default";
-        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        var configSource = CdidxEnvironment.GetConfigSource(envName);
         if (!string.IsNullOrWhiteSpace(configSource))
             return $"config:{configSource}";
         return $"env:{envName}";
@@ -5528,9 +5528,9 @@ public static class QueryCommandRunner
 
     private static string ResolveEnvSource(string envName)
     {
-        if (Environment.GetEnvironmentVariable(envName) is null)
+        if (CdidxEnvironment.GetEnvironmentVariable(envName) is null)
             return "default";
-        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        var configSource = CdidxEnvironment.GetConfigSource(envName);
         if (!string.IsNullOrWhiteSpace(configSource))
             return $"config:{configSource}";
         return $"env:{envName}";
@@ -10300,7 +10300,7 @@ public static class QueryCommandRunner
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
 
-        var staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+        var staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
         if (staleAfter.Error != null)
         {
             Console.Error.WriteLine(staleAfter.Error);
@@ -11877,7 +11877,7 @@ public static class QueryCommandRunner
 
     private static int ResolveDefaultPositiveInt(string environmentVariable, int fallback, string optionName, out string? error)
     {
-        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(environmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
         {
             error = null;
@@ -11896,7 +11896,7 @@ public static class QueryCommandRunner
 
     private static int ResolveDefaultNonNegativeInt(string environmentVariable, int fallback, string optionName, out string? error)
     {
-        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(environmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
         {
             error = null;
