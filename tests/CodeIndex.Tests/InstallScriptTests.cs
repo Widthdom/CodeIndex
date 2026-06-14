@@ -89,6 +89,77 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void Uninstall_ReportsFileRemovalFailureWithoutSuccessMessage_Issue3500()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_failure_bin");
+        Directory.CreateDirectory(installDir);
+        Directory.CreateDirectory(Path.Combine(installDir, "cdidx"));
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            if uninstall_cdidx; then
+                echo "UNINSTALL_OK"
+            else
+                echo "UNINSTALL_FAILED:$?"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("UNINSTALL_FAILED:1", stdout);
+        Assert.DoesNotContain($"Removed {Path.Combine(installDir, "cdidx")}", stdout);
+        Assert.DoesNotContain("Uninstall complete", stdout);
+        Assert.Contains("Failed to remove install file during uninstall", stderr);
+        Assert.Contains("Uninstall incomplete", stderr);
+        Assert.True(Directory.Exists(Path.Combine(installDir, "cdidx")));
+    }
+
+    [Fact]
+    public void Uninstall_ReportsDirectoryRemovalFailureWithoutSuccessMessage_Issue3500()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_directory_failure_bin");
+        var licensesDir = Path.Combine(installDir, "LICENSES");
+        Directory.CreateDirectory(licensesDir);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            rm() {
+                if [ "$#" -eq 2 ] && [ "$1" = "-rf" ] && [ "$2" = "${INSTALL_DIR}/LICENSES" ]; then
+                    return 1
+                fi
+                command rm "$@"
+            }
+
+            if uninstall_cdidx; then
+                echo "UNINSTALL_OK"
+            else
+                echo "UNINSTALL_FAILED:$?"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("UNINSTALL_FAILED:1", stdout);
+        Assert.DoesNotContain($"Removed {licensesDir}", stdout);
+        Assert.DoesNotContain("Uninstall complete", stdout);
+        Assert.Contains("Failed to remove install directory during uninstall", stderr);
+        Assert.Contains("Uninstall incomplete", stderr);
+        Assert.True(Directory.Exists(licensesDir));
+    }
+
+    [Fact]
     public void UninstallPurgeCache_RejectsUnsafeCacheRootBeforeRemovingInstall_Issue3499()
     {
         if (OperatingSystem.IsWindows())
@@ -116,6 +187,81 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("UNREACHABLE", stdout);
         Assert.Contains("Refusing to purge cdidx cache from unsafe cache root", stderr);
         Assert.True(File.Exists(binaryPath));
+    }
+
+    [Fact]
+    public void PathProfileUpdate_BacksUpAndAtomicallyReplacesProfile_Issue3501()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var home = Path.Combine(_tempRoot, "path_profile_home");
+        Directory.CreateDirectory(home);
+        var profilePath = Path.Combine(home, ".zshrc");
+        File.WriteAllText(profilePath, "export EXISTING=1\n");
+        var installDir = Path.Combine(_tempRoot, "path_profile_bin");
+        Directory.CreateDirectory(installDir);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            "append_path_to_shell_profile",
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["HOME"] = home,
+                ["SHELL"] = "/bin/zsh",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Backed up", stdout);
+        Assert.Contains("Added", stdout);
+        var backups = Directory.GetFiles(home, ".zshrc.cdidx-backup.*");
+        Assert.Single(backups);
+        Assert.Equal("export EXISTING=1\n", File.ReadAllText(backups[0]));
+        var profile = File.ReadAllText(profilePath);
+        Assert.Contains("export EXISTING=1", profile);
+        Assert.Contains($"export PATH=\"{installDir}:$PATH\"", profile);
+        Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-tmp.*"));
+    }
+
+    [Fact]
+    public void PathProfileUpdate_PreservesSymlinkedProfile_Issue3501()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var home = Path.Combine(_tempRoot, "path_profile_symlink_home");
+        var dotfiles = Path.Combine(home, "dotfiles");
+        Directory.CreateDirectory(dotfiles);
+        var targetPath = Path.Combine(dotfiles, "zshrc");
+        File.WriteAllText(targetPath, "export EXISTING=1\n");
+        var profilePath = Path.Combine(home, ".zshrc");
+        File.CreateSymbolicLink(profilePath, Path.Combine("dotfiles", "zshrc"));
+        var installDir = Path.Combine(_tempRoot, "path_profile_symlink_bin");
+        Directory.CreateDirectory(installDir);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            "append_path_to_shell_profile",
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["HOME"] = home,
+                ["SHELL"] = "/bin/zsh",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.NotNull(File.ResolveLinkTarget(profilePath, returnFinalTarget: false));
+        Assert.Contains("Backed up", stdout);
+        Assert.Contains(targetPath, stdout);
+        var backups = Directory.GetFiles(dotfiles, "zshrc.cdidx-backup.*");
+        Assert.Single(backups);
+        Assert.Equal("export EXISTING=1\n", File.ReadAllText(backups[0]));
+        var profile = File.ReadAllText(targetPath);
+        Assert.Contains("export EXISTING=1", profile);
+        Assert.Contains($"export PATH=\"{installDir}:$PATH\"", profile);
+        Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-tmp.*"));
+        Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-backup.*"));
     }
 
     [Theory]

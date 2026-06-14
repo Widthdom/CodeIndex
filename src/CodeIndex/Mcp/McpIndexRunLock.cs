@@ -19,6 +19,9 @@ internal sealed class McpIndexRunLock : IDisposable
     private readonly string _infoPath;
     private bool _disposed;
 
+    internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
+    internal static Action<LockCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
+
     private McpIndexRunLock(FileStream stream, string infoPath)
     {
         _stream = stream;
@@ -148,10 +151,13 @@ internal sealed class McpIndexRunLock : IDisposable
         _disposed = true;
         try
         {
-            File.Delete(_infoPath);
+            DeleteFileForTesting(_infoPath);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
+            var diagnostic = LockCleanupDiagnostic.Create("mcp_index_lock", "metadata", ex);
+            GlobalToolLog.Error(diagnostic.ToLogMessage());
+            CleanupDiagnosticSinkForTesting?.Invoke(diagnostic);
         }
         _stream.Dispose();
     }

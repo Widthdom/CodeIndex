@@ -29,11 +29,17 @@ internal static class ProgramRunner
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
+    private const int InstallerSuppressedOutputDrainBufferChars = 4096;
     internal const int WorkspaceVersionPinMaxBytes = 4096;
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
     internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
+    internal const int TestExtractorJsonComparisonMaxDepth = 32;
     private const int TestExtractorReadBufferBytes = 81920;
+    private static readonly JsonDocumentOptions s_testExtractorJsonComparisonOptions = new()
+    {
+        MaxDepth = TestExtractorJsonComparisonMaxDepth,
+    };
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
@@ -44,6 +50,7 @@ internal static class ProgramRunner
     internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
     internal static Action<string>? TestExtractorFileLengthCheckedForTesting { get; set; }
     internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting { get; set; }
+    internal static Action<string>? DeleteUpgradeInstallerScriptForTesting { get; set; }
 
     private sealed record CommandRunContext(
         JsonSerializerOptions JsonOptions,
@@ -517,8 +524,16 @@ internal static class ProgramRunner
             if (!TryReadTestExtractorFile(expect, "expected symbols", out var expected, out readExitCode))
                 return readExitCode;
             var actual = JsonSerializer.Serialize(symbols);
-            if (!JsonEquivalent(expected, actual))
+            if (!TryJsonEquivalent(expected, actual, out var jsonError))
             {
+                if (jsonError is not null)
+                {
+                    return CommandErrorWriter.Write(
+                        $"test-extractor expected or actual symbols JSON could not be parsed within the {TestExtractorJsonComparisonMaxDepth} depth limit: {jsonError.Message}",
+                        CommandExitCodes.InvalidArgument,
+                        "Use a shallower expected-symbols JSON fixture.");
+                }
+
                 Console.Error.WriteLine("Expected symbols did not match extracted symbols.");
                 Console.Error.WriteLine(actual);
                 return CommandExitCodes.InvalidArgument;
@@ -626,11 +641,23 @@ internal static class ProgramRunner
         return true;
     }
 
-    private static bool JsonEquivalent(string expected, string actual)
+    private static bool TryJsonEquivalent(string expected, string actual, out JsonException? error)
     {
-        using var expectedDoc = JsonDocument.Parse(expected);
-        using var actualDoc = JsonDocument.Parse(actual);
-        return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
+        error = null;
+        try
+        {
+            // Both inputs are already bounded: expected JSON is read through
+            // TryReadTestExtractorFile and actual JSON comes from the in-memory
+            // extractor result. Keep parser depth explicit for the comparison.
+            using var expectedDoc = JsonDocument.Parse(expected, s_testExtractorJsonComparisonOptions);
+            using var actualDoc = JsonDocument.Parse(actual, s_testExtractorJsonComparisonOptions);
+            return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
+        }
+        catch (JsonException ex)
+        {
+            error = ex;
+            return false;
+        }
     }
 
     private static int RunDoctor(string[] args, string appVersion)
@@ -3354,12 +3381,12 @@ internal static class ProgramRunner
                 Console.Error.WriteLine($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
                 Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
             }
-            return CommandExitCodes.DatabaseError;
+            return CommandExitCodes.InstallError;
         }
         finally
         {
             if (scriptPath != null)
-                try { File.Delete(scriptPath); } catch { }
+                TryDeleteUpgradeInstallerScript(scriptPath);
             if (scriptDirectory != null)
                 try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
         }
@@ -3511,23 +3538,29 @@ internal static class ProgramRunner
         {
             if (!suppressOutput)
                 Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
-            return CommandExitCodes.DatabaseError;
+            return CommandExitCodes.InstallError;
         }
 
         var outputDrainTask = suppressOutput
-            ? Task.WhenAll(process.StandardOutput.ReadToEndAsync(), process.StandardError.ReadToEndAsync())
+            ? DrainSuppressedInstallerOutputAsync(process)
             : Task.CompletedTask;
 
         try
         {
             var waitTask = process.WaitForExitAsync(cancellationToken);
-            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout));
-            if (Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult() == waitTask)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
+            var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
+            if (completedTask == waitTask)
             {
+                timeoutCts.Cancel();
                 waitTask.GetAwaiter().GetResult();
                 outputDrainTask.GetAwaiter().GetResult();
                 return process.ExitCode;
             }
+
+            if (cancellationToken.IsCancellationRequested)
+                waitTask.GetAwaiter().GetResult();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3564,7 +3597,38 @@ internal static class ProgramRunner
         }
         if (!suppressOutput)
             Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
-        return CommandExitCodes.DatabaseError;
+        return CommandExitCodes.InstallError;
+    }
+
+    private static Task DrainSuppressedInstallerOutputAsync(Process process)
+        => Task.WhenAll(
+            DrainSuppressedInstallerOutputAsync(process.StandardOutput),
+            DrainSuppressedInstallerOutputAsync(process.StandardError));
+
+    private static async Task DrainSuppressedInstallerOutputAsync(TextReader reader)
+    {
+        var buffer = new char[InstallerSuppressedOutputDrainBufferChars];
+        while (await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false) > 0)
+        {
+        }
+    }
+
+    private static void TryDeleteUpgradeInstallerScript(string scriptPath)
+    {
+        try
+        {
+            if (!File.Exists(scriptPath))
+                return;
+
+            if (DeleteUpgradeInstallerScriptForTesting != null)
+                DeleteUpgradeInstallerScriptForTesting(scriptPath);
+            else
+                File.Delete(scriptPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+        }
     }
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(
