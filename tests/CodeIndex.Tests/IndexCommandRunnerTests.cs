@@ -11034,6 +11034,7 @@ public class IndexCommandRunnerTests
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
         psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
+        psi.ArgumentList.Add("-p:NuGetAudit=false");
         psi.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = System.Diagnostics.Process.Start(psi)

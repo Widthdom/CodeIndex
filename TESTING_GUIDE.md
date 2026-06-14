@@ -51,7 +51,9 @@ The test project mirrors the production areas closely.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
-  publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
+  publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
+- `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson`
+  uses the trimmed RID-specific publish path for query JSON coverage, writes publish-specific lock files under the test's temporary intermediate directory, disables NuGet vulnerability auditing for the publish smoke, and runs whichever `cdidx` entry point the SDK emits so the test does not depend on source-tree lock-file mutation, advisory-feed availability, or a DLL-only publish layout. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
   uses the same trimmed RID-specific publish path to verify C# Razor language aliases. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
 - `McpServerTests.cs`
@@ -257,7 +259,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
-  は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
+  は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
+- `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson`
+  は query JSON coverage のために trimmed な RID 固有 publish 経路を使い、publish 専用の lock file をテストの一時 intermediate directory 配下に書き、publish smoke の NuGet 脆弱性監査を無効化し、SDK が生成した `cdidx` entry point を実行します。source tree の lock file 変更、advisory feed の可用性、DLL 固定の publish layout には依存しません。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
   は同じ trimmed RID 固有 publish 経路で C# Razor の言語 alias を検証します。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
 - `McpServerTests.cs`
