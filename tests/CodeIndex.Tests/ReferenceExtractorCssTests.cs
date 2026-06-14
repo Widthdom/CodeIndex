@@ -286,7 +286,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
         var references = ReferenceExtractor.Extract(1, "css", content, symbols);
 
-        Assert.Single(references.Where(reference =>
+        Assert.Equal(2, references.Count(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
