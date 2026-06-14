@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Diagnostics;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -244,7 +245,7 @@ public static class ReportCommandRunner
             try
             {
                 using var countCmd = connection.CreateCommand();
-                countCmd.CommandText = $"SELECT COUNT(*) FROM (SELECT 1 FROM \"{name.Replace("\"", "\"\"")}\" LIMIT {MaxSchemaRowCountScanRows + 1})";
+                countCmd.CommandText = $"SELECT COUNT(*) FROM (SELECT 1 FROM {SqliteIdentifier.Quote(name)} LIMIT {MaxSchemaRowCountScanRows + 1})";
                 var cappedCount = Convert.ToInt64(countCmd.ExecuteScalar());
                 rowCountTruncated = cappedCount > MaxSchemaRowCountScanRows;
                 rowCount = rowCountTruncated ? MaxSchemaRowCountScanRows : cappedCount;

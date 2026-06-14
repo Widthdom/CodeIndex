@@ -58,6 +58,41 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqliteIdentifier_Quote_AllowsUnusualTableNamesForSchemaPragmas()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "CREATE TABLE \"odd \"\" table\" (\"odd col\" INTEGER)";
+            cmd.ExecuteNonQuery();
+        }
+
+        var columns = DbSchemaCache.LoadColumns(connection, "odd \" table");
+
+        Assert.Contains("odd col", columns);
+        Assert.Equal("\"odd \"\" table\"", SqliteIdentifier.Quote("odd \" table"));
+    }
+
+    [Theory]
+    [InlineData("page_count")]
+    [InlineData("_pragma1")]
+    public void SqliteIdentifier_ValidatePragmaName_AllowsBarePragmaNames(string name)
+    {
+        Assert.Equal(name, SqliteIdentifier.ValidatePragmaName(name));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("page-count")]
+    [InlineData("page_count;VACUUM")]
+    [InlineData("1page_count")]
+    public void SqliteIdentifier_ValidatePragmaName_RejectsUnsafePragmaNames(string name)
+    {
+        Assert.Throws<ArgumentException>(() => SqliteIdentifier.ValidatePragmaName(name));
+    }
+
+    [Fact]
     public void DegradationReasonCodes_AllCodesHaveActionableMetadata()
     {
         foreach (var code in DegradationReasonCodes.All)

@@ -700,7 +700,7 @@ public static class DiffCommandRunner
         }
 
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM {table}";
+        command.CommandText = $"SELECT COUNT(*) FROM {SqliteIdentifier.Quote(table)}";
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 

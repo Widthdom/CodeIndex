@@ -3183,7 +3183,7 @@ public class DbWriter
     private bool ColumnExists(string table, string column)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({table})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
