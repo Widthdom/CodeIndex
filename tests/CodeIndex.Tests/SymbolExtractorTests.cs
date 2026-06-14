@@ -15506,6 +15506,10 @@ public partial class SymbolExtractorTests
     {
         Assert.Equal(SymbolExtractor.DockerfileContractVersion, SymbolExtractor.GetContractVersion("dockerfile"));
         Assert.True(SymbolExtractor.DockerfileContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
+        Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
+        Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("xml"));
+        Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
     }
 
     [Fact]
@@ -17751,7 +17755,7 @@ public partial class SymbolExtractorTests
         var content = """
             <Window x:Class="Sample.MainWindow"
                     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x = "http://schemas.microsoft.com/winfx/2006/xaml">
                 <Grid>
                     <Button x:Name="SaveButton" Content="Save" />
                     <TextBlock x:Name="StatusText" />

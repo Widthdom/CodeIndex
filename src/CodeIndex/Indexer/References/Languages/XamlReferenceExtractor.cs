@@ -23,10 +23,6 @@ internal static class XamlReferenceExtractor
         @"\{x:Reference(?:Extension)?\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly Regex XamlBindingRegex = new(
-        @"\{(?<kind>Binding|x:Bind|TemplateBinding|CompiledBinding|ReflectionBinding)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private static readonly Regex XamlBindingElementRegex = new(
         @"<\s*(?:[A-Za-z_][\w.-]*:)?Binding\b(?<attributes>[^<>]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -165,11 +161,11 @@ internal static class XamlReferenceExtractor
                 AddReference(references, seen, fileId, value, match.Groups["content"].Index, "reference", context, lineNumber, container);
         }
 
-        foreach (Match match in XamlBindingRegex.Matches(originalLine))
+        foreach (var binding in EnumerateBindingMarkupExtensions(originalLine))
         {
-            foreach (var name in NormalizeBindingReferences(match.Groups["kind"].Value, match.Groups["content"].Value))
+            foreach (var name in NormalizeBindingReferences(binding.Kind, binding.Content))
             {
-                AddReference(references, seen, fileId, name, match.Groups["content"].Index, "reference", context, lineNumber, container);
+                AddReference(references, seen, fileId, name, binding.ContentIndex, "reference", context, lineNumber, container);
             }
         }
 
@@ -447,6 +443,88 @@ internal static class XamlReferenceExtractor
 
         return normalized.Trim();
     }
+
+    private static IEnumerable<BindingMarkupExtension> EnumerateBindingMarkupExtensions(string line)
+    {
+        var cursor = 0;
+        while (cursor < line.Length)
+        {
+            var openBrace = line.IndexOf('{', cursor);
+            if (openBrace < 0)
+                yield break;
+
+            var kindStart = openBrace + 1;
+            while (kindStart < line.Length && char.IsWhiteSpace(line[kindStart]))
+                kindStart++;
+
+            if (!TryReadBindingKind(line, kindStart, out var kind, out var kindEnd))
+            {
+                cursor = openBrace + 1;
+                continue;
+            }
+
+            var depth = 1;
+            for (var i = kindEnd; i < line.Length; i++)
+            {
+                if (line[i] == '{')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (line[i] != '}')
+                    continue;
+
+                depth--;
+                if (depth != 0)
+                    continue;
+
+                yield return new BindingMarkupExtension(kind, line[kindEnd..i], kindEnd);
+                cursor = i + 1;
+                goto nextBinding;
+            }
+
+            yield break;
+
+        nextBinding:
+            continue;
+        }
+    }
+
+    private static bool TryReadBindingKind(string line, int kindStart, out string kind, out int kindEnd)
+    {
+        foreach (var candidate in BindingMarkupKinds)
+        {
+            if (kindStart + candidate.Length > line.Length)
+                continue;
+            if (!line.AsSpan(kindStart, candidate.Length).Equals(candidate.AsSpan(), StringComparison.Ordinal))
+                continue;
+            kindEnd = kindStart + candidate.Length;
+            if (kindEnd < line.Length && !IsBindingMarkupKindBoundary(line[kindEnd]))
+                continue;
+
+            kind = candidate;
+            return true;
+        }
+
+        kind = "";
+        kindEnd = kindStart;
+        return false;
+    }
+
+    private static bool IsBindingMarkupKindBoundary(char ch)
+        => char.IsWhiteSpace(ch) || ch is ',' or '}';
+
+    private static readonly string[] BindingMarkupKinds =
+    [
+        "TemplateBinding",
+        "CompiledBinding",
+        "ReflectionBinding",
+        "Binding",
+        "x:Bind",
+    ];
+
+    private readonly record struct BindingMarkupExtension(string Kind, string Content, int ContentIndex);
 
     private static string NormalizeXamlMarkupArgument(string value)
     {

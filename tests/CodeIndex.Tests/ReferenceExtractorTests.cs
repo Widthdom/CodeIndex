@@ -592,6 +592,7 @@ public partial class ReferenceExtractorTests
                 <Grid>
                     <TextBox x:Name="SearchBox" />
                     <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
+                    <TextBlock Text="{Binding Path=ViewModel.NestedName, RelativeSource={RelativeSource AncestorType={x:Type local:Vm}}}" />
                     <TextBlock Text="{x:Bind ViewModel.LiveTitle, Mode=OneWay}" />
                     <!-- helper(arg) -->
                     <TextBlock>helper(arg)</TextBlock>
@@ -624,6 +625,9 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NestedName"
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "LiveTitle"
