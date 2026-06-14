@@ -27,6 +27,18 @@ internal static class XamlReferenceExtractor
         @"\{(?<kind>Binding|x:Bind|TemplateBinding|CompiledBinding|ReflectionBinding)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex XamlBindingElementRegex = new(
+        @"<\s*(?:[A-Za-z_][\w.-]*:)?Binding\b(?<attributes>[^<>]*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex XamlBindingPropertyElementRegex = new(
+        @"<\s*(?:[A-Za-z_][\w.-]*:)?Binding\.(?<property>Path|ElementName)\s*>\s*(?<value>[^<]+?)\s*</\s*(?:[A-Za-z_][\w.-]*:)?Binding\.\k<property>\s*>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex XamlAttributeRegex = new(
+        @"\b(?<name>[A-Za-z_][\w:.-]*)\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex XamlEventHandlerRegex = new(
         @"\b(?:Click|Clicked|Tapped|Loaded|Unloaded|SelectionChanged|TextChanged|CheckedChanged|Unchecked|SelectedIndexChanged|PointerPressed|PointerReleased|PointerEntered|PointerExited|Drop|DragOver|Completed|Appearing|Disappearing|NavigatedTo|NavigatedFrom|SizeChanged)\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -142,6 +154,26 @@ internal static class XamlReferenceExtractor
             }
         }
 
+        foreach (Match match in XamlBindingElementRegex.Matches(originalLine))
+        {
+            EmitBindingElementAttributeReferences(
+                match.Groups["attributes"].Value,
+                match.Groups["attributes"].Index,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in XamlBindingPropertyElementRegex.Matches(originalLine))
+        {
+            var value = NormalizeBindingPath(match.Groups["value"].Value);
+            if (value.Length > 0)
+                AddReference(references, seen, fileId, value, match.Groups["value"].Index, "reference", context, lineNumber, container);
+        }
+
         foreach (Match match in XamlEventHandlerRegex.Matches(originalLine))
         {
             var value = match.Groups["value"].Value.Trim();
@@ -219,6 +251,29 @@ internal static class XamlReferenceExtractor
                 if (normalized.Length > 0)
                     yield return normalized;
             }
+        }
+    }
+
+    private static void EmitBindingElementAttributeReferences(
+        string attributes,
+        int attributesIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match attribute in XamlAttributeRegex.Matches(attributes))
+        {
+            var name = attribute.Groups["name"].Value;
+            if (!name.Equals("Path", StringComparison.OrdinalIgnoreCase)
+                && !name.Equals("ElementName", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = NormalizeBindingPath(attribute.Groups["value"].Value);
+            if (value.Length > 0)
+                AddReference(references, seen, fileId, value, attributesIndex + attribute.Groups["value"].Index, "reference", context, lineNumber, container);
         }
     }
 

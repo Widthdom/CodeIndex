@@ -592,6 +592,9 @@ public partial class ReferenceExtractorTests
                 <Grid>
                     <TextBox x:Name="SearchBox" />
                     <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
+                    <TextBox x:Name="DetailsBox" />
+                    <Binding Path="DetailsModel.Name" ElementName="DetailsBox" />
+                    <Binding.Path>SelectedItem.DisplayName</Binding.Path>
                     <Button Clicked="OnSaveClicked" />
                     <Button Click="OnWpfSaveClicked" />
                 </Grid>
@@ -618,6 +621,15 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "SearchBox"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Name"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DetailsBox"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DisplayName"
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "OnSaveClicked"

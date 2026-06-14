@@ -443,6 +443,9 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "spacing-base"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
+            reference.SymbolName == "radius"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
             reference.SymbolName == "rounded"
             && reference.ReferenceKind == "call"));
     }
@@ -458,6 +461,8 @@ public partial class ReferenceExtractorTests
             rounded(radius)
               border-radius radius
 
+            // $commentedAccent
+            // rounded(8px)
             .button
               color $primary
               background $accent
@@ -476,6 +481,8 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "accent"
             && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "commentedAccent");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "rounded"
             && reference.ReferenceKind == "call"));

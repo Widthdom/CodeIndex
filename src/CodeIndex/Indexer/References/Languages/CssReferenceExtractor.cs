@@ -178,7 +178,10 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        EmitScss(preparedLine, references, seen, fileId, context, lineNumber, container);
+        var sassReferenceLine = ShouldSkipSassIndentedDeclarationReferences(preparedLine)
+            ? ""
+            : preparedLine;
+        EmitScss(sassReferenceLine, references, seen, fileId, context, lineNumber, container);
         EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
         foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, preparedLine))
@@ -208,9 +211,10 @@ internal static class CssReferenceExtractor
     {
         EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, preparedLine))
+        var stylusReferenceLine = StripDoubleSlashComment(preparedLine);
+        foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
         {
-            if (ShouldSkipStylusVariableReference(preparedLine, match.Groups["name"].Index))
+            if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
                 continue;
 
             ReferenceExtractor.AddReference(
@@ -224,7 +228,7 @@ internal static class CssReferenceExtractor
                 container);
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
         {
             var name = match.Groups["name"].Value;
             if (name is "url" or "var" or "calc" or "rgb" or "rgba" or "hsl" or "hsla")
@@ -835,6 +839,20 @@ internal static class CssReferenceExtractor
         }
 
         return false;
+    }
+
+    private static bool ShouldSkipSassIndentedDeclarationReferences(string preparedLine)
+    {
+        var trimmed = preparedLine.TrimStart();
+        return trimmed.StartsWith("=", StringComparison.Ordinal);
+    }
+
+    private static string StripDoubleSlashComment(string preparedLine)
+    {
+        var commentIndex = preparedLine.IndexOf("//", StringComparison.Ordinal);
+        return commentIndex >= 0
+            ? preparedLine[..commentIndex]
+            : preparedLine;
     }
 
     private static bool ShouldSkipStylusVariableReference(string preparedLine, int variableIndex)
