@@ -813,9 +813,6 @@ public partial class DbReader
     private static string NormalizeGuardSearchTerm(string value)
         => value.Trim().Trim('"', '\'', '(', ')').TrimEnd('*');
 
-    private static string[] SplitContentLines(string content)
-        => content.Replace("\r\n", "\n").Split('\n');
-
     private static IEnumerable<(int Index, string Text)> EnumerateContentLines(string content) =>
         EnumerateContentLines(content, startIndex: 0, endIndex: int.MaxValue);
 

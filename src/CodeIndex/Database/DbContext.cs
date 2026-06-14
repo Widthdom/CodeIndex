@@ -58,6 +58,7 @@ public class DbContext : IDisposable
         ("symbols", "visibility"),
         ("symbols", "return_type"),
         ("symbols", "is_metadata_target"),
+        ("symbols", "metadata_target_source"),
         ("symbols", "name_folded"),
     ];
     private static readonly string[] ReadMigrationRequiredIndexes =
@@ -99,9 +100,27 @@ public class DbContext : IDisposable
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
 
-    internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
-    internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting { get; set; }
-    internal static Action<string>? WalCheckpointTruncateExecutedForTesting { get; set; }
+    private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
+
+    internal static Action<string>? OptimizePragmaExecutedForTesting
+    {
+        get => ScopedOptimizePragmaExecutedForTesting.Value;
+        set => ScopedOptimizePragmaExecutedForTesting.Value = value;
+    }
+
+    internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting
+    {
+        get => ScopedPlannerStatisticsCommandExecutedForTesting.Value;
+        set => ScopedPlannerStatisticsCommandExecutedForTesting.Value = value;
+    }
+
+    internal static Action<string>? WalCheckpointTruncateExecutedForTesting
+    {
+        get => ScopedWalCheckpointTruncateExecutedForTesting.Value;
+        set => ScopedWalCheckpointTruncateExecutedForTesting.Value = value;
+    }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -137,7 +156,11 @@ public class DbContext : IDisposable
     internal PreparedCommandCache PreparedCommands
         => _preparedCommands ??= new PreparedCommandCache(_connection);
 
-    public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
+    public static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        out string message,
+        out bool isNotFound,
+        CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
             var builder = new SqliteConnectionStringBuilder
@@ -146,7 +169,7 @@ public class DbContext : IDisposable
                 Mode = SqliteOpenMode.ReadWrite,
             };
             return new SqliteConnection(builder.ConnectionString);
-        }, static connection => connection.Open(), static milliseconds => System.Threading.Thread.Sleep(milliseconds), out message, out isNotFound);
+        }, static connection => connection.Open(), null, out message, out isNotFound, cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
         string dbPath,
@@ -154,10 +177,12 @@ public class DbContext : IDisposable
         Action<SqliteConnection> openConnection,
         Action<int>? sleep,
         out string message,
-        out bool isNotFound)
+        out bool isNotFound,
+        CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
         {
@@ -200,7 +225,8 @@ public class DbContext : IDisposable
                 () => createConnection(openTarget),
                 openConnection,
                 sleep,
-                dbPath: dbPath);
+                dbPath: dbPath,
+                cancellationToken: cancellationToken);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA application_id";
@@ -656,7 +682,7 @@ public class DbContext : IDisposable
     private long ReadPragmaLong(string name)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA {name}";
+        cmd.CommandText = $"PRAGMA {SqliteIdentifier.ValidatePragmaName(name)}";
         return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
@@ -1345,12 +1371,12 @@ public class DbContext : IDisposable
     // `cdidx status` の `path_case_sensitive` で診断できるようにする。
     public const string WorkspacePathCaseSensitiveMetaKey = "workspace_path_case_sensitive";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
-    // end of a successful index pass once the writer's metadata-target resolver has classified
-    // every class-like row for that language. Readers fall back to the legacy heuristic when
-    // the per-language stamp is absent or its version does not match. Issue #435.
-    // 言語別 metadata-target 列の正式 readiness。index 終端で resolver が当該言語の class-like
-    // 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の言語については
-    // reader が legacy ヒューリスティックにフォールバックする。Issue #435。
+    // end of a successful index pass once extractor facts and the writer resolver have
+    // classified every class-like row for that language. Readers fall back to the legacy
+    // heuristic when the per-language stamp is absent or its version does not match. Issue #3524.
+    // 言語別 metadata-target 列の正式 readiness。index 終端で extractor fact と writer resolver が
+    // 当該言語の class-like 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の
+    // 言語については reader が legacy ヒューリスティックにフォールバックする。Issue #3524。
     // Version 2 (#435 iter 5) made the writer-side resolver import-aware: unqualified base
     // identifiers now resolve through the deriving file's `using Namespace;` / `using Alias =
     // FQN;` directives (plus `global using` aggregated across the repo) before falling back
@@ -1436,7 +1462,16 @@ public class DbContext : IDisposable
     // まで抜け落ち、`[FooAttribute]` の edge が落ちていた。iter-8 DB はこの展開なしで
     // index されたため、再 index で `::` 対応の resolver が `is_metadata_target` を
     // republish するまで reader を legacy 経路へ縮退させる。
-    public const int MetadataTargetVersion = 6;
+    // Version 7 (#3524) persists metadata-target provenance in
+    // `symbols.metadata_target_source` so readers and diagnostics can tell direct extractor
+    // facts from writer-resolved transitive targets. Iter-6 DBs only stored the flattened
+    // `is_metadata_target` bit, so they must degrade until reindexed with source-aware
+    // storage.
+    // バージョン 7 (#3524) で `symbols.metadata_target_source` に provenance を保存する。
+    // extractor が直接検出した fact と writer が推移的に解決した target を reader / diagnostics
+    // が区別できるようにするため、平坦な `is_metadata_target` だけを持つ iter-6 DB は
+    // source-aware storage で再 index されるまで縮退させる。
+    public const int MetadataTargetVersion = 7;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
     // Audit trail: cdidx version string (e.g. "1.22.0") that produced the most recent
     // successful end-of-index pass on this DB. Readers use it to surface "DB written by
@@ -1574,7 +1609,8 @@ public class DbContext : IDisposable
                 family_key      TEXT,
                 visibility      TEXT,
                 return_type     TEXT,
-                is_metadata_target INTEGER
+                is_metadata_target INTEGER,
+                metadata_target_source TEXT
             )");
 
                 // Indexed references table / 参照インデックステーブル
@@ -1636,6 +1672,7 @@ public class DbContext : IDisposable
                 EnsureColumn("file_issues", "origin", "TEXT");
                 EnsureColumn("file_issues", "severity", "TEXT");
                 EnsureColumn("symbols", "is_metadata_target", "INTEGER");
+                EnsureColumn("symbols", "metadata_target_source", "TEXT");
                 var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
                 EnsureColumn(
                     "symbol_references",
@@ -1795,10 +1832,11 @@ public class DbContext : IDisposable
                     visibility      TEXT,
                     return_type     TEXT,
                     is_metadata_target INTEGER,
+                    metadata_target_source TEXT,
                     name_folded     TEXT
                 )
                 """,
-                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded");
+                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded");
             RebuildReferenceLineTablesWithRequiredFileId();
             RebuildTableWithRequiredFileId(
                 "file_issues",
@@ -1866,18 +1904,20 @@ public class DbContext : IDisposable
 
         const string oldReferenceLines = "_reference_lines_nullable_file_id";
         const string oldSymbolReferences = "_symbol_references_nullable_file_id";
-        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
-        Execute($"DROP TABLE IF EXISTS {oldReferenceLines}");
+        var quotedOldReferenceLines = SqliteIdentifier.Quote(oldReferenceLines);
+        var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
+        Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE IF EXISTS {quotedOldReferenceLines}");
         Execute("DELETE FROM symbol_references WHERE file_id IS NULL");
         Execute("DELETE FROM reference_lines WHERE file_id IS NULL");
-        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
-        Execute($"ALTER TABLE reference_lines RENAME TO {oldReferenceLines}");
+        Execute($"ALTER TABLE symbol_references RENAME TO {quotedOldSymbolReferences}");
+        Execute($"ALTER TABLE reference_lines RENAME TO {quotedOldReferenceLines}");
         Execute(referenceLinesCreateSql);
-        Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {oldReferenceLines}");
+        Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {quotedOldReferenceLines}");
         Execute(symbolReferencesCreateSql);
-        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
-        Execute($"DROP TABLE {oldSymbolReferences}");
-        Execute($"DROP TABLE {oldReferenceLines}");
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE {quotedOldReferenceLines}");
     }
 
     private void EnforceReferenceLineSetNullConstraint()
@@ -1908,8 +1948,9 @@ public class DbContext : IDisposable
             """;
         const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
         const string oldSymbolReferences = "_symbol_references_reference_line_delete";
+        var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
 
-        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
+        Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
         Execute(@"
             UPDATE symbol_references
             SET reference_line_id = NULL
@@ -1919,10 +1960,10 @@ public class DbContext : IDisposable
                   FROM reference_lines
                   WHERE reference_lines.id = symbol_references.reference_line_id
               )");
-        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
+        Execute($"ALTER TABLE symbol_references RENAME TO {quotedOldSymbolReferences}");
         Execute(symbolReferencesCreateSql);
-        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
-        Execute($"DROP TABLE {oldSymbolReferences}");
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE {quotedOldSymbolReferences}");
     }
 
     private bool SymbolReferencesReferenceLineDeletesSetNull()
@@ -1989,20 +2030,22 @@ public class DbContext : IDisposable
 
         const string oldReferenceLines = "_reference_lines_file_line_key";
         const string oldSymbolReferences = "_symbol_references_file_line_key";
+        var quotedOldReferenceLines = SqliteIdentifier.Quote(oldReferenceLines);
+        var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
         var foreignKeys = ReadPragmaLong("foreign_keys");
         Execute("PRAGMA foreign_keys=OFF");
         try
         {
-            Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
-            Execute($"DROP TABLE IF EXISTS {oldReferenceLines}");
-            Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
-            Execute($"ALTER TABLE reference_lines RENAME TO {oldReferenceLines}");
+            Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
+            Execute($"DROP TABLE IF EXISTS {quotedOldReferenceLines}");
+            Execute($"ALTER TABLE symbol_references RENAME TO {quotedOldSymbolReferences}");
+            Execute($"ALTER TABLE reference_lines RENAME TO {quotedOldReferenceLines}");
             Execute(referenceLinesCreateSql);
-            Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {oldReferenceLines}");
+            Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {quotedOldReferenceLines}");
             Execute(symbolReferencesCreateSql);
-            Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
-            Execute($"DROP TABLE {oldSymbolReferences}");
-            Execute($"DROP TABLE {oldReferenceLines}");
+            Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
+            Execute($"DROP TABLE {quotedOldSymbolReferences}");
+            Execute($"DROP TABLE {quotedOldReferenceLines}");
         }
         finally
         {
@@ -2067,10 +2110,11 @@ public class DbContext : IDisposable
                 visibility      TEXT,
                 return_type     TEXT,
                 is_metadata_target INTEGER,
+                metadata_target_source TEXT,
                 name_folded     TEXT
             )
             """;
-        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded";
+        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded";
         var symbolReferencesCreateSql =
             $"""
             CREATE TABLE symbol_references (
@@ -2130,13 +2174,39 @@ public class DbContext : IDisposable
         return cmd.ExecuteScalar() as string;
     }
 
+    private string BuildRebuildSelectProjection(string sourceTableName, string columns)
+    {
+        var existingColumns = LoadColumnNames(sourceTableName);
+        var projectedColumns = columns
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(column => existingColumns.Contains(column) ? column : $"NULL AS {column}");
+        return string.Join(", ", projectedColumns);
+    }
+
+    private HashSet<string> LoadColumnNames(string tableName)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            columns.Add(reader.GetString(1));
+        return columns;
+    }
+
     private void RebuildTableWithCurrentKindChecks(string tableName, string oldTableName, string createSql, string columns)
     {
-        Execute($"DROP TABLE IF EXISTS {oldTableName}");
-        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        var quotedTableName = SqliteIdentifier.Quote(tableName);
+        var quotedOldTableName = SqliteIdentifier.Quote(oldTableName);
+        Execute($"DROP TABLE IF EXISTS {quotedOldTableName}");
+        Execute($"ALTER TABLE {quotedTableName} RENAME TO {quotedOldTableName}");
         Execute(createSql);
-        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
-        Execute($"DROP TABLE {oldTableName}");
+        var sourceColumns = BuildRebuildSelectProjection(oldTableName, columns);
+        Execute($"INSERT INTO {quotedTableName} ({columns}) SELECT {sourceColumns} FROM {quotedOldTableName}");
+        Execute($"DROP TABLE {quotedOldTableName}");
     }
 
     private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)
@@ -2145,7 +2215,9 @@ public class DbContext : IDisposable
             return;
 
         var oldTableName = $"_{tableName}_nullable_file_id";
-        Execute($"DROP TABLE IF EXISTS {oldTableName}");
+        var quotedTableName = SqliteIdentifier.Quote(tableName);
+        var quotedOldTableName = SqliteIdentifier.Quote(oldTableName);
+        Execute($"DROP TABLE IF EXISTS {quotedOldTableName}");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_ai");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_au");
@@ -2154,12 +2226,13 @@ public class DbContext : IDisposable
             Execute("DROP TABLE IF EXISTS fts_chunks");
             _rebuildFtsAfterSchemaMigration = true;
         }
-        Execute($"DELETE FROM {tableName} WHERE file_id IS NULL");
-        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        Execute($"DELETE FROM {quotedTableName} WHERE file_id IS NULL");
+        Execute($"ALTER TABLE {quotedTableName} RENAME TO {quotedOldTableName}");
         Execute(createSql);
-        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        var sourceColumns = BuildRebuildSelectProjection(oldTableName, columns);
+        Execute($"INSERT INTO {quotedTableName} ({columns}) SELECT {sourceColumns} FROM {quotedOldTableName}");
         if (!string.Equals(tableName, "reference_lines", StringComparison.Ordinal))
-            Execute($"DROP TABLE {oldTableName}");
+            Execute($"DROP TABLE {quotedOldTableName}");
     }
 
     private bool ColumnIsNotNull(string tableName, string columnName)
@@ -2167,7 +2240,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2437,6 +2510,7 @@ public class DbContext : IDisposable
         yield return ("EnsureColumn symbols.visibility", () => EnsureColumn("symbols", "visibility", "TEXT"));
         yield return ("EnsureColumn symbols.return_type", () => EnsureColumn("symbols", "return_type", "TEXT"));
         yield return ("EnsureColumn symbols.is_metadata_target", () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));
+        yield return ("EnsureColumn symbols.metadata_target_source", () => EnsureColumn("symbols", "metadata_target_source", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_nocase",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)"));
 
@@ -2545,11 +2619,13 @@ public class DbContext : IDisposable
 
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
+        var quotedTableName = SqliteIdentifier.Quote(tableName);
+        var quotedColumnName = SqliteIdentifier.Quote(columnName);
         if (_activeMigrationTransaction != null || _readMigrationInsideExternalTransaction)
         {
             DbColumnEnsurer.EnsureColumn(
                 () => ColumnExists(tableName, columnName),
-                () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
+                () => Execute($"ALTER TABLE {quotedTableName} ADD COLUMN {quotedColumnName} {definition}"));
             return;
         }
 
@@ -2558,7 +2634,7 @@ public class DbContext : IDisposable
             beginImmediate: () => Execute("BEGIN IMMEDIATE"),
             commit: () => Execute("COMMIT"),
             rollback: () => Execute("ROLLBACK"),
-            () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
+            () => Execute($"ALTER TABLE {quotedTableName} ADD COLUMN {quotedColumnName} {definition}"));
     }
 
     private bool ColumnExists(string tableName, string columnName)
@@ -2566,7 +2642,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())

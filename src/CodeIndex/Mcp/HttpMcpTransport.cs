@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Mcp;
 
@@ -42,6 +43,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
     private const string BearerPrefix = "Bearer ";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
     {
@@ -71,6 +73,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private PendingRequest? _pendingRequest;
     private int _queuedRequestCount;
     private int _eventStreamCount;
+    private long _responseAbortCleanupFailureCount;
+    private long _responseCloseCleanupFailureCount;
+    private string? _lastResponseAbortCleanupFailure;
+    private string? _lastResponseCloseCleanupFailure;
     private bool _disposed;
 
     /// <summary>
@@ -139,7 +145,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             ? null
             : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
         _endpoint = $"http://{host}:{boundPort}/";
-        _acceptLoop = Task.Run(() => AcceptLoopAsync(_acceptCts.Token), CancellationToken.None);
+        _acceptLoop = BackgroundTaskObserver.Run(
+            token => AcceptLoopAsync(token),
+            "cdidx-mcp-http",
+            "accept loop",
+            _acceptCts.Token);
     }
 
     public string Name => "http";
@@ -148,7 +158,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal bool RequiresBearerToken => _bearerTokenHash is not null;
 
-    internal Func<string, string?>? OutOfBandFrameHandler { get; set; }
+    internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
     internal Func<string>? HealthJsonProvider { get; set; }
 
@@ -169,6 +179,16 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal int QueuedRequestCount => Volatile.Read(ref _queuedRequestCount);
 
     internal int EventStreamCount => Volatile.Read(ref _eventStreamCount);
+
+    internal long ResponseAbortCleanupFailureCount => Interlocked.Read(ref _responseAbortCleanupFailureCount);
+
+    internal long ResponseCloseCleanupFailureCount => Interlocked.Read(ref _responseCloseCleanupFailureCount);
+
+    internal bool ResponseCleanupDegraded => ResponseAbortCleanupFailureCount > 0 || ResponseCloseCleanupFailureCount > 0;
+
+    internal string? LastResponseAbortCleanupFailure => Volatile.Read(ref _lastResponseAbortCleanupFailure);
+
+    internal string? LastResponseCloseCleanupFailure => Volatile.Read(ref _lastResponseCloseCleanupFailure);
 
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
@@ -341,7 +361,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                     continue;
                 }
 
-                _ = Task.Run(() => RunHandlerAsync(context, cancellationToken), CancellationToken.None);
+                _ = BackgroundTaskObserver.Run(
+                    () => RunHandlerAsync(context, cancellationToken),
+                    "cdidx-mcp-http",
+                    "request handler");
             }
         }
         finally
@@ -423,14 +446,14 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (string.IsNullOrWhiteSpace(body))
         {
             context.Response.StatusCode = (int)HttpStatusCode.NoContent;
-            context.Response.Close();
+            CloseResponseOrThrow(context.Response, "empty request body");
             LogRequest(request, (int)HttpStatusCode.NoContent);
             return;
         }
 
         request.Body = body;
         request.RequestId = TryExtractJsonRpcId(body);
-        if (TryHandleOutOfBandFrame(request, body))
+        if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
             return;
 
         if (!TryQueueRequest(request))
@@ -482,7 +505,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return false;
     }
 
-    private bool TryHandleOutOfBandFrame(PendingRequest request, string body)
+    private async Task<bool> TryHandleOutOfBandFrameAsync(PendingRequest request, string body, CancellationToken cancellationToken)
     {
         if (OutOfBandFrameHandler is null || (!IsCancellationNotification(body) && !IsJsonRpcResponse(body)))
             return false;
@@ -490,11 +513,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var context = request.Context;
         try
         {
-            var frame = OutOfBandFrameHandler(body);
+            var frame = await OutOfBandFrameHandler(body, cancellationToken).ConfigureAwait(false);
             if (frame is null)
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
-                context.Response.Close();
+                CloseResponseOrThrow(context.Response, "out-of-band no-content response");
                 LogRequest(request, (int)HttpStatusCode.NoContent);
                 return true;
             }
@@ -503,14 +526,14 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
-            context.Response.OutputStream.Write(payload);
-            context.Response.OutputStream.Close();
+            await context.Response.OutputStream.WriteAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
+            CloseOutputStreamOrThrow(context.Response.OutputStream, "out-of-band response body");
             LogRequest(request, (int)HttpStatusCode.OK);
             return true;
         }
         catch
         {
-            try { context.Response.Abort(); } catch { /* ignore */ }
+            AbortResponseBestEffort(context.Response, "out-of-band response failure");
             LogRequest(request, 499);
             return true;
         }
@@ -562,7 +585,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             if (frame is null)
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
-                context.Response.Close();
+                CloseResponseOrThrow(context.Response, "request no-content response");
                 LogRequest(request, (int)HttpStatusCode.NoContent);
                 return;
             }
@@ -572,14 +595,14 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
             await context.Response.OutputStream.WriteAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
-            context.Response.OutputStream.Close();
+            CloseOutputStreamOrThrow(context.Response.OutputStream, "request response body");
             LogRequest(request, (int)HttpStatusCode.OK);
         }
         catch
         {
             // Best-effort: close the response so the listener doesn't leak the context.
             // best-effort で response を閉じる。listener が context を持ち続けないようにする。
-            try { context.Response.Abort(); } catch { /* ignore */ }
+            AbortResponseBestEffort(context.Response, "request response failure");
             throw;
         }
     }
@@ -663,7 +686,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return true;
     }
 
-    private static async Task RespondAsync(HttpListenerContext context, int statusCode, string body)
+    private async Task RespondAsync(HttpListenerContext context, int statusCode, string body)
     {
         try
         {
@@ -672,15 +695,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
             await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
-            context.Response.OutputStream.Close();
+            CloseOutputStreamOrThrow(context.Response.OutputStream, "plain-text response body");
         }
         catch
         {
-            try { context.Response.Abort(); } catch { /* ignore */ }
+            AbortResponseBestEffort(context.Response, "plain-text response failure");
         }
     }
 
-    private static async Task RespondJsonAsync(HttpListenerContext context, int statusCode, string body)
+    private async Task RespondJsonAsync(HttpListenerContext context, int statusCode, string body)
     {
         try
         {
@@ -689,11 +712,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
             await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
-            context.Response.OutputStream.Close();
+            CloseOutputStreamOrThrow(context.Response.OutputStream, "json response body");
         }
         catch
         {
-            try { context.Response.Abort(); } catch { /* ignore */ }
+            AbortResponseBestEffort(context.Response, "json response failure");
         }
     }
 
@@ -742,7 +765,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             RemoveEventStream(streamId, stream);
             LogRequest(request, (int)HttpStatusCode.OK);
-            try { context.Response.Close(); } catch { /* ignore */ }
+            CloseResponseBestEffort(context.Response, "event stream response cleanup");
         }
     }
 
@@ -751,7 +774,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         _eventStreams.TryRemove(streamId, out _);
         if (stream.TryReleaseSlot())
             Interlocked.Decrement(ref _eventStreamCount);
-        try { stream.Response.Abort(); } catch { /* ignore */ }
+        AbortResponseBestEffort(stream.Response, "event stream response cleanup");
     }
 
     private async Task RunKeepAliveLoopAsync(EventStream stream, CancellationToken cancellationToken)
@@ -854,6 +877,79 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return CryptographicOperations.FixedTimeEquals(providedHash, _bearerTokenHash);
     }
 
+    private void CloseResponseOrThrow(HttpListenerResponse response, string operation)
+    {
+        try
+        {
+            response.Close();
+        }
+        catch (Exception ex)
+        {
+            RecordResponseCleanupFailure("close", operation, ex);
+            throw;
+        }
+    }
+
+    private void CloseOutputStreamOrThrow(Stream stream, string operation)
+    {
+        try
+        {
+            stream.Close();
+        }
+        catch (Exception ex)
+        {
+            RecordResponseCleanupFailure("close", operation, ex);
+            throw;
+        }
+    }
+
+    private void CloseResponseBestEffort(HttpListenerResponse response, string operation)
+    {
+        try
+        {
+            response.Close();
+        }
+        catch (Exception ex)
+        {
+            RecordResponseCleanupFailure("close", operation, ex);
+        }
+    }
+
+    private void AbortResponseBestEffort(HttpListenerResponse response, string operation)
+    {
+        try
+        {
+            response.Abort();
+        }
+        catch (Exception ex)
+        {
+            RecordResponseCleanupFailure("abort", operation, ex);
+        }
+    }
+
+    internal void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        var normalizedOperation = DiagnosticRedactor.RedactSensitiveText(DiagnosticSanitizer.ForMessage(operation), redactPaths: true);
+        if (string.IsNullOrWhiteSpace(normalizedOperation))
+            normalizedOperation = "response cleanup";
+        var failure = $"{normalizedOperation}:{DiagnosticRedactor.ClassifyException(exception)}:{exception.GetType().Name}";
+        switch (kind)
+        {
+            case "abort":
+                Interlocked.Increment(ref _responseAbortCleanupFailureCount);
+                Volatile.Write(ref _lastResponseAbortCleanupFailure, failure);
+                break;
+            case "close":
+                Interlocked.Increment(ref _responseCloseCleanupFailureCount);
+                Volatile.Write(ref _lastResponseCloseCleanupFailure, failure);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "Expected 'abort' or 'close'.");
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -864,7 +960,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             if (_pendingRequest is not null)
             {
-                try { _pendingRequest.Context.Response.Abort(); } catch { /* ignore */ }
+                AbortResponseBestEffort(_pendingRequest.Context.Response, "pending request disposal");
                 _pendingRequest = null;
             }
             _listener.Close();
@@ -874,8 +970,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             // Disposal must not throw — the parent server is already on its way down.
             // dispose は例外を投げない方針: 親サーバーは既に終了処理中なので。
         }
-        try { await _acceptLoop.ConfigureAwait(false); } catch { /* ignore */ }
-        _acceptCts.Dispose();
+        var acceptLoopCompleted = false;
+        try
+        {
+            await _acceptLoop.WaitAsync(DisposeAcceptLoopTimeout).ConfigureAwait(false);
+            acceptLoopCompleted = true;
+        }
+        catch (TimeoutException)
+        {
+            // Disposal is best-effort; a platform-delayed listener teardown must not hang shutdown.
+            // dispose は best-effort。プラットフォーム都合で listener 終了が遅れても shutdown を止めない。
+        }
+        catch
+        {
+            acceptLoopCompleted = true;
+        }
+
+        if (acceptLoopCompleted)
+            _acceptCts.Dispose();
     }
 
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>

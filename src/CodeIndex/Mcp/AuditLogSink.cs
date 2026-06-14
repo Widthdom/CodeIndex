@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Mcp;
 
@@ -52,7 +54,29 @@ internal sealed class AuditLogSink : IDisposable
     private readonly bool _includeValues;
     private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
     private long _bytesWritten;
+    private long _droppedRecordCount;
+    private long _serializationFailureCount;
+    private long _writeFailureCount;
+    private long _rotationFailureCount;
+    private long _rotationCleanupFailureCount;
+    private string? _lastDropReason;
+    private string? _lastRotationFailure;
     private bool _disposed;
+
+    internal sealed record AuditLogDiagnostics(
+        string Path,
+        bool IncludeValues,
+        long MaxBytes,
+        long BytesWritten,
+        bool Disposed,
+        long DroppedRecordCount,
+        long SerializationFailureCount,
+        long WriteFailureCount,
+        long RotationFailureCount,
+        long RotationCleanupFailureCount,
+        bool RotationDegraded,
+        string? LastDropReason,
+        string? LastRotationFailure);
 
     internal AuditLogSink(string path, long maxBytes, bool includeValues)
     {
@@ -93,6 +117,35 @@ internal sealed class AuditLogSink : IDisposable
     /// <summary>Size threshold (bytes) at which rotation triggers after a write.</summary>
     internal long MaxBytes => _maxBytes;
 
+    internal AuditLogDiagnostics SnapshotDiagnostics()
+    {
+        lock (_gate)
+        {
+            var droppedRecordCount = Interlocked.Read(ref _droppedRecordCount);
+            var serializationFailureCount = Interlocked.Read(ref _serializationFailureCount);
+            var writeFailureCount = Interlocked.Read(ref _writeFailureCount);
+            var rotationFailureCount = Interlocked.Read(ref _rotationFailureCount);
+            var rotationCleanupFailureCount = Interlocked.Read(ref _rotationCleanupFailureCount);
+            var rotationDegraded = rotationFailureCount > 0
+                || rotationCleanupFailureCount > 0
+                || _bytesWritten >= _maxBytes;
+            return new AuditLogDiagnostics(
+                _path,
+                _includeValues,
+                _maxBytes,
+                _bytesWritten,
+                _disposed,
+                droppedRecordCount,
+                serializationFailureCount,
+                writeFailureCount,
+                rotationFailureCount,
+                rotationCleanupFailureCount,
+                rotationDegraded,
+                Volatile.Read(ref _lastDropReason),
+                Volatile.Read(ref _lastRotationFailure));
+        }
+    }
+
     internal void Record(AuditEvent evt)
     {
         if (_disposed)
@@ -103,9 +156,10 @@ internal sealed class AuditLogSink : IDisposable
         {
             line = SerializeEvent(evt, _includeValues);
         }
-        catch
+        catch (Exception ex)
         {
             // Serialization failures must not crash the MCP loop.
+            RecordDropped("serialization_failure", ex);
             return;
         }
 
@@ -135,10 +189,11 @@ internal sealed class AuditLogSink : IDisposable
                     RotateLocked();
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort: a failing audit write must not break the tool call.
                 // ベストエフォート: 監査出力失敗で本体呼び出しを壊さない。
+                RecordDropped("write_failure", ex);
             }
         }
     }
@@ -151,9 +206,49 @@ internal sealed class AuditLogSink : IDisposable
     /// </summary>
     private void RotateLocked()
     {
-        if (PrivateLogFile.TryRotateSlots(_path, RotationKeep))
+        if (PrivateLogFile.TryRotateSlots(
+            _path,
+            RotationKeep,
+            onFailure: ex => RecordRotationFailure("rotation_failure", ex),
+            onCleanupFailure: ex => RecordRotationFailure("rotation_cleanup_failure", ex)))
             _bytesWritten = 0;
     }
+
+    private void RecordDropped(string reason, Exception exception)
+    {
+        Interlocked.Increment(ref _droppedRecordCount);
+        switch (reason)
+        {
+            case "serialization_failure":
+                Interlocked.Increment(ref _serializationFailureCount);
+                break;
+            case "write_failure":
+                Interlocked.Increment(ref _writeFailureCount);
+                break;
+        }
+        Volatile.Write(ref _lastDropReason, FormatFailureReason(reason, exception));
+    }
+
+    internal void RecordRotationFailure(string reason, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        switch (reason)
+        {
+            case "rotation_failure":
+                Interlocked.Increment(ref _rotationFailureCount);
+                break;
+            case "rotation_cleanup_failure":
+                Interlocked.Increment(ref _rotationCleanupFailureCount);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(reason), reason, "Expected rotation_failure or rotation_cleanup_failure.");
+        }
+        Volatile.Write(ref _lastRotationFailure, FormatFailureReason(reason, exception));
+    }
+
+    private static string FormatFailureReason(string reason, Exception exception)
+        => $"{reason}:{DiagnosticRedactor.ClassifyException(exception)}:{exception.GetType().Name}";
 
     public void Dispose()
     {

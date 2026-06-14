@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Diagnostics;
 using CodeIndex.Models;
@@ -363,7 +364,9 @@ public sealed class PostExtractionHookRunner : IDisposable
             EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
-                $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
+                WorkerProcessCleanupDiagnostics.AppendToMessage(
+                    $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
+                    result.WorkerError),
                 callback,
                 result.DurationMs);
             return false;
@@ -375,7 +378,9 @@ public sealed class PostExtractionHookRunner : IDisposable
             EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
-                $"{callback} failed in isolated worker.",
+                WorkerProcessCleanupDiagnostics.AppendToMessage(
+                    $"{callback} failed in isolated worker.",
+                    result.WorkerError),
                 callback,
                 result.DurationMs);
             return false;
@@ -486,6 +491,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
             IsMetadataTarget = symbol.IsMetadataTarget,
+            MetadataTargetSource = symbol.MetadataTargetSource,
             SameLineSignatureOccurrenceIndex = symbol.SameLineSignatureOccurrenceIndex,
         }).ToList();
 

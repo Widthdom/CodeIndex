@@ -142,11 +142,16 @@ internal static class PrivateLogFile
         return string.Compare(left.Name, right.Name, StringComparison.Ordinal);
     }
 
-    internal static bool TryRotateSlots(string path, int retainedFileCount, Action<string>? afterMove = null)
+    internal static bool TryRotateSlots(
+        string path,
+        int retainedFileCount,
+        Action<string>? afterMove = null,
+        Action<Exception>? onFailure = null,
+        Action<Exception>? onCleanupFailure = null)
     {
         try
         {
-            SafeDelete(SlotPath(path, retainedFileCount - 1));
+            SafeDelete(SlotPath(path, retainedFileCount - 1), onCleanupFailure);
 
             for (var slot = retainedFileCount - 2; slot >= 1; slot--)
             {
@@ -169,8 +174,9 @@ internal static class PrivateLogFile
 
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            ReportFailure(onFailure, ex);
             return false;
         }
     }
@@ -181,16 +187,32 @@ internal static class PrivateLogFile
     private static void MoveReplacing(string sourcePath, string destinationPath)
         => File.Move(sourcePath, destinationPath, overwrite: true);
 
-    private static void SafeDelete(string path)
+    private static void SafeDelete(string path, Action<Exception>? onCleanupFailure = null)
     {
         try
         {
             if (File.Exists(path))
                 File.Delete(path);
         }
+        catch (Exception ex)
+        {
+            ReportFailure(onCleanupFailure, ex);
+            // Ignore: rotation is best-effort.
+        }
+    }
+
+    private static void ReportFailure(Action<Exception>? failureSink, Exception exception)
+    {
+        if (failureSink is null)
+            return;
+
+        try
+        {
+            failureSink(exception);
+        }
         catch
         {
-            // Ignore: rotation is best-effort.
+            // Failure reporting must not make best-effort rotation fail harder.
         }
     }
 

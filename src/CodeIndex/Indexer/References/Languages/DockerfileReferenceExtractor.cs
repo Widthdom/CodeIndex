@@ -8,15 +8,15 @@ internal static class DockerfileReferenceExtractor
 {
     private static readonly Regex StageReferenceRegex = new(
         @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>[A-Za-z0-9_.-]+)\s+AS\s+[A-Za-z0-9_.-]+(?:\s+#.*)?\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex CopyFromReferenceRegex = new(
         @"^\s*(?:ONBUILD\s+)?(?:COPY|ADD)\b.*?--from=[""']?(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b[""']?",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex RunMountFromReferenceRegex = new(
         @"(?:^|,)from=[""']?(?<name>[A-Za-z0-9_.-]+)(?![:/@])\b[""']?",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex UnbracedVariableReferenceRegex = new(
         @"(?<![\$\\])\$(?<name>[A-Za-z_][A-Za-z0-9_]*)",

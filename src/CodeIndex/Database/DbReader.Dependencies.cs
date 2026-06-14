@@ -49,15 +49,11 @@ public partial class DbReader
     // TRUE when a `(symbols s, files <fileAlias>)` row should be counted as a
     // plausible metadata target (`[Attribute]` / `@Annotation` / `@decorator`).
     // Rules by language:
-    //   - C# (`csharp`): only `kind = 'class'` with an inheritance clause
-    //     (`signature LIKE '%: %'`). Transitive base-type resolution is not
-    //     available at SQL time, so "has any inheritance clause" is the
-    //     portable approximation for direct `: Attribute` plus indirect
-    //     `: BaseAudit` where `BaseAudit` itself derives from Attribute.
-    //     Extractor-driven authoritative `is_metadata_target` classification is
-    //     tracked as a follow-up (issue #435) and would let `deps` / `impact`
-    //     reject non-attribute classes like `class MyAuditAttribute : BaseService`
-    //     that this heuristic cannot distinguish.
+    //   - C# (`csharp`): ready DBs use the authoritative `is_metadata_target`
+    //     value stamped from extractor facts plus the writer resolver. Degraded
+    //     DBs fall back to the legacy inheritance-clause heuristic
+    //     (`signature LIKE '%: %'`) because transitive base-type resolution is not
+    //     available at SQL time.
     //     For legacy-migration DBs whose `signature` column exists but stores
     //     NULL for individual C# class rows, fall back to the canonical C#
     //     attribute-naming convention (`name LIKE '%Attribute'`). This is
@@ -77,14 +73,9 @@ public partial class DbReader
     //     class-like declaration, so keep the original class-like candidate
     //     set (`class` / `struct` / `interface`).
     // `deps` と `impact` で共有する言語別 metadata-target 適格性判定。
-    // C# は `kind = 'class'` かつ継承節を持つ行を対象とする（直接/間接の Attribute 継承を
-    // ポータブルに近似するため）。signature 列は存在するが値が NULL の legacy-migration
-    // DB では C# の命名規約 `name LIKE '%Attribute'` にフォールバック — 従来の
-    // 無条件許容より厳密で、NULL-signature の全 class を metadata target 扱いしない。
-    // signature 列自体が無い旧 DB も同じ命名規約ヒューリスティックを使う。
-    // extractor 主導の authoritative な `is_metadata_target` 判定は follow-up（issue #435）
-    // として追跡しており、schema 化すれば `class MyAuditAttribute : BaseService` のような
-    // 非 attribute 継承も厳密に除外できるが、現状のヒューリスティックでは判別できない。
+    // C# は ready DB では extractor/resolver が stamp した `is_metadata_target` を使う。
+    // degraded DB では継承節と命名規約の legacy heuristic に縮退し、signature 列自体が無い旧 DB
+    // では命名規約 `name LIKE '%Attribute'` のみに落とす。
     // JS / TS は decorator が runtime entity (class / factory function) のみ対象。
     // TypeScript の `interface` は型定義で runtime decorator target にならないため除外し、
     // 同名 `interface` が本物の `function` / `class` provider を曖昧化するのを防ぐ。
@@ -105,11 +96,11 @@ public partial class DbReader
         // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
         // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
         // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
-        // Authoritative column takes precedence once the writer's resolver has stamped the
-        // current `metadata_target_version_csharp` version. Drops the `: %` heuristic for C#
-        // so non-attribute classes like `class MyAuditAttribute : BaseService` no longer fake
-        // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #435.
-        // writer の resolver が current version を stamp 済みの DB では authoritative 列を優先し、
+        // Authoritative column takes precedence once the writer has stamped the current
+        // `metadata_target_version_csharp` version. Drops the `: %` heuristic for C# so
+        // non-attribute classes like `class MyAuditAttribute : BaseService` no longer fake
+        // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #3524.
+        // writer が current version を stamp 済みの DB では authoritative 列を優先し、
         // `class MyAuditAttribute : BaseService` のような非 Attribute 派生を ambiguity から除外する。
         // Three-way branch keyed off the `is_metadata_target` column presence, not
         // `signature`. Branch (2) (legacy heuristic) must only fire when both the new

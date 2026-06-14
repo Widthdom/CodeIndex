@@ -252,6 +252,42 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task TryAddAndSubmitAsync_CanceledBeforeReservation_PropagatesWithoutPersisting()
+    {
+        var record = MakeRecord("other", null, "Canceled before reservation");
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            _store.TryAddAndSubmitAsync(
+                record,
+                (_, _) => Task.FromResult(SuggestionStore.SubmitAttemptResult.Success("https://github.com/widthdom/CodeIndex/issues/123")),
+                cts.Token));
+
+        Assert.Empty(_store.LoadAll());
+    }
+
+    [Fact]
+    public async Task TryAddAndSubmitAsync_PassesCancellationTokenToSubmitCallback()
+    {
+        var record = MakeRecord("other", null, "Submit observes cancellation token");
+        using var cts = new CancellationTokenSource();
+        var observedToken = CancellationToken.None;
+
+        var result = await _store.TryAddAndSubmitAsync(
+            record,
+            (_, token) =>
+            {
+                observedToken = token;
+                return Task.FromResult(SuggestionStore.SubmitAttemptResult.Success("https://github.com/widthdom/CodeIndex/issues/123"));
+            },
+            cts.Token);
+
+        Assert.True(result.IsNew);
+        Assert.Equal(cts.Token, observedToken);
+    }
+
+    [Fact]
     public void TryAddAndSubmit_FuzzyDuplicate_IgnoresClosedDiagnosticStderr()
     {
         var originalError = Console.Error;

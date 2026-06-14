@@ -577,7 +577,7 @@ public static partial class ReferenceExtractor
     // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
     private static readonly Regex CSharpDocCrefRegex = new(
         @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Javadoc / KDoc cross-reference links (`{@link Foo#bar}`, `@see Foo`, `[Foo.bar]`).
     // Javadoc / KDoc の cross-reference link。
     private static readonly Regex JvmDocInlineLinkRegex = new(

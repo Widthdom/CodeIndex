@@ -223,13 +223,33 @@ public class SuggestionStore
             record,
             submitToGitHub == null
                 ? null
-                : r => Task.FromResult(submitToGitHub(r))).GetAwaiter().GetResult();
+                : (r, _) => Task.FromResult(submitToGitHub(r)),
+            CancellationToken.None).GetAwaiter().GetResult();
     }
 
     public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
         SuggestionRecord record,
         Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub)
+        => await TryAddAndSubmitAsync(
+            record,
+            submitToGitHub == null ? null : (r, _) => submitToGitHub(r),
+            CancellationToken.None).ConfigureAwait(false);
+
+    public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
+        SuggestionRecord record,
+        Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub,
+        CancellationToken cancellationToken)
+        => await TryAddAndSubmitAsync(
+            record,
+            submitToGitHub == null ? null : (r, _) => submitToGitHub(r),
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
+        SuggestionRecord record,
+        Func<SuggestionRecord, CancellationToken, Task<SubmitAttemptResult>>? submitToGitHub,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         record = RedactRecordForPersistence(record);
         var reservation = WithFileLock(() =>
         {
@@ -299,7 +319,9 @@ public class SuggestionStore
         SubmitAttemptResult submitResult;
         try
         {
-            submitResult = await submitToGitHub(reservation.RecordToSubmit).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            submitResult = await submitToGitHub(reservation.RecordToSubmit, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
         {
@@ -628,7 +650,7 @@ public class SuggestionStore
 
     private static double ResolveDedupThreshold()
     {
-        var raw = Environment.GetEnvironmentVariable(DedupThresholdEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(DedupThresholdEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultDedupThreshold;
 
@@ -908,7 +930,7 @@ public class SuggestionStore
 
     internal static TimeSpan ResolveMaxAge()
     {
-        var raw = Environment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
         return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) && days is > 0 and <= MaximumMaxAgeDays
             ? TimeSpan.FromDays(days)
             : TimeSpan.FromDays(DefaultMaxAgeDays);
@@ -916,7 +938,7 @@ public class SuggestionStore
 
     internal static int ResolveMaxCount()
     {
-        var raw = Environment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
         return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) && count is > 0 and <= MaximumMaxCount
             ? count
             : DefaultMaxCount;

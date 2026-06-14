@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -11,6 +12,8 @@ public static class HookCommandRunner
     private const string BeginMarker = "# BEGIN CDIDX MANAGED PRE-COMMIT";
     private const string EndMarker = "# END CDIDX MANAGED PRE-COMMIT";
     internal const int MaxHookMarkerBytes = 64 * 1024;
+    internal static Action<string>? DeleteFileForTesting { get; set; }
+    internal static Action<string, string, string?>? ReplaceFileForTesting { get; set; }
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
@@ -91,6 +94,7 @@ public static class HookCommandRunner
 
     private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hooksDir, string hookPath, string chainedHookPath)
     {
+        var warnings = new List<HookCommandWarningJsonResult>();
         Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(hooksDir));
 
         var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
@@ -102,18 +106,29 @@ public static class HookCommandRunner
                 if (File.Exists(ioChainedHookPath) && !options.Force)
                     return WriteResult(options.Json, jsonOptions, "error", $"chained hook already exists: {chainedHookPath}", projectPath, hookPath, chainedHookPath, CommandExitCodes.UsageError);
 
-                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath);
-                return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success);
+                try
+                {
+                    ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath, warnings);
+                }
+                catch (Exception ex) when (IsHookFileOperationException(ex))
+                {
+                    RecordHookWarning(warnings, "chained_hook_backup", chainedHookPath, "failed to back up existing hook", ex);
+                    var message = $"failed to install cdidx pre-commit hook ({CommandErrorWriter.FormatSanitizedException(ex)})";
+                    return WriteResult(options.Json, jsonOptions, "error", message, projectPath, hookPath, chainedHookPath, CommandExitCodes.InstallError, warnings);
+                }
+
+                return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success, warnings);
             }
         }
 
         AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath, projectPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
 
-        return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
+        return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success, warnings);
     }
 
     private static int Uninstall(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hookPath, string chainedHookPath)
     {
+        var warnings = new List<HookCommandWarningJsonResult>();
         var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
         var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
         if (!File.Exists(ioHookPath))
@@ -124,15 +139,24 @@ public static class HookCommandRunner
 
         if (File.Exists(ioChainedHookPath))
         {
-            File.Replace(ioChainedHookPath, ioHookPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
-            MakeExecutable(ioHookPath);
+            try
+            {
+                ReplaceFile(ioChainedHookPath, ioHookPath, destinationBackupFileName: null);
+                MakeExecutable(ioHookPath);
+            }
+            catch (Exception ex) when (IsHookFileOperationException(ex))
+            {
+                RecordHookWarning(warnings, "chained_hook_backup", chainedHookPath, "failed to restore chained hook backup", ex);
+                return WriteResult(options.Json, jsonOptions, "error", "failed to restore chained pre-commit hook", projectPath, hookPath, chainedHookPath, CommandExitCodes.InstallError, warnings);
+            }
         }
         else
         {
-            File.Delete(ioHookPath);
+            if (!TryDeleteFile(ioHookPath, hookPath, "managed_hook", warnings))
+                return WriteResult(options.Json, jsonOptions, "error", "failed to delete managed pre-commit hook", projectPath, hookPath, null, CommandExitCodes.InstallError, warnings);
         }
 
-        return WriteResult(options.Json, jsonOptions, "uninstalled", "cdidx pre-commit hook uninstalled", projectPath, hookPath, null, CommandExitCodes.Success);
+        return WriteResult(options.Json, jsonOptions, "uninstalled", "cdidx pre-commit hook uninstalled", projectPath, hookPath, null, CommandExitCodes.Success, warnings);
     }
 
     private static int Status(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hookPath, string chainedHookPath)
@@ -161,7 +185,12 @@ public static class HookCommandRunner
         return content is not null && IsManagedHook(content);
     }
 
-    private static void ReplaceCustomHookWithManagedHook(string hooksDir, string hookPath, string chainedHookPath, string projectPath)
+    private static void ReplaceCustomHookWithManagedHook(
+        string hooksDir,
+        string hookPath,
+        string chainedHookPath,
+        string projectPath,
+        List<HookCommandWarningJsonResult> warnings)
     {
         var stagedHookPath = Path.Combine(hooksDir, $".{HookName}.{Guid.NewGuid():N}.tmp");
         var ioStagedHookPath = LongPath.EnsureWindowsPrefix(stagedHookPath);
@@ -172,14 +201,14 @@ public static class HookCommandRunner
         try
         {
             WriteStagedHookScript(ioStagedHookPath, chainedHookPath, projectPath);
-            File.Replace(ioStagedHookPath, ioHookPath, ioChainedHookPath, ignoreMetadataErrors: true);
+            ReplaceFile(ioStagedHookPath, ioHookPath, ioChainedHookPath);
             stagedHookMoved = true;
             MakeExecutable(ioHookPath);
         }
         finally
         {
             if (!stagedHookMoved)
-                TryDeleteFile(ioStagedHookPath);
+                TryDeleteFile(ioStagedHookPath, stagedHookPath, "staged_hook_temp", warnings);
         }
     }
 
@@ -203,16 +232,55 @@ public static class HookCommandRunner
         MakeExecutable(ioStagedHookPath);
     }
 
-    private static void TryDeleteFile(string ioPath)
+    private static void ReplaceFile(string sourceFileName, string destinationFileName, string? destinationBackupFileName)
+    {
+        if (ReplaceFileForTesting != null)
+            ReplaceFileForTesting(sourceFileName, destinationFileName, destinationBackupFileName);
+        else
+            File.Replace(sourceFileName, destinationFileName, destinationBackupFileName, ignoreMetadataErrors: true);
+    }
+
+    private static bool TryDeleteFile(
+        string ioPath,
+        string displayPath,
+        string category,
+        List<HookCommandWarningJsonResult> warnings)
     {
         try
         {
             if (File.Exists(ioPath))
-                File.Delete(ioPath);
+            {
+                if (DeleteFileForTesting != null)
+                    DeleteFileForTesting(ioPath);
+                else
+                    File.Delete(ioPath);
+            }
+
+            return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (IsHookFileOperationException(ex))
         {
+            RecordHookWarning(warnings, category, displayPath, $"failed to delete {category}", ex);
+            return false;
         }
+    }
+
+    private static bool IsHookFileOperationException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
+
+    private static void RecordHookWarning(
+        List<HookCommandWarningJsonResult> warnings,
+        string category,
+        string path,
+        string action,
+        Exception ex)
+    {
+        var message = $"{action} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).";
+        warnings.Add(new HookCommandWarningJsonResult(category, path, message));
     }
 
     private static string BuildHookScript(string chainedHookPath, string projectPath)
@@ -249,25 +317,44 @@ fi
             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
-    private static int WriteResult(bool json, JsonSerializerOptions jsonOptions, string status, string message, string projectPath, string? hookPath, string? chainedHookPath, int exitCode)
+    private static int WriteResult(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string status,
+        string message,
+        string projectPath,
+        string? hookPath,
+        string? chainedHookPath,
+        int exitCode,
+        IReadOnlyList<HookCommandWarningJsonResult>? warnings = null)
     {
+        var hasWarnings = warnings is { Count: > 0 };
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new HookCommandJsonResult(status, message, projectPath, hookPath, chainedHookPath),
+                new HookCommandJsonResult(status, message, projectPath, hookPath, chainedHookPath, hasWarnings ? warnings : null),
                 CliJsonSerializerContextFactory.Create(jsonOptions).HookCommandJsonResult));
-        }
-        else if (exitCode == CommandExitCodes.Success)
-        {
-            CommandErrorWriter.WriteStdout(message);
-            if (hookPath != null)
-                CommandErrorWriter.WriteStdout($"Hook: {hookPath}");
-            if (chainedHookPath != null)
-                CommandErrorWriter.WriteStdout($"Chained hook: {chainedHookPath}");
         }
         else
         {
-            CommandErrorWriter.WriteStderr($"Error: {message}");
+            if (hasWarnings)
+            {
+                foreach (var warning in warnings!)
+                    CommandErrorWriter.WriteWarning(warning.Message);
+            }
+
+            if (exitCode == CommandExitCodes.Success)
+            {
+                CommandErrorWriter.WriteStdout(message);
+                if (hookPath != null)
+                    CommandErrorWriter.WriteStdout($"Hook: {hookPath}");
+                if (chainedHookPath != null)
+                    CommandErrorWriter.WriteStdout($"Chained hook: {chainedHookPath}");
+            }
+            else
+            {
+                CommandErrorWriter.WriteStderr($"Error: {message}");
+            }
         }
 
         return exitCode;
@@ -279,9 +366,15 @@ fi
 
 public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp, string? ParseError);
 
+public sealed record HookCommandWarningJsonResult(
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("message")] string Message);
+
 public sealed record HookCommandJsonResult(
     string Status,
     string Message,
     string ProjectPath,
     string? HookPath,
-    string? ChainedHookPath);
+    string? ChainedHookPath,
+    IReadOnlyList<HookCommandWarningJsonResult>? Warnings = null);

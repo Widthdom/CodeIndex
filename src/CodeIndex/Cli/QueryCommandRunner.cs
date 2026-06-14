@@ -3858,11 +3858,19 @@ public static class QueryCommandRunner
     {
         var tokens = new List<ExcerptSemanticToken>();
         var lines = excerpt.Content.Replace("\r\n", "\n").Split('\n');
-        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        var spans = excerpt.ContentLineSpans.Count == 0
+            ? BuildIdentityExcerptContentLineSpans(excerpt, lines)
+            : excerpt.ContentLineSpans;
+        foreach (var span in spans)
         {
-            var line = lines[lineIndex];
-            var column = 0;
-            while (column < line.Length)
+            if (span.ContentLine <= 0 || span.ContentLine > lines.Length)
+                continue;
+
+            var line = lines[span.ContentLine - 1];
+            var startColumn = Math.Clamp(span.ContentStartColumn - 1, 0, line.Length);
+            var endColumn = Math.Clamp(span.ContentEndColumn - 1, startColumn, line.Length);
+            var column = startColumn;
+            while (column < endColumn)
             {
                 if (!IsSemanticTokenStart(line[column]))
                 {
@@ -3872,22 +3880,43 @@ public static class QueryCommandRunner
 
                 var start = column;
                 column++;
-                while (column < line.Length && IsSemanticTokenPart(line[column]))
+                while (column < endColumn && IsSemanticTokenPart(line[column]))
                     column++;
 
                 var tokenText = line[start..column];
+                var sourceStartColumn = span.SourceStartColumn + ((start + 1) - span.ContentStartColumn);
+                var sourceEndColumn = span.SourceStartColumn + ((column + 1) - span.ContentStartColumn);
                 tokens.Add(new ExcerptSemanticToken
                 {
-                    StartLine = excerpt.StartLine + lineIndex,
-                    StartColumn = start + 1,
-                    EndLine = excerpt.StartLine + lineIndex,
-                    EndColumn = column + 1,
+                    StartLine = span.SourceLine,
+                    StartColumn = sourceStartColumn,
+                    EndLine = span.SourceLine,
+                    EndColumn = sourceEndColumn,
                     Type = ClassifySemanticToken(tokenText),
                 });
             }
         }
 
         return tokens;
+    }
+
+    private static List<ExcerptContentLineSpan> BuildIdentityExcerptContentLineSpans(FileExcerptResult excerpt, string[] lines)
+    {
+        var spans = new List<ExcerptContentLineSpan>(lines.Length);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            spans.Add(new ExcerptContentLineSpan
+            {
+                ContentLine = i + 1,
+                SourceLine = excerpt.StartLine + i,
+                ContentStartColumn = 1,
+                ContentEndColumn = lines[i].Length + 1,
+                SourceStartColumn = 1,
+                SourceEndColumn = lines[i].Length + 1,
+            });
+        }
+
+        return spans;
     }
 
     private static bool IsSemanticTokenStart(char value) =>
@@ -3984,8 +4013,9 @@ public static class QueryCommandRunner
                 }
                 catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
                 {
-                    Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
-                    return CommandExitCodes.UsageError;
+                    return ex is RegexMatchTimeoutException timeout
+                        ? WriteFindRegexTimeoutError(timeout, jsonOptions, options.Json)
+                        : WriteFindInvalidRegexError(ex);
                 }
                 if (counts.Count == 0)
                 {
@@ -4037,13 +4067,11 @@ public static class QueryCommandRunner
             }
             catch (ArgumentException ex) when (options.Regex)
             {
-                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
-                return CommandExitCodes.UsageError;
+                return WriteFindInvalidRegexError(ex);
             }
             catch (RegexMatchTimeoutException ex) when (options.Regex)
             {
-                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
-                return CommandExitCodes.UsageError;
+                return WriteFindRegexTimeoutError(ex, jsonOptions, options.Json);
             }
             var results = findResults.Results;
             if (results.Count == 0)
@@ -4124,6 +4152,32 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static int WriteFindInvalidRegexError(Exception ex)
+    {
+        Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+        return CommandExitCodes.UsageError;
+    }
+
+    internal static int WriteFindRegexTimeoutError(RegexMatchTimeoutException ex, JsonSerializerOptions jsonOptions, bool json)
+    {
+        var timeout = FormatRegexMatchTimeout(ex.MatchTimeout);
+        return CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            $"regular expression timed out after {timeout} while scanning indexed file contents.",
+            CommandExitCodes.RuntimeError,
+            hint: "Simplify the pattern, narrow the scan with --path/--lang, or omit --regex for literal text.",
+            errorCode: CommandErrorCodes.RegexMatchTimeout,
+            category: "regex_timeout");
+    }
+
+    internal static string FormatRegexMatchTimeout(TimeSpan timeout)
+    {
+        if (timeout.TotalMilliseconds < 1000)
+            return timeout.TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture) + "ms";
+        return timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + "s";
     }
 
     private static string? ValidateFindArgs(string[] args)
@@ -5108,7 +5162,7 @@ public static class QueryCommandRunner
             var staleAfter = (Value: DefaultStaleAfter, Error: (string?)null);
             if (options.CheckWorkspace || options.StaleAfter.HasValue)
             {
-                staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+                staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
                 if (staleAfter.Error != null)
                 {
                     Console.Error.WriteLine(staleAfter.Error);
@@ -5425,7 +5479,7 @@ public static class QueryCommandRunner
             ["value"] = JsonSerializer.SerializeToNode(value),
             ["source"] = source,
         };
-        var staleAfterEnvValue = Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
+        var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
         var payload = new JsonObject
         {
@@ -5464,9 +5518,9 @@ public static class QueryCommandRunner
     {
         if (HasOption(args, primaryFlag) || (aliasFlag != null && HasOption(args, aliasFlag)))
             return "flag";
-        if (Environment.GetEnvironmentVariable(envName) is null)
+        if (CdidxEnvironment.GetEnvironmentVariable(envName) is null)
             return "default";
-        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        var configSource = CdidxEnvironment.GetConfigSource(envName);
         if (!string.IsNullOrWhiteSpace(configSource))
             return $"config:{configSource}";
         return $"env:{envName}";
@@ -5474,9 +5528,9 @@ public static class QueryCommandRunner
 
     private static string ResolveEnvSource(string envName)
     {
-        if (Environment.GetEnvironmentVariable(envName) is null)
+        if (CdidxEnvironment.GetEnvironmentVariable(envName) is null)
             return "default";
-        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        var configSource = CdidxEnvironment.GetConfigSource(envName);
         if (!string.IsNullOrWhiteSpace(configSource))
             return $"config:{configSource}";
         return $"env:{envName}";
@@ -10246,7 +10300,7 @@ public static class QueryCommandRunner
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
 
-        var staleAfter = ResolveStaleAfter(options, Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
+        var staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
         if (staleAfter.Error != null)
         {
             Console.Error.WriteLine(staleAfter.Error);
@@ -11823,7 +11877,7 @@ public static class QueryCommandRunner
 
     private static int ResolveDefaultPositiveInt(string environmentVariable, int fallback, string optionName, out string? error)
     {
-        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(environmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
         {
             error = null;
@@ -11842,7 +11896,7 @@ public static class QueryCommandRunner
 
     private static int ResolveDefaultNonNegativeInt(string environmentVariable, int fallback, string optionName, out string? error)
     {
-        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(environmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
         {
             error = null;
