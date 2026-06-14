@@ -1946,6 +1946,7 @@ exit 0
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_log_flag_option");
         using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1962,7 +1963,7 @@ exit 0
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+            Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
         }
         finally
         {
@@ -1975,6 +1976,7 @@ exit 0
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_inline_log_flag_after_query");
         using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1991,7 +1993,7 @@ exit 0
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+            Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
         }
         finally
         {
