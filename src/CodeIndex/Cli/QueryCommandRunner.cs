@@ -5147,7 +5147,10 @@ public static class QueryCommandRunner
             status.DataDirSource = options.DataDirSource;
             status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
             status.DbFileMode = DbContext.GetUnixFileModeString(options.DbPath);
-            status.MacProfile = MacProfileDetector.DetectCurrent();
+            var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
+            status.MacProfile = macProfile.Profile;
+            if (macProfile.Diagnostics.Count > 0)
+                status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (options.CheckWorkspace)
             {
                 status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);

@@ -803,6 +803,9 @@ public class StatusResult
     [JsonPropertyName("mac_profile")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MacProfile { get; set; }
+    [JsonPropertyName("mac_profile_diagnostics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<MacProfileDiagnostic>? MacProfileDiagnostics { get; set; }
     /// <summary>
     /// Git HEAD commit captured at the end of the most recent successful full-scan
     /// index run (Issue #1508). Compared with the runtime `GitHead` to surface a
