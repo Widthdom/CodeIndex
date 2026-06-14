@@ -88,6 +88,31 @@ public class MacProfileDetectorTests
         }
     }
 
+    [Fact]
+    public void DetectLinuxProcAttrs_RecordsReadFailureDiagnostics_Issue3480()
+    {
+        var result = MacProfileDetector.DetectLinuxProcAttrsForTesting(path =>
+            path == MacProfileDetector.CurrentAttrPath
+                ? throw new UnauthorizedAccessException("secret current detail")
+                : throw new IOException("secret exec detail"));
+
+        Assert.Null(result.Profile);
+        Assert.Collection(
+            result.Diagnostics,
+            diagnostic =>
+            {
+                Assert.Equal(MacProfileDetector.CurrentAttrPath, diagnostic.Path);
+                Assert.Equal("permission_denied", diagnostic.Category);
+                Assert.DoesNotContain("secret", diagnostic.Message, StringComparison.Ordinal);
+            },
+            diagnostic =>
+            {
+                Assert.Equal(MacProfileDetector.ExecAttrPath, diagnostic.Path);
+                Assert.Equal("io_error", diagnostic.Category);
+                Assert.DoesNotContain("secret", diagnostic.Message, StringComparison.Ordinal);
+            });
+    }
+
     [Theory]
     [InlineData(3)]
     [InlineData(10)]
@@ -108,6 +133,24 @@ public class MacProfileDetectorTests
         var json = JsonSerializer.Serialize(status);
 
         Assert.Contains("\"mac_profile\":\"apparmor:snap.cdidx.cdidx\"", json);
+    }
+
+    [Fact]
+    public void StatusResult_JsonIncludesMacProfileDiagnostics_Issue3480()
+    {
+        var status = new StatusResult
+        {
+            MacProfileDiagnostics =
+            [
+                new(MacProfileDetector.CurrentAttrPath, "permission_denied", "Could not read proc attribute due to permissions."),
+            ],
+        };
+
+        var json = JsonSerializer.Serialize(status);
+
+        Assert.Contains("\"mac_profile_diagnostics\"", json);
+        Assert.Contains("\"category\":\"permission_denied\"", json);
+        Assert.DoesNotContain("secret", json, StringComparison.Ordinal);
     }
 
     private static SqliteException CreateSyntheticSqliteError(int errorCode, string message)

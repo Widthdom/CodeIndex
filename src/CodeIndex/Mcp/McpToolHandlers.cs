@@ -3014,7 +3014,10 @@ public partial class McpServer
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
-            status.MacProfile = MacProfileDetector.DetectCurrent();
+            var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
+            status.MacProfile = macProfile.Profile;
+            if (macProfile.Diagnostics.Count > 0)
+                status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (checkWorkspace)
             {
                 status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);

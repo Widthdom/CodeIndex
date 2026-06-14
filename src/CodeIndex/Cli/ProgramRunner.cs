@@ -3511,7 +3511,7 @@ internal static class ProgramRunner
     private static UpdateCheckResult CheckLatestPrerelease(string appVersion, CancellationToken cancellationToken)
     {
         if (UpdateChecker.IsDisabled())
-            return new UpdateCheckResult(appVersion, null, false, FromCache: false, Error: "disabled");
+            return UpdateChecker.CreateDisabledResult(appVersion);
 
         try
         {
@@ -3527,7 +3527,11 @@ internal static class ProgramRunner
                 tag,
                 UpdateChecker.IsNewerRelease(tag, appVersion),
                 FromCache: false,
-                Error: tag is null ? "prerelease_not_found" : null);
+                Error: tag is null ? "prerelease_not_found" : null,
+                ErrorCategory: tag is null ? "release_metadata" : null,
+                ErrorHint: tag is null
+                    ? "Retry later, omit --prerelease, or pass --version to use a known prerelease tag."
+                    : null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3535,7 +3539,15 @@ internal static class ProgramRunner
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(appVersion, null, false, FromCache: false, Error: ex.GetType().Name);
+            var failure = UpdateChecker.ClassifyFailure(ex);
+            return new UpdateCheckResult(
+                appVersion,
+                null,
+                false,
+                FromCache: false,
+                Error: failure.Code,
+                ErrorCategory: failure.Category,
+                ErrorHint: failure.Hint);
         }
     }
 
@@ -3695,6 +3707,8 @@ internal static class ProgramRunner
             selectionSource,
             includePrerelease,
             error ?? result.Error,
+            error is null ? result.ErrorCategory : null,
+            error is null ? result.ErrorHint : null,
             installAttempted,
             installExitCode,
             installExitCode is null ? null : installExitCode == CommandExitCodes.Success,

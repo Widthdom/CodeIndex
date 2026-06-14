@@ -1997,6 +1997,55 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_SkipsAutomaticSolutionDiscoveryFilesystemErrors_Issue3513()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_auto_discovery_error");
+        var lockedRoot = Path.Combine(projectRoot, "locked-root");
+        var restoreLockedRoot = false;
+        try
+        {
+            Directory.CreateDirectory(lockedRoot);
+            try
+            {
+                File.SetUnixFileMode(lockedRoot, UnixFileMode.None);
+                restoreLockedRoot = true;
+                _ = Directory.EnumerateFiles(lockedRoot, "*.sln", SearchOption.TopDirectoryOnly).ToList();
+                return;
+            }
+            catch (Exception permissionEx) when (permissionEx is UnauthorizedAccessException or IOException)
+            {
+            }
+            catch (PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            var projects = SolutionProjectResolver.ResolveProjects(
+                lockedRoot,
+                solutionPath: null,
+                SolutionProjectResolverLimits.Default,
+                diagnostics);
+
+            Assert.Empty(projects);
+            Assert.Contains(
+                diagnostics,
+                diagnostic => diagnostic.Contains("solution files", StringComparison.Ordinal)
+                    && diagnostic.Contains("permissions", StringComparison.Ordinal)
+                    && diagnostic.Contains("pass --solution <path>", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (restoreLockedRoot)
+                File.SetUnixFileMode(lockedRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjects_SkipsSolutionProjectsOutsideWorkspaceRoot_Issue3063()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_outside_root");
