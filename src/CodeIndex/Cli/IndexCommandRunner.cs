@@ -41,6 +41,8 @@ public static partial class IndexCommandRunner
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
+    internal static Action<string>? WriteScanCheckpointForTesting { get; set; }
+    internal static Action<string>? DeleteScanCheckpointForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
 

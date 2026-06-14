@@ -3408,6 +3408,7 @@ public static partial class SymbolExtractor
                                 && pattern.BodyStyle == BodyStyle.None
                                 ? TryExpandFortranParameterDeclaratorList(patternMatchLine, match)
                                 : null;
+                            var csharpMetadataTarget = TryClassifyCSharpExtractorMetadataTarget(lang, pattern.Kind, signature);
 
                             if (pythonImportEntries != null)
                             {
@@ -3632,6 +3633,10 @@ public static partial class SymbolExtractor
                                             SubKind = pythonSubKind ?? ResolveLanguageSubKind(lang, kind, signature, patternMatchLine),
                                             Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                             ReturnType = NormalizeMetadata(rawReturnType),
+                                            IsMetadataTarget = csharpMetadataTarget,
+                                            MetadataTargetSource = csharpMetadataTarget == true
+                                                ? SymbolRecord.MetadataTargetSourceExtractor
+                                                : null,
                                         },
                                     line);
 
@@ -4180,6 +4185,157 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static bool? TryClassifyCSharpExtractorMetadataTarget(string? lang, string kind, string? signature)
+    {
+        if (!string.Equals(lang, "csharp", StringComparison.Ordinal) || kind != "class")
+            return null;
+
+        foreach (var baseIdentifier in ParseCSharpExtractorBaseIdentifiers(signature))
+        {
+            var normalized = StripCSharpVerbatimIdentifierPrefixes(baseIdentifier);
+            if (string.Equals(normalized, "Attribute", StringComparison.Ordinal)
+                || string.Equals(normalized, "System.Attribute", StringComparison.Ordinal)
+                || string.Equals(normalized, "global::System.Attribute", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return null;
+    }
+
+    private static List<string> ParseCSharpExtractorBaseIdentifiers(string? signature)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrEmpty(signature))
+            return result;
+
+        int colonIdx = FindCSharpExtractorBaseListColon(signature);
+        if (colonIdx < 0)
+            return result;
+
+        int genericDepth = 0;
+        var current = new StringBuilder();
+        for (int i = colonIdx + 1; i < signature.Length; i++)
+        {
+            char c = signature[i];
+            if (c == '<')
+            {
+                genericDepth++;
+                current.Append(c);
+                continue;
+            }
+            if (c == '>')
+            {
+                if (genericDepth > 0)
+                    genericDepth--;
+                current.Append(c);
+                continue;
+            }
+            if (c == '{')
+                break;
+            if (genericDepth == 0 && c == ',')
+            {
+                AddCSharpExtractorBaseIdentifier(result, current.ToString());
+                current.Clear();
+                continue;
+            }
+            if (genericDepth == 0 && (c == 'w' || c == 'W') && LooksLikeCSharpWhereKeyword(signature, i))
+            {
+                AddCSharpExtractorBaseIdentifier(result, current.ToString());
+                return result;
+            }
+            current.Append(c);
+        }
+
+        AddCSharpExtractorBaseIdentifier(result, current.ToString());
+        return result;
+    }
+
+    private static int FindCSharpExtractorBaseListColon(string signature)
+    {
+        int genericDepth = 0;
+        int parenDepth = 0;
+        for (int i = 0; i < signature.Length; i++)
+        {
+            char c = signature[i];
+            if (c == '<') { genericDepth++; continue; }
+            if (c == '>') { if (genericDepth > 0) genericDepth--; continue; }
+            if (c == '(') { parenDepth++; continue; }
+            if (c == ')') { if (parenDepth > 0) parenDepth--; continue; }
+            if (c == '{')
+                return -1;
+            if (genericDepth == 0 && parenDepth == 0 && (c == 'w' || c == 'W')
+                && LooksLikeCSharpWhereKeyword(signature, i))
+            {
+                return -1;
+            }
+            if (c == ':' && genericDepth == 0 && parenDepth == 0)
+            {
+                if (i + 1 < signature.Length && signature[i + 1] == ':')
+                {
+                    i++;
+                    continue;
+                }
+                if (i > 0 && signature[i - 1] == ':')
+                    continue;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static bool LooksLikeCSharpWhereKeyword(string signature, int i)
+    {
+        if (i + 5 > signature.Length)
+            return false;
+        if (string.Compare(signature, i, "where", 0, 5, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+        if (i > 0)
+        {
+            char prev = signature[i - 1];
+            if (char.IsLetterOrDigit(prev) || prev == '_')
+                return false;
+        }
+        if (i + 5 < signature.Length)
+        {
+            char next = signature[i + 5];
+            if (char.IsLetterOrDigit(next) || next == '_')
+                return false;
+        }
+        return true;
+    }
+
+    private static void AddCSharpExtractorBaseIdentifier(List<string> result, string raw)
+    {
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0)
+            return;
+
+        int cut = trimmed.Length;
+        for (int i = 0; i < trimmed.Length; i++)
+        {
+            char c = trimmed[i];
+            if (c == '<' || char.IsWhiteSpace(c))
+            {
+                cut = i;
+                break;
+            }
+        }
+        var head = trimmed[..cut];
+        if (head.Length > 0)
+            result.Add(head);
+    }
+
+    private static string StripCSharpVerbatimIdentifierPrefixes(string value)
+    {
+        if (value.IndexOf('@', StringComparison.Ordinal) < 0)
+            return value;
+        return value.Replace(".@", ".", StringComparison.Ordinal)
+            .Replace("::@", "::", StringComparison.Ordinal)
+            .TrimStart('@');
     }
 
     private static void ClassifyScalaCompanions(List<SymbolRecord> symbols)

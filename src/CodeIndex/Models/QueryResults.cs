@@ -977,14 +977,13 @@ public class StatusResult
     public bool CSharpSymbolNameReady { get; set; } = true;
     /// <summary>
     /// True when every indexed C# class row carries an authoritative `is_metadata_target`
-    /// value stamped under the current `metadata_target_version_csharp` contract. False
-    /// means the `deps` / `impact` metadata-attribute edges fall back to the legacy
-    /// `signature LIKE '%: %'` heuristic (or the `name LIKE '%Attribute'` suffix heuristic
-    /// on truly-legacy DBs missing the `is_metadata_target` column), which silently drops
-    /// impostor classes like `class FooAttribute : BaseService`. Run `cdidx index .` once
-    /// to let the authoritative resolver rewrite the stamp (#435).
-    /// true のとき deps / impact の metadata-attribute edge は persisted な
-    /// `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
+    /// value stamped under the current `metadata_target_version_csharp` contract from
+    /// extractor facts plus the writer resolver. False means the `deps` / `impact`
+    /// metadata-attribute edges fall back to the legacy `signature LIKE '%: %'` heuristic
+    /// (or the `name LIKE '%Attribute'` suffix heuristic on truly-legacy DBs missing the
+    /// `is_metadata_target` column). Run `cdidx index .` once to restamp the contract (#3524).
+    /// true のとき deps / impact の metadata-attribute edge は extractor fact と writer resolver が
+    /// stamp した persisted な `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
     /// </summary>
     [JsonPropertyName("csharp_metadata_target_ready")]
     public bool CSharpMetadataTargetReady { get; set; } = true;
