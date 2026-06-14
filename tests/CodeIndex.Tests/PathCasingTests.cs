@@ -1,3 +1,4 @@
+using CodeIndex;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -68,6 +69,31 @@ public class PathCasingTests
         }
         finally
         {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsIgnoreCase_ProbeFailureThrowsStructuredFilesystemError_Issue3439()
+    {
+        PathCasing.ResetCacheForTests();
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_pathcasing_probe_failure_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
+        try
+        {
+            var ex = Assert.Throws<CodeIndexException>(() => PathCasing.IsIgnoreCase(tempDir));
+
+            Assert.Equal(CommandErrorCodes.FileSystemCaseProbeFailed, ex.Code);
+            Assert.Equal(CodeIndexExceptionCategory.Filesystem, ex.Category);
+            Assert.Equal(Path.GetFullPath(tempDir), ex.Path);
+            Assert.IsType<IOException>(ex.InnerException);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
             Directory.Delete(tempDir, recursive: true);
         }
     }

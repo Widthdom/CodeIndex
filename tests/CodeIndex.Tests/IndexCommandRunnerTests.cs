@@ -261,6 +261,73 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_RunCommand_CancellationTokenStopsDelayedExtraction_Issue3399()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                0,
+                "csharp",
+                "public class App { }\n",
+                Path.Combine(projectRoot, "App.cs"),
+                projectRoot);
+            using var input = new StringReader(JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + Environment.NewLine);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+            var stopwatch = Stopwatch.StartNew();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName, "--test-delay-ms", "500"],
+                input,
+                output,
+                error,
+                out var exitCode,
+                cancellationToken: cts.Token);
+
+            stopwatch.Stop();
+            Assert.True(handled);
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, output.ToString());
+            Assert.Equal(string.Empty, error.ToString());
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WorkerProcessCleanupDiagnostics_ReturnBoundedProcessStateCategories_Issue3468()
+    {
+        using var symbolProcess = new Process();
+
+        var symbolWait = SymbolExtractionWorkerClient.WaitForWorkerExit(symbolProcess, 1);
+        var symbolKillDiagnostic = SymbolExtractionWorker.TryKillProcess(symbolProcess);
+
+        Assert.False(symbolWait.Exited);
+        Assert.Equal("worker_wait_failed: InvalidOperationException", symbolWait.Diagnostic);
+        Assert.Equal(
+            "worker_kill_failed: InvalidOperationException; worker_kill_wait_failed: InvalidOperationException",
+            symbolKillDiagnostic);
+        Assert.DoesNotContain("No process", symbolKillDiagnostic, StringComparison.Ordinal);
+
+        using var hookProcess = new Process();
+
+        var hookWait = PostExtractionHookCallbackWorkerClient.WaitForWorkerExit(hookProcess, 1);
+        var hookKillDiagnostic = PostExtractionHookCallbackWorker.TryKillProcess(hookProcess);
+
+        Assert.False(hookWait.Exited);
+        Assert.Equal("worker_wait_failed: InvalidOperationException", hookWait.Diagnostic);
+        Assert.Equal(
+            "worker_kill_failed: InvalidOperationException; worker_kill_wait_failed: InvalidOperationException",
+            hookKillDiagnostic);
+        Assert.DoesNotContain("No process", hookKillDiagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398()
     {
         var projectRoot = CreateTempProject();
@@ -1930,6 +1997,55 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_SkipsAutomaticSolutionDiscoveryFilesystemErrors_Issue3513()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_auto_discovery_error");
+        var lockedRoot = Path.Combine(projectRoot, "locked-root");
+        var restoreLockedRoot = false;
+        try
+        {
+            Directory.CreateDirectory(lockedRoot);
+            try
+            {
+                File.SetUnixFileMode(lockedRoot, UnixFileMode.None);
+                restoreLockedRoot = true;
+                _ = Directory.EnumerateFiles(lockedRoot, "*.sln", SearchOption.TopDirectoryOnly).ToList();
+                return;
+            }
+            catch (Exception permissionEx) when (permissionEx is UnauthorizedAccessException or IOException)
+            {
+            }
+            catch (PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            var projects = SolutionProjectResolver.ResolveProjects(
+                lockedRoot,
+                solutionPath: null,
+                SolutionProjectResolverLimits.Default,
+                diagnostics);
+
+            Assert.Empty(projects);
+            Assert.Contains(
+                diagnostics,
+                diagnostic => diagnostic.Contains("solution files", StringComparison.Ordinal)
+                    && diagnostic.Contains("permissions", StringComparison.Ordinal)
+                    && diagnostic.Contains("pass --solution <path>", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (restoreLockedRoot)
+                File.SetUnixFileMode(lockedRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjects_SkipsSolutionProjectsOutsideWorkspaceRoot_Issue3063()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_outside_root");
@@ -3139,6 +3255,48 @@ public class IndexCommandRunnerTests
                 DeleteDirectory(projectRoot);
             }
         }
+    }
+
+    [Fact]
+    public void MeasureReadableFileBytes_ReportsSkippedUnreadablePaths()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var readable = Path.Combine(projectRoot, "readable.txt");
+            File.WriteAllText(readable, "abc");
+            var diagnostics = new List<string>();
+
+            var summary = IndexCommandRunner.MeasureReadableFileBytes(
+                [readable, "bad\0path.txt"],
+                projectRoot,
+                diagnostics);
+
+            Assert.Equal(3, summary.BytesRead);
+            Assert.Equal(1, summary.SkippedFileCount);
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Contains("file_size_bytes_skipped", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("ArgumentException", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void FormatIndexRunDiagnostic_CollapsesAndBoundsExceptionMessages()
+    {
+        var message = "first line\n" + new string('x', 700);
+
+        var diagnostic = IndexCommandRunner.FormatIndexRunDiagnostic(
+            "indexed_head_metadata_write_failed",
+            new IOException(message));
+
+        Assert.StartsWith("indexed_head_metadata_write_failed: IOException: first line ", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', diagnostic);
+        Assert.EndsWith("...<truncated>", diagnostic, StringComparison.Ordinal);
+        Assert.True(diagnostic.Length <= 512 + "...<truncated>".Length);
     }
 
     [Fact]
@@ -7352,6 +7510,104 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReportsCheckpointSaveFailureAsWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+            IndexCommandRunner.WriteScanCheckpointForTesting = _ => throw new IOException("checkpoint save denied");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Contains(
+                json.GetProperty("warnings").EnumerateArray(),
+                warning =>
+                    warning.GetProperty("file").GetString() == "<scan_checkpoint>"
+                    && warning.GetProperty("message").GetString()!.Contains("scan checkpoint save failed", StringComparison.Ordinal)
+                    && warning.GetProperty("message").GetString()!.Contains("IOException", StringComparison.Ordinal));
+        }
+        finally
+        {
+            IndexCommandRunner.WriteScanCheckpointForTesting = null;
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReportsCheckpointDeleteFailureAsWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+            var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+
+            var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
+            Assert.True(File.Exists(checkpointPath));
+
+            SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            IndexCommandRunner.DeleteScanCheckpointForTesting = _ => throw new IOException("checkpoint delete denied");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains(
+                json.GetProperty("warnings").EnumerateArray(),
+                warning =>
+                    warning.GetProperty("file").GetString() == "<scan_checkpoint>"
+                    && warning.GetProperty("message").GetString()!.Contains("scan checkpoint delete failed", StringComparison.Ordinal)
+                    && warning.GetProperty("message").GetString()!.Contains("IOException", StringComparison.Ordinal));
+            Assert.True(File.Exists(checkpointPath));
+        }
+        finally
+        {
+            IndexCommandRunner.DeleteScanCheckpointForTesting = null;
             if (Directory.Exists(secretDir))
                 SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             DeleteDirectory(projectRoot);

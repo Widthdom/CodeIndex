@@ -6,6 +6,9 @@ namespace CodeIndex.Models;
 /// </summary>
 public class SymbolRecord
 {
+    public const string MetadataTargetSourceExtractor = "extractor";
+    public const string MetadataTargetSourceResolver = "resolver";
+
     public long Id { get; set; }
     public long FileId { get; set; }
 
@@ -66,6 +69,12 @@ public class SymbolRecord
     /// gating される resolver が full populate した後にだけ trust される。
     /// </summary>
     public bool? IsMetadataTarget { get; set; }
+
+    /// <summary>
+    /// Provenance for `IsMetadataTarget` when known (`extractor` or `resolver`).
+    /// `IsMetadataTarget` の由来（分かる場合は `extractor` または `resolver`）。
+    /// </summary>
+    public string? MetadataTargetSource { get; set; }
 
     /// <summary>0-based occurrence index of the same signature on the same raw line / 同一 raw 行・同一 signature 内での 0-based 出現順</summary>
     public int? SameLineSignatureOccurrenceIndex { get; set; }

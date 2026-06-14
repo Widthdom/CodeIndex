@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Text;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -2792,6 +2794,43 @@ public class DatabaseTests : IDisposable
         });
         nextScope.Commit();
     }
+
+    [Fact]
+    public void TransactionScope_CommitContentionTimesOutWithDiagnostic_Issue3517()
+    {
+        var priorTimeout = DbWriter.TransactionStateContentionTimeoutForTesting;
+        var scope = _writer.BeginTransaction();
+        var stateField = typeof(DbWriter.TransactionScope).GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("TransactionScope._state field was not found.");
+        var rollingBackState = ReadTransactionScopeStateConstant("StateRollingBack");
+        var rolledBackState = ReadTransactionScopeStateConstant("StateRolledBack");
+        try
+        {
+            DbWriter.TransactionStateContentionTimeoutForTesting = TimeSpan.FromMilliseconds(20);
+            stateField.SetValue(scope, rollingBackState);
+            var stopwatch = Stopwatch.StartNew();
+
+            var ex = Assert.Throws<InvalidOperationException>(() => scope.Commit());
+
+            stopwatch.Stop();
+            Assert.Contains("Timed out waiting for transaction scope state transition", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("commit", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("rolling_back", ex.Message, StringComparison.Ordinal);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Contention timeout took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            stateField.SetValue(scope, rolledBackState);
+            scope.Dispose();
+            DbWriter.TransactionStateContentionTimeoutForTesting = priorTimeout;
+        }
+    }
+
+    private static int ReadTransactionScopeStateConstant(string name)
+        => (int)(typeof(DbWriter.TransactionScope)
+            .GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+            ?.GetRawConstantValue()
+            ?? throw new InvalidOperationException($"TransactionScope.{name} field was not found."));
 
     public void Dispose()
     {

@@ -394,6 +394,7 @@ public partial class QueryCommandRunnerTests
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
+                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, staleHead);
             }
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -406,6 +407,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(staleHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(staleHead, json.GetProperty("indexed_head_sha").GetString());
             Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
         }
         finally
@@ -449,6 +451,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(indexedHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(indexedHead, json.GetProperty("indexed_head_sha").GetString());
             Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
         }
         finally
@@ -458,7 +461,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_Json_ReportsDetachedHeadAfterPartialUpdateAtSameCommit()
+    public void RunStatus_Json_DoesNotReportDetachedHeadChangedAfterPartialUpdateAtSameCommit()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_detached_head_after_partial_json");
         try
@@ -487,7 +490,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(indexedHead, json.GetProperty("indexed_head_commit").GetString());
-            Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
+            Assert.Equal(indexedHead, json.GetProperty("indexed_head_sha").GetString());
+            Assert.False(json.GetProperty("worktree_head_changed").GetBoolean());
         }
         finally
         {
@@ -518,6 +522,7 @@ public partial class QueryCommandRunnerTests
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
+                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, staleHead);
             }
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(

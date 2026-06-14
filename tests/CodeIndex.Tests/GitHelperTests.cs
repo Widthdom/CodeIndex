@@ -460,8 +460,12 @@ public class GitHelperTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
-        var repoDir = Path.Combine(_tempDir, "repo-timeout");
-        Directory.CreateDirectory(repoDir);
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "tracked\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "base");
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
         var fakeGitDir = Path.Combine(_tempDir, "fake-git-timeout");
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
@@ -473,13 +477,122 @@ public class GitHelperTests : IDisposable
         try
         {
             var ex = Assert.Throws<InvalidOperationException>(
-                () => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef"));
+                () => GitHelper.GetChangedFilesFromCommit(repoDir, commitId));
 
             Assert.Contains("timed out", ex.Message);
         }
         finally
         {
             GitHelper.GitCommandTimeout = oldTimeout;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void RunGitCapturingResult_NonZeroExitReportsStructuredBoundedDiagnostic_Issue3434()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-git-structured-failure");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-structured-failure");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatFailsWithLongSensitiveStderr(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        try
+        {
+            var result = GitHelper.RunGitCapturingResultForTests(
+                repoDir,
+                gitEnvironmentOverrides: null,
+                CancellationToken.None,
+                "status");
+
+            Assert.Equal(23, result.ExitCode);
+            Assert.Equal(GitCommandFailureKind.ExitCode, result.FailureKind);
+            Assert.Equal(result.Diagnostic, result.Error);
+            Assert.NotNull(result.Diagnostic);
+            Assert.Contains("[redacted]", result.Diagnostic);
+            Assert.Contains("truncated", result.Diagnostic);
+            Assert.True(result.Diagnostic!.Length < 700, result.Diagnostic);
+            Assert.DoesNotContain("/Users/example/private", result.Diagnostic);
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void RunGitCapturingResult_TimeoutReportsStructuredFailure_Issue3434()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-git-structured-timeout");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-structured-timeout");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsForAnyCommand(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldTimeout = GitHelper.GitCommandTimeout;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        GitHelper.GitCommandTimeout = TimeSpan.FromMilliseconds(100);
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var result = GitHelper.RunGitCapturingResultForTests(
+                repoDir,
+                gitEnvironmentOverrides: null,
+                CancellationToken.None,
+                "status");
+            stopwatch.Stop();
+
+            Assert.Equal(-1, result.ExitCode);
+            Assert.Equal(GitCommandFailureKind.TimedOut, result.FailureKind);
+            Assert.Contains("timed out", result.Diagnostic);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Timeout took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            GitHelper.GitCommandTimeout = oldTimeout;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void RunGitCapturingResult_StartFailureReportsStructuredRedactedDiagnostic_Issue3434()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-git-start-failure");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-start-failure");
+        Directory.CreateDirectory(fakeGitDir);
+        var fakeGitPath = WriteNonExecutableFakeGit(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = fakeGitPath;
+        try
+        {
+            var result = GitHelper.RunGitCapturingResultForTests(
+                repoDir,
+                gitEnvironmentOverrides: null,
+                CancellationToken.None,
+                "status");
+
+            Assert.Null(result.ExitCode);
+            Assert.Equal(GitCommandFailureKind.StartFailed, result.FailureKind);
+            Assert.NotNull(result.Diagnostic);
+            Assert.DoesNotContain(fakeGitDir, result.Diagnostic);
+            Assert.True(result.Diagnostic!.Length < 700, result.Diagnostic);
+        }
+        finally
+        {
             GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
     }
@@ -684,6 +797,39 @@ exit 7
         Assert.Equal(GitHeadCommitState.NotARepo, actual.State);
         Assert.Null(actual.Sha);
         Assert.Null(actual.Reason);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_RootDiscoveryTimeoutReportsStructuredFailure_Issue3434()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-head-root-timeout");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-head-root-timeout");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsForAnyCommand(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldTimeout = GitHelper.GitCommandTimeout;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        GitHelper.GitCommandTimeout = TimeSpan.FromMilliseconds(100);
+        try
+        {
+            var actual = GitHelper.TryGetHeadCommitResult(repoDir);
+
+            Assert.Equal(GitHeadCommitState.Error, actual.State);
+            Assert.Null(actual.Sha);
+            Assert.Equal(GitCommandFailureKind.TimedOut, actual.FailureKind);
+            Assert.Contains("timed out", actual.Diagnostic);
+            Assert.NotEqual(GitHeadCommitState.NotARepo, actual.State);
+        }
+        finally
+        {
+            GitHelper.GitCommandTimeout = oldTimeout;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
     }
 
     [Fact]
@@ -963,6 +1109,28 @@ exit 7
         Assert.False(Directory.Exists(Path.Combine(nonRepoDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_ProbeFailureThrowsStructuredFilesystemError_Issue3439()
+    {
+        var nonRepoDir = Path.Combine(_tempDir, $"non_repo_probe_failure_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nonRepoDir);
+        var previousProbe = GitHelper.FileSystemIgnoreCaseProbeForTesting;
+        GitHelper.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
+        try
+        {
+            var ex = Assert.Throws<CodeIndexException>(() => GitHelper.ResolveIgnoreCase(nonRepoDir));
+
+            Assert.Equal(CommandErrorCodes.FileSystemCaseProbeFailed, ex.Code);
+            Assert.Equal(CodeIndexExceptionCategory.Filesystem, ex.Category);
+            Assert.Equal(Path.GetFullPath(nonRepoDir), ex.Path);
+            Assert.IsType<IOException>(ex.InnerException);
+        }
+        finally
+        {
+            GitHelper.FileSystemIgnoreCaseProbeForTesting = previousProbe;
+        }
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
@@ -1137,6 +1305,39 @@ exit 1
 """);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatFailsWithLongSensitiveStderr(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+perl -e 'print STDERR "/Users/example/private/repo/.git/config " . ("x" x 2000)'
+exit 23
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatHangsForAnyCommand(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+sleep 5
+exit 0
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static string WriteNonExecutableFakeGit(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, "#!/bin/sh\nexit 0\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        return script;
     }
 
     private static void WriteFakeGitThatHangsOnRevParse(string directory)

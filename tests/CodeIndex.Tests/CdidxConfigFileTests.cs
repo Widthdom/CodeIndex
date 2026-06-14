@@ -1,6 +1,7 @@
 using CodeIndex.Cli;
 using CodeIndex.Mcp;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.Tests;
 
@@ -14,12 +15,12 @@ public class CdidxConfigFileTests
         try
         {
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.False(result.Loaded);
             Assert.False(result.Failed);
             Assert.Null(result.Path);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -54,25 +55,25 @@ public class CdidxConfigFileTests
                 """);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
             Assert.Null(result.Error);
-            Assert.Equal("1", env.Writes["CDIDX_DEBUG"]);
-            Assert.Equal(expectedMetricsPath, env.Writes["CDIDX_METRICS"]);
-            Assert.Equal("1", env.Writes["CDIDX_DISABLE_PERSISTENT_LOG"]);
-            Assert.Equal(expectedLogDir, env.Writes["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
-            Assert.Equal("2h", env.Writes["CDIDX_STALE_AFTER"]);
-            Assert.Equal("0.75", env.Writes["CDIDX_SUGGESTION_DEDUP_THRESHOLD"]);
-            Assert.Equal("30", env.Writes["CDIDX_SUGGESTION_MAX_AGE_DAYS"]);
-            Assert.Equal("250", env.Writes["CDIDX_SUGGESTION_MAX_COUNT"]);
-            Assert.Equal("class", env.Writes["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
-            Assert.Equal("test_method,generated_parser", env.Writes["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
-            Assert.Equal("search,definition", env.Writes["CDIDX_MCP_TOOLS_ALLOW"]);
-            Assert.Equal("index", env.Writes["CDIDX_MCP_TOOLS_DENY"]);
-            Assert.Equal("5", env.Writes[RateLimiterOptions.RpsEnvVar]);
-            Assert.Equal("10", env.Writes[RateLimiterOptions.BurstEnvVar]);
-            Assert.Equal("120", env.Writes[RateLimiterOptions.BucketIdleSecondsEnvVar]);
+            Assert.Equal("1", result.Settings["CDIDX_DEBUG"]);
+            Assert.Equal(expectedMetricsPath, result.Settings["CDIDX_METRICS"]);
+            Assert.Equal("1", result.Settings["CDIDX_DISABLE_PERSISTENT_LOG"]);
+            Assert.Equal(expectedLogDir, result.Settings["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
+            Assert.Equal("2h", result.Settings["CDIDX_STALE_AFTER"]);
+            Assert.Equal("0.75", result.Settings["CDIDX_SUGGESTION_DEDUP_THRESHOLD"]);
+            Assert.Equal("30", result.Settings["CDIDX_SUGGESTION_MAX_AGE_DAYS"]);
+            Assert.Equal("250", result.Settings["CDIDX_SUGGESTION_MAX_COUNT"]);
+            Assert.Equal("class", result.Settings["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
+            Assert.Equal("test_method,generated_parser", result.Settings["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
+            Assert.Equal("search,definition", result.Settings["CDIDX_MCP_TOOLS_ALLOW"]);
+            Assert.Equal("index", result.Settings["CDIDX_MCP_TOOLS_DENY"]);
+            Assert.Equal("5", result.Settings[RateLimiterOptions.RpsEnvVar]);
+            Assert.Equal("10", result.Settings[RateLimiterOptions.BurstEnvVar]);
+            Assert.Equal("120", result.Settings[RateLimiterOptions.BucketIdleSecondsEnvVar]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -88,11 +89,11 @@ public class CdidxConfigFileTests
             File.WriteAllBytes(path, [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(json)]);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
             Assert.Null(result.Error);
-            Assert.Equal(Path.Combine(dir, ".cdidx", "bom.jsonl"), env.Writes["CDIDX_METRICS"]);
+            Assert.Equal(Path.Combine(dir, ".cdidx", "bom.jsonl"), result.Settings["CDIDX_METRICS"]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -120,14 +121,14 @@ public class CdidxConfigFileTests
                 """);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(Path.Combine(dir, "src"), env.Read, env.Write);
+            var result = CdidxConfigFile.Load(Path.Combine(dir, "src"), env.Read);
 
             Assert.True(result.Loaded);
             Assert.EndsWith(Path.Combine(".cdidx", "config.json"), result.Path);
-            Assert.Equal("41", env.Writes[QueryCommandRunner.DefaultLimitEnvironmentVariable]);
-            Assert.Equal("5", env.Writes[QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable]);
-            Assert.Equal("120", env.Writes[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable]);
-            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), env.Writes[CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable]);
+            Assert.Equal("41", result.Settings[QueryCommandRunner.DefaultLimitEnvironmentVariable]);
+            Assert.Equal("5", result.Settings[QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable]);
+            Assert.Equal("120", result.Settings[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable]);
+            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), result.Sources[QueryCommandRunner.DefaultLimitEnvironmentVariable]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -145,12 +146,12 @@ public class CdidxConfigFileTests
                 """{ "search": { "limit": """ + new string('[', nesting) + "1" + new string(']', nesting) + " } }");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("Invalid JSON", result.Error);
             Assert.Contains("depth", result.Error!.ToLowerInvariant());
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -170,12 +171,12 @@ public class CdidxConfigFileTests
                 """);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
             Assert.Null(result.Error);
-            Assert.Equal(Path.Combine(dir, "metrics.jsonl"), env.Writes["CDIDX_METRICS"]);
-            Assert.Equal(Path.Combine(dir, "logs"), env.Writes["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
+            Assert.Equal(Path.Combine(dir, "metrics.jsonl"), result.Settings["CDIDX_METRICS"]);
+            Assert.Equal(Path.Combine(dir, "logs"), result.Settings["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -193,12 +194,12 @@ public class CdidxConfigFileTests
                 $$"""{ "{{key}}": "../outside/path" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains(key, result.Error);
             Assert.Contains("config workspace root", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -218,11 +219,11 @@ public class CdidxConfigFileTests
             File.WriteAllText(Path.Combine(dir, ".cdidx", "config.json"), json);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains(expectedError, result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -239,10 +240,10 @@ public class CdidxConfigFileTests
                 """{ "metrics_path": "./.cdidx/config.jsonl" }""");
 
             var env = new TestEnvironment(initial: new() { ["CDIDX_METRICS"] = "/from/env.jsonl" });
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
-            Assert.False(env.Writes.ContainsKey("CDIDX_METRICS"));
+            Assert.False(result.Settings.ContainsKey("CDIDX_METRICS"));
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -260,10 +261,10 @@ public class CdidxConfigFileTests
                 """{ "metrics_path": "./.cdidx/config.jsonl" }""");
 
             var env = new TestEnvironment(initial: new() { ["CDIDX_METRICS"] = "" });
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
-            Assert.False(env.Writes.ContainsKey("CDIDX_METRICS"));
+            Assert.False(result.Settings.ContainsKey("CDIDX_METRICS"));
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -280,11 +281,11 @@ public class CdidxConfigFileTests
                 """{ "debug": "config-value" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(nested, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(nested, env.Read);
 
             Assert.True(result.Loaded);
             Assert.Equal(Path.Combine(root, ".cdidxrc.json"), result.Path);
-            Assert.Equal("config-value", env.Writes["CDIDX_DEBUG"]);
+            Assert.Equal("config-value", result.Settings["CDIDX_DEBUG"]);
         }
         finally { TestProjectHelper.DeleteDirectory(root); }
     }
@@ -299,11 +300,11 @@ public class CdidxConfigFileTests
                 """{ "debug": "1" }""");
 
             var env = new TestEnvironment(initial: new() { ["CDIDX_DISABLE_CONFIG_FILE"] = "1" });
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.False(result.Loaded);
             Assert.False(result.Failed);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -317,11 +318,11 @@ public class CdidxConfigFileTests
             File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), "{ not-json");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("Invalid JSON", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -338,12 +339,12 @@ public class CdidxConfigFileTests
                 """{ "debug": """ + new string('[', nesting) + """"1"""" + new string(']', nesting) + " }");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("Invalid JSON", result.Error);
             Assert.Contains("depth", result.Error!.ToLowerInvariant());
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -358,11 +359,11 @@ public class CdidxConfigFileTests
                 """{ "github_token": "secret" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("github_token", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -377,7 +378,7 @@ public class CdidxConfigFileTests
                 """{ "mcp": { "tools": { "bogus": [] } } }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("mcp.tools.bogus", result.Error);
@@ -410,7 +411,7 @@ public class CdidxConfigFileTests
                 """);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("github_token", result.Error);
@@ -419,7 +420,7 @@ public class CdidxConfigFileTests
             Assert.Contains("search.typo", result.Error);
             Assert.Contains("mcp.rate_limit.burst", result.Error);
             Assert.Contains("mcp.rate_limit.unknown", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -438,12 +439,12 @@ public class CdidxConfigFileTests
                 $$"""{ "indexing": { "includeKinds": [{{items}}] } }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("indexing.includeKinds", result.Error);
             Assert.Contains($"<= {CdidxConfigFile.MaxConfigStringArrayItems} items", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -460,12 +461,12 @@ public class CdidxConfigFileTests
                 $$"""{ "mcp": { "tools": { "allow": ["{{item}}"] } } }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("mcp.tools.allow", result.Error);
             Assert.Contains($"<= {CdidxConfigFile.MaxConfigStringArrayItemChars} characters", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -482,12 +483,12 @@ public class CdidxConfigFileTests
                 $$"""{ "debug": "{{value}}" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("debug", result.Error);
             Assert.Contains($"<= {CdidxConfigFile.MaxConfigScalarStringChars} characters", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -505,13 +506,13 @@ public class CdidxConfigFileTests
                 $$"""{ "metrics_path": "{{value}}" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("metrics_path", result.Error);
             Assert.Contains($"<= {CdidxConfigFile.MaxConfigPathStringChars} characters", result.Error);
             Assert.DoesNotContain(Sentinel, result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -528,13 +529,13 @@ public class CdidxConfigFileTests
                 $$"""{ "metrics_path": "{{Sentinel}}\u0000.txt" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("metrics_path", result.Error);
             Assert.Contains("invalid_path", result.Error);
             Assert.DoesNotContain(Sentinel, result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -549,7 +550,7 @@ public class CdidxConfigFileTests
                 """{ "disable_persistent_log": "yes" }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("must be a boolean", result.Error);
@@ -568,12 +569,12 @@ public class CdidxConfigFileTests
             File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), json);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains(expectedKey, result.Error);
             Assert.Contains("finite", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -598,14 +599,14 @@ public class CdidxConfigFileTests
                 """);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("mcp.rate_limit.rps", result.Error);
             Assert.Contains(RateLimiterOptions.MaxRefillTokensPerSecond.ToString(System.Globalization.CultureInfo.InvariantCulture), result.Error);
             Assert.Contains("mcp.rate_limit.burst", result.Error);
             Assert.Contains(RateLimiterOptions.MaxBurstCapacity.ToString(System.Globalization.CultureInfo.InvariantCulture), result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -620,11 +621,11 @@ public class CdidxConfigFileTests
                 """{ "suggestion_dedup_threshold": 1.5 }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("suggestion_dedup_threshold", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -640,11 +641,11 @@ public class CdidxConfigFileTests
                 $$"""{ "suggestion_max_age_days": {{tooLarge}} }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("suggestion_max_age_days", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -660,11 +661,11 @@ public class CdidxConfigFileTests
                 $$"""{ "suggestion_max_count": {{tooLarge}} }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains("suggestion_max_count", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -684,11 +685,11 @@ public class CdidxConfigFileTests
                 """);
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
             Assert.Null(result.Error);
-            Assert.Equal("1", env.Writes["CDIDX_DEBUG"]);
+            Assert.Equal("1", result.Settings["CDIDX_DEBUG"]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -708,10 +709,10 @@ public class CdidxConfigFileTests
                 """{ "disable_persistent_log": false }""");
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Loaded);
-            Assert.False(env.Writes.ContainsKey("CDIDX_DISABLE_PERSISTENT_LOG"));
+            Assert.False(result.Settings.ContainsKey("CDIDX_DISABLE_PERSISTENT_LOG"));
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -737,6 +738,41 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void Run_ConfigFileAppliesScopedDefaultsWithoutMutatingEnvironment()
+    {
+        var dir = CreateTempDir();
+        var sourceEnvName = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable;
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable, sourceEnvName);
+        env.Set(QueryCommandRunner.DefaultLimitEnvironmentVariable, null);
+        env.Set(sourceEnvName, null);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """
+                {
+                  "search": {
+                    "limit": 17
+                  }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["status", "--config", "--json"],
+                appVersion: "1.30.0",
+                configStartDirectory: dir));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+            Assert.Equal(17, limit.GetProperty("value").GetInt32());
+            Assert.StartsWith("config:", limit.GetProperty("source").GetString(), StringComparison.Ordinal);
+            Assert.Null(Environment.GetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable));
+            Assert.Null(Environment.GetEnvironmentVariable(sourceEnvName));
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_OversizedConfigFile_FailsBeforeParsing()
     {
         var dir = CreateTempDir();
@@ -747,11 +783,11 @@ public class CdidxConfigFileTests
                 new string('x', CdidxConfigFile.MaxConfigFileBytes + 1));
 
             var env = new TestEnvironment();
-            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+            var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
             Assert.Contains($"{CdidxConfigFile.MaxConfigFileBytes} byte limit", result.Error);
-            Assert.Empty(env.Writes);
+            Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }

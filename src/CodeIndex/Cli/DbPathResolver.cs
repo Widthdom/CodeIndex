@@ -322,6 +322,12 @@ public static class DbPathResolver
     public static string? TryReadIndexedHeadBranch(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
 
+    public static string? TryReadIndexedHeadSha(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadShaMetaKey);
+
+    public static bool TryHasIndexedHeadBranchStamp(string dbPath)
+        => TryMetaKeyExists(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
+
     public static string? TryReadIndexedHeadCommitBranch(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadCommitBranchMetaKey);
 

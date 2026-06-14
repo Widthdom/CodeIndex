@@ -3014,7 +3014,10 @@ public partial class McpServer
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
-            status.MacProfile = MacProfileDetector.DetectCurrent();
+            var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
+            status.MacProfile = macProfile.Profile;
+            if (macProfile.Diagnostics.Count > 0)
+                status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (checkWorkspace)
             {
                 status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
@@ -3352,7 +3355,37 @@ public partial class McpServer
             session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
             session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
         }
+        if (_auditLog is not null)
+            session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
         return session;
+    }
+
+    private static bool IsAuditLogDegraded(AuditLogSink.AuditLogDiagnostics? diagnostics)
+        => diagnostics is not null
+            && (diagnostics.DroppedRecordCount > 0 || diagnostics.RotationDegraded);
+
+    private static JsonObject BuildAuditLogStatus(AuditLogSink.AuditLogDiagnostics diagnostics)
+    {
+        var payload = new JsonObject
+        {
+            ["enabled"] = true,
+            ["path"] = diagnostics.Path,
+            ["include_values"] = diagnostics.IncludeValues,
+            ["max_bytes"] = diagnostics.MaxBytes,
+            ["bytes_written"] = diagnostics.BytesWritten,
+            ["disposed"] = diagnostics.Disposed,
+            ["dropped_record_count"] = diagnostics.DroppedRecordCount,
+            ["serialization_failure_count"] = diagnostics.SerializationFailureCount,
+            ["write_failure_count"] = diagnostics.WriteFailureCount,
+            ["rotation_failure_count"] = diagnostics.RotationFailureCount,
+            ["rotation_cleanup_failure_count"] = diagnostics.RotationCleanupFailureCount,
+            ["rotation_degraded"] = diagnostics.RotationDegraded,
+        };
+        if (!string.IsNullOrWhiteSpace(diagnostics.LastDropReason))
+            payload["last_drop_reason"] = diagnostics.LastDropReason;
+        if (!string.IsNullOrWhiteSpace(diagnostics.LastRotationFailure))
+            payload["last_rotation_failure"] = diagnostics.LastRotationFailure;
+        return payload;
     }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
@@ -3564,19 +3597,105 @@ public partial class McpServer
             return;
 
         var builder = new StringBuilder();
+        var retainedLineCount = 0;
+        var firstRetainedLine = true;
         foreach (var line in content.Replace("\r\n", "\n").Split('\n'))
         {
-            var candidate = builder.Length == 0 ? line : builder.ToString() + "\n" + line;
+            var candidate = firstRetainedLine ? line : builder.ToString() + "\n" + line;
             if (Encoding.UTF8.GetByteCount(candidate) > maxOutputBytes)
                 break;
             builder.Clear();
             builder.Append(candidate);
+            retainedLineCount++;
+            firstRetainedLine = false;
         }
         payload[contentKey] = builder.ToString();
+        TrimExcerptCoordinatePayload(payload, retainedLineCount);
         payload["contentTruncated"] = true;
         payload["truncated"] = true;
         payload["truncation_reason"] = "output_size_cap";
     }
+
+    private static void TrimExcerptCoordinatePayload(JsonObject payload, int retainedLineCount)
+    {
+        var spansKey = FirstPayloadKey(payload, "contentLineSpans", "content_line_spans", "ContentLineSpans");
+        var retainedSpans = new List<ExcerptPayloadSpan>();
+        var hasSpanMapping = false;
+        if (spansKey is not null && payload[spansKey] is JsonArray spans)
+        {
+            hasSpanMapping = true;
+            var trimmedSpans = new JsonArray();
+            foreach (var spanNode in spans)
+            {
+                if (spanNode is not JsonObject span)
+                    continue;
+                var contentLine = GetPayloadInt(span, "contentLine", "content_line", "ContentLine");
+                if (!contentLine.HasValue || contentLine.Value > retainedLineCount)
+                    continue;
+
+                trimmedSpans.Add(span.DeepClone());
+                var sourceLine = GetPayloadInt(span, "sourceLine", "source_line", "SourceLine");
+                var sourceStartColumn = GetPayloadInt(span, "sourceStartColumn", "source_start_column", "SourceStartColumn");
+                var sourceEndColumn = GetPayloadInt(span, "sourceEndColumn", "source_end_column", "SourceEndColumn");
+                if (sourceLine.HasValue && sourceStartColumn.HasValue && sourceEndColumn.HasValue)
+                    retainedSpans.Add(new ExcerptPayloadSpan(sourceLine.Value, sourceStartColumn.Value, sourceEndColumn.Value));
+            }
+
+            payload[spansKey] = trimmedSpans;
+        }
+
+        var tokensKey = FirstPayloadKey(payload, "semanticTokens", "semantic_tokens", "SemanticTokens");
+        if (tokensKey is null || payload[tokensKey] is not JsonArray tokens)
+            return;
+        if (!hasSpanMapping)
+        {
+            if (retainedLineCount == 0)
+                payload[tokensKey] = new JsonArray();
+            return;
+        }
+
+        var trimmedTokens = new JsonArray();
+        if (retainedLineCount > 0 && retainedSpans.Count > 0)
+        {
+            foreach (var tokenNode in tokens)
+            {
+                if (tokenNode is not JsonObject token)
+                    continue;
+                var startLine = GetPayloadInt(token, "startLine", "start_line", "StartLine");
+                var endLine = GetPayloadInt(token, "endLine", "end_line", "EndLine");
+                var startColumn = GetPayloadInt(token, "startColumn", "start_column", "StartColumn");
+                var endColumn = GetPayloadInt(token, "endColumn", "end_column", "EndColumn");
+                if (!startLine.HasValue || !endLine.HasValue || !startColumn.HasValue || !endColumn.HasValue)
+                    continue;
+                if (retainedSpans.Any(span =>
+                    startLine.Value == span.SourceLine &&
+                    endLine.Value == span.SourceLine &&
+                    startColumn.Value >= span.SourceStartColumn &&
+                    endColumn.Value <= span.SourceEndColumn))
+                {
+                    trimmedTokens.Add(token.DeepClone());
+                }
+            }
+        }
+
+        payload[tokensKey] = trimmedTokens;
+    }
+
+    private static string? FirstPayloadKey(JsonObject payload, params string[] keys)
+        => keys.FirstOrDefault(payload.ContainsKey);
+
+    private static int? GetPayloadInt(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (obj[key] is JsonNode node)
+                return node.GetValue<int>();
+        }
+
+        return null;
+    }
+
+    private readonly record struct ExcerptPayloadSpan(int SourceLine, int SourceStartColumn, int SourceEndColumn);
 
     private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
     {
@@ -3635,7 +3754,21 @@ public partial class McpServer
             {
                 results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
             }
-            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+            catch (RegexMatchTimeoutException ex) when (regex)
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    $"regular expression timed out after {QueryCommandRunner.FormatRegexMatchTimeout(ex.MatchTimeout)} while scanning indexed file contents.",
+                    category: McpErrorEnvelope.CategoryRegexTimeout,
+                    suggestion: "Simplify the pattern, narrow the scan with path/lang filters, or disable regex mode for literal text.",
+                    retrySafe: true,
+                    extraData: new JsonObject
+                    {
+                        ["error_code"] = CommandErrorCodes.RegexMatchTimeout,
+                        ["timeout_ms"] = ex.MatchTimeout.TotalMilliseconds,
+                    });
+            }
+            catch (ArgumentException) when (regex)
             {
                 return CreateToolErrorResponse(id, "invalid regular expression. Check regex syntax and retry.");
             }
@@ -5075,9 +5208,6 @@ public partial class McpServer
         return gaps;
     }
 
-    private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
-        => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();
-
     private sealed record McpIndexUnsupportedMode(string Name, string Reason, bool BlocksIndexing);
 
     private static FileIssue BuildMcpSymbolCountExceededIssue(string path, int symbolCount, int maxSymbolsPerFile) =>
@@ -5487,9 +5617,10 @@ public partial class McpServer
             symbolKindFilterMetaMarkedIncomplete = true;
         }
 
-        static long SumReadableFileBytes(IEnumerable<string> paths)
+        static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(IEnumerable<string> paths, string projectRoot, List<string> diagnostics)
         {
             long total = 0;
+            long skipped = 0;
             foreach (var filePath in paths)
             {
                 try
@@ -5500,11 +5631,35 @@ public partial class McpServer
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
                 {
+                    skipped++;
+                    diagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic(
+                        "file_size_bytes_skipped",
+                        FormatDiagnosticPath(projectRoot, filePath),
+                        ex));
                 }
             }
 
-            return total;
+            return (total, skipped);
         }
+
+        static string FormatDiagnosticPath(string projectRoot, string path)
+        {
+            try
+            {
+                var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+                return relative == "."
+                    || relative.StartsWith("../", StringComparison.Ordinal)
+                    || Path.IsPathRooted(relative)
+                    ? path
+                    : relative;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+            {
+                return path;
+            }
+        }
+
+        var indexRunDiagnostics = new List<string>();
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -5528,7 +5683,7 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
+        await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
@@ -5675,7 +5830,7 @@ public partial class McpServer
                 failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "index_file"));
             }
             processed++;
-            EmitProgressNotification(progressToken, processed, files.Count);
+            await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
         writer.OptimizeFts();
@@ -5692,7 +5847,7 @@ public partial class McpServer
         _ = priorMetadataTargetCsharp;
         if (!scanResult.HadErrors && errors == 0)
         {
-            EmitProgressNotification(progressToken, processed, files.Count, "Finalizing index metadata.");
+            await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
             writer.MarkBatchInProgress();
             using var readinessTxn = writer.BeginTransaction();
             writer.MarkGraphReady();
@@ -5763,13 +5918,16 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
+            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics);
             writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
             writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.BytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.ClearLastFailedIndexRunMetadata();
@@ -5799,9 +5957,10 @@ public partial class McpServer
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort; never fail an otherwise-successful index run.
+                indexRunDiagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic("indexed_head_metadata_write_failed", ex));
             }
             // #1546: stamp workspace path-case-sensitivity so MCP-driven indexes also
             // surface the diagnostic field through `cdidx status` / MCP status.
@@ -5818,15 +5977,17 @@ public partial class McpServer
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort; never fail an otherwise-successful index run.
+                indexRunDiagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic("path_case_sensitivity_metadata_write_failed", ex));
             }
+            IndexCommandRunner.StampLastIndexRunDiagnostics(writer, indexRunDiagnostics);
             writer.ClearBatchInProgress();
             readinessTxn.Commit();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-        EmitProgressNotification(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.");
+        await EmitProgressNotificationAsync(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.").ConfigureAwait(false);
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
 
@@ -6005,9 +6166,10 @@ public partial class McpServer
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
 
-    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
+    private async Task<JsonNode> ExecuteBackfillFoldAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        var requestToken = _currentRequestToken.Value;
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound, requestToken))
         {
             var detail = isNotFound
                 ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."
@@ -6054,9 +6216,9 @@ public partial class McpServer
             }
             else
             {
-                EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
+                await EmitProgressNotificationAsync(progressToken, 0, null, "Backfilling folded-name keys.").ConfigureAwait(false);
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-                EmitProgressNotification(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.");
+                await EmitProgressNotificationAsync(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.").ConfigureAwait(false);
                 // Row rewrites are intentionally committed before the final FoldReady stamp so
                 // interrupted MCP backfills can resume from the remaining rows.
                 // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
@@ -6067,7 +6229,7 @@ public partial class McpServer
 
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();
-                EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+                await EmitProgressNotificationAsync(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.").ConfigureAwait(false);
             }
 
             var foldMetadataCurrentAfter = dryRun
@@ -6164,9 +6326,6 @@ public partial class McpServer
     /// 構造化された提案を .cdidx/suggestions-*.json に記録する。
     /// description と context にソースコードが含まれていないことを検証する。
     /// </summary>
-    private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
-        => ExecuteSuggestImprovementAsync(id, args).GetAwaiter().GetResult();
-
     private async Task<JsonNode> ExecuteSuggestImprovementAsync(JsonNode? id, JsonNode? args)
     {
         // 1. Validate required parameters / 必須パラメータのバリデーション
@@ -6266,16 +6425,16 @@ public partial class McpServer
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
-        Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
+        Func<SuggestionRecord, CancellationToken, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
         var githubTokenConfigured = GitHubIssueReporter.ResolveToken() != null;
+        var cancellationToken = _currentRequestToken.Value;
         if (githubTokenConfigured)
         {
             var version = _version;
-            var cancellationToken = _currentRequestToken.Value;
-            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, cancellationToken);
+            githubCallback = (r, token) => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, token);
         }
 
-        var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
+        var result = await store.TryAddAndSubmitAsync(record, githubCallback, cancellationToken).ConfigureAwait(false);
         var storedHash = result.StoredHash ?? hash;
 
         if (!result.IsNew)
@@ -6799,7 +6958,7 @@ public partial class McpServer
             var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
             pendingPaths.Add(relativePath);
 
-            var detection = FileIndexer.TryDetectLanguage(absolutePath);
+            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
                 || detection.Language != "csharp")
             {

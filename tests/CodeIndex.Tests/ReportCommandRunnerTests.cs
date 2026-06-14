@@ -160,6 +160,7 @@ public class ReportCommandRunnerTests
             Assert.Contains("version.txt", entries.Keys);
             Assert.Contains("env.txt", entries.Keys);
             Assert.Contains("schema.txt", entries.Keys);
+            Assert.Contains("support-manifest.json", entries.Keys);
             Assert.Contains("README.md", entries.Keys);
             Assert.DoesNotContain("log/stderr-recent.log", entries.Keys);
 
@@ -167,6 +168,19 @@ public class ReportCommandRunnerTests
             Assert.Contains("no SQLite index found", schemaText);
             Assert.Contains($"no SQLite index found at: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
             Assert.DoesNotContain(missingDb, schemaText);
+
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var root = manifest.RootElement;
+            Assert.Equal(1, root.GetProperty("manifest_version").GetInt32());
+            Assert.Equal(entries.Count, root.GetProperty("bundle").GetProperty("files").GetInt32());
+            Assert.False(root.GetProperty("bundle").GetProperty("db_included").GetBoolean());
+            Assert.False(root.GetProperty("bundle").GetProperty("log_included").GetBoolean());
+            Assert.Equal(0, root.GetProperty("redactions").GetProperty("total").GetInt32());
+            Assert.Equal("unavailable", root.GetProperty("readiness").GetProperty("source").GetString());
+            Assert.Equal("database_unavailable", root.GetProperty("readiness").GetProperty("unavailable_reason").GetString());
+            Assert.True(JsonArrayContains(root.GetProperty("omissions").GetProperty("schema"), "schema_unavailable_no_database"));
+            Assert.True(JsonArrayContains(root.GetProperty("omissions").GetProperty("log"), "lifecycle_log_skipped_by_option"));
+            Assert.DoesNotContain(missingDb, root.GetRawText());
         }
         finally
         {
@@ -289,6 +303,16 @@ public class ReportCommandRunnerTests
             Assert.Contains($"database: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
             Assert.DoesNotContain(dbPath, schemaText);
             Assert.DoesNotContain("no SQLite index found", schemaText);
+
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var readiness = manifest.RootElement.GetProperty("readiness");
+            Assert.Equal("database", readiness.GetProperty("source").GetString());
+            Assert.True(readiness.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(readiness.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(readiness.GetProperty("fold_ready").GetBoolean());
+            Assert.True(JsonArrayContains(readiness.GetProperty("degraded_fields"), "fold_ready"));
+            Assert.False(readiness.GetProperty("migration_in_progress").GetBoolean());
+            Assert.DoesNotContain(dbPath, manifest.RootElement.GetRawText());
         }
         finally
         {
@@ -309,9 +333,10 @@ public class ReportCommandRunnerTests
             SqliteConnection.ClearAllPools();
 
             var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            var (schemaText, tables, reportedDbPath, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbUri);
+            var (schemaText, tables, reportedDbPath, dbIncluded, tablesTruncated) = ReportCommandRunner.BuildSchemaSummary(dbUri);
 
             Assert.True(dbIncluded);
+            Assert.False(tablesTruncated);
             Assert.Equal(Path.GetFullPath(dbPath), reportedDbPath);
             Assert.Contains(tables, table => table.Name == "files");
             Assert.Contains("files", schemaText);
@@ -342,9 +367,10 @@ public class ReportCommandRunnerTests
                 }
             }
 
-            var (schemaText, tables, _, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbPath);
+            var (schemaText, tables, _, dbIncluded, tablesTruncated) = ReportCommandRunner.BuildSchemaSummary(dbPath);
 
             Assert.True(dbIncluded);
+            Assert.True(tablesTruncated);
             Assert.Equal(ReportCommandRunner.MaxSchemaTables, tables.Count);
             Assert.Contains($"tables  : {ReportCommandRunner.MaxSchemaTables} (capped; additional tables omitted)", schemaText);
             Assert.Contains($"limits  : table entries <= {ReportCommandRunner.MaxSchemaTables}", schemaText);
@@ -392,10 +418,11 @@ public class ReportCommandRunnerTests
                 transaction.Commit();
             }
 
-            var (schemaText, tables, _, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbPath);
+            var (schemaText, tables, _, dbIncluded, tablesTruncated) = ReportCommandRunner.BuildSchemaSummary(dbPath);
             var table = Assert.Single(tables);
 
             Assert.True(dbIncluded);
+            Assert.False(tablesTruncated);
             Assert.Equal(ReportCommandRunner.MaxSchemaRowCountScanRows, table.RowCount);
             Assert.True(table.RowCountTruncated);
             Assert.True(table.Name.Length <= ReportCommandRunner.MaxSchemaTableNameDisplayChars);
@@ -460,6 +487,97 @@ public class ReportCommandRunnerTests
             Assert.DoesNotContain("/Users/widthdom/secret/.cdidx/config.json", logText);
             Assert.DoesNotContain("SELECT * FROM secret", logText);
             Assert.Contains("session_start", logText);
+
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var root = manifest.RootElement;
+            Assert.Equal(entries.Count, root.GetProperty("bundle").GetProperty("files").GetInt32());
+            Assert.True(root.GetProperty("bundle").GetProperty("log_included").GetBoolean());
+            Assert.Equal(8, root.GetProperty("bundle").GetProperty("log_lines_included").GetInt32());
+            Assert.True(root.GetProperty("redactions").GetProperty("total").GetInt32() >= 6);
+            var categories = root.GetProperty("redactions").GetProperty("categories");
+            Assert.True(categories.GetProperty("args").GetInt32() >= 1);
+            Assert.True(categories.GetProperty("path_fields").GetInt32() >= 5);
+            Assert.DoesNotContain(logDir, root.GetRawText());
+            Assert.DoesNotContain("/Users/widthdom/secret", root.GetRawText());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_WithFullyIncludedShortLog_DoesNotReportTailOmission_Issue3555()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        File.WriteAllText(
+            Path.Combine(logDir, "stderr-20260519.log"),
+            string.Join('\n',
+                "2026-05-19T03:00:00Z [INFO] first",
+                "2026-05-19T03:00:01Z [INFO] second",
+                ""));
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--log-lines", "20",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var logOmissions = manifest.RootElement.GetProperty("omissions").GetProperty("log");
+
+            Assert.Equal(2, manifest.RootElement.GetProperty("bundle").GetProperty("log_lines_included").GetInt32());
+            Assert.False(JsonArrayContains(logOmissions, "older_log_lines_outside_tail_limit"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_WithTruncatedLog_ReportsTailOmission_Issue3555()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        File.WriteAllText(
+            Path.Combine(logDir, "stderr-20260520.log"),
+            string.Join('\n',
+                "2026-05-20T03:00:00Z [INFO] omitted",
+                "2026-05-20T03:00:01Z [INFO] kept-one",
+                "2026-05-20T03:00:02Z [INFO] kept-two",
+                ""));
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--log-lines", "2",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var logOmissions = manifest.RootElement.GetProperty("omissions").GetProperty("log");
+
+            Assert.Equal(2, manifest.RootElement.GetProperty("bundle").GetProperty("log_lines_included").GetInt32());
+            Assert.True(JsonArrayContains(logOmissions, "older_log_lines_outside_tail_limit"));
         }
         finally
         {
@@ -493,6 +611,28 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void ReadLogFileTailLines_LargeLogKeepsOnlyRequestedTail_Issue3397()
+    {
+        var workDir = CreateWorkDir();
+        var path = Path.Combine(workDir, "stderr-20260608.log");
+        try
+        {
+            File.WriteAllText(
+                path,
+                new string('x', ReportCommandRunner.MaxLogFileTailBytes + 512)
+                + "\nline-1\nline-2\nline-3\n");
+
+            var lines = ReportCommandRunner.ReadLogFileTailLines(path, 2);
+
+            Assert.Equal(new[] { "line-2", "line-3" }, lines);
+        }
+        finally
+        {
             TryDeleteDirectory(workDir);
         }
     }
@@ -831,6 +971,112 @@ public class ReportCommandRunnerTests
         Assert.Equal(line, redacted);
     }
 
+    [Fact]
+    public void BuildSupportManifest_DoesNotReportSchemaTableOmissionAtExactLimit_Issue3555()
+    {
+        var bundle = new ReportBundle
+        {
+            DbIncluded = false,
+            LogIncluded = false,
+            SchemaTables = Enumerable.Range(0, ReportCommandRunner.MaxSchemaTables)
+                .Select(i => new ReportSchemaTable($"table_{i:D3}", 0))
+                .ToList(),
+        };
+        var options = new ReportCommandOptions { IncludeLog = false };
+
+        var manifest = ReportCommandRunner.BuildSupportManifest(
+            options,
+            bundle,
+            DateTimeOffset.UnixEpoch,
+            ReportRedactionSummary.Empty);
+
+        Assert.DoesNotContain("schema_tables_after_limit", manifest.Omissions.Schema);
+
+        bundle.SchemaTablesTruncated = true;
+        var truncatedManifest = ReportCommandRunner.BuildSupportManifest(
+            options,
+            bundle,
+            DateTimeOffset.UnixEpoch,
+            ReportRedactionSummary.Empty);
+
+        Assert.Contains("schema_tables_after_limit", truncatedManifest.Omissions.Schema);
+    }
+
+    [Fact]
+    public void Run_WithMetadataTargetSourceMissing_ManifestReadinessIsDegraded_Issue3555()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "legacy-source.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = $"""
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Legacy.cs', 'csharp', 1, 1, 'legacy', '2026-01-01T00:00:00Z');
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES ('{DbContext.GetMetadataTargetVersionMetaKey("csharp")}', '{DbContext.MetadataTargetVersion}');
+                    PRAGMA foreign_keys = OFF;
+                    ALTER TABLE symbols RENAME TO symbols_old;
+                    CREATE TABLE symbols (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind            TEXT,
+                        sub_kind        TEXT,
+                        name            TEXT,
+                        name_folded     TEXT,
+                        line            INTEGER,
+                        start_line      INTEGER,
+                        start_column    INTEGER,
+                        end_line        INTEGER,
+                        body_start_line INTEGER,
+                        body_end_line   INTEGER,
+                        signature       TEXT,
+                        container_kind  TEXT,
+                        container_name  TEXT,
+                        container_qualified_name TEXT,
+                        family_key      TEXT,
+                        visibility      TEXT,
+                        return_type     TEXT,
+                        is_metadata_target INTEGER
+                    );
+                    DROP TABLE symbols_old;
+                    PRAGMA foreign_keys = ON;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var readiness = manifest.RootElement.GetProperty("readiness");
+
+            Assert.True(
+                readiness.TryGetProperty("csharp_metadata_target_ready", out var csharpMetadataTargetReady),
+                readiness.GetRawText());
+            Assert.False(readiness.TryGetProperty("c_sharp_metadata_target_ready", out _), readiness.GetRawText());
+            Assert.False(csharpMetadataTargetReady.GetBoolean());
+            Assert.True(JsonArrayContains(readiness.GetProperty("degraded_fields"), "csharp_metadata_target_ready"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(workDir);
+        }
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)
@@ -911,6 +1157,20 @@ public class ReportCommandRunnerTests
             entries[entry.Name] = buffer.ToArray();
         }
         return entries;
+    }
+
+    private static JsonDocument ReadJsonEntry(Dictionary<string, byte[]> entries, string name)
+        => JsonDocument.Parse(entries[name]);
+
+    private static bool JsonArrayContains(JsonElement array, string value)
+    {
+        foreach (var item in array.EnumerateArray())
+        {
+            if (string.Equals(item.GetString(), value, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static Dictionary<string, UnixFileMode> ReadTarGzEntryModes(string path)

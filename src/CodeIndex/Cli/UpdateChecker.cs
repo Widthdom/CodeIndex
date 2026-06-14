@@ -41,12 +41,14 @@ internal static class UpdateChecker
         CancellationToken cancellationToken = default)
     {
         if (IsDisabled())
-            return new UpdateCheckResult(currentVersion, null, false, false, "disabled");
+            return CreateDisabledResult(currentVersion);
 
         var cache = ReadCache(cachePath);
         var fromCache = cache is not null && now - cache.CheckedAt < CacheTtl;
         string? latestTag = fromCache ? cache!.LatestTag : null;
         string? error = null;
+        string? errorCategory = null;
+        string? errorHint = null;
 
         if (!fromCache)
         {
@@ -63,7 +65,10 @@ internal static class UpdateChecker
             catch (Exception ex)
             {
                 latestTag = cache?.LatestTag;
-                error = ex.GetType().Name;
+                var failure = ClassifyFailure(ex);
+                error = failure.Code;
+                errorCategory = failure.Category;
+                errorHint = failure.Hint;
             }
 
             TryWriteCache(cachePath, new UpdateCheckCache(now, latestTag));
@@ -74,7 +79,51 @@ internal static class UpdateChecker
             latestTag,
             IsNewerRelease(latestTag, currentVersion),
             fromCache,
-            error);
+            error,
+            errorCategory,
+            errorHint);
+    }
+
+    internal static UpdateCheckResult CreateDisabledResult(string currentVersion)
+        => new(
+            currentVersion,
+            null,
+            false,
+            false,
+            "disabled",
+            "configuration",
+            "Unset CDIDX_DISABLE_UPDATE_CHECK to re-enable update checks.");
+
+    internal static UpdateCheckFailure ClassifyFailure(Exception ex)
+    {
+        if (ex is OperationCanceledException or TimeoutException)
+        {
+            return new(
+                "timeout",
+                "timeout",
+                "Retry later, or set CDIDX_DISABLE_UPDATE_CHECK=1 to skip automatic update checks.");
+        }
+
+        if (ex is HttpRequestException or IOException)
+        {
+            return new(
+                "network_failure",
+                "network",
+                "Check network access to GitHub releases, or set CDIDX_DISABLE_UPDATE_CHECK=1 to skip automatic update checks.");
+        }
+
+        if (ex is JsonException or InvalidDataException or NotSupportedException)
+        {
+            return new(
+                "invalid_response",
+                "response",
+                "Retry later; release metadata could not be parsed within the safe response bounds.");
+        }
+
+        return new(
+            "unexpected_failure",
+            "unexpected",
+            "Retry later; if this repeats, report the sanitized update-check error code.");
     }
 
     internal static string? GetNewerReleaseHint(
@@ -319,4 +368,6 @@ internal static class UpdateChecker
     }
 
     private sealed record UpdateCheckCache(DateTimeOffset CheckedAt, string? LatestTag);
+
+    internal readonly record struct UpdateCheckFailure(string Code, string Category, string Hint);
 }

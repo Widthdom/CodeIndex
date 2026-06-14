@@ -18,7 +18,7 @@ public partial class DbReader
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexMatcher = regex
-            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            ? CreateFindRegexMatcher(query, exact)
             : null;
 
         using var fileCmd = _conn.CreateCommand();
@@ -167,7 +167,7 @@ public partial class DbReader
 
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexMatcher = regex
-            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            ? CreateFindRegexMatcher(query, exact)
             : null;
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
@@ -349,6 +349,14 @@ public partial class DbReader
 
         lineMatch = new FindLineMatch(rawMatchColumn, rawMatchLength);
         return !focusColumn.HasValue || (focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength);
+    }
+
+    private static Regex CreateFindRegexMatcher(string query, bool exact)
+    {
+        var options = RegexOptions.CultureInvariant;
+        if (!exact)
+            options |= RegexOptions.IgnoreCase;
+        return new Regex(query, options, BoundedRegex.DefaultMatchTimeout);
     }
 
     private static void AddLineToFindWindow(IndexedLine indexedLine, Queue<IndexedLine> snippetWindow, Dictionary<int, string> snippetLinesByNumber)
@@ -561,14 +569,32 @@ public partial class DbReader
         var focusLineIndex = focusLine.HasValue ? selectedLines.IndexOf(focusLine.Value) : -1;
         if (focusLineIndex >= 0 && focusColumn.HasValue && focusColumn.Value > contentLines[focusLineIndex].Length)
             return null;
-        var clampedContent = maxLineWidth.HasValue
-            ? LineWidthFormatter.ClampLines(
-                contentLines,
-                maxLineWidth.Value,
-                focusLineIndex >= 0 ? focusLineIndex : null,
-                focusLineIndex >= 0 ? focusColumn : null,
-                focusLength)
-            : new ClampedTextResult(string.Join("\n", contentLines), false);
+        var excerptLines = new string[contentLines.Count];
+        var contentLineSpans = new List<ExcerptContentLineSpan>(contentLines.Count);
+        var contentTruncated = false;
+        for (var i = 0; i < contentLines.Count; i++)
+        {
+            var clampedLine = maxLineWidth.HasValue
+                ? LineWidthFormatter.ClampLine(
+                    contentLines[i],
+                    maxLineWidth.Value,
+                    i == focusLineIndex ? focusColumn : null,
+                    focusLength)
+                : ClampedTextResult.Unclamped(contentLines[i]);
+
+            excerptLines[i] = clampedLine.Text;
+            contentTruncated |= clampedLine.Truncated;
+            var visibleLength = Math.Max(0, clampedLine.OriginalVisibleEndColumn - clampedLine.OriginalVisibleStartColumn + 1);
+            contentLineSpans.Add(new ExcerptContentLineSpan
+            {
+                ContentLine = i + 1,
+                SourceLine = selectedLines[i],
+                ContentStartColumn = clampedLine.TextVisibleStartColumn,
+                ContentEndColumn = clampedLine.TextVisibleStartColumn + visibleLength,
+                SourceStartColumn = clampedLine.OriginalVisibleStartColumn,
+                SourceEndColumn = clampedLine.OriginalVisibleStartColumn + visibleLength,
+            });
+        }
 
         return new FileExcerptResult
         {
@@ -580,12 +606,13 @@ public partial class DbReader
             RequestedEndLine = requestedEndCeiling,
             EffectiveStartLine = selectedLines[0],
             EffectiveEndLine = selectedLines[^1],
-            Content = clampedContent.Text,
-            ContentTruncated = clampedContent.Truncated,
-            ContentTruncationReasons = clampedContent.Truncated ? ["line_width_cap"] : [],
-            ContentRecovery = clampedContent.Truncated
+            Content = string.Join("\n", excerptLines),
+            ContentTruncated = contentTruncated,
+            ContentTruncationReasons = contentTruncated ? ["line_width_cap"] : [],
+            ContentRecovery = contentTruncated
                 ? FileExcerptResult.CreateRecoveryHint(path, selectedLines[0], selectedLines[^1])
                 : null,
+            ContentLineSpans = contentLineSpans,
         };
     }
 
@@ -934,11 +961,18 @@ public partial class DbReader
         var filesSkipped = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunFilesSkippedMetaKey));
         var parseErrors = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunParseErrorsMetaKey));
         var bytesRead = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadMetaKey));
+        var bytesReadSkippedFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey));
+        var bytesReadIncomplete = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadIncompleteMetaKey));
         var rowsUpserted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsUpsertedMetaKey));
         var rowsDeleted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsDeletedMetaKey));
         var peakMemoryMb = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunPeakMemoryMbMetaKey));
+        var diagnostics = ParseMetaStringList(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsMetaKey));
+        var diagnosticCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticCountMetaKey));
+        var diagnosticsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey));
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
-            && parseErrors == null && bytesRead == null && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null)
+            && parseErrors == null && bytesRead == null && bytesReadSkippedFileCount == null && bytesReadIncomplete == null
+            && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
+            && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null)
         {
             return null;
         }
@@ -952,9 +986,14 @@ public partial class DbReader
             FilesSkipped = filesSkipped,
             ParseErrors = parseErrors,
             BytesRead = bytesRead,
+            BytesReadSkippedFileCount = bytesReadSkippedFileCount,
+            BytesReadIncomplete = bytesReadIncomplete,
             RowsUpserted = rowsUpserted,
             RowsDeleted = rowsDeleted,
             PeakMemoryMb = peakMemoryMb,
+            Diagnostics = diagnostics,
+            DiagnosticCount = diagnosticCount,
+            DiagnosticsTruncated = diagnosticsTruncated,
         };
     }
 

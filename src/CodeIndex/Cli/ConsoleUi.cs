@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using System.Globalization;
 using System.Reflection;
@@ -338,10 +339,10 @@ public static class ConsoleUi
 
         var cts = new CancellationTokenSource();
         var ct = cts.Token;
-        _ = Task.Run(async () =>
+        _ = BackgroundTaskObserver.Run(async token =>
         {
             int i = 0;
-            while (!ct.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
                 var frame = frames[i % frames.Length];
                 var line = isThemed ? $"\r{frame}" : $"\r{frame} {message}";
@@ -351,9 +352,9 @@ public static class ConsoleUi
                     Console.Out.Flush();
                 }
                 i++;
-                try { await Task.Delay(SpinnerFrameDelayMs, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(SpinnerFrameDelayMs, token).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
             }
-        }, ct);
+        }, "cdidx", "console spinner", ct);
         return cts;
     }
 
@@ -989,7 +990,7 @@ public static class ConsoleUi
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         WriteHelpLine("  --max-symbols-per-file <n> Skip file content, symbols, and references when one file emits too many symbols (default: 5000; max: 50000)");
         WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
-        WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
+        WriteHelpLine("  --follow-symlinks <mode>  Symlink policy for directories and files: none (default), internal, or all");
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
         WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
         Console.WriteLine("  --commits <commit-ref> [commit-ref ...]");

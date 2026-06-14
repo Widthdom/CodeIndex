@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
+using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
@@ -601,18 +602,95 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void TryConsumeSuggestionDedupThresholdFlag_SetsEnvironmentAndRemovesFlag()
+    public async Task RuntimeTestHooks_AreScopedToExecutionContext()
+    {
+        Func<HttpClient> upgradeFactory = () => new HttpClient();
+        var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+        try
+        {
+            ProgramRunner.UpgradeHttpClientFactory = upgradeFactory;
+            ProgramRunner.TestExtractorFileLengthCheckedForTesting = _ => { };
+            ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = _ => { };
+            ProgramRunner.DeleteUpgradeInstallerScriptForTesting = _ => { };
+            DbWriter.BatchRowSkipWarningForTesting = _ => { };
+            DbContext.OptimizePragmaExecutedForTesting = _ => { };
+
+            Task<(
+                bool UpgradeFactoryVisible,
+                bool TestExtractorHookVisible,
+                bool DeleteInstallHookVisible,
+                bool DeleteUpgradeHookVisible,
+                bool WriterHookVisible,
+                bool ContextHookVisible)> task;
+            using (ExecutionContext.SuppressFlow())
+            {
+                task = Task.Run(() => (
+                    ReferenceEquals(ProgramRunner.UpgradeHttpClientFactory, upgradeFactory),
+                    ProgramRunner.TestExtractorFileLengthCheckedForTesting is not null,
+                    ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting is not null,
+                    ProgramRunner.DeleteUpgradeInstallerScriptForTesting is not null,
+                    DbWriter.BatchRowSkipWarningForTesting is not null,
+                    DbContext.OptimizePragmaExecutedForTesting is not null));
+            }
+
+            var observed = await task;
+            Assert.False(observed.UpgradeFactoryVisible);
+            Assert.False(observed.TestExtractorHookVisible);
+            Assert.False(observed.DeleteInstallHookVisible);
+            Assert.False(observed.DeleteUpgradeHookVisible);
+            Assert.False(observed.WriterHookVisible);
+            Assert.False(observed.ContextHookVisible);
+        }
+        finally
+        {
+            ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            ProgramRunner.TestExtractorFileLengthCheckedForTesting = null;
+            ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = null;
+            ProgramRunner.DeleteUpgradeInstallerScriptForTesting = null;
+            DbWriter.BatchRowSkipWarningForTesting = null;
+            DbContext.OptimizePragmaExecutedForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void TryConsumeGlobalLogFlags_ReturnsOverridesAndDoesNotMutateEnvironment()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GlobalToolLog.LogFormatEnvironmentVariable,
+            GlobalToolLog.LogRetainEnvironmentVariable,
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        env.Set(GlobalToolLog.LogFormatEnvironmentVariable, null);
+        env.Set(GlobalToolLog.LogRetainEnvironmentVariable, null);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
+        string[] args = ["--log-format", "json", "--log-retain-count", "4", "--log-max-size-mb", "12", "status"];
+
+        var ok = ProgramRunner.TryConsumeGlobalLogFlags(ref args, out var overrides, out var error);
+
+        Assert.True(ok);
+        Assert.Empty(error);
+        Assert.Equal(["status"], args);
+        Assert.Equal("json", overrides[GlobalToolLog.LogFormatEnvironmentVariable]);
+        Assert.Equal("4", overrides[GlobalToolLog.LogRetainEnvironmentVariable]);
+        Assert.Equal("12", overrides[GlobalToolLog.LogMaxSizeMbEnvironmentVariable]);
+        Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogFormatEnvironmentVariable));
+        Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogRetainEnvironmentVariable));
+        Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+    }
+
+    [Fact]
+    public void TryConsumeSuggestionDedupThresholdFlag_ReturnsOverrideAndRemovesFlag()
     {
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);
         env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
         string[] args = ["--db", "index.db", "--suggestion-dedup-threshold", "0.7"];
 
-        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var thresholdValue, out var error);
 
         Assert.True(ok);
         Assert.Empty(error);
         Assert.Equal(["--db", "index.db"], args);
-        Assert.Equal("0.7", Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
+        Assert.Equal("0.7", thresholdValue);
+        Assert.Null(Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
     }
 
     [Fact]
@@ -622,10 +700,11 @@ public class ProgramRunnerTests
         env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
         string[] args = ["--suggestion-dedup-threshold=1.5"];
 
-        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var thresholdValue, out var error);
 
         Assert.False(ok);
         Assert.Contains("--suggestion-dedup-threshold", error);
+        Assert.Null(thresholdValue);
         Assert.Null(Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
     }
 
@@ -936,6 +1015,80 @@ public class ProgramRunnerTests
                     DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
                     token => throw new OperationCanceledException(token),
                     cts.Token));
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_ClassifiesTimeoutFailureWithoutRawMessage_Issue3453()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => throw new OperationCanceledException("secret timeout detail"));
+
+            Assert.Equal("timeout", result.Error);
+            Assert.Equal("timeout", result.ErrorCategory);
+            Assert.Contains("Retry later", result.ErrorHint);
+            Assert.DoesNotContain("secret", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_ClassifiesNetworkFailureWithoutRawMessage_Issue3453()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => throw new HttpRequestException("secret host detail"));
+
+            Assert.Equal("network_failure", result.Error);
+            Assert.Equal("network", result.ErrorCategory);
+            Assert.Contains("GitHub releases", result.ErrorHint);
+            Assert.DoesNotContain("secret", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_SerializesStructuredFailureFields_Issue3453()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => throw new JsonException("secret parser detail"));
+
+            using var json = JsonDocument.Parse(JsonSerializer.Serialize(result));
+            var root = json.RootElement;
+            Assert.Equal("invalid_response", root.GetProperty("error").GetString());
+            Assert.Equal("response", root.GetProperty("error_category").GetString());
+            Assert.Contains("safe response bounds", root.GetProperty("error_hint").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("secret", root.GetRawText(), StringComparison.Ordinal);
         }
         finally
         {
@@ -1479,6 +1632,45 @@ exit 0
         }
     }
 
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonPrereleaseNotFound_ReportsStructuredFailure_Issue3453()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("""
+                    [
+                      { "tag_name": "v9.9.9", "draft": false, "prerelease": false }
+                    ]
+                    """))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--check-only", "--json", "--prerelease"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("prerelease_not_found", root.GetProperty("error").GetString());
+                Assert.Equal("release_metadata", root.GetProperty("error_category").GetString());
+                Assert.Contains("omit --prerelease", root.GetProperty("error_hint").GetString(), StringComparison.Ordinal);
+                Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            }
+        }
+    }
+
     [Theory]
     [InlineData(Architecture.X64, "CodeIndex-win-x64.zip")]
     [InlineData(Architecture.Arm64, "CodeIndex-win-arm64.zip")]
@@ -1867,6 +2059,7 @@ exit 0
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_log_flag_option");
         using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1883,7 +2076,7 @@ exit 0
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+            Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
         }
         finally
         {
@@ -1896,6 +2089,7 @@ exit 0
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_inline_log_flag_after_query");
         using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1912,7 +2106,7 @@ exit 0
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+            Assert.Null(Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
         }
         finally
         {

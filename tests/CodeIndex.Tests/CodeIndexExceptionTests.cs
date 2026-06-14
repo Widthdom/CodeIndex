@@ -234,6 +234,22 @@ public class CodeIndexExceptionTests
     }
 
     [Fact]
+    public void TryValidateExistingCodeIndexDb_CancelledToken_ThrowsOperationCanceled_Issue3400()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var message = string.Empty;
+        var isNotFound = false;
+
+        Assert.Throws<OperationCanceledException>(() =>
+            DbContext.TryValidateExistingCodeIndexDb(
+                "/tmp/cdidx_cancelled_validation.db",
+                out message,
+                out isNotFound,
+                cts.Token));
+    }
+
+    [Fact]
     public void RegisterConnectionFunctionsWithRetry_CancelDuringRetrySleep_ThrowsOperationCanceled()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
@@ -282,6 +298,7 @@ public class CodeIndexExceptionTests
     [InlineData(CommandErrorCodes.FeatureUnavailable, CommandExitCodes.FeatureUnavailable)]
     [InlineData(CommandErrorCodes.UsageError, CommandExitCodes.InvalidArgument)]
     [InlineData(CommandErrorCodes.Interrupted, CommandExitCodes.CancelledBySignal)]
+    [InlineData(CommandErrorCodes.FileSystemCaseProbeFailed, CommandExitCodes.DatabaseError)]
     [InlineData("E999_UNKNOWN", CommandExitCodes.DatabaseError)]
     public void MapCodeIndexExceptionExitCode_MapsKnownCodesToTaxonomy(string code, int expectedExitCode)
     {

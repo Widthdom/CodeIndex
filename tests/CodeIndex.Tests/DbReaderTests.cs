@@ -58,6 +58,41 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqliteIdentifier_Quote_AllowsUnusualTableNamesForSchemaPragmas()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "CREATE TABLE \"odd \"\" table\" (\"odd col\" INTEGER)";
+            cmd.ExecuteNonQuery();
+        }
+
+        var columns = DbSchemaCache.LoadColumns(connection, "odd \" table");
+
+        Assert.Contains("odd col", columns);
+        Assert.Equal("\"odd \"\" table\"", SqliteIdentifier.Quote("odd \" table"));
+    }
+
+    [Theory]
+    [InlineData("page_count")]
+    [InlineData("_pragma1")]
+    public void SqliteIdentifier_ValidatePragmaName_AllowsBarePragmaNames(string name)
+    {
+        Assert.Equal(name, SqliteIdentifier.ValidatePragmaName(name));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("page-count")]
+    [InlineData("page_count;VACUUM")]
+    [InlineData("1page_count")]
+    public void SqliteIdentifier_ValidatePragmaName_RejectsUnsafePragmaNames(string name)
+    {
+        Assert.Throws<ArgumentException>(() => SqliteIdentifier.ValidatePragmaName(name));
+    }
+
+    [Fact]
     public void DegradationReasonCodes_AllCodesHaveActionableMetadata()
     {
         foreach (var code in DegradationReasonCodes.All)
@@ -85,9 +120,14 @@ public class DbReaderTests : IDisposable
         _writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, "1");
         _writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, "0");
         _writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, "4096");
+        _writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, "2");
+        _writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, "true");
         _writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, "2");
         _writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, "1");
         _writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, "64");
+        _writer.SetMeta(DbContext.LastIndexRunDiagnosticsMetaKey, JsonStringListCodec.Serialize(["indexed_head_metadata_write_failed: IOException: denied"]));
+        _writer.SetMeta(DbContext.LastIndexRunDiagnosticCountMetaKey, "1");
+        _writer.SetMeta(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, "false");
 
         var status = _reader.GetStatus();
 
@@ -102,7 +142,12 @@ public class DbReaderTests : IDisposable
         Assert.Equal(expectedFreshenedAt, status.LastWorkspaceFreshenedAt);
         Assert.Equal(1234, status.LastIndexRun.DurationMs);
         Assert.Equal(3, status.LastIndexRun.FilesScanned);
+        Assert.Equal(2, status.LastIndexRun.BytesReadSkippedFileCount);
+        Assert.True(status.LastIndexRun.BytesReadIncomplete);
         Assert.Equal(64, status.LastIndexRun.PeakMemoryMb);
+        Assert.Equal(["indexed_head_metadata_write_failed: IOException: denied"], status.LastIndexRun.Diagnostics);
+        Assert.Equal(1, status.LastIndexRun.DiagnosticCount);
+        Assert.False(status.LastIndexRun.DiagnosticsTruncated);
     }
 
     [Theory]
@@ -9729,6 +9774,72 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveCSharpMetadataTargets_SeedsExtractorOwnedMetadataTargets_Issue3524()
+    {
+        InsertIndexedFile("src/A/DirectAttribute.cs", "csharp",
+            """
+            namespace A
+            {
+                public class DirectAttribute : System.Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/A/ChildAttribute.cs", "csharp",
+            """
+            namespace A
+            {
+                public class ChildAttribute : DirectAttribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A
+            {
+                [Child]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT s.is_metadata_target, s.metadata_target_source
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'src/A/DirectAttribute.cs' AND s.kind = 'class' AND s.name = 'DirectAttribute'";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal(SymbolRecord.MetadataTargetSourceExtractor, reader.GetString(1));
+        }
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT s.is_metadata_target, s.metadata_target_source
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'src/A/ChildAttribute.cs' AND s.kind = 'class' AND s.name = 'ChildAttribute'";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal(SymbolRecord.MetadataTargetSourceResolver, reader.GetString(1));
+        }
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/A/Svc.cs" && d.TargetPath == "src/A/ChildAttribute.cs");
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no
@@ -13122,6 +13233,20 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetStatus_DistinguishesCSharpMetadataTargetSourceMissingColumn_Issue3524()
+    {
+        InsertIndexedFile("src/LegacySource.cs", "csharp", "public class LegacySource { }\n");
+        _writer.MarkMetadataTargetReady("csharp");
+        RecreateSymbolsTableWithoutMetadataTargetSourceColumn();
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.False(status.CSharpMetadataTargetReady);
+        Assert.Equal(DegradationReasonCodes.CSharpMetadataTargetMissingColumn, status.CSharpMetadataTargetDegradedReason);
+    }
+
+    [Fact]
     public void GetStatus_ExposesCSharpMetadataTargetReadyTrueWhenContractStampCurrent()
     {
         // Happy path: C# files are indexed and the current-version stamp is present, so the
@@ -13278,6 +13403,52 @@ public class DbReaderTests : IDisposable
                 start_column, end_line, body_start_line,
                 body_end_line, signature, container_kind, container_name,
                 container_qualified_name, family_key, visibility, return_type
+            FROM symbols_old;
+            DROP TABLE symbols_old;
+            PRAGMA foreign_keys = ON;
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private void RecreateSymbolsTableWithoutMetadataTargetSourceColumn()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE symbols RENAME TO symbols_old;
+            CREATE TABLE symbols (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT,
+                sub_kind        TEXT,
+                name            TEXT,
+                name_folded     TEXT,
+                line            INTEGER,
+                start_line      INTEGER,
+                start_column    INTEGER,
+                end_line        INTEGER,
+                body_start_line INTEGER,
+                body_end_line   INTEGER,
+                signature       TEXT,
+                container_kind  TEXT,
+                container_name  TEXT,
+                container_qualified_name TEXT,
+                family_key      TEXT,
+                visibility      TEXT,
+                return_type     TEXT,
+                is_metadata_target INTEGER
+            );
+            INSERT INTO symbols (
+                id, file_id, kind, sub_kind, name, name_folded, line, start_line,
+                start_column, end_line, body_start_line,
+                body_end_line, signature, container_kind, container_name,
+                container_qualified_name, family_key, visibility, return_type, is_metadata_target
+            )
+            SELECT
+                id, file_id, kind, sub_kind, name, name_folded, line, start_line,
+                start_column, end_line, body_start_line,
+                body_end_line, signature, container_kind, container_name,
+                container_qualified_name, family_key, visibility, return_type, is_metadata_target
             FROM symbols_old;
             DROP TABLE symbols_old;
             PRAGMA foreign_keys = ON;
