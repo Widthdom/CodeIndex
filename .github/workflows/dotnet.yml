@@ -216,7 +216,7 @@ jobs:
       - name: Audit NuGet package vulnerabilities
         shell: pwsh
         run: |
-          $auditOutput = dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore 2>&1
+          $auditOutput = dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1
           $auditExitCode = $LASTEXITCODE
 
           $auditOutput | ForEach-Object { Write-Host $_ }

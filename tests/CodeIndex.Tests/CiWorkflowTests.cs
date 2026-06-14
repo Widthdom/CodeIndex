@@ -77,6 +77,19 @@ public class CiWorkflowTests
     }
 
     [Fact]
+    public void DotnetWorkflow_UsesSdkCompatibleNuGetAudit()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
+
+        Assert.Contains(
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1",
+            workflow);
+        Assert.DoesNotContain(
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore",
+            workflow);
+    }
+
+    [Fact]
     public void TestingGuide_DocumentsSharedStateParallelismInventory()
     {
         var guide = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "TESTING_GUIDE.md"));
