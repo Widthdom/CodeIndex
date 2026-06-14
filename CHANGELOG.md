@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.31.2] - 2026-06-15
+
+#### Internal
+
+- Fixed the release workflow's `create-release` job so curated release-note generation installs the pinned .NET SDK before running the changelog tool.
+
 ### [1.31.1] - 2026-06-14
 
 #### Fixed
@@ -3920,6 +3926,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.31.2] - 2026-06-15
+
+#### 内部変更
+
+- release workflow の `create-release` job で curated release notes を生成する前に、固定版 .NET SDK をセットアップするよう修正しました。
+
 ### [1.31.1] - 2026-06-14
 
 #### 修正
@@ -7811,7 +7823,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.31.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.31.2...HEAD
+[1.31.2]: https://github.com/Widthdom/CodeIndex/compare/v1.31.1...v1.31.2
 [1.31.1]: https://github.com/Widthdom/CodeIndex/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/Widthdom/CodeIndex/compare/v1.30.2...v1.31.0
 [1.30.2]: https://github.com/Widthdom/CodeIndex/compare/v1.30.1...v1.30.2
