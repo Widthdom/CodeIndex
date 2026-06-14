@@ -335,7 +335,13 @@ public static partial class IndexCommandRunner
 
     private static HashSet<string> EmptyScanCheckpointDirectories() => new(StringComparer.Ordinal);
 
-    private static void SaveScanCheckpoint(string path, string? currentHead, IReadOnlySet<string> directories)
+    private static void SaveScanCheckpoint(
+        string path,
+        string? currentHead,
+        IReadOnlySet<string> directories,
+        List<CliJsonMessage> warningList,
+        bool json,
+        bool quiet)
     {
         try
         {
@@ -350,29 +356,60 @@ public static partial class IndexCommandRunner
                     .Where(directory => directory.Length > 0)
                     .OrderBy(directory => directory, StringComparer.Ordinal)
                     .ToList());
-            AtomicFileWriter.WriteJson(path, checkpoint, new JsonSerializerOptions { WriteIndented = true });
+            if (WriteScanCheckpointForTesting != null)
+                WriteScanCheckpointForTesting(path);
+            else
+                AtomicFileWriter.WriteJson(path, checkpoint, new JsonSerializerOptions { WriteIndented = true });
         }
-        catch (IOException)
+        catch (Exception ex) when (IsScanCheckpointPersistenceException(ex))
         {
-        }
-        catch (UnauthorizedAccessException)
-        {
+            RecordScanCheckpointPersistenceWarning(path, "save", ex, warningList, json, quiet);
         }
     }
 
-    private static void DeleteScanCheckpoint(string path)
+    private static void DeleteScanCheckpoint(
+        string path,
+        List<CliJsonMessage> warningList,
+        bool json,
+        bool quiet)
     {
         try
         {
             if (File.Exists(path))
-                File.Delete(path);
+            {
+                if (DeleteScanCheckpointForTesting != null)
+                    DeleteScanCheckpointForTesting(path);
+                else
+                    File.Delete(path);
+            }
         }
-        catch (IOException)
+        catch (Exception ex) when (IsScanCheckpointPersistenceException(ex))
         {
+            RecordScanCheckpointPersistenceWarning(path, "delete", ex, warningList, json, quiet);
         }
-        catch (UnauthorizedAccessException)
-        {
-        }
+    }
+
+    private static bool IsScanCheckpointPersistenceException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
+
+    private static void RecordScanCheckpointPersistenceWarning(
+        string path,
+        string operation,
+        Exception ex,
+        List<CliJsonMessage> warningList,
+        bool json,
+        bool quiet)
+    {
+        var message =
+            $"scan checkpoint {operation} failed for {ConsoleUi.FormatBoundedValue(path)} " +
+            $"({CommandErrorWriter.FormatSanitizedException(ex)}); continuing without failing the scan.";
+        warningList.Add(new CliJsonMessage("<scan_checkpoint>", message));
+        if (!json && !quiet)
+            ConsoleUi.PrintWarning(message);
     }
 
     private sealed record FullScanDiscoveryResult(
@@ -651,7 +688,13 @@ public static partial class IndexCommandRunner
             .ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {
-            SaveScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint, scanResult.CheckpointedDirectories);
+            SaveScanCheckpoint(
+                scanCheckpointPath,
+                currentHeadForCheckpoint,
+                scanResult.CheckpointedDirectories,
+                warningList,
+                options.Json,
+                options.Quiet);
             retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
             foreach (var relPath in scanResult.NonIndexablePaths)
@@ -690,7 +733,7 @@ public static partial class IndexCommandRunner
             {
                 purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
             }
-            DeleteScanCheckpoint(scanCheckpointPath);
+            DeleteScanCheckpoint(scanCheckpointPath, warningList, options.Json, options.Quiet);
         }
         if (purged > 0)
             WriteProjectRootOnce();
