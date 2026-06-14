@@ -11,6 +11,9 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class GitHelperTests : IDisposable
 {
+    // Keep below the fake git scripts' 5-second sleep so missed cancellation still fails.
+    private static readonly TimeSpan GitCancellationWallClockLimit = TimeSpan.FromSeconds(4);
+
     private readonly string _tempDir;
 
     public GitHelperTests()
@@ -622,7 +625,9 @@ public class GitHelperTests : IDisposable
 
             stopwatch.Stop();
             Assert.Equal(cts.Token, ex.CancellationToken);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Cancellation took {stopwatch.Elapsed}.");
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Cancellation took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
         }
         finally
         {
@@ -655,7 +660,9 @@ public class GitHelperTests : IDisposable
 
             stopwatch.Stop();
             Assert.Equal(cts.Token, ex.CancellationToken);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Cancellation took {stopwatch.Elapsed}.");
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Cancellation took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
         }
         finally
         {

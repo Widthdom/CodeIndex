@@ -61,7 +61,7 @@ The test project mirrors the production areas closely.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
 - `GitHelperTests.cs`
-  Git-specific behavior, including worktrees and commit-based updates.
+  Git-specific behavior, including worktrees, commit-based updates, and cancellation of git subprocesses. Cancellation wall-clock assertions should stay below the fake git scripts' natural 5-second completion while leaving room for macOS CI scheduling and process-cleanup overhead.
 - `WorkspaceMetadataEnricherTests.cs`
   Workspace freshness and git metadata enrichment behavior.
 - `SuggestionStoreTests.cs`
@@ -269,7 +269,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
 - `GitHelperTests.cs`
-  worktree や commit ベース更新を含む Git まわりのテスト。
+  worktree や commit ベース更新、git subprocess の cancellation を含む Git まわりのテスト。Cancellation の wall-clock assertion は fake git script が自然完了する 5 秒未満に保ちつつ、macOS CI の scheduling や process cleanup の遅れを許容する余裕を持たせます。
 - `WorkspaceMetadataEnricherTests.cs`
   ワークスペース鮮度と git メタデータ付与のテスト。
 - `SuggestionStoreTests.cs`
