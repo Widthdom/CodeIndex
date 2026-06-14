@@ -312,6 +312,117 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_ShaderLanguages_DetectsEntryPointsAndResources_Issue3533()
+    {
+        const string glsl = """
+            layout(location = 0) in vec3 position;
+            layout(set = 0, binding = 0) uniform sampler2D diffuseMap;
+
+            struct Light {
+                vec3 color;
+            };
+
+            void main()
+            {
+            }
+            """;
+        const string hlsl = """
+            cbuffer FrameData : register(b0)
+            {
+                float4 Tint;
+            };
+
+            Texture2D<float4> DiffuseTexture : register(t0);
+            SamplerState LinearSampler : register(s0);
+
+            struct VertexOut
+            {
+                float4 Position : SV_Position;
+            };
+
+            float4 PSMain(VertexOut input) : SV_Target
+            {
+                return DiffuseTexture.Sample(LinearSampler, input.Position.xy);
+            }
+            """;
+        const string metal = """
+            struct VertexOut {
+                float4 position [[position]];
+            };
+
+            constant float4 Tint;
+
+            vertex VertexOut vertex_main(uint vid [[vertex_id]])
+            {
+                return VertexOut();
+            }
+
+            fragment float4 fragment_main(VertexOut in [[stage_in]])
+            {
+                return Tint;
+            }
+
+            kernel void compute_main(device float4* values [[buffer(0)]])
+            {
+            }
+            """;
+        const string wgsl = """
+            struct VertexOut {
+                @builtin(position) position: vec4<f32>,
+            }
+
+            alias Index = u32;
+            @group(0) @binding(0) var diffuse_texture: texture_2d<f32>;
+            override WorkgroupSize: u32 = 64;
+
+            @vertex
+            fn vs_main() -> VertexOut
+            {
+                return VertexOut();
+            }
+
+            @fragment fn fs_main() -> @location(0) vec4<f32>
+            {
+                return vec4<f32>();
+            }
+            """;
+
+        var glslSymbols = SymbolExtractor.Extract(1, "glsl", glsl);
+        var hlslSymbols = SymbolExtractor.Extract(2, "hlsl", hlsl);
+        var metalSymbols = SymbolExtractor.Extract(3, "metal", metal);
+        var wgslSymbols = SymbolExtractor.Extract(4, "wgsl", wgsl);
+
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "position");
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "diffuseMap");
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "Light");
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "main");
+
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "FrameData");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "DiffuseTexture");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "LinearSampler");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "VertexOut");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "PSMain");
+
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "VertexOut");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "property" && symbol.Name == "Tint");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "vertex_main");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "fragment_main");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "compute_main");
+        Assert.DoesNotContain(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "VertexOut");
+
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "VertexOut");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "typealias" && symbol.Name == "Index");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "diffuse_texture");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "WorkgroupSize");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "vs_main");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "fs_main");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "glsl");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "hlsl");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "metal");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "wgsl");
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_HandlesOutOfTreeLanguage()
     {
         lock (TestConsoleLock.Gate)
@@ -508,15 +619,18 @@ public partial class SymbolExtractorTests
             ["fsharp"] = "module Demo\nlet run x = x + 1\n",
             ["go"] = "package demo\nfunc Run() int { return 1 }\n",
             ["gradle"] = "task buildDocs {\n}\n",
+            ["glsl"] = "uniform mat4 model;\nvec4 run(vec4 value) { return model * value; }\n",
             ["graphql"] = "type Query { answer: Int }\nquery GetAnswer { answer }\n",
             ["haskell"] = "module Demo where\nrun :: Int -> Int\nrun x = x + 1\n",
             ["html"] = "<div id=\"app\"></div>\n<script>function run() { return 1; }</script>\n",
+            ["hlsl"] = "cbuffer Params { float4 color; }\nfloat4 run(float4 value) { return value * color; }\n",
             ["java"] = "package demo; public class Service { int run() { return 1; } }\n",
             ["javascript"] = "export function run() { return 1; }\n",
             ["justfile"] = "build:\n    echo build\n",
             ["kotlin"] = "package demo\nclass Service { fun run(): Int = 1 }\n",
             ["lua"] = "local function run()\n  return 1\nend\n",
             ["makefile"] = "build:\n\t@echo build\n",
+            ["metal"] = "struct VertexOut { float4 position; };\nvertex VertexOut run(uint id) { return VertexOut(); }\n",
             ["msbuild"] = "<Project><Target Name=\"Build\" /></Project>\n",
             ["objc"] = "@interface Service\n- (void)run;\n@end\n",
             ["pascal"] = "unit Demo;\ninterface\nprocedure Run;\nimplementation\nprocedure Run; begin end;\nend.\n",
@@ -544,6 +658,7 @@ public partial class SymbolExtractorTests
             ["verilog"] = "module demo #(parameter WIDTH = 8) (input clk);\nfunction run; run = WIDTH; endfunction\nendmodule\n",
             ["vhdl"] = "library ieee;\nentity demo is\nend demo;\narchitecture rtl of demo is\nsignal ready : std_logic;\nbegin\nend rtl;\n",
             ["vue"] = "<script setup lang=\"ts\">\nfunction run() { return 1 }\n</script>\n",
+            ["wgsl"] = "@group(0) @binding(0) var<uniform> params: mat4x4<f32>;\nfn run() -> vec4<f32> { return vec4<f32>(); }\n",
             ["zig"] = "pub fn run() i32 { return 1; }\n",
         };
 

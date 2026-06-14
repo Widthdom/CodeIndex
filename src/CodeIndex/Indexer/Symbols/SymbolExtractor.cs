@@ -129,6 +129,10 @@ public static partial class SymbolExtractor
     private static readonly Regex HdlInlineParameterRegex = new(
         @"\b(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const string ShaderIdentifierPattern = @"[A-Za-z_]\w*";
+    private const string ShaderTypePattern = @"[\w:<>,]+(?:\s*[*&])?(?:\s*\[[^\]\r\n]+\])?";
+    private const string ShaderAttributePrefixPattern = @"(?:(?:layout\s*\([^)]*\)|\[[^\]\r\n]+\]|@\w+(?:\([^)]*\))?)\s*)*";
+    private const string ShaderFunctionStartBlacklistPattern = @"^(?!\s*(?:if|for|while|switch|return|discard)\b)";
     private static readonly Regex RPacmanPackageLoaderStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?p_load\s*\(",
         RegexOptions.Compiled);
@@ -1869,6 +1873,35 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?<name>" + VhdlIdentifierPattern + @")\s*:\s*process\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("typealias", new Regex(@"^\s*(?:type|subtype)\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("property", new Regex(@"^\s*(?:signal|constant|variable|generic|port)\s+(?<name>" + VhdlIdentifierPattern + @")\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["glsl"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*" + ShaderAttributePrefixPattern + @"(?:uniform|buffer)\s+(?:(?<returnType>" + ShaderTypePattern + @")\s+)?(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property", new Regex(@"^\s*" + ShaderAttributePrefixPattern + @"(?:in|out|attribute|varying)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*" + ShaderAttributePrefixPattern + @"(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+        ],
+        ["hlsl"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*(?:cbuffer|tbuffer)\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*(?:globallycoherent\s+)?(?:RW)?(?:Texture\w*|Buffer|StructuredBuffer|RWStructuredBuffer|ByteAddressBuffer|RWByteAddressBuffer|Sampler\w*)\s*(?:<[^>\r\n]+>)?\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:groupshared|static|uniform)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*" + ShaderAttributePrefixPattern + @"(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+        ],
+        ["metal"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*(?:constant|device|threadgroup)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*(?:kernel|vertex|fragment)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+        ],
+        ["wgsl"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("typealias", new Regex(@"^\s*alias\s+(?<name>" + ShaderIdentifierPattern + @")\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*(?:var(?:<[^>\r\n]+>)?|let|const|override)\s+(?<name>" + ShaderIdentifierPattern + @")\s*:", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*fn\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
         ],
         ["shell"] =
         [

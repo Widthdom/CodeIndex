@@ -2231,6 +2231,25 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonReportsShaderSymbolExtraction_Issue3533()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        foreach (var language in new[] { "glsl", "hlsl", "metal", "wgsl" })
+        {
+            var entry = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == language);
+            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
+            Assert.False(entry.GetProperty("reference_extraction").GetBoolean());
+            Assert.False(entry.GetProperty("graph_queries").GetBoolean());
+        }
+    }
+
+    [Fact]
     public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
     {
         // Pin the #215 surface: `cdidx languages --json` must report html with
