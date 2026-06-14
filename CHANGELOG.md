@@ -11,6 +11,137 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.31.0] - 2026-06-14
+
+#### Added
+
+- **Added a bounded CI performance smoke for indexing and search (#3384)** — the default test suite now includes a small deterministic smoke fixture with broad budgets so severe indexing or query regressions are caught without turning the skipped large-scale performance tests into PR gates.
+- **Solidity files now expose symbols and graph references (#3531)** - `.sol` files index contracts, interfaces, libraries, constructors, functions, events, errors, structs, enums, modifiers, inheritance, library usage, modifier applications, event emissions, and interface-style calls for navigation and graph queries.
+- **Report bundles now include a support diagnostics manifest (#3555)** — generated support archives include `support-manifest.json` with bundle contents, redaction counts, omission reasons, readiness flags, schema/config/hook/extractor diagnostics, and bounded limit metadata while keeping local paths redacted.
+
+#### Changed
+
+- **MCP guidance is now more self-guiding for code investigation** — initialize instructions, tool descriptions, schema descriptions, prompts, and read-only response hints now steer clients toward CodeIndex-first search, focused excerpts, symbol navigation, graph-aware impact checks, and recovery steps when a query misses.
+
+#### Fixed
+
+- Prevented fresh status and inspect payloads from reporting
+  `worktree_head_changed=true` when the latest successful `indexed_head_sha`
+  matches the runtime HEAD but an older full-scan-only `indexed_head_commit`
+  stamp is stale.
+- **Export/import database path guards now use the stamped workspace case-sensitivity contract conservatively (#3368)** — archive and ctags output overlap checks now consider both `workspace_path_case_sensitive` and the live filesystem path comparer, so case-sensitive APFS and other non-default volumes no longer inherit a macOS-wide case-insensitive heuristic while moved databases still cannot overwrite a case-variant of the live DB on case-insensitive filesystems.
+- **Upgrade cleanup now reports installer script deletion failures (#3372)** — `cdidx upgrade` emits a bounded warning when the downloaded temporary `install.sh` cannot be deleted, while keeping JSON stdout parseable.
+- **Upgrade preparation failures no longer report database errors (#3373)** — installer startup, timeout, and pre-install download or verification failures now return a dedicated install error exit code instead of `DatabaseError`.
+- **Upgrade installer output capture is now bounded (#3376)** — JSON-mode upgrades drain suppressed installer stdout and stderr through fixed-size buffers instead of retaining unbounded output in memory.
+- **Upgrade installer timeout timers are now cancellable (#3377)** — `RunInstallerProcess` links its timeout delay to caller cancellation and cancels the delay when the installer exits first, avoiding leftover uncancellable timer work.
+- **Report log tailing now reads incrementally (#3397)** — `cdidx report` no longer materializes the bounded log tail window with `ReadToEnd`; it streams lines from the tail offset and keeps only the requested final lines.
+- **Symbol extraction workers now honor caller cancellation during extraction (#3399)** — the worker command receives the caller cancellation token and passes it through delayed worker setup and `SymbolExtractor.Extract`, so interrupted extraction can stop without waiting for uncancelable in-worker work.
+- **Retry and EOF drain waits now observe cancellation (#3400)** — SQLite DB validation can receive a cancellation token, retry backoff no longer uses uncancelable `Thread.Sleep`, and MCP EOF drain delays return promptly when the loop token is cancelled.
+- **Fire-and-forget background task failures are now observed and reported (#3401)** — CLI spinner and HTTP MCP background loops route through a shared observer that reports faulted tasks without leaking full exception details.
+- **MCP request paths no longer rely on synchronous async bridge wrappers (#3402)** — progress, logging, backfill, and HTTP out-of-band handling now flow through async delegates instead of blocking on request-path tasks.
+- **Environment numeric settings now parse with invariant culture (#3404)** — `CDIDX_SLOW_QUERY_MS`, suggestion max-age/max-count settings, and GitHub submit timeout now ignore current-culture-specific numeric signs.
+- **CLI config and log/MCP flags no longer mutate process-wide environment variables (#3407)** — config-file and CLI-derived values now flow through a scoped runtime overlay while real environment variables keep their documented precedence.
+- **Atomic file writes now apply permissions before replacement and surface durability failures (#3409)** — `AtomicFileWriter` applies requested POSIX modes to the temp file before rename, fsyncs the parent directory on Unix after replacement, and throws a bounded error when the file was replaced but directory durability could not be confirmed.
+- **Import database replacement now rolls back post-move failures (#3410)** — if a later step fails after moving the staged import database into place, the previous database and SQLite sidecars are restored instead of leaving a partial replacement.
+- **Archive and log rotation now share replacement-aware slot rotation (#3412)** — metrics logs, MCP audit logs, and suggestion archives now use the common `PrivateLogFile.TryRotateSlots` helper, which replaces existing destination slots with overwrite move semantics where the platform supports them.
+- **Plugin and hook diagnostics now expose sanitized failure categories (#3414)** — `status --json` and MCP status include bounded `category` machine codes for extractor plugin, pattern config, and post-extraction hook diagnostics, so callers can distinguish assembly load, constructor, callback, timeout, and discovery failures without parsing messages.
+- **Git helper failures now carry structured bounded diagnostics (#3434)** — process start failures, non-zero exits, timeouts, cancellations, capture failures, and incomplete output capture are classified with `GitCommandFailureKind` and redacted 512-character diagnostics instead of unbounded stderr text.
+- **SQL identifier construction is centralized for dynamic table and pragma names (#3435)** — schema PRAGMAs, report/diff table counts, and migration helper SQL now quote or validate dynamic SQLite identifiers instead of interpolating raw names.
+- **TypeScript path alias config warnings now preserve failure categories (#3438)** - unreadable configs, invalid JSON, and excessive extends depth now emit stable diagnostic codes while keeping the existing human-readable warning text.
+- **Filesystem case-sensitivity probing now fails explicitly (#3439)** -
+  `cdidx` no longer falls back to OS heuristics when case probing cannot
+  determine the workspace behavior, and probe cleanup failures now surface as
+  diagnostics instead of being silently swallowed.
+- **Changelog parsing now uses invariant, friendly validation (#3444)** — changelog release dates, versions, previous versions, and fragment issue numbers now use invariant parsing and report `ChangelogException` messages for invalid inputs.
+- **HTTP MCP transport now reports best-effort response cleanup failures (#3452)** — abort and close cleanup failures are counted, retain the latest sanitized failure label, and surface through MCP health JSON.
+- **HTTP MCP transport shutdown no longer waits indefinitely for delayed listener teardown (#3452)** — disposal now bounds accept-loop teardown so CI and callers are not stuck if a platform delays `HttpListener` shutdown.
+- **Update-check failures now preserve sanitized categories (#3453)** — `--check-updates --json`, status update checks, and prerelease upgrade checks now report stable failure codes, categories, and bounded recovery hints instead of raw exception type names.
+- **`--json-envelope` now rejects oversized raw JSON item lines before parsing (#3454)** — envelope wrapping now caps each captured NDJSON item line before `JsonNode.Parse` and returns a structured envelope error instead of doing unbounded parser work.
+- **Hook discovery truncation diagnostics are now visible in status output (#3456)** — `status --json` and MCP status now include sanitized `hook_diagnostics[]` entries when hook discovery hits candidate limits, so oversized extension directories report bounded truncation without loading hook assemblies.
+- **Changelog cleanup failures now use sanitized diagnostics (#3457)** — release preparation cleanup and rollback failures now report stable categories, affected relative paths, reason codes, and recovery hints without raw filesystem exception messages.
+- **PackageNormalize now reports bounded friendly failures and cleanup warnings (#3458)** — package normalization errors now avoid raw path-heavy exception text, cap package arguments per run, bound ZIP entry diagnostics, and include structured cleanup warnings in JSON output.
+- **`import --prune-paths` now rewrites imported roots to the import target project root (#3459)** — importing into `.../.cdidx/codeindex.db` now stamps the sibling project directory instead of the shell current directory, and JSON/human diagnostics report the pruned project root.
+- **Suggestion storage now follows shared data-dir and cancellation contracts (#3460)** — `cdidx suggestions` resolves its default store through the same query data-dir path rules as other commands, and async suggestion submission now carries cancellation through the store and GitHub callback path.
+- **Index lock metadata and cleanup failures are now safer (#3462)** — new CLI lock sidecars no longer include host or project-path metadata, and CLI/MCP lock cleanup failures now report bounded reason-code diagnostics without raw exception text.
+- **Scan checkpoint persistence failures now surface as bounded index warnings (#3463)** — full scans continue when best-effort checkpoint save or delete fails, but human output and JSON `warnings` now report the checkpoint operation, bounded path, and sanitized exception type.
+- **Hook install and uninstall cleanup failures now report bounded warnings (#3464)** — hook commands now include the affected hook path category and sanitized exception type in human warnings and JSON `warnings` when staged-hook cleanup or managed-hook deletion fails.
+- **GitHub suggestion submission now fails closed on duplicate lookup failures (#3465)** — `GitHubIssueReporter` uses an explicit default HTTP timeout and treats existing-issue lookup API or parse failures as indeterminate instead of creating a possible duplicate issue.
+- **Open-issues duplicate preflight now bounds issue-number scalars (#3466)** — malformed `--open-issues` JSON with an oversized issue number now returns an `invalid-preflight-file` diagnostic instead of parsing an unbounded scalar.
+- **Static-using reference totals no longer issue an unbounded read (#3467)** — exact C# reference totals that need static-using suppression now scan bounded result pages instead of building a single unrestricted reference command.
+- **Worker process cleanup failures now preserve bounded diagnostics (#3468)** — symbol and hook worker wait/kill helpers report sanitized failure categories, and timeout diagnostics include cleanup failure details when cleanup itself fails.
+- **`test-extractor` JSON comparison now uses bounded parser options (#3470)** — expected-symbols comparison now parses expected and actual JSON with an explicit depth cap and reports a usage error when the fixture is too deep.
+- **Language-map override read failures now emit diagnostics (#3472)** -
+  unreadable `.cdidx-langmap.yaml` files are skipped with a warning instead of
+  being treated as successful empty override files, while later readable
+  override files still load.
+- **Project marker and git submodule discovery failures now surface warnings (#3473)** -
+  unreadable marker traversal subtrees and `.gitmodules` read failures are reported
+  as bounded scan warnings instead of silently producing incomplete fingerprints or
+  empty submodule metadata.
+- **File-size estimation now reports byte-total omissions (#3474)** -
+  successful CLI and MCP index runs persist
+  `last_index_run.bytes_read_skipped_file_count` and
+  `bytes_read_incomplete` when files cannot be probed for the `bytes_read`
+  total, with bounded diagnostics for the skipped paths.
+- **Private log hardening failures are now observable (#3475)** — best-effort permission and pruning failures now emit bounded `private_log_diagnostic` WARN entries with stable reason codes instead of disappearing silently.
+- **Codex command guards now fail closed with explicit hook diagnostics (#3476)** - malformed hook payloads, missing Bash commands, and unresolved Git project roots now return clear deny reasons instead of falling through to generic guard behavior.
+- **Command guard script inspection now fails closed for missing or oversized scripts (#3477)** - candidate script paths must exist and fit within the bounded scan window before execution is allowed.
+- **Command guard secret checks now fail closed when gitleaks is unavailable (#3478)** - git commits are denied instead of passing through the text-only staged diff fallback that cannot safely cover binary or encoded staged content.
+- **Extractor regex backtracking policy is now documented and audited (#3479)** - built-in symbol and reference extractor regexes must either use `RegexOptions.NonBacktracking` or the shared `BoundedRegex.DefaultMatchTimeout`.
+- **MAC profile detection now reports bounded proc-attribute diagnostics (#3480)** — `status --json` and MCP status responses include `mac_profile_diagnostics` when Linux `/proc/self/attr/*` reads fail, so callers can distinguish no active profile from detection failures without exposing raw exception messages.
+- **CI now pins .NET SDKs and Stryker.NET for reproducible runs (#3488)** — the repository selects SDK `9.0.301` through `global.json`, CI installs exact `8.0.413` and `9.0.301` SDKs, the Docker build image aligns with the pinned SDK, and scheduled mutation testing installs `dotnet-stryker` version `4.14.0`.
+- **Docker images now pin .NET base images and drop privileges for `cdidx` (#3492)** — the container build uses explicit multi-arch MCR image digests, creates a dedicated `cdidx` UID, and starts through an entrypoint that runs `cdidx` as the `/repo` owner or the dedicated UID so bind-mounted repositories remain writable without keeping the CLI process as root.
+- **Docker builds now use a narrower context (#3493)** — the build stage copies only restore, source, version, and license inputs needed for the runtime image, while `.dockerignore` excludes VCS metadata, tests, docs, workflow files, changelog fragments, tools, and agent artifacts from the build context. Release builds pass commit, date, and dirty metadata through explicit build args so the image keeps the same version provenance without shipping `.git/`.
+- **Docker builds now follow the locked restore/no-restore policy (#3494)** — the container build restores the committed musl RID graph with `dotnet restore --locked-mode` and publishes with `--no-restore`, with musl RID lock entries committed so Docker restore uses the same package graph policy as CI.
+- **Installer uninstall now reports removal failures (#3500)** — uninstall checks file, license-directory, and cache-directory removals, avoids successful removal messages for failed paths, and exits nonzero when cleanup is incomplete.
+- **Installer PATH profile edits are backed up and replaced atomically (#3501)** — `CDIDX_INSTALL_UPDATE_PATH=1` now writes shell profile updates through a same-directory temporary file, backs up existing profiles, and reports the recovery paths when setup fails.
+- **Metrics sink failures now surface a warning for configured paths (#3504)** — `--metrics` / `CDIDX_METRICS` still keep command execution best-effort, but an unusable configured metrics path now emits a bounded stderr warning instead of silently disabling metrics.
+- **Search snippet line handling avoids the leftover full-content split helper (#3507)** — `DbSearchReader` now keeps its snippet and guard line paths on the streaming line enumerator without retaining the allocation-heavy split helper.
+- **MCP request scheduling no longer uses short SpinWait polling (#3509)** — the stdio concurrent request loop now uses an async task-start handoff after scheduling request work instead of briefly polling shared request state.
+- **Shell symbol extraction now ignores heredoc bodies and bounds function ranges (#3510)** - shell heredoc contents no longer emit phantom functions, and shell function ranges stop at their matching body close instead of stretching to EOF.
+- **Bounded metrics summary input and percentile retention (#3512)** — `scripts/metrics-summary.py` now caps JSONL lines, decoded records, per-line bytes, and retained elapsed values per bucket while keeping total counts and max latency across all processed records.
+- **Automatic solution discovery now reports bounded filesystem diagnostics (#3513)** — when root-level `.sln` discovery cannot enumerate the workspace root, project resolution records a sanitized traversal diagnostic with the `--solution <path>` recovery hint instead of surfacing a raw filesystem exception.
+- **Symlink indexing now applies file-link policy consistently (#3515)** -
+  `--follow-symlinks internal|all` now applies to file symlinks as well as
+  directory symlinks across full scans, update mode, dry-run, and MCP indexing,
+  while permission failures resolving directory symlink targets surface as scan
+  warnings.
+- **Case-insensitive extractor regexes now use culture-invariant matching consistently (#3516)** - built-in symbol and reference extractor regex audits now fail if an `IgnoreCase` regex omits `CultureInvariant`.
+- **DbWriter transaction finalization no longer spins on `Thread.Yield` (#3517)** — transaction scope commit, rollback, dispose, and gate retry paths now wait on bounded state-change notifications and report prolonged contention with a structured diagnostic.
+- **C# metadata-target detection now uses first-class extractor provenance (#3524)** — direct `Attribute` bases are stamped as extractor-owned metadata targets, writer-resolved transitive targets are stored separately, readiness requires the new `metadata_target_source` column, and legacy naming/signature heuristics remain only the degraded fallback path.
+- **Best-effort index metadata write failures are now diagnosable (#3546)** -
+  successful CLI and MCP index runs persist bounded `last_index_run.diagnostics`
+  with `diagnostic_count` and `diagnostics_truncated` when HEAD, commit-scoped
+  freshness, path-case, or git-exclude metadata writes fail without invalidating
+  the index data itself.
+- **AuditLogSink now reports dropped records and rotation degradation (#3547)** — audit write/serialization drops and rotation cleanup failures are counted and exposed through MCP status and health diagnostics.
+- **PackageNormalize no longer preserves unsafe ZIP external attributes (#3552)** — normalized packages now scrub entry external attributes to a deterministic safe value after rejecting POSIX special-file types and unsafe DOS attributes.
+- **`find --regex` timeouts now use the shared bounded regex policy (#3559)** - CLI and MCP `find` regex scans distinguish match timeouts from invalid regex syntax and emit machine-readable `regex_timeout` diagnostics.
+- **Excerpt semantic tokens now use source coordinates for clamped content (#3563)** — `excerpt --json` reports `semantic_token_coordinate_space: "source"` and includes `content_line_spans` so clients can map visible clamped content back to original source columns without treating clamp markers as tokens.
+- **Trimmed publish query tests now skip missing ILLink runtimes clearly (#3571)** — the trimmed query JSON smoke test now reports a skipped test when `dotnet publish` reaches an SDK/ILLink tool that requires an unavailable `Microsoft.NETCore.App` runtime, preserving the test coverage on supported SDK setups without failing before `cdidx` runs.
+- **GitHelper timeout coverage now reaches the timeout path after commit validation (#3572)** — the timeout test now creates a real commit and passes its resolved SHA before swapping in the hanging fake git, so commit validation no longer masks the timeout behavior under test.
+- **Published trimmed CLI tests no longer assume live restore advisory state (#3573)** — the trimmed-publish smoke tests now use publish-specific lock files, disable NuGet vulnerability auditing for the smoke publish, run whichever `cdidx` entry point the SDK emits, and apply the existing macOS arm64 SDK/ILLink skip to the query JSON smoke test.
+- **Command guard core tests no longer leave `guard.py` in the repository root (#3608)** — the outside-project script fixture now lives in its own temporary directory so test cleanup removes it reliably.
+- **Trimmed query publish smoke tests no longer dirty the repository lock file (#3619)** — the test publish now writes RID-specific NuGet lock data under its temporary intermediate directory.
+- **Existing index databases now migrate `symbols.metadata_target_source` (#3642)** - `InitializeSchema` now adds the column before writers insert symbol metadata target source values.
+
+#### Security
+
+- **GitHub issue submission no longer forwards default proxy credentials by default (#3369)** — GitHub submission and duplicate-preflight HTTP clients still use standard proxy discovery, but OS/default proxy credentials are sent only when `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` is explicitly configured.
+- **Symbol extraction worker test hooks no longer honor ambient environment variables (#3398)** — the isolated worker now ignores legacy `CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_*` environment variables during normal execution and only receives bounded test controls through an internal test seam.
+- **Extension assemblies no longer load through the default assembly load context (#3413)** — extractor plugins and post-extraction hook callbacks now use custom collectible load contexts with explicit dependency resolution, keeping CodeIndex shared interfaces unified while avoiding default-context pinning for extension code.
+- **`CDIDX_HOOKS_DIR` now reports trust-boundary diagnostics (#3415)** — hook directory overrides now reject missing or symlink/reparse-point directories, warn on group- or world-writable Unix directories, and report sanitized accepted/rejected diagnostics through `status --json` and MCP status.
+- **GitHelper no longer resolves git through ambient PATH (#3433)** — git commands now use a trusted absolute executable path so indexing helpers do not inherit a caller-controlled `git` from `PATH`.
+- **Test telemetry TRX processing is now bounded (#3442)** — the telemetry helper now caps `--top`, TRX directory and entry traversal, TRX file discovery, TRX file size, XML parser work, and retained result collections so unusually large test result trees cannot force unbounded processing. It also skips non-regular `.trx` filesystem entries and discards malformed TRX files atomically instead of contributing partial pass/fail counts.
+- **Test telemetry TRX warnings now avoid leaking local paths and XML parser details (#3443)** — parse and inspection warnings now use relative TRX paths when possible and stable reason codes instead of raw exception messages.
+- **Worker child processes no longer fall back to PATH-resolved dotnet (#3455)** — isolated symbol extraction and post-extraction hook workers now require a trusted absolute dotnet host path and return a structured diagnostic when one cannot be resolved.
+
+#### Internal
+
+- **Mutable runtime test hooks are scoped to execution context (#3408)** — `ProgramRunner`, `DbWriter`, and `DbContext` test seams now use scoped backing so hook values do not become process-wide command state.
+- **FileIndexer content loading now lives behind a focused collaborator (#3419)** — file byte reading, decoding, line canonicalization, and checksum calculation now flow through `FileContentLoader`, leaving `FileIndexer` focused on traversal and record orchestration without changing indexed output.
+- **DbContext connection and pragma responsibilities now have focused collaborators (#3420)** — SQLite open/retry/read-only URI handling lives in `DbConnectionFactory`, connection performance pragma policy lives in `DbPragmaPolicy`, and `DbContext` keeps compatibility wrappers while continuing to orchestrate schema and migration flow.
+
 ### [1.30.2] - 2026-06-13
 
 #### Fixed
@@ -3783,6 +3914,130 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.31.0] - 2026-06-14
+
+#### 追加
+
+- **indexing と search の bounded な CI performance smoke を追加しました (#3384)** — 通常のテスト suite に小さく決定的な smoke fixture を加え、広めの budget で重大な indexing / query 退行を検出しつつ、skip されている大規模 performance test を PR gate 化しないようにしました。
+- **Solidity ファイルでシンボルと graph 参照を抽出するようになりました (#3531)** - `.sol` ファイルで contract、interface、library、constructor、function、event、error、struct、enum、modifier、継承、library 使用、modifier 適用、event emit、interface 形式の call を index し、navigation と graph query に利用できるようにしました。
+- **report bundle に support diagnostics manifest を追加しました (#3555)** — 生成される support archive に `support-manifest.json` を含め、bundle 内容、redaction 件数、省略理由、readiness flag、schema/config/hook/extractor diagnostics、bounded limit metadata を記録しつつ、ローカルパスは redaction されたままにします。
+
+#### 変更
+
+- **MCP のコード調査ガイダンスをより自己誘導的にしました** — initialize instructions、tool descriptions、schema descriptions、prompts、read-only response hints が、CodeIndex-first な検索、焦点を絞った抜粋、シンボル移動、graph-aware な影響確認、検索失敗時の recovery steps へ誘導するようになりました。
+
+#### 修正
+
+- 最新の成功 `indexed_head_sha` が runtime HEAD と一致しているにもかかわらず、
+  古い full-scan 限定 `indexed_head_commit` stamp が stale なために fresh な
+  status / inspect payload が `worktree_head_changed=true` を返す問題を修正しました。
+- **export/import の DB パス保護が workspace の大小文字区別 stamp を保守的に使うようになりました (#3368)** — archive と ctags の出力先 overlap チェックは `workspace_path_case_sensitive` と実ファイルシステムのパス比較の両方を考慮するため、case-sensitive APFS などの非標準ボリュームで macOS 全体を case-insensitive とみなす heuristic を引き継がず、移動された database でも case-insensitive filesystem 上の live DB の大小文字違いを上書きできません。
+- **upgrade cleanup が installer script の削除失敗を報告するようになりました (#3372)** — `cdidx upgrade` はダウンロードした一時 `install.sh` を削除できない場合に bounded warning を出し、JSON stdout は parse 可能なまま保ちます。
+- **upgrade preparation failure を database error として報告しないようにしました (#3373)** — installer 起動、timeout、install 前の download / verification failure は `DatabaseError` ではなく専用の install error exit code を返します。
+- **upgrade installer の出力 capture を bounded にしました (#3376)** — JSON mode の upgrade は suppress した installer stdout/stderr を固定サイズ buffer で drain し、無制限にメモリへ保持しないようになりました。
+- **upgrade installer の timeout timer を cancel 可能にしました (#3377)** — `RunInstallerProcess` は timeout delay を呼び出し側 cancellation と連動させ、installer が先に終了した場合も delay を cancel するため、cancel できない timer 処理を残しません。
+- **report のログ末尾読み取りを逐次処理にしました (#3397)** — `cdidx report` は bounded log tail window を `ReadToEnd` でまとめて materialize せず、tail offset から行単位で読みながら要求された末尾行だけを保持するようになりました。
+- **シンボル抽出 worker が抽出中の caller cancellation を尊重するようになりました (#3399)** — worker command は caller の cancellation token を受け取り、worker 内の遅延処理と `SymbolExtractor.Extract` に渡すため、割り込まれた抽出が worker 内のキャンセル不能な処理を待たずに停止できます。
+- **retry と EOF drain の待機が cancellation を監視するようになりました (#3400)** — SQLite DB 検証は cancellation token を受け取れるようになり、retry backoff はキャンセル不能な `Thread.Sleep` を使わず、MCP の EOF drain delay は loop token がキャンセルされると速やかに戻ります。
+- **fire-and-forget background task の失敗を観測して報告するようになりました (#3401)** — CLI spinner と HTTP MCP の background loop は共有 observer を通り、faulted task を詳細な例外情報を漏らさずに報告します。
+- **MCP request paths が同期 async bridge wrapper に依存しなくなりました (#3402)** — progress、logging、backfill、HTTP out-of-band handling は request-path task をブロックせず、async delegate 経由で処理されるようになりました。
+- **環境変数の数値設定が invariant culture で parse されるようになりました (#3404)** — `CDIDX_SLOW_QUERY_MS`、suggestion の max-age/max-count 設定、GitHub submit timeout は、現在カルチャ固有の数値記号に左右されなくなりました。
+- **CLI config と log/MCP flags が process-wide environment variables を変更しないようになりました (#3407)** — config file と CLI 由来の値は scoped runtime overlay 経由で渡し、実環境変数は従来どおり優先されます。
+- **Atomic file write が置換前に権限を適用し、耐久化失敗を明示するようになりました (#3409)** — `AtomicFileWriter` は rename 前の temp file に要求された POSIX mode を適用し、Unix では置換後に parent directory を fsync し、file は置換済みだが directory durability を確認できなかった場合は bounded な error を返します。
+- **import のデータベース置換が移動後失敗をロールバックするようになりました (#3410)** — staged import database を配置した後の処理で失敗した場合、部分的な置換を残さず、以前の database と SQLite sidecar を復元します。
+- **archive と log rotation が replacement-aware な共通 slot rotation を使うようになりました (#3412)** — metrics log、MCP audit log、suggestion archive は共通の `PrivateLogFile.TryRotateSlots` helper を使い、platform が対応する範囲で overwrite move semantics により既存 destination slot を置き換えるようになりました。
+- **plugin / hook diagnostics が sanitization 済み failure category を返すようになりました (#3414)** — `status --json` と MCP status は extractor plugin、pattern config、post-extraction hook diagnostics に bounded な `category` machine code を含めるため、caller は message を parse せずに assembly load、constructor、callback、timeout、discovery failure を区別できます。
+- **Git helper の失敗が構造化された bounded diagnostics を返すようになりました (#3434)** — process start failure、non-zero exit、timeout、cancellation、capture failure、不完全な output capture を `GitCommandFailureKind` で分類し、無制限の stderr ではなく redaction 済み 512 文字 diagnostics として返します。
+- **動的なテーブル名と PRAGMA 名の SQL identifier 構築を共通化しました (#3435)** — schema PRAGMA、report/diff のテーブル件数、migration helper の SQL は、生の名前を補間せずに SQLite identifier を quote または検証するようになりました。
+- **TypeScript path alias config の警告で失敗カテゴリを保持するようにしました (#3438)** - 読み取れない config、不正な JSON、過剰な extends 深度では、既存の人間向け警告文を保ったまま安定した診断コードを出力します。
+- **filesystem の大小文字区別 probe が明示的に失敗するようになりました (#3439)** -
+  workspace の挙動を判定できない場合に OS heuristic へ fallback せず、probe cleanup
+  の失敗も黙って握りつぶさず diagnostics として表面化します。
+- **changelog parsing が invariant で friendly な検証を使うようになりました (#3444)** — changelog の release date、version、previous version、fragment issue number は invariant parsing を使い、不正な入力には `ChangelogException` のメッセージを返します。
+- **HTTP MCP transport が best-effort response cleanup failure を報告するようになりました (#3452)** — abort/close cleanup failure をカウントし、最後の sanitized failure label を保持して MCP health JSON に表示します。
+- **HTTP MCP transport の shutdown が listener teardown を無期限に待たなくなりました (#3452)** — `HttpListener` shutdown がプラットフォーム都合で遅れても CI や呼び出し元が詰まらないよう、dispose 時の accept-loop 終了待ちを bounded にしました。
+- **update check の失敗が sanitized category を保持するようになりました (#3453)** — `--check-updates --json`、status の update check、prerelease upgrade check は、生の例外型名ではなく安定した失敗コード、category、bounded な復旧ヒントを返すようになりました。
+- **`--json-envelope` が過大な raw JSON item 行を parse 前に拒否するようになりました (#3454)** — envelope wrapping は捕捉した NDJSON item の各行に上限を設け、`JsonNode.Parse` に渡す前に構造化 envelope error を返すため、無制限な parser 処理を避けます。
+- **hook discovery の打ち切り diagnostics が status 出力で見えるようになりました (#3456)** — `status --json` と MCP status は hook discovery が candidate limit に達した場合に sanitization 済みの `hook_diagnostics[]` を返し、hook assembly を読み込まずに大きすぎる extension directory の bounded truncation を報告します。
+- **changelog cleanup 失敗が sanitized diagnostic を返すようになりました (#3457)** — release preparation の cleanup / rollback 失敗は、生の filesystem 例外文ではなく、安定した category、影響する相対パス、reason code、復旧ヒントを返します。
+- **PackageNormalize が bounded で friendly な失敗内容と cleanup warning を報告するようになりました (#3458)** — package normalization error は raw な path-heavy exception text を避け、1 回の実行で受け付ける package 引数数を制限し、ZIP entry diagnostics を bounded にし、JSON 出力に構造化された cleanup warning を含めます。
+- **`import --prune-paths` が import 先 project root へ root を書き換えるようになりました (#3459)** — `.../.cdidx/codeindex.db` へ import する場合は shell の current directory ではなく sibling の project directory を stamp し、JSON / human 診断にも pruning 後の project root を表示します。
+- **提案ストアが共有 data-dir とキャンセル契約に従うようになりました (#3460)** — `cdidx suggestions` の既定ストア解決は他のクエリ系コマンドと同じ data-dir ルールを使い、非同期の提案送信はストアと GitHub callback 経路まで cancellation を伝搬するようになりました。
+- **index lock metadata と cleanup 失敗をより安全に扱うようになりました (#3462)** — 新しい CLI lock sidecar は host や project path を含めず、CLI / MCP lock の cleanup 失敗は生の例外文ではなく bounded な reason-code diagnostic として記録します。
+- **scan checkpoint 永続化の失敗を bounded な index warning として報告するようになりました (#3463)** — best-effort な checkpoint save / delete に失敗しても full scan は継続しつつ、human output と JSON `warnings` に checkpoint 操作、bounded path、sanitized exception type を出力します。
+- **hook install / uninstall の cleanup 失敗を bounded warning として報告するようになりました (#3464)** — staged hook cleanup や managed hook deletion に失敗した場合、hook command は影響を受けた hook path category と sanitized exception type を human warning と JSON `warnings` に含めます。
+- **GitHub 提案送信が重複 lookup 失敗時に fail closed するようになりました (#3465)** — `GitHubIssueReporter` は明示的な既定 HTTP timeout を使い、既存 Issue lookup の API/parse 失敗を「未検出」ではなく不確定として扱うため、重複 Issue を作る可能性を避けます。
+- **open-issues duplicate preflight が issue number scalar に上限を設けるようになりました (#3466)** — 過大な issue number を含む不正な `--open-issues` JSON は、無制限の scalar parse を行わず `invalid-preflight-file` 診断を返します。
+- **static using 参照の総数計算で無制限 read を行わないようにしました (#3467)** — static using の抑制が必要な C# exact reference total は、単一の無制限 reference command ではなく、上限付き result page を順に走査するようになりました。
+- **worker process cleanup failure が bounded な診断を保持するようになりました (#3468)** — symbol worker と hook worker の wait / kill helper は sanitized な failure category を返し、cleanup 自体が失敗した場合は timeout 診断にも詳細を含めます。
+- **`test-extractor` の JSON 比較が上限付き parser options を使うようになりました (#3470)** — expected-symbols 比較は expected / actual JSON を明示的な深度上限付きで parse し、fixture が深すぎる場合は usage error を返します。
+- **language-map override の読み取り失敗が diagnostics として出るようになりました (#3472)** -
+  読み取れない `.cdidx-langmap.yaml` は成功した空の override file として扱わず、
+  warning を出して skip します。後続の読み取り可能な override file は引き続き読み込みます。
+- **project marker と git submodule discovery の失敗が warnings として出るようになりました (#3473)** -
+  marker traversal の読めない subtree や `.gitmodules` 読み取り失敗を黙って不完全な
+  fingerprint / 空の submodule metadata にせず、bounded scan warning として報告します。
+- **ファイルサイズ推定が byte 合計からの除外を報告するようになりました (#3474)** -
+  CLI / MCP index run は、file の size probe に失敗して `bytes_read` 合計へ含められない場合、
+  `last_index_run.bytes_read_skipped_file_count` と `bytes_read_incomplete` を保存し、
+  除外された path の bounded diagnostics も残します。
+- **private log の hardening 失敗を観測できるようになりました (#3475)** — 権限設定や prune のベストエフォート失敗は、黙って消える代わりに、安定した reason code を含む bounded な `private_log_diagnostic` WARN として記録されます。
+- **Codex command guard が明示的な hook 診断付きで fail closed するようになりました (#3476)** - 不正な hook payload、欠落した Bash command、Git project root の解決失敗は、汎用 guard 挙動へ流れず明確な deny 理由を返します。
+- **Command guard の script inspection が missing script と oversized script で fail closed するようになりました (#3477)** - 候補 script path は存在し、上限付き scan window 内に収まる場合だけ実行を許可します。
+- **gitleaks が利用できない場合の command guard secret check が fail closed するようになりました (#3478)** - binary や encoded staged content を安全に網羅できない text-only staged diff fallback を成功扱いせず、git commit を deny します。
+- **extractor regex の backtracking policy を文書化し audit するようになりました (#3479)** - built-in symbol/reference extractor regex は `RegexOptions.NonBacktracking` または共有 `BoundedRegex.DefaultMatchTimeout` を使う必要があります。
+- **MAC profile detection が bounded な proc attribute diagnostics を返すようになりました (#3480)** — Linux の `/proc/self/attr/*` 読み取りが失敗した場合、`status --json` と MCP status response は `mac_profile_diagnostics` を含めるため、生の例外メッセージを出さずに active profile なしと detection failure を区別できます。
+- **CI が再現可能な実行のため .NET SDK と Stryker.NET を pin するようになりました (#3488)** — repository は `global.json` で SDK `9.0.301` を選択し、CI は `8.0.413` と `9.0.301` の SDK を exact version で install します。Docker build image も pinned SDK に合わせ、定期 mutation testing は `dotnet-stryker` version `4.14.0` を install します。
+- **Docker image が .NET base image を digest 固定し、`cdidx` 実行時に権限降格するようになりました (#3492)** — container build は MCR の multi-arch image digest を明示し、専用の `cdidx` UID を作成します。entrypoint は bind mount した repository を書き込めるよう、`/repo` の owner または専用 UID で `cdidx` を実行し、CLI process を root のままにしません。
+- **Docker build context を絞り込みました (#3493)** — build stage は runtime image に必要な restore / source / version / license 入力だけをコピーし、`.dockerignore` は VCS metadata、tests、docs、workflow files、changelog fragments、tools、agent artifacts を build context から除外します。release build は commit/date/dirty metadata を明示的な build args で渡すため、`.git/` を含めなくても image の version provenance を維持します。
+- **Docker build が locked restore / no-restore policy に従うようになりました (#3494)** — container build は commit 済み musl RID graph を `dotnet restore --locked-mode` で復元し、`--no-restore` 付きで publish します。Docker restore も CI と同じ package graph policy を使えるよう、musl RID の lock entry を commit します。
+- **installer の uninstall が削除失敗を報告するようになりました (#3500)** — uninstall は file、license directory、cache directory の削除結果を確認し、失敗した path に成功メッセージを出さず、cleanup が不完全な場合は nonzero で終了します。
+- **installer の PATH profile 編集をバックアップ付きの atomic 置換にしました (#3501)** — `CDIDX_INSTALL_UPDATE_PATH=1` は shell profile 更新を同一ディレクトリの一時ファイル経由で書き、既存 profile をバックアップし、準備に失敗した場合は復旧用 path を報告します。
+- **設定済み metrics path の sink 失敗時に warning を出すようになりました (#3504)** — `--metrics` / `CDIDX_METRICS` は引き続きコマンド実行をベストエフォートで継続しますが、設定済み metrics path が使えない場合はメトリクスを黙って無効化せず、上限付きの stderr warning を出します。
+- **search snippet の行処理から full-content split helper の残存をなくしました (#3507)** — `DbSearchReader` は snippet と guard line の経路を streaming line enumerator に統一し、allocation の大きい split helper を保持しないようになりました。
+- **MCP request scheduling が短い SpinWait polling を使わなくなりました (#3509)** — stdio の並列 request loop は request work をスケジュールした後、共有 request 状態を短時間 polling する代わりに async な task-start handoff を使うようになりました。
+- **shell のシンボル抽出で heredoc 本文を無視し、関数範囲を制限しました (#3510)** - shell heredoc 内の内容が偽の関数として出力されなくなり、shell 関数範囲は EOF ではなく対応する本体の閉じ位置で止まります。
+- **metrics summary の入力と percentile 用保持値を上限化しました (#3512)** — `scripts/metrics-summary.py` は JSONL の行数、デコード済みレコード数、1 行あたりの byte 数、bucket ごとの elapsed 値保持数を制限しつつ、処理済み全レコードの count と最大 latency は維持するようになりました。
+- **自動 solution discovery が bounded な filesystem diagnostics を返すようになりました (#3513)** — root 直下の `.sln` discovery が workspace root を列挙できない場合、project resolution は生の filesystem exception を出さず、`--solution <path>` recovery hint 付きの sanitized traversal diagnostic を記録します。
+- **symlink indexing が file link policy を一貫して適用するようになりました (#3515)** -
+  `--follow-symlinks internal|all` が full scan、update mode、dry-run、MCP indexing
+  のすべてで directory symlink だけでなく file symlink にも効くようになり、directory
+  symlink target の permission failure は scan warning として表面化します。
+- **case-insensitive な extractor regex が一貫して culture-invariant matching を使うようになりました (#3516)** - built-in symbol/reference extractor の regex audit は、`IgnoreCase` regex が `CultureInvariant` を省いた場合に失敗します。
+- **DbWriter の transaction finalize が `Thread.Yield` で spin しなくなりました (#3517)** — transaction scope の commit / rollback / dispose と gate retry は bounded な状態変更通知で待機し、長引く contention を構造化された診断として報告します。
+- **C# metadata-target 検出が first-class extractor provenance を使うようになりました (#3524)** — 直接 `Attribute` を継承する型は extractor 由来の metadata target として stamp し、writer が推移的に解決した target は別 source として保存します。readiness は新しい `metadata_target_source` 列を要求し、legacy の naming/signature heuristic は縮退時だけ使います。
+- **best-effort index metadata write の失敗を診断できるようになりました (#3546)** -
+  HEAD、commit-scoped freshness、path-case、git-exclude metadata write が失敗しても
+  index data 自体は有効な場合、成功した CLI / MCP index run は上限付きの
+  `last_index_run.diagnostics`、`diagnostic_count`、`diagnostics_truncated` を保存します。
+- **AuditLogSink が dropped record と rotation degradation を報告するようになりました (#3547)** — audit write/serialization drop と rotation cleanup failure をカウントし、MCP status/health diagnostics に表示します。
+- **PackageNormalize が安全でない ZIP external attributes を保持しないようになりました (#3552)** — 正規化後の package は、POSIX special-file type や unsafe DOS 属性を拒否したうえで、entry external attributes を deterministic な安全値へ scrub します。
+- **`find --regex` の timeout が共有 bounded regex policy を使うようになりました (#3559)** - CLI と MCP の `find` regex scan は match timeout と regex 構文エラーを区別し、機械可読な `regex_timeout` 診断を出します。
+- **clamp された excerpt content の semantic token が source 座標を使うようになりました (#3563)** — `excerpt --json` は `semantic_token_coordinate_space: "source"` と `content_line_spans` を返し、クライアントが clamp marker を token として扱わずに可視 content を元の source column へ対応付けられるようになりました。
+- **trimmed publish の query テストが ILLink runtime 不足を明確に skip するようになりました (#3571)** — trimmed query JSON smoke test は、`dotnet publish` が利用できない `Microsoft.NETCore.App` runtime を必要とする SDK/ILLink tool に到達した場合、`cdidx` 実行前の失敗ではなく skipped test として報告します。対応済み SDK 構成でのカバレッジは維持されます。
+- **GitHelper の timeout カバレッジが commit validation 後に timeout 経路へ到達するようになりました (#3572)** — timeout テストは実コミットを作成して解決済み SHA を渡してから hang する fake git に差し替えるため、commit validation が検証対象の timeout 挙動を隠さなくなりました。
+- **公開済み trimmed CLI テストが live restore advisory 状態を仮定しないようになりました (#3573)** — trimmed-publish smoke テストは publish 専用の lock file を使い、smoke publish の NuGet 脆弱性監査を無効化し、SDK が生成した `cdidx` entry point を実行し、既存の macOS arm64 SDK/ILLink skip を query JSON smoke test にも適用するようになりました。
+- **command guard core のテストがリポジトリルートに `guard.py` を残さないようになりました (#3608)** — project root 外の script fixture を専用の一時ディレクトリに置き、テスト後に確実に削除されるようにしました。
+- **trimmed query publish smoke テストがリポジトリの lock file を汚さないようになりました (#3619)** — テスト用 publish が RID 固有の NuGet lock 情報を一時 intermediate ディレクトリ配下へ書き込むようにしました。
+- **既存の index DB でも `symbols.metadata_target_source` を移行するようにしました (#3642)** - writer が symbol metadata target source 値を書き込む前に、`InitializeSchema` が列を追加します。
+
+#### セキュリティ
+
+- **GitHub Issue 送信が既定で default proxy 資格情報を転送しないよう修正 (#3369)** — GitHub 送信と重複 preflight の HTTP クライアントは標準の proxy 検出を引き続き使いますが、OS/default proxy 資格情報は `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` が明示設定された場合にだけ送信されます。
+- **symbol extraction worker のテストフックが環境変数を拾わないよう修正 (#3398)** — isolated worker は通常実行中に従来の `CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_*` 環境変数を無視し、内部テストシームから渡される上限付きのテスト制御だけを受け取るようになりました。
+- **extension assembly が default assembly load context で読み込まれないようになりました (#3413)** — extractor plugin と post-extraction hook callback は明示的な dependency resolution を持つ custom collectible load context を使い、CodeIndex の共有 interface の型同一性を保ちながら extension code が default context に固定されないようにしました。
+- **`CDIDX_HOOKS_DIR` が trust boundary diagnostics を返すようになりました (#3415)** — hook directory override は存在しない directory や symlink / reparse point directory を拒否し、Unix で group- または world-writable な directory を warning として報告し、`status --json` と MCP status に sanitization 済みの accepted / rejected diagnostics を返します。
+- **GitHelper が環境 PATH 経由で git を解決しないようになりました (#3433)** — git コマンドは信頼済みの絶対実行ファイルパスを使うため、indexing helper が呼び出し元に制御された `PATH` 上の `git` を継承しなくなりました。
+- **Test telemetry の TRX 処理に上限を設けました (#3442)** — telemetry helper は `--top`、TRX ディレクトリ / エントリ走査、TRX ファイル探索、TRX ファイルサイズ、XML parser の処理量、保持する結果コレクションを制限し、過大なテスト結果ツリーで無制限の処理が発生しないようにしました。通常ファイルではない `.trx` filesystem entry をスキップし、壊れた TRX ファイルは pass/fail 件数へ部分的に反映せずファイル単位で破棄します。
+- **Test telemetry の TRX warning がローカルパスや XML parser 詳細を漏らさないようになりました (#3443)** — parse / inspection warning は可能な限り相対 TRX パスと安定した reason code を使い、生の例外メッセージを出力しないようにしました。
+- **worker 子プロセスが PATH 解決の dotnet にフォールバックしなくなりました (#3455)** — isolated symbol extraction と post-extraction hook worker は信頼済みの絶対 dotnet host パスを必須にし、解決できない場合は構造化された診断を返します。
+
+#### 内部変更
+
+- **mutable runtime test hooks を execution context に閉じ込めました (#3408)** — `ProgramRunner`、`DbWriter`、`DbContext` の test seam は scoped backing を使うようになり、hook 値が process-wide な command state にならないようにしました。
+- **FileIndexer の content loading を focused collaborator に切り出しました (#3419)** — ファイル byte 読み込み、decode、行 canonicalization、checksum 算出を `FileContentLoader` 経由にし、indexed output を変えずに `FileIndexer` が traversal と record orchestration に集中できるようにしました。
+- **DbContext の connection と pragma 責務を focused collaborator に分離しました (#3420)** — SQLite open/retry/read-only URI handling は `DbConnectionFactory` に、connection performance pragma policy は `DbPragmaPolicy` に置き、`DbContext` は互換 wrapper を保ちながら schema と migration flow の orchestration を継続します。
+
 ### [1.30.2] - 2026-06-13
 
 #### 修正
@@ -7544,7 +7799,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.30.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.31.0...HEAD
+[1.31.0]: https://github.com/Widthdom/CodeIndex/compare/v1.30.2...v1.31.0
 [1.30.2]: https://github.com/Widthdom/CodeIndex/compare/v1.30.1...v1.30.2
 [1.30.1]: https://github.com/Widthdom/CodeIndex/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/Widthdom/CodeIndex/compare/v1.29.1...v1.30.0
