@@ -75,7 +75,7 @@ The test project mirrors the production areas closely.
 - `ConcurrencyTests.cs`
   Concurrent read and read-during-write scenarios (WAL mode validation), including the issue #180 bug-catching snapshot-isolation regressions for all three multi-statement reader entry points: (1) `GetStatus` seeds `refs == files * refsPerFile` and asserts every concurrent observation preserves that invariant; (2) `AnalyzeSymbol` seeds one symbol `S` plus matching reference/caller pairs, toggles a second file symmetrically, and asserts `references.Count == callers.Count` across every `inspect`/`analyze_symbol` bundle; (3) `GetRepoMap` seeds a baseline modified timestamp and toggles a newer file, asserting `latest_modified == workspace_latest_modified` across every map call. Each test fails without the DEFERRED-transaction wrap on the matching reader and passes with it.
 - `PerformanceTests.cs`
-  Large-scale data benchmarks (10K+ files). Skip-by-default; run manually with `--filter`.
+  Bounded CI smoke coverage plus large-scale data benchmarks. `CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` runs in the default suite, so it is a blocking PR/CI check, but its broad budgets are intended to catch only severe indexing/search regressions rather than act as a benchmark. The 10K+ large-scale tests remain skip-by-default; run them manually with `--filter`.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
 - `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
@@ -281,7 +281,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `ConcurrencyTests.cs`
   並行読み取りと書き込み中読み取りシナリオ（WALモード検証）。issue #180 の bug-catching な snapshot 隔離回帰テストを 3 つの multi-statement reader 経路について含む。(1) `GetStatus` は `refs == files * refsPerFile` の seed 不変条件を立て、並行観測が常にこの条件を維持することを要求する。(2) `AnalyzeSymbol` はシンボル `S` に対して reference/caller を対称に 1 対 1 で seed し、もう 1 ファイルを対称に toggle することで `inspect` / `analyze_symbol` bundle の `references.Count == callers.Count` を常に保証する。(3) `GetRepoMap` はベースラインの modified と新しい toggle 対象ファイルを用意し、`latest_modified == workspace_latest_modified` が常に一致することを要求する。各テストは対応する reader の DEFERRED transaction を外すと落ち、戻すと通ることを確認済み。
 - `PerformanceTests.cs`
-  大規模データベンチマーク（10K+ファイル）。デフォルトSkip。`--filter` で手動実行。
+  bounded な CI smoke と大規模データベンチマークを扱います。`CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` は通常 suite で実行されるため PR / CI の blocking check ですが、benchmark ではなく重大な indexing/search 退行だけを拾う広めの budget を使います。10K+ の大規模テストは引き続きデフォルト Skip で、`--filter` で手動実行します。
 - `DbRecoveryTests.cs`
   DB破損からの復旧とグレースフル劣化のテスト。`cdidx index` の filesystem setup failure（read-only DB file や書き込み不可の DB 親ディレクトリ）は、ユーザーが見る CLI JSON/stderr 境界を通すため `IndexCommandRunnerTests.cs` で扱います。
 - `JsonOutputSnapshotTests.cs`、`JsonOutputSnapshotHelper.cs`
