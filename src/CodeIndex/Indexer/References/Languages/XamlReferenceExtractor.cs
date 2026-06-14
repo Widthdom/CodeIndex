@@ -47,8 +47,6 @@ internal static class XamlReferenceExtractor
     {
         foreach (var line in lines)
         {
-            if (line.IndexOf("xmlns:x=", StringComparison.OrdinalIgnoreCase) < 0)
-                continue;
             if (line.IndexOf("schemas.microsoft.com/winfx/2006/xaml", StringComparison.OrdinalIgnoreCase) >= 0
                 || line.IndexOf("github.com/avaloniaui", StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;

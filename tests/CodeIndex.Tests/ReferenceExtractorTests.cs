@@ -578,7 +578,7 @@ public partial class ReferenceExtractorTests
         const string content = """
             <Window x:Class="Sample.MainWindow"
                     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x = "http://schemas.microsoft.com/winfx/2006/xaml">
                 <Window.Resources>
                     <SolidColorBrush x:Key="PrimaryBrush" Color="Tomato" />
                     <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}" />
@@ -648,6 +648,26 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "AfterInlineComment"
             && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_Xml_XamlDefaultNamespaceOnly_ReferencesAreEnabled()
+    {
+        const string content = """
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+                <TextBlock Text="{Binding Path=ViewModel.Title}" />
+                <Button Click="OnSaveClicked" />
+            </Window>
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "xml", content, []);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]

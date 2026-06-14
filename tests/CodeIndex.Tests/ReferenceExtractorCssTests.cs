@@ -466,6 +466,8 @@ public partial class ReferenceExtractorTests
             .button
               color $primary
               background $accent
+              background-image url("logo.png")
+              border-color rgb(0, 0, 0)
               rounded(4px)
             """;
 
@@ -483,6 +485,12 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "call"));
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "commentedAccent");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "rgb"
+            && reference.ReferenceKind == "call");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "rounded"
             && reference.ReferenceKind == "call"));
