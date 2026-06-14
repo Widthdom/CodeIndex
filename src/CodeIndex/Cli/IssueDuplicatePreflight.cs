@@ -15,6 +15,7 @@ internal sealed class IssueDuplicatePreflight
     internal const int MaxOpenIssueTitleLength = GitHubIssueReporter.MaxGitHubIssueTitleLength;
     internal const int MaxOpenIssueUrlLength = 2048;
     internal const int MaxOpenIssueLabelLength = 128;
+    internal const int MaxOpenIssueNumberLength = 32;
     internal const int MaxTitleTokenizationInputLength = MaxOpenIssueTitleLength;
     internal const int MaxGitHubRepositoryLength = 200;
     private const int GitHubOpenIssuesPerPage = 100;
@@ -23,6 +24,7 @@ internal sealed class IssueDuplicatePreflight
     private const string GitHubSourcePrefix = "github:";
     private const string GitHubTokenEnvironmentVariable = "CDIDX_GITHUB_TOKEN";
     private const string GitHubApiBase = "https://api.github.com";
+    private const string InvalidPreflightFileErrorCode = "invalid-preflight-file";
 
     private static readonly HashSet<string> StopTitleTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -87,6 +89,12 @@ internal sealed class IssueDuplicatePreflight
                 documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
             preflight = new IssueDuplicatePreflight(true, fullPath, ParseOpenIssues(root));
             return true;
+        }
+        catch (InvalidOpenIssuesFileException ex)
+        {
+            preflight = new IssueDuplicatePreflight(false, null, []);
+            error = $"invalid --open-issues file '{path}' ({InvalidPreflightFileErrorCode}): {ex.Message}";
+            return false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -255,7 +263,7 @@ internal sealed class IssueDuplicatePreflight
             error = null;
             return true;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or InvalidOperationException or InvalidOpenIssuesFileException)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
             error = $"could not fetch --open-issues github for repository '{repository}': {ex.Message}";
@@ -358,13 +366,21 @@ internal sealed class IssueDuplicatePreflight
         => GitHubHttpClientFactory.CreateDefaultHttpClient(TimeSpan.FromSeconds(10));
 
     private static string? TryReadString(JsonNode? node, int maxLength)
+        => TryReadString(node, maxLength, truncate: true, fieldName: null);
+
+    private static string? TryReadString(JsonNode? node, int maxLength, bool truncate, string? fieldName)
     {
         if (node == null)
             return null;
         try
         {
             var value = node.GetValue<string>();
-            return value.Length <= maxLength ? value : value[..maxLength];
+            if (value.Length <= maxLength)
+                return value;
+            if (truncate)
+                return value[..maxLength];
+            throw new InvalidOpenIssuesFileException(
+                $"{fieldName ?? "string scalar"} exceeds maximum supported length of {maxLength.ToString(CultureInfo.InvariantCulture)} characters.");
         }
         catch (InvalidOperationException)
         {
@@ -380,9 +396,9 @@ internal sealed class IssueDuplicatePreflight
         {
             return node.GetValue<int>();
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException or OverflowException)
         {
-            var value = TryReadString(node, int.MaxValue);
+            var value = TryReadString(node, MaxOpenIssueNumberLength, truncate: false, fieldName: "issue number");
             return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                 ? parsed
                 : null;
@@ -458,4 +474,6 @@ internal sealed class IssueDuplicatePreflight
     }
 
     private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels);
+
+    private sealed class InvalidOpenIssuesFileException(string message) : Exception(message);
 }

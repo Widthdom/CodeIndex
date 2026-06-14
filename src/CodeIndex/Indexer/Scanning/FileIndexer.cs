@@ -475,6 +475,7 @@ public class FileIndexer
     private readonly Func<string, IEnumerable<string>> _enumerateFiles;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly long _maxFileSizeBytes;
+    private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
@@ -1031,6 +1032,7 @@ public class FileIndexer
         _enumerateFiles = enumerateFiles ?? (dir => Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
+        _contentLoader = new FileContentLoader(_maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(_projectRoot);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -3376,163 +3378,23 @@ public class FileIndexer
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
-        var (bytes, sizeBytes, modifiedUtc) = ReadRawBytesWithSizeLimit(
+        var loaded = _contentLoader.Load(
             absolutePath,
             normalizedRelativePath,
+            relativePath,
             cancellationToken);
-        var (content, warning) = DecodeIndexableContent(bytes, relativePath);
-        // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
-        content = NormalizeLineEndings(content);
-        // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
-        // and any BOM that immediately follows a `\n` (e.g. from accidental file
-        // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
-        // anchored regexes silently miss line-1 declarations in BOM-prefixed
-        // Windows-authored sources; a BOM at the start of a mid-file line would
-        // additionally leak a phantom glyph through `search` / `excerpt` chunk
-        // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
-        // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
-        // verbatim: stripping it would corrupt content fidelity for intentional
-        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
-        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
-        // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
-        // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
-        // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
-        // 1 行目宣言を黙って取りこぼし、mid-file 行頭 BOM は `search` / `excerpt`
-        // のチャンク出力にそのまま幽霊グリフを漏らす。行頭以外の U+FEFF
-        // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
-        // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
-        // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
-        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
-        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
-        content = StripLineLeadingInvisibles(content);
-        if (IsGitLfsPointer(bytes))
-            content = string.Empty;
-        var lineCount = CountPhysicalLines(content);
-        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguageForIndexing(absolutePath, content).Language,
-            Size = sizeBytes,
-            Lines = lineCount,
-            Checksum = checksum,
-            Modified = modifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
+            Lang = TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language,
+            Size = loaded.SizeBytes,
+            Lines = loaded.LineCount,
+            Checksum = loaded.Checksum,
+            Modified = loaded.ModifiedUtc,
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
-        return (record, content, bytes, warning);
-    }
-
-    private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
-        string absolutePath,
-        string normalizedRelativePath,
-        CancellationToken cancellationToken)
-    {
-        // Read raw bytes through a single FileStream and cap the accumulated payload at
-        // the configured max-file limit so a file that grew between the size probe and the read can no
-        // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
-        // left a TOCTOU window where an attacker (or any build/log emitter rapidly
-        // appending to a generated file) could grow a 1 MB file to multi-GB between
-        // stat and read and force the indexer into an OOM-sized allocation; reading
-        // through one open handle removes the second stat call, and the read loop's
-        // running total guarantees we never accumulate more than the configured max-file bytes
-        // regardless of how aggressively a concurrent writer extends the file.
-        // ファイルを 1 本の FileStream で開き、設定された max-file byte 上限として累積バッファを
-        // 制限することで、サイズ確認と読み込みの間にファイルが肥大化しても上限を
-        // 回避できないようにする。`FileInfo.Length` と `File.ReadAllBytes` を分離して
-        // いた従来実装では、stat と read の間に攻撃者 (もしくは自動生成ファイルを高速
-        // に追記し続けるビルド/ログ系) が 1 MB のファイルを数 GB まで肥大化させて
-        // インデクサに巨大確保を強制できる TOCTOU 経路があったが、1 本のオープン
-        // ハンドルで読むことで 2 回目の stat を排除し、ループ側の総バイト数チェック
-        // により並行追記がどれほど激しくても設定上限以上の確保は発生しない。
-        byte[] bytes;
-        long sizeBytes;
-        DateTime modifiedUtc;
-        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
-        for (var attempt = 0; ; attempt++)
-        {
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-            using (var stream = new FileStream(
-                ioPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 4096,
-                useAsync: false))
-            {
-                var initialLength = stream.Length;
-                if (initialLength > _maxFileSizeBytes)
-                    throw new FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        initialLength,
-                        _maxFileSizeBytes,
-                        BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
-
-                // Pre-size the accumulator to the observed length but cap initial capacity
-                // at the configured limit so a tampered Length cannot force a huge up-front allocation.
-                // 初期容量は観測した長さに合わせるが設定上限で打ち切り、Length を偽装
-                // されても巨大な事前確保を起こさないようにする。
-                var initialCapacity = (int)Math.Min(initialLength, _maxFileSizeBytes);
-                using var accumulator = new MemoryStream(initialCapacity);
-                var buffer = new byte[81920];
-                long total = 0;
-                int read;
-                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    total += read;
-                    if (total > _maxFileSizeBytes)
-                        throw new FileTooLargeSkippedException(
-                            normalizedRelativePath,
-                            total,
-                            _maxFileSizeBytes,
-                            BuildFileTooLargeMessage(total, grewDuringRead: true));
-                    accumulator.Write(buffer, 0, read);
-                }
-                bytes = accumulator.ToArray();
-                sizeBytes = total;
-            }
-            modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
-            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
-                break;
-        }
-
-        return (bytes, sizeBytes, modifiedUtc);
-    }
-
-    private static (string Content, string? Warning) DecodeIndexableContent(byte[] bytes, string relativePath)
-    {
-        var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
-
-        if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
-            throw new BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
-
-        // BOM-based encoding detection: UTF-16 LE/BE source files are otherwise mangled
-        // by the UTF-8 decoder (every other byte is U+FFFD or NUL), silently dropping
-        // every symbol they declare. UTF-32 LE shares the first two bytes with UTF-16 LE
-        // (FF FE [00 00]), so we exclude that prefix from the UTF-16 LE path rather than
-        // misclassify a UTF-32 LE file as UTF-16 LE with embedded NULs. Closes #1540.
-        // BOM ベースのエンコーディング検出: UTF-16 LE/BE のソースファイルは UTF-8
-        // デコーダで毎バイト U+FFFD / NUL に変換され、ファイル内のシンボルが丸ごと
-        // 消える。UTF-32 LE は UTF-16 LE と先頭 2 バイトを共有する (FF FE [00 00])
-        // ため、UTF-16 LE 経路から除外し UTF-8 fallback に流す。Closes #1540.
-        if (isUtf16Encoded)
-        {
-            var content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
-                .GetString(bytes);
-            return (content, null);
-        }
-
-        try
-        {
-            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null);
-        }
-        catch (DecoderFallbackException)
-        {
-            // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
-            var content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
-            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
-        }
+        return (record, loaded.Content, loaded.RawBytes, loaded.Warning);
     }
 
     public FileRecord BuildSkippedFileRecord(string absolutePath)
@@ -3706,48 +3568,7 @@ public class FileIndexer
     }
 
     internal static string NormalizeLineEndings(string content)
-    {
-        var firstCarriageReturn = content.IndexOf('\r');
-        if (firstCarriageReturn < 0)
-            return content;
-
-        var builder = new StringBuilder(content.Length);
-        builder.Append(content, 0, firstCarriageReturn);
-
-        for (var index = firstCarriageReturn; index < content.Length; index++)
-        {
-            if (content[index] != '\r')
-            {
-                builder.Append(content[index]);
-                continue;
-            }
-
-            builder.Append('\n');
-            if (index + 1 < content.Length && content[index + 1] == '\n')
-                index++;
-        }
-
-        return builder.ToString();
-    }
-
-    private string BuildFileTooLargeMessage(long actualBytes, bool grewDuringRead)
-    {
-        var actual = FormatBytesForError(actualBytes);
-        var limit = FormatBytesForError(_maxFileSizeBytes);
-        var observed = grewDuringRead
-            ? $"File too large (> {limit} limit; grew during read)"
-            : $"File too large ({actual} > {limit} limit)";
-        return $"{observed}. Override with --max-file-bytes <bytes> or {MaxFileSizeEnvironmentVariable}=<bytes> when this source file is intentionally indexable.";
-    }
-
-    private static string FormatBytesForError(long bytes)
-    {
-        if (bytes % (1024L * 1024L) == 0)
-            return $"{bytes / 1024L / 1024L} MiB";
-        if (bytes % 1024L == 0)
-            return $"{bytes / 1024L} KiB";
-        return $"{bytes} bytes";
-    }
+        => FileContentLoader.NormalizeLineEndings(content);
 
     /// <summary>
     /// Strip every line-leading UTF-8 BOM (U+FEFF) and zero-width space (U+200B).
@@ -3758,125 +3579,10 @@ public class FileIndexer
     /// 行頭以外の不可視文字はそのまま保持する。
     /// </summary>
     internal static string StripLineLeadingInvisibles(string content)
-    {
-        if (string.IsNullOrEmpty(content))
-            return content;
-        // Fast path: invisible-free files (the dominant case) skip the line-tracking
-        // scan and return the input unchanged so no StringBuilder is allocated.
-        // 高速パス: 対象の不可視文字が一切無いファイル (支配的ケース) は行頭追跡走査を
-        // 回避し、入力をそのまま返して StringBuilder を確保しない。
-        if (!content.Contains('\uFEFF') && !content.Contains('\u200B'))
-            return content;
-
-        // A target invisible is present somewhere. Locate the first line-leading
-        // occurrence in a single pass; if every occurrence is mid-line, return
-        // the input unchanged so the no-strip path also avoids any allocation.
-        // 対象の不可視文字が含まれている。最初の「行頭」出現を 1 パスで探し、行頭
-        // 以外のみであれば入力をそのまま返し、「剥がし不要」のケースでも割り当てを
-        // 発生させない。
-        int firstStripIndex = -1;
-        bool atLineStart = true;
-        for (int i = 0; i < content.Length; i++)
-        {
-            char c = content[i];
-            if (IsLineLeadingInvisible(c) && atLineStart)
-            {
-                firstStripIndex = i;
-                break;
-            }
-            atLineStart = c == '\n';
-        }
-        if (firstStripIndex < 0)
-            return content;
-
-        // Allocate only after at least one line-leading invisible is confirmed.
-        // The capacity accounts for stripping at least the char at firstStripIndex.
-        // 少なくとも 1 つの行頭不可視文字が確定した時点で初めて確保する。容量は
-        // firstStripIndex の文字を必ず剥がす分を差し引いた値にしておく。
-        var sb = new StringBuilder(content.Length - 1);
-        if (firstStripIndex > 0)
-            sb.Append(content, 0, firstStripIndex);
-        // The char at firstStripIndex is itself a line-leading invisible; resume
-        // after it with atLineStart = true so consecutive BOMs at the same
-        // logical position (e.g. multiple markers right after `\n`) are stripped.
-        // firstStripIndex の文字自体が行頭不可視文字。直後から再開し atLineStart を
-        // true に戻すことで `\n` 直後に連続する marker も同じ論理位置として剥がす。
-        atLineStart = true;
-        for (int i = firstStripIndex + 1; i < content.Length; i++)
-        {
-            char c = content[i];
-            if (IsLineLeadingInvisible(c) && atLineStart)
-                continue;
-            sb.Append(c);
-            atLineStart = c == '\n';
-        }
-        return sb.ToString();
-    }
-
-    private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
+        => FileContentLoader.StripLineLeadingInvisibles(content);
 
     internal static bool IsGitLfsPointer(byte[] rawBytes)
-    {
-        if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
-            return false;
-
-        var pointerText = Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        var lines = pointerText.Split('\n');
-        if (lines.Length > 0 && lines[^1].Length == 0)
-            lines = lines[..^1];
-        if (lines.Length < 3)
-            return false;
-        if (!string.Equals(lines[0], "version https://git-lfs.github.com/spec/v1", StringComparison.Ordinal))
-            return false;
-
-        var lineIndex = 1;
-        while (lineIndex < lines.Length && lines[lineIndex].StartsWith("ext-", StringComparison.Ordinal))
-            lineIndex++;
-
-        if (lineIndex + 1 >= lines.Length)
-            return false;
-        if (!IsGitLfsSha256OidLine(lines[lineIndex]))
-            return false;
-        lineIndex++;
-        if (!IsGitLfsSizeLine(lines[lineIndex]))
-            return false;
-
-        return lineIndex == lines.Length - 1;
-    }
-
-    private static bool IsGitLfsSha256OidLine(string line)
-    {
-        const string prefix = "oid sha256:";
-        if (!line.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-
-        var hash = line.AsSpan(prefix.Length);
-        if (hash.Length != 64)
-            return false;
-        foreach (var c in hash)
-        {
-            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
-                return false;
-        }
-        return true;
-    }
-
-    private static bool IsGitLfsSizeLine(string line)
-    {
-        const string prefix = "size ";
-        if (!line.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-
-        var size = line.AsSpan(prefix.Length);
-        if (size.Length == 0)
-            return false;
-        foreach (var c in size)
-        {
-            if (c < '0' || c > '9')
-                return false;
-        }
-        return true;
-    }
+        => FileContentLoader.IsGitLfsPointer(rawBytes);
 
     /// <summary>
     /// Validate file content for encoding issues.
@@ -4398,87 +4104,14 @@ public class FileIndexer
     }
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
-    {
-        return !TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _) && rawBytes.Any(b => b == 0);
-    }
+        => FileContentLoader.ContainsIndexBlockingNullByte(rawBytes);
 
     internal static bool TryDetectUtf16Encoding(
         byte[] rawBytes,
         bool allowHeuristic,
         out bool bigEndian,
         out bool hasBom)
-    {
-        bigEndian = false;
-        hasBom = false;
-
-        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
-        {
-            bigEndian = true;
-            hasBom = true;
-            return true;
-        }
-
-        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
-            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00))
-        {
-            hasBom = true;
-            return true;
-        }
-
-        if (!allowHeuristic || rawBytes.Length < 4)
-            return false;
-
-        var sampleLength = Math.Min(rawBytes.Length, 4096);
-        sampleLength -= sampleLength % 2;
-        var pairs = sampleLength / 2;
-        if (pairs == 0)
-            return false;
-
-        var evenNulls = 0;
-        var oddNulls = 0;
-        var oddTextBytes = 0;
-        var evenTextBytes = 0;
-        for (var i = 0; i < sampleLength; i += 2)
-        {
-            if (rawBytes[i] == 0)
-                evenNulls++;
-            if (rawBytes[i + 1] == 0)
-                oddNulls++;
-            if (IsLikelyTextByte(rawBytes[i + 1]))
-                oddTextBytes++;
-            if (IsLikelyTextByte(rawBytes[i]))
-                evenTextBytes++;
-        }
-
-        const double NullParityThreshold = 0.30;
-        const double OppositeNullThreshold = 0.01;
-        const double TextByteThreshold = 0.80;
-        var beScore = (double)evenNulls / pairs;
-        var leScore = (double)oddNulls / pairs;
-        var beOppositeScore = (double)oddNulls / pairs;
-        var leOppositeScore = (double)evenNulls / pairs;
-
-        if (beScore >= NullParityThreshold
-            && beOppositeScore <= OppositeNullThreshold
-            && (double)oddTextBytes / pairs >= TextByteThreshold)
-        {
-            bigEndian = true;
-            return true;
-        }
-
-        if (leScore >= NullParityThreshold
-            && leOppositeScore <= OppositeNullThreshold
-            && (double)evenTextBytes / pairs >= TextByteThreshold)
-        {
-            bigEndian = false;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsLikelyTextByte(byte value)
-        => value is 0x09 or 0x0A or 0x0D || value >= 0x20;
+        => FileContentLoader.TryDetectUtf16Encoding(rawBytes, allowHeuristic, out bigEndian, out hasBom);
 
     internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
 
@@ -4652,115 +4285,10 @@ public class FileIndexer
     /// 正規化後バイトのフルコピーを追加で確保しない。Closes #1544.
     /// </summary>
     internal static string ComputeChecksum(byte[] bytes)
-    {
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var pendingCarriageReturn = false;
-        AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
-        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
-        return FinishChecksum(hasher);
-    }
+        => FileContentLoader.ComputeChecksum(bytes);
 
     internal static bool TryComputeChecksum(string filePath, long maxBytes, out string checksum)
-    {
-        if (maxBytes < 0)
-            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
-
-        checksum = string.Empty;
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: 81920,
-            options: FileOptions.SequentialScan);
-
-        var buffer = new byte[81920];
-        var pendingCarriageReturn = false;
-        long total = 0;
-        while (true)
-        {
-            var read = stream.Read(buffer, 0, buffer.Length);
-            if (read == 0)
-                break;
-
-            total += read;
-            if (total > maxBytes)
-                return false;
-
-            AppendNormalizedChecksumBytes(hasher, buffer.AsSpan(0, read), ref pendingCarriageReturn);
-        }
-
-        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
-        checksum = FinishChecksum(hasher);
-        return true;
-    }
-
-    private static void AppendNormalizedChecksumBytes(
-        IncrementalHash hasher,
-        ReadOnlySpan<byte> bytes,
-        ref bool pendingCarriageReturn)
-    {
-        Span<byte> normalized = stackalloc byte[4096];
-        var n = 0;
-
-        if (pendingCarriageReturn)
-        {
-            if (bytes.Length > 0 && bytes[0] == 0x0A)
-                bytes = bytes[1..];
-            normalized[n++] = 0x0A;
-            pendingCarriageReturn = false;
-        }
-
-        for (var i = 0; i < bytes.Length; i++)
-        {
-            var b = bytes[i];
-            if (b == 0x0D)
-            {
-                if (i + 1 == bytes.Length)
-                {
-                    pendingCarriageReturn = true;
-                    continue;
-                }
-
-                normalized[n++] = 0x0A;
-                if (i + 1 < bytes.Length && bytes[i + 1] == 0x0A)
-                    i++;
-            }
-            else
-            {
-                normalized[n++] = b;
-            }
-
-            if (n == normalized.Length)
-            {
-                hasher.AppendData(normalized);
-                n = 0;
-            }
-        }
-
-        if (n > 0)
-            hasher.AppendData(normalized[..n]);
-    }
-
-    private static void FlushPendingChecksumCarriageReturn(IncrementalHash hasher, ref bool pendingCarriageReturn)
-    {
-        if (!pendingCarriageReturn)
-            return;
-
-        Span<byte> lineFeed = stackalloc byte[1];
-        lineFeed[0] = 0x0A;
-        hasher.AppendData(lineFeed);
-        pendingCarriageReturn = false;
-    }
-
-    private static string FinishChecksum(IncrementalHash hasher)
-    {
-        Span<byte> hash = stackalloc byte[32];
-        if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
-            throw new InvalidOperationException("SHA256 produced an unexpected hash length");
-        return Convert.ToHexString(hash).ToLowerInvariant();
-    }
+        => FileContentLoader.TryComputeChecksum(filePath, maxBytes, out checksum);
 
     /// <summary>
     /// Try to infer a language from an extensionless script shebang.

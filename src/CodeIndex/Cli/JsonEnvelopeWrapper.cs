@@ -18,6 +18,7 @@ internal static class JsonEnvelopeWrapper
 {
     internal const string EnvelopeFlag = "--json-envelope";
     internal const int MaxCapturedOutputChars = 10 * 1024 * 1024;
+    internal const int MaxRawJsonItemChars = 1024 * 1024;
     internal const int MaxRawJsonItemDepth = 32;
 
     private static readonly HashSet<string> WrappableCommands = new(StringComparer.Ordinal)
@@ -128,7 +129,28 @@ internal static class JsonEnvelopeWrapper
         }
 
         var raw = captured.ToString();
-        var results = ParseRawJsonItems(raw);
+        JsonArray results;
+        JsonObject? parseError = null;
+        try
+        {
+            results = ParseRawJsonItems(raw);
+        }
+        catch (JsonEnvelopeRawJsonItemLimitExceededException ex)
+        {
+            exitCode = CommandExitCodes.InvalidArgument;
+            var message = $"--json-envelope raw JSON item line exceeded {ex.MaxChars} characters.";
+            var hint = "Run the command with --json for streaming NDJSON output or reduce the raw item size.";
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {message}");
+            Console.Error.WriteLine($"Hint: {hint}");
+            parseError = new JsonObject
+            {
+                ["message"] = message,
+                ["hint"] = hint,
+                ["error_code"] = CommandErrorCodes.UsageError,
+                ["max_chars"] = ex.MaxChars,
+            };
+            results = [];
+        }
         var envelope = BuildEnvelope(
             command,
             queryNormalized,
@@ -137,7 +159,8 @@ internal static class JsonEnvelopeWrapper
             appVersion,
             stopwatch.Elapsed.TotalMilliseconds,
             results,
-            exitCode);
+            exitCode,
+            parseError);
 
         Console.WriteLine(envelope.ToJsonString(jsonOptions));
         return exitCode;
@@ -206,6 +229,8 @@ internal static class JsonEnvelopeWrapper
         {
             if (string.IsNullOrWhiteSpace(line))
                 continue;
+            if (line.Length > MaxRawJsonItemChars)
+                throw new JsonEnvelopeRawJsonItemLimitExceededException(MaxRawJsonItemChars);
 
             JsonNode? node;
             try
@@ -355,6 +380,11 @@ internal static class JsonEnvelopeWrapper
     }
 
     private sealed class JsonEnvelopeCaptureLimitExceededException(int maxChars) : Exception
+    {
+        public int MaxChars { get; } = maxChars;
+    }
+
+    private sealed class JsonEnvelopeRawJsonItemLimitExceededException(int maxChars) : Exception
     {
         public int MaxChars { get; } = maxChars;
     }

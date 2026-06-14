@@ -365,7 +365,9 @@ cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
 database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
-to the current checkout.
+to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
+use the sibling project directory; other database paths fall back to the process
+current directory.
 
 ## Flag compatibility and migrations
 
@@ -1410,6 +1412,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | `6` | Transient database error (SQLite `BUSY` / `LOCKED` / `READONLY`, retry with backoff after fixing the transient holder or mount state) |
 | `7` | Invalid argument value (for example invalid `--kind`, `--color`, or `--metrics`) |
 | `8` | Cancelled by signal / Ctrl-C (`SIGINT` / `SIGTERM`-style cancellation path) |
+| `9` | Install or upgrade installer failure (for example a failed `install.sh` start, timeout, download, checksum, or preparation step) |
 | `99` | Unhandled exception after command dispatch; run `cdidx report` and inspect the lifecycle log |
 
 ### Error codes
@@ -2807,7 +2810,9 @@ cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
 
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
-`--prune-paths` は import した `indexed_project_root` metadata を現在の checkout に書き換えます。
+`--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
+`.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
+それ以外の database path では process current directory に fallback します。
 
 ## フラグ互換性と移行
 
@@ -3860,6 +3865,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `6` | 一時的なデータベースエラー（SQLite `BUSY` / `LOCKED` / `READONLY`。一時的な保持者や mount 状態を解消してから backoff 付き retry 推奨） |
 | `7` | 引数値が不正（例: 不正な `--kind`、`--color`、`--metrics`） |
 | `8` | シグナル / Ctrl-C によるキャンセル（`SIGINT` / `SIGTERM` 系のキャンセル経路） |
+| `9` | install / upgrade installer の失敗（例: `install.sh` 起動失敗、timeout、download、checksum、準備処理の失敗） |
 | `99` | コマンド dispatch 後の想定外例外。`cdidx report` とライフサイクルログを確認 |
 
 ### エラーコード
