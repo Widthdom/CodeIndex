@@ -25,7 +25,7 @@ internal static class CssReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex SassBareFunctionReferenceRegex = new(
-        @"(?<![@+\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
+        @"(?<![:@+\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
         RegexOptions.Compiled);
 
     private static readonly Regex StylusVariableReferenceRegex = new(
@@ -37,7 +37,7 @@ internal static class CssReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex StylusBareFunctionReferenceRegex = new(
-        @"(?<![@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
+        @"(?<![:@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
         RegexOptions.Compiled);
 
     private static readonly Regex StylusVariableDefinitionRegex = new(
@@ -45,11 +45,11 @@ internal static class CssReferenceExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex SassImportReferenceRegex = new(
-        @"^\s*@(?>import|use|forward)\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        @"^\s*@(?>import|use|forward)\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex StylusImportReferenceRegex = new(
-        @"^\s*@(?>import|require|use)\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        @"^\s*@(?>import|require|use)\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -334,6 +334,8 @@ internal static class CssReferenceExtractor
     {
         public bool Active { get; set; }
         public int Indent { get; set; }
+        public bool SilentActive { get; set; }
+        public int SilentIndent { get; set; }
     }
 
     internal static string MaskSassBlockCommentLine(string line, SassLoudCommentState state)
@@ -342,6 +344,18 @@ internal static class CssReferenceExtractor
         var lineIndent = CountLeadingWhitespace(line);
         var isBlank = lineIndent == line.Length;
         var cursor = 0;
+
+        if (state.SilentActive)
+        {
+            if (isBlank || lineIndent > state.SilentIndent)
+            {
+                for (var j = 0; j < chars.Length; j++)
+                    chars[j] = ' ';
+                return new string(chars);
+            }
+
+            state.SilentActive = false;
+        }
 
         if (state.Active)
         {
@@ -371,6 +385,7 @@ internal static class CssReferenceExtractor
         }
 
         var quote = '\0';
+        var parenDepth = 0;
         for (var i = cursor; i < line.Length; i++)
         {
             var ch = line[i];
@@ -393,6 +408,18 @@ internal static class CssReferenceExtractor
                 continue;
             }
 
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
             if (ch == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
                 var commentEnd = line.IndexOf("*/", i + 2, StringComparison.Ordinal);
@@ -408,6 +435,19 @@ internal static class CssReferenceExtractor
                 }
 
                 i = stop - 1;
+                continue;
+            }
+
+            if (parenDepth == 0 && ch == '/' && i + 1 < line.Length && line[i + 1] == '/')
+            {
+                for (var j = i; j < chars.Length; j++)
+                    chars[j] = ' ';
+                if (i == lineIndent)
+                {
+                    state.SilentActive = true;
+                    state.SilentIndent = lineIndent;
+                }
+                break;
             }
         }
 

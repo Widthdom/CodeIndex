@@ -420,7 +420,11 @@ public partial class ReferenceExtractorTests
             /* Loud comment
               @use "loud-comment-theme"
               +loud-commented(4px)
+            // Silent comment
+              @use "silent-comment-theme"
+              +silent-commented(4px)
             @use "theme"
+            @import url("reset.css")
             $primary: #3366cc
             $spacing-base: 8px
             $accent: #ffcc00
@@ -448,6 +452,10 @@ public partial class ReferenceExtractorTests
               margin: spacing-unit(2)
               +rounded(4px)
               +rounded-button(4px)
+            .card:not(.disabled)
+              display: block
+            :is(.button, .link)
+              display: block
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sass", content);
@@ -455,6 +463,9 @@ public partial class ReferenceExtractorTests
 
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "theme"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "reset.css"
             && reference.ReferenceKind == "import"));
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "string-theme"
@@ -469,11 +480,20 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "loud-comment-theme"
             && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "silent-comment-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "commented-rounded"
             && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "loud-commented"
             && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "silent-commented"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url("
+            && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "url"
             && reference.ReferenceKind == "call");
@@ -507,6 +527,12 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "unit"
             && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "not"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "is"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]
@@ -514,6 +540,7 @@ public partial class ReferenceExtractorTests
     {
         const string content = """
             @require "theme"
+            @import url("tokens.css")
             primary = #3366cc
             $accent = #ffcc00
             /*
@@ -534,6 +561,10 @@ public partial class ReferenceExtractorTests
 
             // $commentedAccent
             // rounded(8px)
+            .card:not(.disabled)
+              display block
+            :is(.button, .link)
+              display block
             .button
               &:hover
                 color primary
@@ -555,6 +586,9 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "theme"
             && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "tokens.css"
+            && reference.ReferenceKind == "import"));
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "string-theme"
             && reference.ReferenceKind == "import");
@@ -563,6 +597,9 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "comment-block-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "url("
             && reference.ReferenceKind == "import");
         Assert.Equal(2, references.Count(reference =>
             reference.SymbolName == "primary"
@@ -601,6 +638,12 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "unit"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "not"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "is"
             && reference.ReferenceKind == "call");
     }
 }

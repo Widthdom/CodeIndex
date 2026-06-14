@@ -15087,6 +15087,11 @@ public partial class SymbolExtractorTests
               @use "loud-commented-theme"
               $loud-commented: #fff
               =loud-commented-rounded()
+            // Silent comment
+              @use "silent-commented-theme"
+              $silent-commented: #fff
+              =silent-commented-rounded()
+              .silent-commented
             @use "theme"
             $primary: #3366cc
             /*
@@ -15121,6 +15126,10 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"loud-commented-theme\"");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "loud-commented");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "loud-commented-rounded");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"silent-commented-theme\"");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "silent-commented");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "silent-commented-rounded");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".silent-commented");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"commented-theme\"");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "commented");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "commented-rounded");
