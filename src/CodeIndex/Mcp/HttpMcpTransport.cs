@@ -43,6 +43,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
     private const string BearerPrefix = "Bearer ";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
     {
@@ -969,8 +970,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             // Disposal must not throw — the parent server is already on its way down.
             // dispose は例外を投げない方針: 親サーバーは既に終了処理中なので。
         }
-        try { await _acceptLoop.ConfigureAwait(false); } catch { /* ignore */ }
-        _acceptCts.Dispose();
+        var acceptLoopCompleted = false;
+        try
+        {
+            await _acceptLoop.WaitAsync(DisposeAcceptLoopTimeout).ConfigureAwait(false);
+            acceptLoopCompleted = true;
+        }
+        catch (TimeoutException)
+        {
+            // Disposal is best-effort; a platform-delayed listener teardown must not hang shutdown.
+            // dispose は best-effort。プラットフォーム都合で listener 終了が遅れても shutdown を止めない。
+        }
+        catch
+        {
+            acceptLoopCompleted = true;
+        }
+
+        if (acceptLoopCompleted)
+            _acceptCts.Dispose();
     }
 
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
