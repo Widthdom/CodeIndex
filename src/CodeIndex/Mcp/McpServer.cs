@@ -68,7 +68,7 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
-    private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
+    private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
@@ -472,7 +472,7 @@ public partial class McpServer : IDisposable
 
         if (transport is HttpMcpTransport httpTransport)
         {
-            httpTransport.OutOfBandFrameHandler = ProcessFrame;
+            httpTransport.OutOfBandFrameHandler = (frame, _) => ProcessFrameAsync(frame);
             httpTransport.HealthJsonProvider = () => BuildHealthJson(httpTransport);
             httpTransport.KeepAliveInterval = _keepAliveInterval;
             httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
@@ -518,7 +518,7 @@ public partial class McpServer : IDisposable
                         // token を `WithDbReader` に渡す (#1567)。
                         _currentRequestToken.Value = loopToken;
                         _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
-                            ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
+                            ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
                             : null;
                         _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
                             && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
@@ -665,22 +665,24 @@ public partial class McpServer : IDisposable
             }
 
             await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
-            tasks.Add(Task.Run(async () =>
+            var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var requestTask = Task.Run(async () =>
             {
                 try
                 {
+                    requestTaskStarted.TrySetResult();
                     await normalFrameGate.WaitAsync(loopToken).ConfigureAwait(false);
                     string? response;
                     try
                     {
                         _currentRequestToken.Value = loopToken;
                         _canAwaitClientResponses.Value = true;
-                        _currentOutOfBandFrameWriter.Value = frameToWrite =>
+                        _currentOutOfBandFrameWriter.Value = async (frameToWrite, writeToken) =>
                         {
-                            writeGate.Wait(loopToken);
+                            await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
                             try
                             {
-                                transport.WriteFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult();
+                                await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
                             }
                             finally
                             {
@@ -714,8 +716,9 @@ public partial class McpServer : IDisposable
                 {
                     _concurrencyGate.Release();
                 }
-            }, CancellationToken.None));
-            SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
+            }, CancellationToken.None);
+            tasks.Add(requestTask);
+            await requestTaskStarted.Task.ConfigureAwait(false);
         }
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
@@ -1096,7 +1099,7 @@ public partial class McpServer : IDisposable
 
         try
         {
-            writer(request.ToJsonString(_jsonOptions));
+            await writer(request.ToJsonString(_jsonOptions), timeoutCts.Token).ConfigureAwait(false);
             return await pending.Task.ConfigureAwait(false);
         }
         catch (InvalidOperationException)
@@ -1426,7 +1429,7 @@ public partial class McpServer : IDisposable
             "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
             "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
             "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
-            "logging/setLevel" => Task.FromResult<JsonNode>(HandleLoggingSetLevel(id, request["params"])),
+            "logging/setLevel" => HandleLoggingSetLevelAsync(id, request["params"]),
             "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
             _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
@@ -1476,9 +1479,12 @@ public partial class McpServer : IDisposable
     {
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
+        var httpResponseCleanupDegraded = httpTransport?.ResponseCleanupDegraded ?? false;
+        var auditLogDiagnostics = _auditLog?.SnapshotDiagnostics();
+        var auditLogDegraded = IsAuditLogDegraded(auditLogDiagnostics);
         var result = new JsonObject
         {
-            ["status"] = dbOpen ? "ok" : "degraded",
+            ["status"] = dbOpen && !httpResponseCleanupDegraded && !auditLogDegraded ? "ok" : "degraded",
             ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
             ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["db_open"] = dbOpen,
@@ -1491,7 +1497,16 @@ public partial class McpServer : IDisposable
             result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
             result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
+            result["http_response_cleanup_degraded"] = httpResponseCleanupDegraded;
+            result["http_response_abort_cleanup_failure_count"] = httpTransport.ResponseAbortCleanupFailureCount;
+            result["http_response_close_cleanup_failure_count"] = httpTransport.ResponseCloseCleanupFailureCount;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastResponseAbortCleanupFailure))
+                result["http_response_abort_cleanup_last_error"] = httpTransport.LastResponseAbortCleanupFailure;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastResponseCloseCleanupFailure))
+                result["http_response_close_cleanup_last_error"] = httpTransport.LastResponseCloseCleanupFailure;
         }
+        if (auditLogDiagnostics is not null)
+            result["audit_log"] = BuildAuditLogStatus(auditLogDiagnostics);
         if (!string.IsNullOrWhiteSpace(dbError))
             result["db_error"] = dbError;
         return result;
@@ -1576,9 +1591,6 @@ public partial class McpServer : IDisposable
 
         return responses.Count == 0 ? null : responses;
     }
-
-    private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
-        => DispatchWithRequestCancellationAsync(id, isolateRequestDb: false, () => Task.FromResult(action())).GetAwaiter().GetResult();
 
     private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
     {
@@ -2379,7 +2391,7 @@ public partial class McpServer : IDisposable
             extraData: data);
     }
 
-    private JsonNode HandleLoggingSetLevel(JsonNode? id, JsonNode? setLevelParams)
+    private async Task<JsonNode> HandleLoggingSetLevelAsync(JsonNode? id, JsonNode? setLevelParams)
     {
         var level = TryReadStringValue(setLevelParams?["level"]);
         if (!IsSupportedMcpLogLevel(level))
@@ -2390,7 +2402,7 @@ public partial class McpServer : IDisposable
 
         var previous = _mcpLogLevel;
         _mcpLogLevel = level!;
-        EmitLogNotification("info", $"MCP logging level changed from {previous} to {_mcpLogLevel}.");
+        await EmitLogNotificationAsync("info", $"MCP logging level changed from {previous} to {_mcpLogLevel}.").ConfigureAwait(false);
         return CreateSuccessResponse(true, id, new JsonObject());
     }
 
@@ -2631,9 +2643,6 @@ public partial class McpServer : IDisposable
     /// Execute a tool call.
     /// ツール呼び出しを実行。
     /// </summary>
-    private JsonNode HandleToolsCall(JsonNode? id, JsonNode? callParams)
-        => HandleToolsCallAsync(id, callParams).GetAwaiter().GetResult();
-
     private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? callParams)
     {
         var toolName = callParams?["name"]?.GetValue<string>();
@@ -2783,7 +2792,7 @@ public partial class McpServer : IDisposable
                         "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                         "ping" => ExecutePing(id),
                         "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
-                        "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
+                        "backfill_fold" => await ExecuteBackfillFoldAsync(id, args, progressToken).ConfigureAwait(false),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateUnknownToolResponseForMetrics(),
                     };
@@ -2963,7 +2972,7 @@ public partial class McpServer : IDisposable
         return true;
     }
 
-    private void EmitProgressNotification(JsonNode? progressToken, long progress, long? total, string? message = null)
+    private async Task EmitProgressNotificationAsync(JsonNode? progressToken, long progress, long? total, string? message = null)
     {
         if (progressToken is null || _currentOutOfBandFrameWriter.Value is not { } writer)
             return;
@@ -2984,10 +2993,10 @@ public partial class McpServer : IDisposable
             ["method"] = "notifications/progress",
             ["params"] = parameters,
         };
-        writer(notification.ToJsonString(_jsonOptions));
+        await writer(notification.ToJsonString(_jsonOptions), _currentRequestToken.Value).ConfigureAwait(false);
     }
 
-    private void EmitLogNotification(string level, string message)
+    private async Task EmitLogNotificationAsync(string level, string message)
     {
         if (_currentOutOfBandFrameWriter.Value is not { } writer)
             return;
@@ -3003,7 +3012,7 @@ public partial class McpServer : IDisposable
                 ["data"] = message,
             },
         };
-        writer(notification.ToJsonString(_jsonOptions));
+        await writer(notification.ToJsonString(_jsonOptions), _currentRequestToken.Value).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -3383,7 +3392,7 @@ public partial class McpServer : IDisposable
         => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
 
     internal static bool IsUnsafeDebugEnabled()
-        => string.Equals(Environment.GetEnvironmentVariable(DebugEnvironmentVariable), "unsafe", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(CdidxEnvironment.GetEnvironmentVariable(DebugEnvironmentVariable), "unsafe", StringComparison.OrdinalIgnoreCase);
 
     internal static string FormatDbPathForLog(string dbPath)
     {

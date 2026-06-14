@@ -28,8 +28,20 @@ public class DbWriter
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private readonly Action? _markWriteWork;
-    internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
-    internal static Action<string>? BatchRowSkipWarningForTesting { get; set; }
+    private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
+    internal static Action? FoldBackfillRowUpdatedForTesting
+    {
+        get => ScopedFoldBackfillRowUpdatedForTesting.Value;
+        set => ScopedFoldBackfillRowUpdatedForTesting.Value = value;
+    }
+
+    internal static Action<string>? BatchRowSkipWarningForTesting
+    {
+        get => ScopedBatchRowSkipWarningForTesting.Value;
+        set => ScopedBatchRowSkipWarningForTesting.Value = value;
+    }
+
     private readonly object _transactionStateLock = new();
     private readonly SemaphoreSlim _transactionGate = new(1, 1);
     private readonly AsyncLocal<Guid?> _currentTransactionGateToken = new();
@@ -3327,7 +3339,7 @@ public class DbWriter
     private bool ColumnExists(string table, string column)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({table})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

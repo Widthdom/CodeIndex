@@ -262,6 +262,8 @@ public class FileExcerptResult
     public List<string> ContentTruncationReasons { get; set; } = [];
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExcerptRecoveryHint? ContentRecovery { get; set; }
+    public string SemanticTokenCoordinateSpace { get; set; } = "source";
+    public List<ExcerptContentLineSpan> ContentLineSpans { get; set; } = [];
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExcerptSemanticToken>? SemanticTokens { get; set; }
 
@@ -283,6 +285,16 @@ public class FileExcerptResult
 
     private static bool IsSafeCliArgumentChar(char c)
         => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-' or ':';
+}
+
+public class ExcerptContentLineSpan
+{
+    public int ContentLine { get; set; }
+    public int SourceLine { get; set; }
+    public int ContentStartColumn { get; set; }
+    public int ContentEndColumn { get; set; }
+    public int SourceStartColumn { get; set; }
+    public int SourceEndColumn { get; set; }
 }
 
 public class ExcerptSemanticToken

@@ -485,30 +485,43 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
-        using var cmd = CreateSearchReferencesCommand(
-            query,
-            int.MaxValue,
-            lang,
-            referenceKind,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
-            exact,
-            includeOrdering: false);
-        using var reader = cmd.ExecuteTrackedReader();
-
         int count = 0;
         bool includesSql = false;
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        while (reader.TrackedRead())
+        var rawLimit = CSharpUsingStaticReferenceFilterChunkSize;
+        var rawOffset = 0;
+        while (true)
         {
-            var row = ReadSearchReferenceRawRow(reader);
-            if (ShouldSuppressCSharpUsingStaticConstantPatternReference(row))
-                continue;
+            using var cmd = CreateSearchReferencesCommand(
+                query,
+                rawLimit,
+                lang,
+                referenceKind,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                exact,
+                rawOffset);
+            using var reader = cmd.ExecuteTrackedReader();
 
-            count++;
-            includesSql |= IsSqlLanguage(row.Lang);
-            paths.Add(row.Path);
+            var rawRows = 0;
+            while (reader.TrackedRead())
+            {
+                rawRows++;
+                var row = ReadSearchReferenceRawRow(reader);
+                if (ShouldSuppressCSharpUsingStaticConstantPatternReference(row))
+                    continue;
+
+                count++;
+                includesSql |= IsSqlLanguage(row.Lang);
+                paths.Add(row.Path);
+            }
+
+            if (rawRows < rawLimit)
+                break;
+
+            rawOffset += rawRows;
+            rawLimit = Math.Min(rawLimit * 2, CSharpUsingStaticReferenceFilterMaxRawLimit);
         }
 
         return new QueryCountResult(count, paths.Count, includesSql);

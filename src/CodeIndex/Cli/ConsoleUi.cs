@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using System.Globalization;
 using System.Reflection;
@@ -338,10 +339,10 @@ public static class ConsoleUi
 
         var cts = new CancellationTokenSource();
         var ct = cts.Token;
-        _ = Task.Run(async () =>
+        _ = BackgroundTaskObserver.Run(async token =>
         {
             int i = 0;
-            while (!ct.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
                 var frame = frames[i % frames.Length];
                 var line = isThemed ? $"\r{frame}" : $"\r{frame} {message}";
@@ -351,9 +352,9 @@ public static class ConsoleUi
                     Console.Out.Flush();
                 }
                 i++;
-                try { await Task.Delay(SpinnerFrameDelayMs, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(SpinnerFrameDelayMs, token).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
             }
-        }, ct);
+        }, "cdidx", "console spinner", ct);
         return cts;
     }
 

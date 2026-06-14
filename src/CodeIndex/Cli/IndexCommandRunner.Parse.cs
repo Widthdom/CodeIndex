@@ -69,12 +69,12 @@ public static partial class IndexCommandRunner
 
         AddSymbolKindFilterValues(
             IncludeSymbolKindsEnvironmentVariable,
-            Environment.GetEnvironmentVariable(IncludeSymbolKindsEnvironmentVariable),
+            CdidxEnvironment.GetEnvironmentVariable(IncludeSymbolKindsEnvironmentVariable),
             includeSymbolKinds,
             ref symbolKindFilterError);
         AddSymbolKindFilterValues(
             ExcludeSymbolKindsEnvironmentVariable,
-            Environment.GetEnvironmentVariable(ExcludeSymbolKindsEnvironmentVariable),
+            CdidxEnvironment.GetEnvironmentVariable(ExcludeSymbolKindsEnvironmentVariable),
             excludeSymbolKinds,
             ref symbolKindFilterError);
 
