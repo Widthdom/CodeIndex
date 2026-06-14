@@ -15132,6 +15132,27 @@ public class McpServerTests : IDisposable
         Assert.Equal("search", data["tool"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void BuildData_RegexTimeoutCarriesStructuredPayload_Issue3559()
+    {
+        var extra = new JsonObject
+        {
+            ["error_code"] = CommandErrorCodes.RegexMatchTimeout,
+            ["timeout_ms"] = 500.0,
+        };
+
+        var data = McpErrorEnvelope.BuildData(
+            McpErrorEnvelope.CategoryRegexTimeout,
+            "Simplify the pattern.",
+            retrySafe: true,
+            extra);
+
+        Assert.Equal(McpErrorEnvelope.CategoryRegexTimeout, data["category"]!.GetValue<string>());
+        Assert.True(data["retry_safe"]!.GetValue<bool>());
+        Assert.Equal(CommandErrorCodes.RegexMatchTimeout, data["error_code"]!.GetValue<string>());
+        Assert.Equal(500.0, data["timeout_ms"]!.GetValue<double>());
+    }
+
     private static void AssertJsonNullId(JsonNode node)
     {
         var obj = Assert.IsType<JsonObject>(node);
