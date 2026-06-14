@@ -581,11 +581,42 @@ public class AuditLogSinkTests
                     ErrorCode: 0,
                     ErrorType: null)));
                 Assert.Null(ex);
+
+                var diagnostics = sink.SnapshotDiagnostics();
+                Assert.Equal(1, diagnostics.DroppedRecordCount);
+                Assert.Equal(1, diagnostics.WriteFailureCount);
+                Assert.Equal(0, diagnostics.SerializationFailureCount);
+                Assert.StartsWith("write_failure:", diagnostics.LastDropReason, StringComparison.Ordinal);
             }
             finally
             {
                 Directory.Delete(path, recursive: true);
             }
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SnapshotDiagnostics_ReportsRotationDegradation_Issue3547()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_rotation_diag_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            sink.RecordRotationFailure("rotation_failure", new IOException("rotation failed"));
+            sink.RecordRotationFailure("rotation_cleanup_failure", new UnauthorizedAccessException("delete failed"));
+
+            var diagnostics = sink.SnapshotDiagnostics();
+
+            Assert.True(diagnostics.RotationDegraded);
+            Assert.Equal(1, diagnostics.RotationFailureCount);
+            Assert.Equal(1, diagnostics.RotationCleanupFailureCount);
+            Assert.Equal(0, diagnostics.DroppedRecordCount);
+            Assert.Equal("rotation_cleanup_failure:access_denied:UnauthorizedAccessException", diagnostics.LastRotationFailure);
         }
         finally
         {

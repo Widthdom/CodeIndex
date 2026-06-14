@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Reflection.Emit;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -21,6 +22,18 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class McpServerTests : IDisposable
 {
+    private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => opCode.Value);
+
+    private static readonly Dictionary<short, OpCode> MultiByteOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 2)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => (short)(opCode.Value & 0xff));
+
     private readonly string _dbPath;
     private readonly string _projectRoot;
     private readonly DbContext _db;
@@ -84,6 +97,63 @@ public class McpServerTests : IDisposable
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
     }
+
+    [Fact]
+    public void RunConcurrentFrameLoop_DoesNotUseSpinWaitPolling_Issue3509()
+    {
+        var method = typeof(McpServer).GetMethod("RunConcurrentFrameLoopAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        Assert.NotNull(method);
+        Assert.False(MethodCallsType(method!, typeof(SpinWait)));
+    }
+
+    private static bool MethodCallsType(MethodInfo method, Type declaringType)
+    {
+        var body = method.GetMethodBody()?.GetILAsByteArray();
+        if (body is null)
+            return false;
+
+        var module = method.Module;
+        for (var i = 0; i < body.Length;)
+        {
+            OpCode opCode;
+            var value = body[i++];
+            if (value == 0xfe)
+            {
+                if (i >= body.Length)
+                    break;
+                opCode = MultiByteOpCodes[(short)body[i++]];
+            }
+            else
+            {
+                opCode = SingleByteOpCodes[(short)value];
+            }
+
+            var operandStart = i;
+            i += OperandSize(opCode.OperandType, body, i);
+            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt)
+                && operandStart + 4 <= body.Length)
+            {
+                var token = BitConverter.ToInt32(body, operandStart);
+                var member = module.ResolveMember(token);
+                if (member?.DeclaringType == declaringType)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int OperandSize(OperandType operandType, byte[] body, int offset) => operandType switch
+    {
+        OperandType.InlineNone => 0,
+        OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+        OperandType.InlineVar => 2,
+        OperandType.InlineI or OperandType.InlineBrTarget or OperandType.InlineField or OperandType.InlineMethod or OperandType.InlineSig or OperandType.InlineString or OperandType.InlineTok or OperandType.InlineType or OperandType.ShortInlineR => 4,
+        OperandType.InlineI8 or OperandType.InlineR => 8,
+        OperandType.InlineSwitch => 4 + (offset + 4 <= body.Length ? BitConverter.ToInt32(body, offset) * 4 : 0),
+        _ => 0,
+    };
 
     [Fact]
     public void ProcessFrame_UsesTraceParentFromMetaAsActivityParent()
@@ -1284,6 +1354,44 @@ public class McpServerTests : IDisposable
         Assert.Equal(versionDisplay.Text, clientInfo["version"]!.GetValue<string>());
         Assert.Equal(version.Length, clientInfo["version_length"]!.GetValue<int>());
         Assert.True(clientInfo["version_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void StatusAndPing_ReportAuditLogDiagnostics_Issue3547()
+    {
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_audit_diag_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            sink.RecordRotationFailure("rotation_failure", new IOException("rotation failed"));
+            using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
+
+            var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(status)!;
+            var statusAudit = statusResponse["result"]!["structuredContent"]!["mcp_session"]!["audit_log"]!;
+
+            Assert.True(statusAudit["enabled"]!.GetValue<bool>());
+            Assert.Equal(auditPath, statusAudit["path"]!.GetValue<string>());
+            Assert.False(statusAudit["include_values"]!.GetValue<bool>());
+            Assert.True(statusAudit["rotation_degraded"]!.GetValue<bool>());
+            Assert.Equal(1, statusAudit["rotation_failure_count"]!.GetValue<long>());
+            Assert.Equal(0, statusAudit["dropped_record_count"]!.GetValue<long>());
+            Assert.Equal("rotation_failure:io_error:IOException", statusAudit["last_rotation_failure"]!.GetValue<string>());
+
+            var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"ping"}""")!;
+            var pingResponse = server.HandleMessage(ping)!;
+            var health = pingResponse["result"]!;
+            var healthAudit = health["audit_log"]!;
+
+            Assert.Equal("degraded", health["status"]!.GetValue<string>());
+            Assert.True(healthAudit["rotation_degraded"]!.GetValue<bool>());
+            Assert.Equal(1, healthAudit["rotation_failure_count"]!.GetValue<long>());
+        }
+        finally
+        {
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
+        }
     }
 
     [Fact]
