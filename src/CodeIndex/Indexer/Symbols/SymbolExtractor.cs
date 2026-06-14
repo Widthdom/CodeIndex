@@ -2049,7 +2049,7 @@ public static partial class SymbolExtractor
             // Stylus supports optional punctuation, so only capture conservative declaration shapes.
             // Stylus は句読点を省略できるため、保守的な宣言形だけを捕捉する。
             new("import",   new Regex(@"^\s*@(?:import|require|use)\s+(?<name>.+?)\s*$", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?<name>[A-Za-z_][\w-]*)\s*\([^)\r\n]*\)\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^(?<name>[A-Za-z_][\w-]*)\s*\([^)\r\n]*\)\s*$", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("property", new Regex(@"^\s*\$?(?<name>[A-Za-z_][\w-]*)\s*(?:=|:=)\s*", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>[.#%][\w-]+)(?=[\s\.,:>+~\[]|$)", RegexOptions.Compiled), BodyStyle.None),

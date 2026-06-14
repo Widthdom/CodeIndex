@@ -593,6 +593,7 @@ public partial class ReferenceExtractorTests
                     <TextBox x:Name="SearchBox" />
                     <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
                     <Button Clicked="OnSaveClicked" />
+                    <Button Click="OnWpfSaveClicked" />
                 </Grid>
             </Window>
             """;
@@ -620,6 +621,9 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
             reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnWpfSaveClicked"
             && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "IgnoredCommentBinding");

@@ -15129,7 +15129,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "\"theme\"");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "rounded");
+        Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "rounded"));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".button");
     }
 

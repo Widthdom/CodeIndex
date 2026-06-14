@@ -434,6 +434,9 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sass", content, symbols);
 
         Assert.Single(references.Where(reference =>
+            reference.SymbolName == "theme"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
@@ -448,13 +451,16 @@ public partial class ReferenceExtractorTests
     public void Extract_Stylus_VariablesAndFunctionCalls_AreReferenced()
     {
         const string content = """
+            @require "theme"
             primary = #3366cc
+            $accent = #ffcc00
 
             rounded(radius)
               border-radius radius
 
             .button
               color $primary
+              background $accent
               rounded(4px)
             """;
 
@@ -462,7 +468,13 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "stylus", content, symbols);
 
         Assert.Single(references.Where(reference =>
+            reference.SymbolName == "theme"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "accent"
             && reference.ReferenceKind == "call"));
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "rounded"

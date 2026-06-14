@@ -32,6 +32,14 @@ internal static class CssReferenceExtractor
         @"(?<![@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
         RegexOptions.Compiled);
 
+    private static readonly Regex SassImportReferenceRegex = new(
+        @"@(?:import|use|forward)\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex StylusImportReferenceRegex = new(
+        @"@(?:import|require|use)\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -162,6 +170,7 @@ internal static class CssReferenceExtractor
 
     public static void EmitSass(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -170,6 +179,7 @@ internal static class CssReferenceExtractor
         SymbolRecord? container)
     {
         EmitScss(preparedLine, references, seen, fileId, context, lineNumber, container);
+        EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
         foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, preparedLine))
         {
@@ -187,6 +197,7 @@ internal static class CssReferenceExtractor
 
     public static void EmitStylus(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -195,9 +206,11 @@ internal static class CssReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
+        EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
+
         foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, preparedLine))
         {
-            if (ShouldSkipScssVariableReference(preparedLine, match.Groups["name"].Index))
+            if (ShouldSkipStylusVariableReference(preparedLine, match.Groups["name"].Index))
                 continue;
 
             ReferenceExtractor.AddReference(
@@ -225,6 +238,39 @@ internal static class CssReferenceExtractor
                 fileId,
                 match,
                 "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    private static void EmitPreprocessorImportReferences(
+        Regex importRegex,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        if (originalLine.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            return;
+
+        var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
+        foreach (Match match in importRegex.Matches(importScanLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (!nameGroup.Success || nameGroup.Value.Length == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "import",
                 context,
                 lineNumber,
                 container);
@@ -789,5 +835,26 @@ internal static class CssReferenceExtractor
         }
 
         return false;
+    }
+
+    private static bool ShouldSkipStylusVariableReference(string preparedLine, int variableIndex)
+    {
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        var dollarIndex = variableIndex - 1;
+        if (dollarIndex != firstNonWhitespace || dollarIndex < 0 || preparedLine[dollarIndex] != '$')
+            return false;
+
+        var cursor = variableIndex;
+        while (cursor < preparedLine.Length && (char.IsLetterOrDigit(preparedLine[cursor]) || preparedLine[cursor] is '_' or '-'))
+            cursor++;
+        while (cursor < preparedLine.Length && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor++;
+
+        return cursor < preparedLine.Length
+            && (preparedLine[cursor] == '='
+                || (preparedLine[cursor] == ':' && cursor + 1 < preparedLine.Length && preparedLine[cursor + 1] == '='));
     }
 }
