@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -91,7 +92,7 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new ChangelogException("Missing value for --version.");
 
-                version = Version.Parse(args[++i]);
+                version = ChangelogValueParser.ParseVersion(args[++i], "--version");
                 continue;
             }
 
@@ -100,7 +101,7 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new ChangelogException("Missing value for --date.");
 
-                releaseDate = DateOnly.Parse(args[++i]);
+                releaseDate = ChangelogValueParser.ParseDate(args[++i], "--date");
                 continue;
             }
 
@@ -109,7 +110,7 @@ public static class Program
                 if (i + 1 >= args.Length)
                     throw new ChangelogException("Missing value for --previous-version.");
 
-                previousVersion = Version.Parse(args[++i]);
+                previousVersion = ChangelogValueParser.ParseVersion(args[++i], "--previous-version");
                 continue;
             }
 
@@ -163,6 +164,62 @@ public static class Program
     private sealed record ParsedOptions(Version Version, DateOnly ReleaseDate, Version? PreviousVersion);
 }
 
+internal static class ChangelogValueParser
+{
+    private const string DateFormat = "yyyy-MM-dd";
+
+    internal static Version ParseVersion(string value, string optionName)
+    {
+        if (!TryParseVersion(value, out var version))
+            throw new ChangelogException($"{optionName} must be a version like X.Y.Z.");
+
+        return version;
+    }
+
+    internal static DateOnly ParseDate(string value, string optionName)
+    {
+        if (!DateOnly.TryParseExact(value, DateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            throw new ChangelogException($"{optionName} must use {DateFormat}.");
+
+        return date;
+    }
+
+    internal static int ParseIssueNumber(string value, string relativePath)
+    {
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var issueNumber) || issueNumber <= 0)
+            throw new ChangelogException($"{relativePath}: invalid issue number '{value}'.");
+
+        return issueNumber;
+    }
+
+    private static bool TryParseVersion(string value, out Version version)
+    {
+        version = new Version(0, 0);
+        var trimmed = value.Trim();
+        var parts = trimmed.Split('.');
+        if (parts.Length is < 2 or > 4)
+            return false;
+
+        Span<int> parsed = stackalloc int[4] { -1, -1, -1, -1 };
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            if (part.Length == 0 || part.Any(ch => ch is < '0' or > '9'))
+                return false;
+            if (!int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out parsed[i]))
+                return false;
+        }
+
+        version = parts.Length switch
+        {
+            2 => new Version(parsed[0], parsed[1]),
+            3 => new Version(parsed[0], parsed[1], parsed[2]),
+            _ => new Version(parsed[0], parsed[1], parsed[2], parsed[3]),
+        };
+        return true;
+    }
+}
+
 public sealed class ChangelogTool
 {
     public const int MaxFragmentCount = 512;
@@ -170,6 +227,8 @@ public sealed class ChangelogTool
     public const long MaxChangelogBytes = 8 * 1024 * 1024;
     public const long MaxVersionJsonBytes = 16 * 1024;
     internal static Action<PrepareWritePhase>? PrepareWritePhaseForTesting { get; set; }
+    internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
+    internal static Action<string>? BeforeRestoreTextForTesting { get; set; }
 
     private static readonly string[] AllowedCategories =
     [
@@ -433,10 +492,7 @@ public sealed class ChangelogTool
                 var item = line[4..].Trim();
                 if (currentKey == "issues")
                 {
-                    if (!int.TryParse(item, out var issueNumber))
-                        throw new ChangelogException($"{relativePath}: invalid issue number '{item}'.");
-
-                    frontMatterIssues.Add(issueNumber);
+                    frontMatterIssues.Add(ChangelogValueParser.ParseIssueNumber(item, relativePath));
                 }
                 else if (currentKey == "affected")
                 {
@@ -465,10 +521,7 @@ public sealed class ChangelogTool
                     {
                         if (currentKey == "issues")
                         {
-                            if (!int.TryParse(value, out var issueNumber))
-                                throw new ChangelogException($"{relativePath}: invalid issue number '{value}'.");
-
-                            frontMatterIssues.Add(issueNumber);
+                            frontMatterIssues.Add(ChangelogValueParser.ParseIssueNumber(value, relativePath));
                         }
                         else
                         {
@@ -576,7 +629,9 @@ public sealed class ChangelogTool
         if (!document.RootElement.TryGetProperty("version", out var versionElement))
             throw new ChangelogException("version.json is missing the version property.");
 
-        return Version.Parse(versionElement.GetString() ?? throw new ChangelogException("version.json contains an empty version."));
+        return ChangelogValueParser.ParseVersion(
+            versionElement.GetString() ?? throw new ChangelogException("version.json contains an empty version."),
+            "version.json version");
     }
 
     private static string ReadAllTextBounded(string absolutePath, string repositoryRoot, long maxBytes)
@@ -621,7 +676,7 @@ public sealed class ChangelogTool
         return reader.ReadToEnd();
     }
 
-    private static void WritePreparedFiles(
+    private void WritePreparedFiles(
         string changelogPath,
         string originalChangelog,
         string updatedChangelog,
@@ -735,19 +790,23 @@ public sealed class ChangelogTool
         File.Move(stagedPath, targetPath, overwrite: true);
     }
 
-    private static void DeleteConsumedFragment(Fragment fragment)
+    private void DeleteConsumedFragment(Fragment fragment)
     {
         try
         {
-            File.Delete(fragment.AbsolutePath);
+            DeleteFileForTesting(fragment.AbsolutePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new ChangelogException($"{fragment.RelativePath}: failed to delete consumed changelog fragment after CHANGELOG.md and version.json were updated; delete this fragment manually before retrying prepare. {ex.Message}");
+            throw new ChangelogException(BuildCleanupFailureMessage(
+                "fragment_delete_failed",
+                [fragment.RelativePath],
+                ex,
+                "Delete the listed fragment manually before retrying prepare."));
         }
     }
 
-    private static void RollBackPreparedFiles(
+    private void RollBackPreparedFiles(
         string changelogPath,
         string originalChangelog,
         bool changelogReplaced,
@@ -765,12 +824,17 @@ public sealed class ChangelogTool
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new ChangelogException($"prepare failed before fragment deletion and rollback also failed: {ex.Message}");
+            throw new ChangelogException(BuildCleanupFailureMessage(
+                "rollback_failed",
+                GetRollbackAffectedPaths(changelogPath, changelogReplaced, versionPath, versionReplaced),
+                ex,
+                "Restore the listed release files from version control or backup before retrying prepare."));
         }
     }
 
     private static void RestoreText(string targetPath, string contents)
     {
+        BeforeRestoreTextForTesting?.Invoke(targetPath);
         var tempPath = string.Empty;
         try
         {
@@ -806,12 +870,70 @@ public sealed class ChangelogTool
 
         try
         {
-            File.Delete(path);
+            DeleteFileForTesting(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
     }
+
+    private string BuildCleanupFailureMessage(
+        string category,
+        IReadOnlyList<string> affectedPaths,
+        Exception exception,
+        string recoveryHint)
+    {
+        var paths = affectedPaths
+            .Select(FormatRelativePath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .DefaultIfEmpty("<unknown>")
+            .ToArray();
+
+        return $"{category}: affected_paths={string.Join(",", paths)}; reason={ClassifyFileFailure(exception)}; Hint: {recoveryHint}";
+    }
+
+    private IReadOnlyList<string> GetRollbackAffectedPaths(
+        string changelogPath,
+        bool changelogReplaced,
+        string versionPath,
+        bool versionReplaced)
+    {
+        var paths = new List<string>(capacity: 2);
+        if (versionReplaced)
+            paths.Add(versionPath);
+        if (changelogReplaced)
+            paths.Add(changelogPath);
+        return paths;
+    }
+
+    private string FormatRelativePath(string path)
+    {
+        string relative;
+        try
+        {
+            relative = Path.IsPathFullyQualified(path)
+                ? Path.GetRelativePath(_repositoryRoot, path)
+                : path;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return "<invalid>";
+        }
+
+        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            relative = Path.GetFileName(path);
+        return relative.Replace('\\', '/');
+    }
+
+    private static string ClassifyFileFailure(Exception exception) =>
+        exception switch
+        {
+            UnauthorizedAccessException => "permission_denied",
+            FileNotFoundException or DirectoryNotFoundException => "not_found",
+            IOException => "io_error",
+            _ => "operation_failed",
+        };
 
     private static List<VersionBlock> PrepareLanguageSection(
         IReadOnlyList<VersionBlock> existingBlocks,

@@ -365,7 +365,9 @@ cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
 database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
-to the current checkout.
+to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
+use the sibling project directory; other database paths fall back to the process
+current directory.
 
 ## Flag compatibility and migrations
 
@@ -1410,7 +1412,8 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | `6` | Transient database error (SQLite `BUSY` / `LOCKED` / `READONLY`, retry with backoff after fixing the transient holder or mount state) |
 | `7` | Invalid argument value (for example invalid `--kind`, `--color`, or `--metrics`) |
 | `8` | Cancelled by signal / Ctrl-C (`SIGINT` / `SIGTERM`-style cancellation path) |
-| `9` | Runtime error from bounded query/index execution (for example regex match timeout or extraction stall) |
+| `9` | Install or upgrade installer failure (for example a failed `install.sh` start, timeout, download, checksum, or preparation step) |
+| `10` | Runtime error from bounded query/index execution (for example regex match timeout or extraction stall) |
 | `99` | Unhandled exception after command dispatch; run `cdidx report` and inspect the lifecycle log |
 
 ### Error codes
@@ -2427,7 +2430,7 @@ When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`
    - Recovery: drop `--fts` to use the default tokenizer, or fix the FTS5 expression. For prefix matching of a single token, prefer trailing `*` (e.g. `auth*`) without `--fts`.
 
 10. **Regex match timeout** (`E014_REGEX_MATCH_TIMEOUT`)
-    - Symptom: CLI `find --regex` exits `9` with `Error [E014_REGEX_MATCH_TIMEOUT]: ...`; `--json` responses include `error_code: "E014_REGEX_MATCH_TIMEOUT"` and `category: "regex_timeout"`. MCP `find_in_file` returns `isError: true` with `structuredContent.category: "regex_timeout"`, `retry_safe: true`, `error_code: "E014_REGEX_MATCH_TIMEOUT"`, and `timeout_ms`.
+    - Symptom: CLI `find --regex` exits `10` with `Error [E014_REGEX_MATCH_TIMEOUT]: ...`; `--json` responses include `error_code: "E014_REGEX_MATCH_TIMEOUT"` and `category: "regex_timeout"`. MCP `find_in_file` returns `isError: true` with `structuredContent.category: "regex_timeout"`, `retry_safe: true`, `error_code: "E014_REGEX_MATCH_TIMEOUT"`, and `timeout_ms`.
     - Cause: the user-supplied regular expression exceeded the bounded match timeout while scanning indexed file contents.
     - Recovery: simplify the pattern, narrow the scan with `--path` / `--lang`, or omit `--regex` when searching for literal text.
 
@@ -2815,7 +2818,9 @@ cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
 
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
-`--prune-paths` は import した `indexed_project_root` metadata を現在の checkout に書き換えます。
+`--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
+`.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
+それ以外の database path では process current directory に fallback します。
 
 ## フラグ互換性と移行
 
@@ -3868,7 +3873,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `6` | 一時的なデータベースエラー（SQLite `BUSY` / `LOCKED` / `READONLY`。一時的な保持者や mount 状態を解消してから backoff 付き retry 推奨） |
 | `7` | 引数値が不正（例: 不正な `--kind`、`--color`、`--metrics`） |
 | `8` | シグナル / Ctrl-C によるキャンセル（`SIGINT` / `SIGTERM` 系のキャンセル経路） |
-| `9` | 制限付きのクエリ／インデックス実行で発生した実行時エラー（regex match timeout や抽出停止など） |
+| `9` | install / upgrade installer の失敗（例: `install.sh` 起動失敗、timeout、download、checksum、準備処理の失敗） |
+| `10` | 制限付きのクエリ／インデックス実行で発生した実行時エラー（regex match timeout や抽出停止など） |
 | `99` | コマンド dispatch 後の想定外例外。`cdidx report` とライフサイクルログを確認 |
 
 ### エラーコード
@@ -4879,7 +4885,7 @@ SELinux profile が取れれば confinement-aware hint を追加します。
    - 復旧: `--fts` を外してデフォルトトークナイザを使うか、FTS5 表現を直す。単一トークンのプレフィックスマッチなら `--fts` を使わずに `auth*` のような末尾 `*` で十分。
 
 10. **正規表現の match timeout**（`E014_REGEX_MATCH_TIMEOUT`）
-    - 症状: CLI の `find --regex` が `Error [E014_REGEX_MATCH_TIMEOUT]: ...` を出して終了コード `9` で終了する。`--json` 応答には `error_code: "E014_REGEX_MATCH_TIMEOUT"` と `category: "regex_timeout"` が含まれる。MCP の `find_in_file` は `isError: true` を返し、`structuredContent.category: "regex_timeout"`、`retry_safe: true`、`error_code: "E014_REGEX_MATCH_TIMEOUT"`、`timeout_ms` を含む。
+    - 症状: CLI の `find --regex` が `Error [E014_REGEX_MATCH_TIMEOUT]: ...` を出して終了コード `10` で終了する。`--json` 応答には `error_code: "E014_REGEX_MATCH_TIMEOUT"` と `category: "regex_timeout"` が含まれる。MCP の `find_in_file` は `isError: true` を返し、`structuredContent.category: "regex_timeout"`、`retry_safe: true`、`error_code: "E014_REGEX_MATCH_TIMEOUT"`、`timeout_ms` を含む。
     - 原因: ユーザー指定の正規表現が、索引済みファイル内容の走査中に制限付き match timeout を超えた。
     - 復旧: 正規表現を単純化する、`--path` / `--lang` で走査範囲を絞る、またはリテラル検索では `--regex` を外す。
 

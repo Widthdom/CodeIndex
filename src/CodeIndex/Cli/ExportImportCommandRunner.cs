@@ -89,6 +89,7 @@ internal static class ExportImportCommandRunner
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+        var importTargetProjectRoot = ResolveImportTargetProjectRoot(fullDbPath);
         var dbDirectory = Path.GetDirectoryName(fullDbPath);
         if (string.IsNullOrWhiteSpace(dbDirectory))
             return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_db_directory_unresolved", $"could not resolve destination DB directory for `{dbPath}`.", "pass an explicit `--db <path>`.", ImportUsage);
@@ -148,7 +149,7 @@ internal static class ExportImportCommandRunner
             if (prunePaths)
             {
                 phase = PhasePrunePaths;
-                RewriteImportedProjectRoot(tempPath, Environment.CurrentDirectory);
+                RewriteImportedProjectRoot(tempPath, importTargetProjectRoot);
                 AddImportValidationPhase(validationPhases, PhasePrunePaths);
                 SqliteConnection.ClearAllPools();
             }
@@ -166,13 +167,17 @@ internal static class ExportImportCommandRunner
                             fullDbPath,
                             dryRun,
                             prunePaths,
+                            prunePaths ? importTargetProjectRoot : null,
                             ReplacementWouldBeAllowed: true,
                             validationPhases),
                         CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
                 }
                 else
                 {
-                    Console.WriteLine($"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}");
+                    Console.WriteLine(FormatImportSuccessMessage(
+                        $"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}",
+                        prunePaths,
+                        importTargetProjectRoot));
                 }
 
                 return CommandExitCodes.Success;
@@ -182,11 +187,16 @@ internal static class ExportImportCommandRunner
             ReplaceImportedDatabase(tempPath, fullDbPath);
             if (wantsJson)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new ImportResult("1", fullDbPath, prunePaths), jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new ImportResult("1", fullDbPath, prunePaths, prunePaths ? importTargetProjectRoot : null),
+                    jsonOptions));
             }
             else
             {
-                Console.WriteLine($"Imported CodeIndex database to {fullDbPath}");
+                Console.WriteLine(FormatImportSuccessMessage(
+                    $"Imported CodeIndex database to {fullDbPath}",
+                    prunePaths,
+                    importTargetProjectRoot));
             }
             return CommandExitCodes.Success;
         }
@@ -835,6 +845,27 @@ internal static class ExportImportCommandRunner
         cmd.ExecuteNonQuery();
     }
 
+    internal static string ResolveImportTargetProjectRoot(string fullDbPath)
+    {
+        var normalizedDbPath = Path.GetFullPath(fullDbPath);
+        var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
+        if (!string.IsNullOrWhiteSpace(dbDirectory)
+            && string.Equals(Path.GetFileName(normalizedDbPath), "codeindex.db", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFileName(dbDirectory), ".cdidx", StringComparison.OrdinalIgnoreCase))
+        {
+            var siblingRoot = Path.GetDirectoryName(dbDirectory);
+            if (!string.IsNullOrWhiteSpace(siblingRoot))
+                return Path.GetFullPath(siblingRoot);
+        }
+
+        return Path.GetFullPath(Environment.CurrentDirectory);
+    }
+
+    private static string FormatImportSuccessMessage(string prefix, bool prunePaths, string importTargetProjectRoot)
+        => prunePaths
+            ? $"{prefix}; pruned paths to project root {importTargetProjectRoot}"
+            : prefix;
+
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
     {
         using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
@@ -849,12 +880,103 @@ internal static class ExportImportCommandRunner
     private static string CreateUnpooledConnectionString(string dbPath)
         => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
 
+    private static string CreateReadOnlyUnpooledConnectionString(string dbPath)
+        => new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ConnectionString;
+
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
     {
-        File.Move(tempPath, fullDbPath, overwrite: true);
-        DataDirectorySecurity.ApplyPrivateFileMode(fullDbPath);
-        DeleteSqliteSidecars(fullDbPath);
+        var dbBackupPath = MoveExistingReplacementFileToBackup(fullDbPath);
+        var sidecarBackups = new List<ReplacementBackup>(capacity: 2);
+        try
+        {
+            AddReplacementBackup(sidecarBackups, fullDbPath + "-wal");
+            AddReplacementBackup(sidecarBackups, fullDbPath + "-shm");
+
+            File.Move(tempPath, fullDbPath, overwrite: false);
+            ApplyImportedDatabasePrivateFileMode(fullDbPath);
+        }
+        catch (Exception ex) when (IsRecoverableReplacementException(ex))
+        {
+            try
+            {
+                RollBackImportedDatabaseReplacement(fullDbPath, dbBackupPath, sidecarBackups);
+            }
+            catch (Exception rollbackEx) when (IsRecoverableReplacementException(rollbackEx))
+            {
+                Console.Error.WriteLine($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+            }
+
+            throw new IOException("import database replacement failed; rolled back the previous destination database when possible.", ex);
+        }
+
+        DeleteReplacementBackup(dbBackupPath, "import replaced database backup");
+        foreach (var backup in sidecarBackups)
+            DeleteReplacementBackup(backup.BackupPath, "import replaced database sidecar backup", DeleteSqliteSidecarForTesting);
     }
+
+    private static void ApplyImportedDatabasePrivateFileMode(string fullDbPath)
+    {
+        if (ApplyPrivateFileModeForTesting != null)
+        {
+            ApplyPrivateFileModeForTesting(fullDbPath);
+            return;
+        }
+
+        DataDirectorySecurity.ApplyPrivateFileMode(fullDbPath);
+    }
+
+    private static void AddReplacementBackup(List<ReplacementBackup> backups, string path)
+    {
+        var backupPath = MoveExistingReplacementFileToBackup(path);
+        if (backupPath != null)
+            backups.Add(new ReplacementBackup(path, backupPath));
+    }
+
+    private static string? MoveExistingReplacementFileToBackup(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+
+        var backupPath = $"{path}.replace-backup-{Guid.NewGuid():N}";
+        File.Move(path, backupPath, overwrite: false);
+        return backupPath;
+    }
+
+    private static void RollBackImportedDatabaseReplacement(
+        string fullDbPath,
+        string? dbBackupPath,
+        IReadOnlyList<ReplacementBackup> sidecarBackups)
+    {
+        if (dbBackupPath != null)
+        {
+            File.Move(dbBackupPath, fullDbPath, overwrite: true);
+        }
+        else if (File.Exists(fullDbPath))
+        {
+            File.Delete(fullDbPath);
+        }
+
+        foreach (var backup in sidecarBackups)
+            File.Move(backup.BackupPath, backup.OriginalPath, overwrite: true);
+    }
+
+    private static void DeleteReplacementBackup(string? path, string cleanupDescription, Action<string>? deleteOverride = null)
+    {
+        if (path != null)
+            TryDeleteFile(path, cleanupDescription, deleteOverride);
+    }
+
+    private static bool IsRecoverableReplacementException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     private static void DeleteSqliteSidecars(string dbPath, string? cleanupDescription = null)
     {
@@ -901,17 +1023,63 @@ internal static class ExportImportCommandRunner
 
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string>? DeleteSqliteSidecarForTesting { get; set; }
+    internal static Action<string>? ApplyPrivateFileModeForTesting { get; set; }
 
-    private static bool IsSamePath(string left, string right)
+    private readonly record struct ReplacementBackup(string OriginalPath, string BackupPath);
+
+    internal static StringComparison ResolveDatabasePathComparison(string dbPath)
+    {
+        if (TryReadDatabasePathCaseSensitive(dbPath, out var pathCaseSensitive))
+            return pathCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        return PathCasing.ComparisonFor(dbPath);
+    }
+
+    private static bool TryReadDatabasePathCaseSensitive(string dbPath, out bool pathCaseSensitive)
+    {
+        pathCaseSensitive = false;
+        try
+        {
+            using var connection = new SqliteConnection(CreateReadOnlyUnpooledConnectionString(dbPath));
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
+            cmd.Parameters.AddWithValue("@key", DbContext.WorkspacePathCaseSensitiveMetaKey);
+            var raw = cmd.ExecuteScalar();
+            return raw is string value && bool.TryParse(value, out pathCaseSensitive);
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSamePath(string left, string right, StringComparison comparison)
         => string.Equals(
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            comparison);
 
-    private static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath)
-        => IsSamePath(path, dbPath)
-            || IsSamePath(path, dbPath + "-wal")
-            || IsSamePath(path, dbPath + "-shm");
+    internal static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath, StringComparison comparison)
+        => IsSamePath(path, dbPath, comparison)
+            || IsSamePath(path, dbPath + "-wal", comparison)
+            || IsSamePath(path, dbPath + "-shm", comparison);
+
+    internal static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath)
+    {
+        var liveComparison = PathCasing.ComparisonFor(dbPath);
+        if (IsDatabaseOrSqliteSidecarPath(path, dbPath, liveComparison))
+            return true;
+
+        if (!TryReadDatabasePathCaseSensitive(dbPath, out var pathCaseSensitive))
+            return false;
+
+        var stampedComparison = pathCaseSensitive
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+        return stampedComparison != liveComparison
+            && IsDatabaseOrSqliteSidecarPath(path, dbPath, stampedComparison);
+    }
 
     private static string SanitizeCtagsField(string value)
         => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
@@ -1063,8 +1231,17 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("db_path")] string DbPath,
         [property: JsonPropertyName("dry_run")] bool DryRun,
         [property: JsonPropertyName("pruned_paths")] bool PrunedPaths,
+        [property: JsonPropertyName("pruned_project_root")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? PrunedProjectRoot,
         [property: JsonPropertyName("replacement_would_be_allowed")] bool ReplacementWouldBeAllowed,
         [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases);
     internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
-    internal sealed record ImportResult(string ApiVersion, string DbPath, bool PrunedPaths);
+    internal sealed record ImportResult(
+        string ApiVersion,
+        string DbPath,
+        bool PrunedPaths,
+        [property: JsonPropertyName("pruned_project_root")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? PrunedProjectRoot);
 }
