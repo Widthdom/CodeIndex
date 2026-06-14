@@ -1023,6 +1023,80 @@ public class ProgramRunnerTests
         }
     }
 
+    [Fact]
+    public void UpdateChecker_Check_ClassifiesTimeoutFailureWithoutRawMessage_Issue3453()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => throw new OperationCanceledException("secret timeout detail"));
+
+            Assert.Equal("timeout", result.Error);
+            Assert.Equal("timeout", result.ErrorCategory);
+            Assert.Contains("Retry later", result.ErrorHint);
+            Assert.DoesNotContain("secret", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_ClassifiesNetworkFailureWithoutRawMessage_Issue3453()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => throw new HttpRequestException("secret host detail"));
+
+            Assert.Equal("network_failure", result.Error);
+            Assert.Equal("network", result.ErrorCategory);
+            Assert.Contains("GitHub releases", result.ErrorHint);
+            Assert.DoesNotContain("secret", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_SerializesStructuredFailureFields_Issue3453()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => throw new JsonException("secret parser detail"));
+
+            using var json = JsonDocument.Parse(JsonSerializer.Serialize(result));
+            var root = json.RootElement;
+            Assert.Equal("invalid_response", root.GetProperty("error").GetString());
+            Assert.Equal("response", root.GetProperty("error_category").GetString());
+            Assert.Contains("safe response bounds", root.GetProperty("error_hint").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("secret", root.GetRawText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
     [Theory]
     [InlineData("v1.26.0", "https://github.com/Widthdom/CodeIndex/releases/download/v1.26.0/install.sh")]
     [InlineData(" release/test ", "https://github.com/Widthdom/CodeIndex/releases/download/release%2Ftest/install.sh")]
@@ -1550,6 +1624,45 @@ exit 0
                 Assert.Equal("prerelease", root.GetProperty("selected_channel").GetString());
                 Assert.Equal("prerelease", root.GetProperty("selection_source").GetString());
                 Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonPrereleaseNotFound_ReportsStructuredFailure_Issue3453()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("""
+                    [
+                      { "tag_name": "v9.9.9", "draft": false, "prerelease": false }
+                    ]
+                    """))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--check-only", "--json", "--prerelease"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("prerelease_not_found", root.GetProperty("error").GetString());
+                Assert.Equal("release_metadata", root.GetProperty("error_category").GetString());
+                Assert.Contains("omit --prerelease", root.GetProperty("error_hint").GetString(), StringComparison.Ordinal);
+                Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
             }
             finally
             {

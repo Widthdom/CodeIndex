@@ -58,6 +58,7 @@ internal static class JsonOutputSnapshotHelper
     {
         "data_dir_mode",
         "db_file_mode",
+        "mac_profile_diagnostics",
     };
 
     private static readonly HashSet<string> VolatileCountKeys = new(StringComparer.Ordinal)

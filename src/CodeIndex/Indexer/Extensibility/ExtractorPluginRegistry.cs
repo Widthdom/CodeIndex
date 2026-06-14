@@ -274,7 +274,8 @@ public static class ExtractorPluginRegistry
                 {
                     ReportPluginDirectorySkipped(
                         directory,
-                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesPerDirectory} per directory)");
+                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesPerDirectory} per directory)",
+                        "plugin_candidate_limit_exceeded");
                     break;
                 }
 
@@ -282,7 +283,8 @@ public static class ExtractorPluginRegistry
                 {
                     ReportPluginDirectorySkipped(
                         directory,
-                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesTotal} total)");
+                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesTotal} total)",
+                        "plugin_candidate_limit_exceeded");
                     yield break;
                 }
 
@@ -301,7 +303,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory");
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
             return null;
         }
     }
@@ -319,7 +321,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory");
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
             return false;
         }
     }
@@ -604,7 +606,8 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "error",
             $"Pattern config skipped: {reason}",
-            countsAsSkippedFile: true);
+            countsAsSkippedFile: true,
+            category: "invalid_pattern_config");
     }
 
     private static void ReportPatternConfigSkipped(string path, string reason)
@@ -616,7 +619,8 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "skipped",
             $"Pattern config skipped: {reason}",
-            countsAsSkippedFile: true);
+            countsAsSkippedFile: true,
+            category: "pattern_config_incomplete");
     }
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
@@ -628,7 +632,8 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "error",
             $"Pattern directory skipped: {reason}",
-            countsAsSkippedFile: false);
+            countsAsSkippedFile: false,
+            category: "pattern_directory_rejected");
     }
 
     private static void ReportPatternDirectorySkipped(string path, string reason)
@@ -640,10 +645,11 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "skipped",
             $"Pattern directory skipped: {reason}.",
-            countsAsSkippedFile: false);
+            countsAsSkippedFile: false,
+            category: "pattern_candidate_limit_exceeded");
     }
 
-    private static void ReportPluginDirectorySkipped(string path, string reason)
+    private static void ReportPluginDirectorySkipped(string path, string reason, string category)
     {
         RecordDiagnostic(
             "plugin_directory",
@@ -651,7 +657,8 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "skipped",
             $"Plugin directory skipped: {reason}.",
-            countsAsSkippedFile: false);
+            countsAsSkippedFile: false,
+            category: category);
     }
 
     private static bool TryReservePatternRuleBudget(string path)
@@ -1031,7 +1038,8 @@ public static class ExtractorPluginRegistry
                     typeName: null,
                     severity: "skipped",
                     "Plugin assembly skipped: missing CdidxPluginAttribute.",
-                    countsAsSkippedFile: true);
+                    countsAsSkippedFile: true,
+                    category: "missing_plugin_attribute");
                 return;
             }
 
@@ -1044,7 +1052,8 @@ public static class ExtractorPluginRegistry
                     typeName: null,
                     severity: "skipped",
                     $"Plugin assembly skipped: API range {attribute.MinApiVersion}-{attribute.MaxApiVersion} does not include {CurrentApiVersion}.",
-                    countsAsSkippedFile: true);
+                    countsAsSkippedFile: true,
+                    category: "incompatible_plugin_api");
                 return;
             }
 
@@ -1069,7 +1078,8 @@ public static class ExtractorPluginRegistry
                 typeName: null,
                 severity: "error",
                 "Failed to load plugin assembly.",
-                countsAsSkippedFile: true);
+                countsAsSkippedFile: true,
+                category: "assembly_load_failed");
         }
         finally
         {
@@ -1103,7 +1113,8 @@ public static class ExtractorPluginRegistry
                 typeName: null,
                 severity: "error",
                 "Plugin assembly skipped: could not inspect file.",
-                countsAsSkippedFile: true);
+                countsAsSkippedFile: true,
+                category: "plugin_file_inspection_failed");
             return false;
         }
 
@@ -1115,7 +1126,8 @@ public static class ExtractorPluginRegistry
                 typeName: null,
                 severity: "error",
                 "Plugin assembly skipped: file does not exist.",
-                countsAsSkippedFile: true);
+                countsAsSkippedFile: true,
+                category: "plugin_file_missing");
             return false;
         }
 
@@ -1127,7 +1139,8 @@ public static class ExtractorPluginRegistry
                 typeName: null,
                 severity: "error",
                 "Plugin assembly skipped: path is a directory.",
-                countsAsSkippedFile: true);
+                countsAsSkippedFile: true,
+                category: "plugin_path_is_directory");
             return false;
         }
 
@@ -1139,7 +1152,8 @@ public static class ExtractorPluginRegistry
                 typeName: null,
                 severity: "skipped",
                 $"Plugin assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {MaxPluginAssemblyBytes}).",
-                countsAsSkippedFile: true);
+                countsAsSkippedFile: true,
+                category: "plugin_file_too_large");
             return false;
         }
 
@@ -1170,7 +1184,8 @@ public static class ExtractorPluginRegistry
                 type.FullName,
                 severity: "error",
                 "Failed to instantiate plugin type.",
-                countsAsSkippedFile: false);
+                countsAsSkippedFile: false,
+                category: "plugin_type_instantiation_failed");
         }
     }
 
@@ -1180,7 +1195,8 @@ public static class ExtractorPluginRegistry
         string? typeName,
         string severity,
         string message,
-        bool countsAsSkippedFile)
+        bool countsAsSkippedFile,
+        string category = "unspecified")
     {
         lock (Gate)
         {
@@ -1193,6 +1209,7 @@ public static class ExtractorPluginRegistry
                     DiagnosticSanitizer.ForPath(path),
                     DiagnosticSanitizer.ForOptionalLabel(typeName),
                     DiagnosticSanitizer.ForMessage(severity),
+                    DiagnosticSanitizer.ForMessage(category),
                     DiagnosticSanitizer.ForMessage(message)));
         }
     }
@@ -1268,4 +1285,5 @@ public sealed record ExtractorRegistryDiagnostic(
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("type_name")] string? TypeName,
     [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("message")] string Message);

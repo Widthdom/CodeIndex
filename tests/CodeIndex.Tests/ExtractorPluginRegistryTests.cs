@@ -31,6 +31,7 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(status.Diagnostics!);
                 Assert.Equal("plugin_directory", diagnostic.Kind);
                 Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("plugin_candidate_limit_exceeded", diagnostic.Category);
                 Assert.Contains("maximum", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains("per directory", diagnostic.Message, StringComparison.Ordinal);
             }
@@ -74,6 +75,7 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(status.Diagnostics!);
                 Assert.Equal("plugin_directory", diagnostic.Kind);
                 Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("plugin_candidate_limit_exceeded", diagnostic.Category);
                 Assert.Contains("maximum", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains("total", diagnostic.Message, StringComparison.Ordinal);
             }
@@ -142,10 +144,41 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(status.Diagnostics!);
                 Assert.Equal("plugin", diagnostic.Kind);
                 Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("plugin_file_too_large", diagnostic.Category);
                 Assert.Equal("oversize.dll", diagnostic.Path);
                 Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains(ExtractorPluginRegistry.MaxPluginAssemblyBytes.ToString(), diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_ReportsSanitizedAssemblyLoadCategory_3414()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_load_category");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var pluginPath = Path.Combine(projectRoot, "broken.dll");
+                File.WriteAllText(pluginPath, $"not a real dll from {projectRoot}");
+
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal("plugin", diagnostic.Kind);
+                Assert.Equal("error", diagnostic.Severity);
+                Assert.Equal("assembly_load_failed", diagnostic.Category);
+                Assert.Equal("broken.dll", diagnostic.Path);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
+                Assert.Equal("Failed to load plugin assembly.", diagnostic.Message);
             }
             finally
             {
@@ -211,6 +244,7 @@ public class ExtractorPluginRegistryTests
                 {
                     Assert.Equal("pattern", diagnostic.Kind);
                     Assert.Equal("error", diagnostic.Severity);
+                    Assert.Equal("invalid_pattern_config", diagnostic.Category);
                     Assert.EndsWith(".yaml", diagnostic.Path);
                     Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 });
@@ -278,6 +312,7 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
 
                 Assert.Equal(".cdidx/patterns/broken.yaml", diagnostic.Path);
+                Assert.Equal("invalid_pattern_config", diagnostic.Category);
                 Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 Assert.Contains("invalid regex", diagnostic.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("(?<name>", diagnostic.Message, StringComparison.Ordinal);
@@ -314,6 +349,7 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(status.Diagnostics!);
                 Assert.Equal("pattern", diagnostic.Kind);
                 Assert.Equal("error", diagnostic.Severity);
+                Assert.Equal("invalid_pattern_config", diagnostic.Category);
                 Assert.Contains($"{scalarName} scalar is too long", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains("maximum", diagnostic.Message, StringComparison.Ordinal);
             }
