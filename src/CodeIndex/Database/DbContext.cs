@@ -664,7 +664,7 @@ public class DbContext : IDisposable
     private long ReadPragmaLong(string name)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA {name}";
+        cmd.CommandText = $"PRAGMA {SqliteIdentifier.ValidatePragmaName(name)}";
         return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
@@ -1654,6 +1654,7 @@ public class DbContext : IDisposable
                 EnsureColumn("file_issues", "origin", "TEXT");
                 EnsureColumn("file_issues", "severity", "TEXT");
                 EnsureColumn("symbols", "is_metadata_target", "INTEGER");
+                EnsureColumn("symbols", "metadata_target_source", "TEXT");
                 var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
                 EnsureColumn(
                     "symbol_references",
@@ -1885,18 +1886,20 @@ public class DbContext : IDisposable
 
         const string oldReferenceLines = "_reference_lines_nullable_file_id";
         const string oldSymbolReferences = "_symbol_references_nullable_file_id";
-        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
-        Execute($"DROP TABLE IF EXISTS {oldReferenceLines}");
+        var quotedOldReferenceLines = SqliteIdentifier.Quote(oldReferenceLines);
+        var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
+        Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE IF EXISTS {quotedOldReferenceLines}");
         Execute("DELETE FROM symbol_references WHERE file_id IS NULL");
         Execute("DELETE FROM reference_lines WHERE file_id IS NULL");
-        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
-        Execute($"ALTER TABLE reference_lines RENAME TO {oldReferenceLines}");
+        Execute($"ALTER TABLE symbol_references RENAME TO {quotedOldSymbolReferences}");
+        Execute($"ALTER TABLE reference_lines RENAME TO {quotedOldReferenceLines}");
         Execute(referenceLinesCreateSql);
-        Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {oldReferenceLines}");
+        Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {quotedOldReferenceLines}");
         Execute(symbolReferencesCreateSql);
-        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
-        Execute($"DROP TABLE {oldSymbolReferences}");
-        Execute($"DROP TABLE {oldReferenceLines}");
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE {quotedOldReferenceLines}");
     }
 
     private void EnforceReferenceLineSetNullConstraint()
@@ -1927,8 +1930,9 @@ public class DbContext : IDisposable
             """;
         const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
         const string oldSymbolReferences = "_symbol_references_reference_line_delete";
+        var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
 
-        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
+        Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
         Execute(@"
             UPDATE symbol_references
             SET reference_line_id = NULL
@@ -1938,10 +1942,10 @@ public class DbContext : IDisposable
                   FROM reference_lines
                   WHERE reference_lines.id = symbol_references.reference_line_id
               )");
-        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
+        Execute($"ALTER TABLE symbol_references RENAME TO {quotedOldSymbolReferences}");
         Execute(symbolReferencesCreateSql);
-        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
-        Execute($"DROP TABLE {oldSymbolReferences}");
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
+        Execute($"DROP TABLE {quotedOldSymbolReferences}");
     }
 
     private bool SymbolReferencesReferenceLineDeletesSetNull()
@@ -2008,20 +2012,22 @@ public class DbContext : IDisposable
 
         const string oldReferenceLines = "_reference_lines_file_line_key";
         const string oldSymbolReferences = "_symbol_references_file_line_key";
+        var quotedOldReferenceLines = SqliteIdentifier.Quote(oldReferenceLines);
+        var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
         var foreignKeys = ReadPragmaLong("foreign_keys");
         Execute("PRAGMA foreign_keys=OFF");
         try
         {
-            Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
-            Execute($"DROP TABLE IF EXISTS {oldReferenceLines}");
-            Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
-            Execute($"ALTER TABLE reference_lines RENAME TO {oldReferenceLines}");
+            Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
+            Execute($"DROP TABLE IF EXISTS {quotedOldReferenceLines}");
+            Execute($"ALTER TABLE symbol_references RENAME TO {quotedOldSymbolReferences}");
+            Execute($"ALTER TABLE reference_lines RENAME TO {quotedOldReferenceLines}");
             Execute(referenceLinesCreateSql);
-            Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {oldReferenceLines}");
+            Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {quotedOldReferenceLines}");
             Execute(symbolReferencesCreateSql);
-            Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
-            Execute($"DROP TABLE {oldSymbolReferences}");
-            Execute($"DROP TABLE {oldReferenceLines}");
+            Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
+            Execute($"DROP TABLE {quotedOldSymbolReferences}");
+            Execute($"DROP TABLE {quotedOldReferenceLines}");
         }
         finally
         {
@@ -2165,7 +2171,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2175,12 +2181,14 @@ public class DbContext : IDisposable
 
     private void RebuildTableWithCurrentKindChecks(string tableName, string oldTableName, string createSql, string columns)
     {
-        Execute($"DROP TABLE IF EXISTS {oldTableName}");
-        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        var quotedTableName = SqliteIdentifier.Quote(tableName);
+        var quotedOldTableName = SqliteIdentifier.Quote(oldTableName);
+        Execute($"DROP TABLE IF EXISTS {quotedOldTableName}");
+        Execute($"ALTER TABLE {quotedTableName} RENAME TO {quotedOldTableName}");
         Execute(createSql);
         var sourceColumns = BuildRebuildSelectProjection(oldTableName, columns);
-        Execute($"INSERT INTO {tableName} ({columns}) SELECT {sourceColumns} FROM {oldTableName}");
-        Execute($"DROP TABLE {oldTableName}");
+        Execute($"INSERT INTO {quotedTableName} ({columns}) SELECT {sourceColumns} FROM {quotedOldTableName}");
+        Execute($"DROP TABLE {quotedOldTableName}");
     }
 
     private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)
@@ -2189,7 +2197,9 @@ public class DbContext : IDisposable
             return;
 
         var oldTableName = $"_{tableName}_nullable_file_id";
-        Execute($"DROP TABLE IF EXISTS {oldTableName}");
+        var quotedTableName = SqliteIdentifier.Quote(tableName);
+        var quotedOldTableName = SqliteIdentifier.Quote(oldTableName);
+        Execute($"DROP TABLE IF EXISTS {quotedOldTableName}");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_ai");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_au");
@@ -2198,13 +2208,13 @@ public class DbContext : IDisposable
             Execute("DROP TABLE IF EXISTS fts_chunks");
             _rebuildFtsAfterSchemaMigration = true;
         }
-        Execute($"DELETE FROM {tableName} WHERE file_id IS NULL");
-        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        Execute($"DELETE FROM {quotedTableName} WHERE file_id IS NULL");
+        Execute($"ALTER TABLE {quotedTableName} RENAME TO {quotedOldTableName}");
         Execute(createSql);
         var sourceColumns = BuildRebuildSelectProjection(oldTableName, columns);
-        Execute($"INSERT INTO {tableName} ({columns}) SELECT {sourceColumns} FROM {oldTableName}");
+        Execute($"INSERT INTO {quotedTableName} ({columns}) SELECT {sourceColumns} FROM {quotedOldTableName}");
         if (!string.Equals(tableName, "reference_lines", StringComparison.Ordinal))
-            Execute($"DROP TABLE {oldTableName}");
+            Execute($"DROP TABLE {quotedOldTableName}");
     }
 
     private bool ColumnIsNotNull(string tableName, string columnName)
@@ -2212,7 +2222,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2591,11 +2601,13 @@ public class DbContext : IDisposable
 
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
+        var quotedTableName = SqliteIdentifier.Quote(tableName);
+        var quotedColumnName = SqliteIdentifier.Quote(columnName);
         if (_activeMigrationTransaction != null || _readMigrationInsideExternalTransaction)
         {
             DbColumnEnsurer.EnsureColumn(
                 () => ColumnExists(tableName, columnName),
-                () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
+                () => Execute($"ALTER TABLE {quotedTableName} ADD COLUMN {quotedColumnName} {definition}"));
             return;
         }
 
@@ -2604,7 +2616,7 @@ public class DbContext : IDisposable
             beginImmediate: () => Execute("BEGIN IMMEDIATE"),
             commit: () => Execute("COMMIT"),
             rollback: () => Execute("ROLLBACK"),
-            () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
+            () => Execute($"ALTER TABLE {quotedTableName} ADD COLUMN {quotedColumnName} {definition}"));
     }
 
     private bool ColumnExists(string tableName, string columnName)
@@ -2612,7 +2624,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
