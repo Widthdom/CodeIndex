@@ -21,6 +21,7 @@ public static partial class SymbolExtractor
     public const int StyleAndXamlContractVersion = 2;
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
+    public const int SystemsLanguageContractVersion = 2;
     private static readonly Regex GraphQLInputBlockRegex = new(
         @"^\s*(?:extend\s+)?input\s+(?<name>\w+)[^{]*\{(?<body>.*?)^\s*\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Singleline);
@@ -59,6 +60,7 @@ public static partial class SymbolExtractor
             "sass" or "stylus" or "xml" => StyleAndXamlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
+            "ada" or "d" or "nim" => SystemsLanguageContractVersion,
             "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
@@ -1500,6 +1502,35 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*proc\s+(?<name>[A-Za-z_:][\w:.-]*)\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("property", new Regex(@"^\s*(?:variable|set)\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",   new Regex(@"^\s*package\s+(?:require|provide)\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["ada"] =
+        [
+            new("namespace", new Regex(@"^\s*package\s+(?:body\s+)?(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("type",      new Regex(@"^\s*(?:subtype|type)\s+(?<name>[A-Za-z]\w*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("type",      new Regex(@"^\s*(?:task|protected)\s+(?:type\s+)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("function",  new Regex(@"^\s*(?:(?:overriding|not\s+overriding)\s+)?(?:function|procedure)\s+(?:(?:[A-Za-z]\w*)\.)*(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("import",    new Regex(@"^\s*with\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["d"] =
+        [
+            new("namespace", new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("interface", new Regex(@"^\s*(?:(?:public|private|protected|package|static|abstract|extern)\s+)*interface\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("class",     new Regex(@"^\s*(?:(?:public|private|protected|package|static|abstract|final|extern)\s+)*class\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("struct",    new Regex(@"^\s*(?:(?:public|private|protected|package|static|extern)\s+)*struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("union",     new Regex(@"^\s*(?:(?:public|private|protected|package|static|extern)\s+)*union\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("enum",      new Regex(@"^\s*(?:(?:public|private|protected|package|static)\s+)*enum\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("typealias", new Regex(@"^\s*(?:alias|typedef)\s+(?<name>[A-Za-z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function",  new Regex(@"^\s*(?!(?:if|for|while|switch|catch|return|throw|new|assert|version|debug)\b)(?:(?:public|private|protected|package|static|extern|export|final|abstract|override|synchronized|pure|nothrow|@safe|@trusted|@system)\s+)*(?<returnType>(?:auto|void|bool|byte|ubyte|short|ushort|int|uint|long|ulong|cent|ucent|float|double|real|char|wchar|dchar|string|[A-Za-z_][\w.]*)(?:\s*[*\[\]])*)\s+(?<name>[A-Za-z_]\w*)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("import",    new Regex(@"^\s*import\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["nim"] =
+        [
+            new("type",      new Regex(@"^\s*type\s+(?<name>[A-Za-z_]\w*)\*?\s*=\s*(?:ref\s+)?(?:object|enum|tuple|distinct)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("type",      new Regex(@"^\s+(?<name>[A-Za-z_]\w*)\*?\s*=\s*(?:ref\s+)?(?:object|enum|tuple|distinct)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("function",  new Regex(@"^\s*(?:proc|func|method|iterator|template|macro|converter)\s+(?<name>`[^`\r\n]+`|[A-Za-z_]\w*)\*?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("property",  new Regex(@"^\s*(?:const|let|var)\s+(?<name>[A-Za-z_]\w*)\*?\s*(?::|=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",    new Regex(@"^\s*(?:import|include)\s+(?<name>[A-Za-z_][\w./]*(?:\s*,\s*[A-Za-z_][\w./]*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",    new Regex(@"^\s*from\s+(?<name>[A-Za-z_][\w./]*)\s+import\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["perl"] =
         [

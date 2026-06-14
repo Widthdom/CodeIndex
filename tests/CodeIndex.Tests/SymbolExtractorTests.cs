@@ -386,9 +386,65 @@ public partial class SymbolExtractorTests
         Assert.Contains(tclSymbols, symbol => symbol.Kind == "property" && symbol.Name == "cache");
     }
 
+    [Fact]
+    public void Extract_SystemsLanguages_IndexConservativeDeclarations_Issue3529()
+    {
+        const string ada = """
+            with Ada.Text_IO;
+            package body Demo.Store is
+               type User_Id is new Integer;
+               protected type Cache is
+               end Cache;
+               procedure Load_User(Id : User_Id) is
+               begin
+                  null;
+               end Load_User;
+            end Demo.Store;
+            """;
 
+        var adaSymbols = SymbolExtractor.Extract(1, "ada", ada);
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "import" && symbol.Name == "Ada.Text_IO");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Demo.Store");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "type" && symbol.Name == "User_Id");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "type" && symbol.Name == "Cache");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "function" && symbol.Name == "Load_User");
 
+        const string d = """
+            module demo.store;
+            import std.json;
+            class UserService {
+            }
+            struct Point {
+            }
+            alias UserId = int;
+            int loadUser(int id) {
+                return id;
+            }
+            """;
 
+        var dSymbols = SymbolExtractor.Extract(2, "d", d);
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo.store");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "import" && symbol.Name == "std.json");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "class" && symbol.Name == "UserService");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "Point");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "typealias" && symbol.Name == "UserId");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "function" && symbol.Name == "loadUser");
+
+        const string nim = """
+            import std/json
+            type User* = object
+              id*: int
+            proc loadUser*(id: int): int =
+              id
+            const Cache* = 1
+            """;
+
+        var nimSymbols = SymbolExtractor.Extract(3, "nim", nim);
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "import" && symbol.Name == "std/json");
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "type" && symbol.Name == "User");
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "function" && symbol.Name == "loadUser");
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "property" && symbol.Name == "Cache");
+    }
 
     [Theory]
     [InlineData("csharp", "Pages/Product.razor")]

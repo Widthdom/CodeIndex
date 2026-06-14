@@ -2268,11 +2268,11 @@ public partial class QueryCommandRunnerTests
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside richer extractors
-        // (Cython .pyx/.pxd and the newly added extension-only languages) must advertise
+        // (Cython .pyx/.pxd) must advertise
         // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
         // between "indexed with symbols" and "indexed for search only".
         // 意図的に richer な抽出器の対象外になっている search-only 言語
-        // （Cython の .pyx/.pxd と新規追加の拡張子ベース言語）は、
+        // （Cython の .pyx/.pxd）は、
         // symbol_extraction=false / graph_queries=false で広告しなければならない。
         // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
@@ -2297,19 +2297,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         }
 
-        foreach (var searchOnly in new[] { "d", "nim" })
-        {
-            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
-            var entry = languages[searchOnly];
-            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
-                $"{searchOnly} must advertise symbol_extraction=false");
-            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
-                $"{searchOnly} must advertise reference_extraction=false");
-            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
-                $"{searchOnly} must advertise graph_queries=false");
-        }
-
-        foreach (var symbolOnly in new[] { "clojure", "crystal", "erlang", "groovy", "julia", "ocaml", "raku", "tcl" })
+        foreach (var symbolOnly in new[] { "ada", "clojure", "crystal", "d", "erlang", "groovy", "julia", "nim", "ocaml", "raku", "tcl" })
         {
             Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
             var entry = languages[symbolOnly];
