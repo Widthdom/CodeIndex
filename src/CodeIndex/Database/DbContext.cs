@@ -1654,6 +1654,7 @@ public class DbContext : IDisposable
                 EnsureColumn("file_issues", "origin", "TEXT");
                 EnsureColumn("file_issues", "severity", "TEXT");
                 EnsureColumn("symbols", "is_metadata_target", "INTEGER");
+                EnsureColumn("symbols", "metadata_target_source", "TEXT");
                 var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
                 EnsureColumn(
                     "symbol_references",
