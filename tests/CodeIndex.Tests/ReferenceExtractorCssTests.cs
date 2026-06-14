@@ -428,6 +428,11 @@ public partial class ReferenceExtractorTests
 
             =rounded($radius)
               border-radius: $radius
+            =rounded-button($button-radius)
+              border-radius: $button-radius
+
+            @function spacing-unit($step)
+              @return $step * 4px
 
             .button
               content: '@use "string-theme"'
@@ -437,7 +442,9 @@ public partial class ReferenceExtractorTests
               border-color: rgb(0, 0, 0)
               background: url(http://cdn/a.png) $accent
               padding: $spacing-base * 2
+              margin: spacing-unit(2)
               +rounded(4px)
+              +rounded-button(4px)
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sass", content);
@@ -479,6 +486,18 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "rounded"
             && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded-button"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "button"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "unit"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]
@@ -495,6 +514,10 @@ public partial class ReferenceExtractorTests
 
             rounded(radius)
               border-radius radius
+            rounded-button(radius)
+              border-radius radius
+            spacing-unit(step)
+              margin step
 
             @keyframes fade
               from
@@ -513,6 +536,8 @@ public partial class ReferenceExtractorTests
               background-image url("logo.png")
               border-color rgb(0, 0, 0)
               rounded(4px)
+              rounded-button(4px)
+              spacing-unit(2)
             """;
 
         var symbols = SymbolExtractor.Extract(1, "stylus", content);
@@ -556,5 +581,17 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "rounded"
             && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded-button"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "button"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "unit"
+            && reference.ReferenceKind == "call");
     }
 }

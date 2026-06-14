@@ -24,6 +24,10 @@ internal static class CssReferenceExtractor
         @"(?<![\w-])\+(?<name>[A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex SassBareFunctionReferenceRegex = new(
+        @"(?<![@+\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
+        RegexOptions.Compiled);
+
     private static readonly Regex StylusVariableReferenceRegex = new(
         @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
@@ -83,6 +87,11 @@ internal static class CssReferenceExtractor
         "infinite", "normal", "reverse", "alternate", "alternate-reverse",
         "none", "forwards", "backwards", "both", "running", "paused",
         "initial", "inherit", "unset", "revert", "revert-layer",
+    };
+
+    private static readonly HashSet<string> CssBuiltInFunctionNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "url", "var", "calc", "rgb", "rgba", "hsl", "hsla",
     };
 
     public static void EmitCss(
@@ -209,6 +218,25 @@ internal static class CssReferenceExtractor
                 lineNumber,
                 container);
         }
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(SassBareFunctionReferenceRegex, sassReferenceLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (CssBuiltInFunctionNames.Contains(name))
+                continue;
+            if (ShouldSkipSassBareFunctionReference(sassReferenceLine, match.Groups["name"].Index))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     public static void EmitStylus(
@@ -268,7 +296,7 @@ internal static class CssReferenceExtractor
         foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
         {
             var name = match.Groups["name"].Value;
-            if (name is "url" or "var" or "calc" or "rgb" or "rgba" or "hsl" or "hsla")
+            if (CssBuiltInFunctionNames.Contains(name))
                 continue;
             if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
                 continue;
@@ -952,6 +980,19 @@ internal static class CssReferenceExtractor
     {
         var trimmed = preparedLine.TrimStart();
         return trimmed.StartsWith("=", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldSkipSassBareFunctionReference(string preparedLine, int functionIndex)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (!trimmed.StartsWith("@function", StringComparison.Ordinal)
+            && !trimmed.StartsWith("@mixin", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var firstNonWhitespace = preparedLine.Length - trimmed.Length;
+        return functionIndex >= firstNonWhitespace;
     }
 
     private static string PrepareSassStylusReferenceLine(string originalLine)

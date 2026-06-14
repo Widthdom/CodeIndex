@@ -599,6 +599,8 @@ public partial class ReferenceExtractorTests
                         Path=ViewModel.WrappedTitle,
                         RelativeSource={RelativeSource
                             AncestorType={x:Type local:Vm}}}" />
+                    <TextBlock Text="{Binding
+                        Path=ViewModel.WrappedSuffixTitle}" Loaded="OnWrappedLoaded" />
                     <TextBlock Tag="{x:Bind
                         ViewModel.WrappedLiveTitle,
                         Mode=OneWay}" />
@@ -652,6 +654,9 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "WrappedTitle"
             && reference.ReferenceKind == "reference");
         Assert.Contains(references, reference =>
+            reference.SymbolName == "WrappedSuffixTitle"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
             reference.SymbolName == "WrappedLiveTitle"
             && reference.ReferenceKind == "reference");
         Assert.DoesNotContain(references, reference =>
@@ -683,6 +688,9 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "call");
         Assert.Contains(references, reference =>
             reference.SymbolName == "OnWpfSaveClicked"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnWrappedLoaded"
             && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "IgnoredCommentBinding");

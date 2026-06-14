@@ -971,9 +971,15 @@ public static partial class ReferenceExtractor
                     container);
             }
             else if (language == "sass")
+            {
                 CssReferenceExtractor.EmitSass(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, container);
+                continue;
+            }
             else if (language == "stylus")
+            {
                 CssReferenceExtractor.EmitStylus(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, allDefinitionNames, stylusVariableDefinitionNames, container);
+                continue;
+            }
             else if (language == "xml" && xamlReferenceEnabled)
             {
                 var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);

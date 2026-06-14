@@ -135,7 +135,11 @@ internal static class XamlReferenceExtractor
         if (bindingMarkupExtensionState.Active)
         {
             if (bindingMarkupExtensionState.Advance(originalLine, context, lineNumber, container, out var completed))
+            {
                 EmitBindingMarkupExtensionReferences(completed.Kind, completed.Content, completed.ContentIndex, references, seen, fileId, completed.Context, completed.LineNumber, completed.Container);
+                if (!string.IsNullOrWhiteSpace(completed.RemainingLine))
+                    Emit(completed.RemainingLine, context, lineNumber, references, seen, fileId, container, bindingPropertyElementState, bindingMarkupExtensionState);
+            }
 
             return;
         }
@@ -446,7 +450,8 @@ internal static class XamlReferenceExtractor
                     hasContentLocation ? contentIndex : fallbackContentIndex,
                     hasContentLocation ? contentLineNumber : lineNumber,
                     hasContentLocation ? contentContext : context,
-                    hasContentLocation ? contentContainer : container);
+                    hasContentLocation ? contentContainer : container,
+                    i + 1 < line.Length ? new string(' ', i + 1) + line[(i + 1)..] : "");
                 Reset();
                 return true;
             }
@@ -506,7 +511,8 @@ internal static class XamlReferenceExtractor
         int ContentIndex,
         int LineNumber,
         string Context,
-        SymbolRecord? Container);
+        SymbolRecord? Container,
+        string RemainingLine);
 
     private static void AddReference(
         List<ReferenceRecord> references,
