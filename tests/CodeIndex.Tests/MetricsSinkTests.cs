@@ -235,17 +235,25 @@ public class MetricsSinkTests
     [Fact]
     public void Run_WithMetricsFlag_BadDirectory_DoesNotBreakCommand()
     {
-        // A metrics path under a non-writable / non-existent location must not break the
-        // underlying command — sink failure is best-effort and silently degrades.
-        // 書き込めない場所でも本体コマンドは継続する。
-        var badPath = Path.Combine("/", "definitely-not-a-real-mount", "metrics.jsonl");
-        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
-            ["--metrics", badPath, "definitely-not-a-command"],
-            appVersion: "1.10.0"));
+        // Use an existing file as the parent directory so the open failure is portable.
+        // 既存ファイルを親ディレクトリとして扱わせ、OS に依存せずファイルを開けない失敗を起こす。
+        var blockerPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_blocker_{Guid.NewGuid():N}");
+        File.WriteAllText(blockerPath, "not a directory");
+        try
+        {
+            var badPath = Path.Combine(blockerPath, "metrics.jsonl");
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--metrics", badPath, "definitely-not-a-command"],
+                appVersion: "1.10.0"));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("Warning: metrics output disabled", stderr);
-        Assert.Contains("failed to open the configured metrics path", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Warning: metrics output disabled", stderr);
+            Assert.Contains("failed to open the configured metrics path", stderr);
+        }
+        finally
+        {
+            File.Delete(blockerPath);
+        }
     }
 
     [Fact]
