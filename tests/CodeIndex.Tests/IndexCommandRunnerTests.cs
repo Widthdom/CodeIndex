@@ -266,7 +266,6 @@ public class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         try
         {
-            SymbolExtractionWorker.DelayMillisecondsForTesting = 500;
             var request = new SymbolExtractionWorker.WorkerRequest(
                 0,
                 "csharp",
@@ -280,7 +279,7 @@ public class IndexCommandRunnerTests
             var stopwatch = Stopwatch.StartNew();
 
             var handled = SymbolExtractionWorker.TryRunCommand(
-                [SymbolExtractionWorker.CommandName],
+                [SymbolExtractionWorker.CommandName, "--test-delay-ms", "500"],
                 input,
                 output,
                 error,
@@ -296,7 +295,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SymbolExtractionWorker.DelayMillisecondsForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
