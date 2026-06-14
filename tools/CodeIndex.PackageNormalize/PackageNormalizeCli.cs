@@ -6,18 +6,20 @@ namespace CodeIndex.PackageNormalize;
 
 public static class PackageNormalizeCli
 {
-    public static int Run(string[] args)
+    public static int Run(string[] args) => Run(args, Console.Out, Console.Error);
+
+    internal static int Run(string[] args, TextWriter stdout, TextWriter stderr)
     {
         if (args.Any(arg => arg is "-h" or "--help"))
         {
-            WriteUsage();
+            WriteUsage(stderr);
             return 0;
         }
 
         if (!PackageNormalizeOptions.TryParse(args, out var options, out var parseError))
         {
-            Console.Error.WriteLine($"Error: {parseError}");
-            WriteUsage();
+            stderr.WriteLine($"Error: {parseError}");
+            WriteUsage(stderr);
             return 1;
         }
 
@@ -38,14 +40,14 @@ public static class PackageNormalizeCli
                         summary.Skipped++;
                         results.Add(new PackageNormalizePackageResult(packagePath, "would_normalize", null, warnings));
                         if (!options.Json)
-                            Console.WriteLine($"Would normalize {packagePath}");
+                            stdout.WriteLine($"Would normalize {packagePath}");
                     }
                     else
                     {
                         summary.Unchanged++;
                         results.Add(new PackageNormalizePackageResult(packagePath, "unchanged", null, warnings));
                         if (!options.Json)
-                            Console.WriteLine($"Unchanged {packagePath}");
+                            stdout.WriteLine($"Unchanged {packagePath}");
                     }
                 }
                 else
@@ -55,8 +57,8 @@ public static class PackageNormalizeCli
                     results.Add(new PackageNormalizePackageResult(packagePath, "normalized", null, warnings));
                     if (!options.Json)
                     {
-                        Console.WriteLine($"Normalized {packagePath}");
-                        WriteWarnings(warnings);
+                        stdout.WriteLine($"Normalized {packagePath}");
+                        WriteWarnings(stderr, warnings);
                     }
                 }
             }
@@ -67,8 +69,8 @@ public static class PackageNormalizeCli
                 results.Add(new PackageNormalizePackageResult(packagePath, "failed", error, warnings));
                 if (!options.Json)
                 {
-                    Console.Error.WriteLine($"Failed {PackageNormalizeDiagnostics.FormatPath(packagePath)}: {error}");
-                    WriteWarnings(warnings);
+                    stderr.WriteLine($"Failed {PackageNormalizeDiagnostics.FormatPath(packagePath)}: {error}");
+                    WriteWarnings(stderr, warnings);
                 }
 
                 if (!options.ContinueOnError)
@@ -78,7 +80,7 @@ public static class PackageNormalizeCli
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
+            stdout.WriteLine(JsonSerializer.Serialize(
                 new PackageNormalizeJsonResult(
                     options.DryRun,
                     options.ContinueOnError,
@@ -92,22 +94,22 @@ public static class PackageNormalizeCli
         }
         else if (options.Summary)
         {
-            Console.WriteLine(
+            stdout.WriteLine(
                 $"Summary: inspected={summary.Inspected} normalized={summary.Normalized} unchanged={summary.Unchanged} failed={summary.Failed} skipped={summary.Skipped}");
         }
 
         return summary.Failed == 0 ? 0 : 1;
     }
 
-    private static void WriteUsage()
+    private static void WriteUsage(TextWriter error)
     {
-        Console.Error.WriteLine("Usage: dotnet run --project tools/CodeIndex.PackageNormalize -- [--dry-run|--check] [--summary] [--json] [--continue-on-error] <package.nupkg|package.snupkg> [...]");
+        error.WriteLine("Usage: dotnet run --project tools/CodeIndex.PackageNormalize -- [--dry-run|--check] [--summary] [--json] [--continue-on-error] <package.nupkg|package.snupkg> [...]");
     }
 
-    private static void WriteWarnings(IReadOnlyList<string> warnings)
+    private static void WriteWarnings(TextWriter error, IReadOnlyList<string> warnings)
     {
         foreach (var warning in warnings)
-            Console.Error.WriteLine($"Warning: {warning}");
+            error.WriteLine($"Warning: {warning}");
     }
 }
 
