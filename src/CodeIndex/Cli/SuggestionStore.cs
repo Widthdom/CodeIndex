@@ -909,7 +909,7 @@ public class SuggestionStore
     internal static TimeSpan ResolveMaxAge()
     {
         var raw = Environment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
-        return int.TryParse(raw, out var days) && days is > 0 and <= MaximumMaxAgeDays
+        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) && days is > 0 and <= MaximumMaxAgeDays
             ? TimeSpan.FromDays(days)
             : TimeSpan.FromDays(DefaultMaxAgeDays);
     }
@@ -917,7 +917,7 @@ public class SuggestionStore
     internal static int ResolveMaxCount()
     {
         var raw = Environment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
-        return int.TryParse(raw, out var count) && count is > 0 and <= MaximumMaxCount
+        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) && count is > 0 and <= MaximumMaxCount
             ? count
             : DefaultMaxCount;
     }

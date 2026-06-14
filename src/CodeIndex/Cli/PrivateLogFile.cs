@@ -7,6 +7,7 @@ internal static class PrivateLogFile
 {
     internal const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     internal const int MaxExistingFilesToHarden = 128;
+    private const int MaxDiagnosticTargetChars = 160;
 
     internal static FileStream OpenAppend(string path, FileShare share = FileShare.ReadWrite)
     {
@@ -28,7 +29,7 @@ internal static class PrivateLogFile
             AutoFlush = true,
         };
 
-    internal static void TrySetPrivatePermissions(string path)
+    internal static void TrySetPrivatePermissions(string path, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -39,11 +40,11 @@ internal static class PrivateLogFile
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            // Best-effort only / ベストエフォートのみ
+            ReportDiagnostic(diagnosticSink, "set_private_permissions", path, ex);
         }
     }
 
-    internal static void HardenExisting(string directory, string pattern)
+    internal static void HardenExisting(string directory, string pattern, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -53,7 +54,7 @@ internal static class PrivateLogFile
             var hardened = 0;
             foreach (var file in new DirectoryInfo(directory).EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
             {
-                TrySetPrivatePermissions(file.FullName);
+                TrySetPrivatePermissions(file.FullName, diagnosticSink);
                 hardened++;
                 if (hardened >= MaxExistingFilesToHarden)
                     break;
@@ -61,11 +62,11 @@ internal static class PrivateLogFile
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Best-effort only / ベストエフォートのみ
+            ReportDiagnostic(diagnosticSink, "harden_existing", directory, ex);
         }
     }
 
-    internal static void PruneOldFiles(string directory, string pattern, int retainedFileCount)
+    internal static void PruneOldFiles(string directory, string pattern, int retainedFileCount, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
     {
         try
         {
@@ -85,7 +86,7 @@ internal static class PrivateLogFile
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Best-effort only / ベストエフォートのみ
+            ReportDiagnostic(diagnosticSink, "prune_old_files", directory, ex);
         }
     }
 
@@ -192,4 +193,56 @@ internal static class PrivateLogFile
             // Ignore: rotation is best-effort.
         }
     }
+
+    private static void ReportDiagnostic(
+        Action<PrivateLogFileDiagnostic>? diagnosticSink,
+        string operation,
+        string path,
+        Exception exception)
+    {
+        if (diagnosticSink is null)
+            return;
+
+        try
+        {
+            diagnosticSink(new PrivateLogFileDiagnostic(
+                operation,
+                ClassifyFailure(exception),
+                FormatDiagnosticTarget(path)));
+        }
+        catch
+        {
+            // Diagnostics must not make best-effort log hardening fail.
+        }
+    }
+
+    private static string ClassifyFailure(Exception exception) =>
+        exception switch
+        {
+            UnauthorizedAccessException => "permission_denied",
+            FileNotFoundException or DirectoryNotFoundException => "not_found",
+            NotSupportedException => "not_supported",
+            IOException => "io_error",
+            _ => "operation_failed",
+        };
+
+    private static string FormatDiagnosticTarget(string path)
+    {
+        try
+        {
+            var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var target = Path.GetFileName(trimmed);
+            if (string.IsNullOrWhiteSpace(target))
+                target = "<target>";
+            return target.Length <= MaxDiagnosticTargetChars
+                ? target
+                : target[..MaxDiagnosticTargetChars] + "...";
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return "<invalid>";
+        }
+    }
 }
+
+internal sealed record PrivateLogFileDiagnostic(string Operation, string Reason, string Target);

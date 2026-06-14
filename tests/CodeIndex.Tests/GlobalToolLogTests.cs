@@ -80,6 +80,24 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_TrySetPrivatePermissions_WhenPathMissing_ReportsDiagnostic_Issue3475()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_missing_private_log_{Guid.NewGuid():N}.log");
+        var diagnostics = new List<PrivateLogFileDiagnostic>();
+
+        PrivateLogFile.TrySetPrivatePermissions(path, diagnostics.Add);
+
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("set_private_permissions", diagnostic.Operation);
+        Assert.Equal("not_found", diagnostic.Reason);
+        Assert.Equal(Path.GetFileName(path), diagnostic.Target);
+        Assert.DoesNotContain(Path.GetTempPath(), diagnostic.Target, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PrivateLogFile_PruneOldFiles_KeepsNewestFilesWithoutMaterializingAll_Issue3028()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_prune_{Guid.NewGuid():N}");
@@ -138,6 +156,47 @@ public class GlobalToolLogTests
         {
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TryStart_WritesPrivateLogDiagnostics_Issue3475()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_private_diag_{Guid.NewGuid():N}");
+        var capturedLogPath = Path.Combine(Path.GetTempPath(), $"cdidx_captured_private_diag_{Guid.NewGuid():N}.log");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            using (var session = GlobalToolLog.TryStartForTesting(
+                ["status"],
+                "test",
+                createWriter: _ => PrivateLogFile.OpenAppendText(capturedLogPath)))
+            {
+                Assert.NotNull(session);
+            }
+
+            var log = File.ReadAllText(capturedLogPath);
+            Assert.Contains("private_log_diagnostic", log);
+            Assert.Contains("operation=\"set_private_permissions\"", log);
+            Assert.Contains("reason=\"not_found\"", log);
+            Assert.DoesNotContain(logRoot, log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+            if (File.Exists(capturedLogPath))
+                File.Delete(capturedLogPath);
         }
     }
 

@@ -2141,7 +2141,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "razor", "blazor", "cshtml" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "razor", "blazor", "cshtml", "solidity" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2327,6 +2327,9 @@ public static partial class SymbolExtractor
 
         if (lang is "commonlisp" or "racket")
             return ExtractLispSymbols(fileId, lang, lines);
+
+        if (lang == "solidity")
+            return ExtractSoliditySymbols(fileId, lines);
 
         if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
