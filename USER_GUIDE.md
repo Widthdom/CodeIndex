@@ -1395,7 +1395,7 @@ same source location.
 | `--max-results <n>` | `search` | Alias for `--limit` |
 | `--color <when>` | All commands | Control ANSI color output. Accepts `auto` (default), `always`, or `never`. Precedence: `--color` flag > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > terminal capability auto-detect. Auto mode treats redirected stdout and StringWriter-style test capture as non-ANSI; on Windows it also accepts ConPTY/Windows Terminal virtual-terminal support and terminal hints such as `WT_SESSION`, `WT_PROFILE_ID`, `TERM_PROGRAM`, or non-`dumb` `TERM`. Use `--color=always` to keep colored kind labels through a pager such as `cdidx symbols Foo \| less -R`; use `--color=never` (or `NO_COLOR=1`) to suppress ANSI even on a TTY. |
 | `--palette <name>` | All commands | Choose the ANSI palette used when color output is enabled. Accepts `basic` (8-color SGR 30–37, the default fallback for minimal SSH/CI terminals), `256` (256-color `\x1b[38;5;Nm`), or `truecolor` (24-bit RGB `\x1b[38;2;R;G;Bm`). Precedence: `--palette` flag > `CDIDX_COLOR_PALETTE` env var > `COLORTERM` / `TERM` auto-detect. The basic palette avoids `\x1b[90m` (bright-black / dim), which is unreadable on many minimal terminals. |
-| `--metrics <path>` | All commands (and MCP tool calls) | Append one JSONL metrics record per CLI command / MCP tool call to `<path>`. The `CDIDX_METRICS=<path>` environment variable provides the same destination as a fallback when the flag is not passed. Best-effort: any IO failure (missing directory, read-only mount, etc.) is swallowed silently and never breaks the underlying command. |
+| `--metrics <path>` | All commands (and MCP tool calls) | Append one JSONL metrics record per CLI command / MCP tool call to `<path>`. The `CDIDX_METRICS=<path>` environment variable provides the same destination as a fallback when the flag is not passed. If the destination cannot be opened at startup, cdidx emits a bounded warning, disables metrics, and continues the underlying command. Later write or rotation failures remain best-effort and never break the command. |
 
 If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`. If an option value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value, for example `--path=--json-dir` or `--db=--tmp.db`.
 
@@ -1512,7 +1512,7 @@ Currently only the `cdidx --sushi` / `--coffee` / `--ramen` / `--wine` / `--beer
 
 ### Metrics emission
 
-Pass `--metrics <path>` (or set `CDIDX_METRICS=<path>` in the environment) to make `cdidx` append one JSON-lines record per CLI command and per MCP tool call. The flag wins over the environment variable when both are present. The destination file is opened in append mode, so multiple cdidx invocations writing to the same path interleave cleanly. Emission is best-effort: any IO failure (missing directory, unwritable mount, etc.) is swallowed silently and never breaks the underlying command.
+Pass `--metrics <path>` (or set `CDIDX_METRICS=<path>` in the environment) to make `cdidx` append one JSON-lines record per CLI command and per MCP tool call. The flag wins over the environment variable when both are present. The destination file is opened in append mode, so multiple cdidx invocations writing to the same path interleave cleanly. If the destination cannot be opened at startup, cdidx emits a bounded warning to stderr, disables metrics, and continues the underlying command. Later record writes and rotation attempts remain best-effort and never break the command.
 
 Each record is a single JSON object on its own line with these fields:
 
@@ -3856,7 +3856,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--max-results <n>` | `search` | `--limit` のエイリアス |
 | `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > 端末能力の自動判定。auto では redirected stdout と StringWriter 風のテスト capture を非 ANSI とみなし、Windows では ConPTY / Windows Terminal の virtual-terminal 対応と `WT_SESSION`、`WT_PROFILE_ID`、`TERM_PROGRAM`、非 `dumb` の `TERM` などの端末ヒントも見る。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
 | `--palette <name>` | 全コマンド | カラー出力が有効なときに用いる ANSI パレットを選択する。`basic`（標準8色 SGR 30–37、最小 SSH/CI 端末向けの既定フォールバック）、`256`（256色 `\x1b[38;5;Nm`）、`truecolor`（24ビット RGB `\x1b[38;2;R;G;Bm`）を受け付ける。優先順位: `--palette` フラグ > `CDIDX_COLOR_PALETTE` 環境変数 > `COLORTERM` / `TERM` 自動判定。`basic` パレットは最小端末で読みにくい `\x1b[90m`（暗灰 / dim）を避ける。 |
-| `--metrics <path>` | 全コマンド（および MCP ツール呼び出し） | CLI コマンド / MCP ツール呼び出し 1 回ごとに JSONL レコードを 1 行ずつ `<path>` に追記する。フラグ未指定時のフォールバックとして `CDIDX_METRICS=<path>` 環境変数でも同じ出力先を指定できる。Best-effort のため、ディレクトリが無い・read-only マウント等の IO 失敗は黙って握り潰し、本体コマンドを壊さない。 |
+| `--metrics <path>` | 全コマンド（および MCP ツール呼び出し） | CLI コマンド / MCP ツール呼び出し 1 回ごとに JSONL レコードを 1 行ずつ `<path>` に追記する。フラグ未指定時のフォールバックとして `CDIDX_METRICS=<path>` 環境変数でも同じ出力先を指定できる。起動時に出力先を開けない場合、cdidx は長さを制限した警告を出してメトリクスを無効化し、本体コマンドを続行する。その後の書き込みやローテーションの失敗はベストエフォートのまま扱われ、本体コマンドを壊さない。 |
 
 クエリ自体が `-` で始まる場合は `--query <query>` または `-- <query>` で渡してください。オプション値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡します。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
 
@@ -3973,7 +3973,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 ### メトリクス出力
 
-`--metrics <path>` を渡す（または環境変数 `CDIDX_METRICS=<path>` を設定する）と、`cdidx` は CLI コマンド 1 回・MCP ツール呼び出し 1 回ごとに 1 行の JSON レコードを指定パスへ追記します。両方指定されている場合はフラグが優先されます。出力先は append モードで開かれるため、複数の cdidx 実行が同じファイルへ書いてもきれいにインターリーブされます。出力は best-effort で、ディレクトリ不在・書き込み不可マウントなどの IO 失敗は黙って握り潰し、本体コマンドを壊しません。
+`--metrics <path>` を渡す（または環境変数 `CDIDX_METRICS=<path>` を設定する）と、`cdidx` は CLI コマンド 1 回・MCP ツール呼び出し 1 回ごとに 1 行の JSON レコードを指定パスへ追記します。両方指定されている場合はフラグが優先されます。出力先は append モードで開かれるため、複数の cdidx 実行が同じファイルへ書いてもきれいにインターリーブされます。起動時に出力先を開けない場合、cdidx は stderr に長さを制限した警告を出してメトリクスを無効化し、本体コマンドを続行します。その後のレコード書き込みやローテーションの失敗はベストエフォートのまま扱われ、本体コマンドを壊しません。
 
 各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
 

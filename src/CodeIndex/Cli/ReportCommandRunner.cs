@@ -663,43 +663,25 @@ public static class ReportCommandRunner
             detectEncodingFromByteOrderMarks: startOffset == 0,
             bufferSize: 8192,
             leaveOpen: false);
-        var text = reader.ReadToEnd();
         if (startOffset > 0)
         {
-            var firstNewline = text.IndexOf('\n', StringComparison.Ordinal);
-            if (firstNewline < 0)
+            if (reader.ReadLine() == null)
                 return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: true);
-            text = text[(firstNewline + 1)..];
         }
 
-        var lines = TakeLastLines(text, maxLines + 1);
+        var lines = new Queue<string>(maxLines + 1);
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            if (lines.Count == maxLines + 1)
+                lines.Dequeue();
+            lines.Enqueue(line);
+        }
+
         var linesTruncated = lines.Count > maxLines;
         if (linesTruncated)
-            lines = lines.Skip(1).ToArray();
-        return new ReportLogTailReadResult(lines, linesTruncated, startOffset > 0);
-    }
-
-    private static IReadOnlyList<string> TakeLastLines(string text, int maxLines)
-    {
-        var lines = new List<string>();
-        var end = text.Length;
-        if (end > 0 && text[end - 1] == '\n')
-            end--;
-        while (end > 0 && lines.Count < maxLines)
-        {
-            var start = text.LastIndexOf('\n', end - 1);
-            var lineStart = start + 1;
-            var line = text[lineStart..end];
-            if (line.EndsWith('\r'))
-                line = line[..^1];
-            lines.Add(line);
-            if (start < 0)
-                break;
-            end = start;
-        }
-
-        lines.Reverse();
-        return lines;
+            lines.Dequeue();
+        return new ReportLogTailReadResult(lines.ToArray(), linesTruncated, startOffset > 0);
     }
 
     internal static string RedactSensitiveFields(string line)
