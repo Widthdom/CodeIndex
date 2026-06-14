@@ -200,70 +200,18 @@ internal sealed class AuditLogSink : IDisposable
 
     /// <summary>
     /// Rotate the current file to `<path>.1`, cascading older files up to `RotationKeep` slots.
-    /// The newest record always lives in `<path>`; `<path>.(RotationKeep-1)` is the oldest retained slot.
-    /// The previous oldest is deleted so a slow drain of the audit log cannot fill the disk.
+    /// `<path>.(RotationKeep-1)` is the oldest retained slot, and the previous oldest is
+    /// deleted so a slow drain of the audit log cannot fill the disk.
     /// Caller must hold `_gate`.
     /// </summary>
     private void RotateLocked()
     {
-        try
-        {
-            // Drop the current oldest slot so we never spill past `RotationKeep` files.
-            // 最古スロットを先に削除して、合計ファイル数が RotationKeep を超えないようにする。
-            SafeDelete(SlotPath(RotationKeep - 1));
-
-            // Cascade surviving rotated slots upward (path.N → path.N+1).
-            // 既存ローテーション済みスロットを 1 つずつ古い側へずらす。
-            for (var slot = RotationKeep - 2; slot >= 1; slot--)
-            {
-                var current = SlotPath(slot);
-                var next = SlotPath(slot + 1);
-                var ioCurrent = LongPath.EnsureWindowsPrefix(current);
-                var ioNext = LongPath.EnsureWindowsPrefix(next);
-                if (!File.Exists(ioCurrent))
-                    continue;
-                if (File.Exists(ioNext))
-                    SafeDelete(ioNext);
-                File.Move(ioCurrent, ioNext);
-            }
-
-            var ioPath = LongPath.EnsureWindowsPrefix(_path);
-            if (File.Exists(ioPath))
-            {
-                var first = SlotPath(1);
-                var ioFirst = LongPath.EnsureWindowsPrefix(first);
-                if (File.Exists(ioFirst))
-                    SafeDelete(ioFirst);
-                File.Move(ioPath, ioFirst);
-            }
+        if (PrivateLogFile.TryRotateSlots(
+            _path,
+            RotationKeep,
+            onFailure: ex => RecordRotationFailure("rotation_failure", ex),
+            onCleanupFailure: ex => RecordRotationFailure("rotation_cleanup_failure", ex)))
             _bytesWritten = 0;
-        }
-        catch (Exception ex)
-        {
-            // Rotation failure (e.g. file locked by reader on Windows) degrades to "keep
-            // writing to the existing file"; the file may exceed maxBytes but we never
-            // crash the tool call.
-            // rotation 失敗時は既存ファイルへの追記継続にフォールバックし、ツール呼び出しを
-            // 壊さない。サイズが maxBytes を超えうるが、ベストエフォートを優先する。
-            RecordRotationFailure("rotation_failure", ex);
-        }
-    }
-
-    private string SlotPath(int slot) =>
-        slot <= 0 ? _path : _path + "." + slot.ToString(CultureInfo.InvariantCulture);
-
-    private void SafeDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-        catch (Exception ex)
-        {
-            // Ignore: rotation is best-effort.
-            RecordRotationFailure("rotation_cleanup_failure", ex);
-        }
     }
 
     private void RecordDropped(string reason, Exception exception)

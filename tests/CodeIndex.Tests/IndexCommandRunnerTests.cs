@@ -3258,6 +3258,48 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void MeasureReadableFileBytes_ReportsSkippedUnreadablePaths()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var readable = Path.Combine(projectRoot, "readable.txt");
+            File.WriteAllText(readable, "abc");
+            var diagnostics = new List<string>();
+
+            var summary = IndexCommandRunner.MeasureReadableFileBytes(
+                [readable, "bad\0path.txt"],
+                projectRoot,
+                diagnostics);
+
+            Assert.Equal(3, summary.BytesRead);
+            Assert.Equal(1, summary.SkippedFileCount);
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Contains("file_size_bytes_skipped", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("ArgumentException", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void FormatIndexRunDiagnostic_CollapsesAndBoundsExceptionMessages()
+    {
+        var message = "first line\n" + new string('x', 700);
+
+        var diagnostic = IndexCommandRunner.FormatIndexRunDiagnostic(
+            "indexed_head_metadata_write_failed",
+            new IOException(message));
+
+        Assert.StartsWith("indexed_head_metadata_write_failed: IOException: first line ", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', diagnostic);
+        Assert.EndsWith("...<truncated>", diagnostic, StringComparison.Ordinal);
+        Assert.True(diagnostic.Length <= 512 + "...<truncated>".Length);
+    }
+
+    [Fact]
     public void Run_GitRepo_PersistsIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();

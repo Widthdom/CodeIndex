@@ -16,6 +16,9 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
+    internal static Func<string, FileSystemInfo?>? ResolveDirectoryLinkTargetForTesting { get; set; }
+
     public enum SymlinkPolicy
     {
         None,
@@ -94,7 +97,10 @@ public class FileIndexer
 
     private readonly record struct ProjectMarkerFingerprintDirectory(string Path, IgnoreRuleSet IgnoreRules, bool IsProjectRoot);
 
-    internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete);
+    internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete)
+    {
+        public IReadOnlyList<ScanError> Warnings { get; init; } = [];
+    }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
@@ -103,6 +109,7 @@ public class FileIndexer
     private const int GitLfsPointerMaxBytes = 1024;
     private const int MaxGitmodulesBytes = 256 * 1024;
     private const int MaxGitmodulesLines = 4096;
+    private const int MaxProjectMarkerTraversalWarnings = 32;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private static readonly JsonDocumentOptions DockerfileJsonFormIssueDocumentOptions = new()
     {
@@ -485,6 +492,9 @@ public class FileIndexer
     // 通過モードとしてその直下ファイルを索引せず、submodule 方向のみ降りる。
     private readonly HashSet<string> _submoduleAncestorPaths;
     private readonly IReadOnlyList<ScanError> _submoduleLoadWarnings;
+
+    internal static Func<string, IEnumerable<string>>? EnumerateProjectMarkerDirectoriesForTesting { get; set; }
+    internal static Func<string, IReadOnlyList<string>>? ReadGitmodulesLinesForTesting { get; set; }
 
     private sealed class IgnoreRuleSet
     {
@@ -1076,11 +1086,15 @@ public class FileIndexer
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)
     {
+        var normalizedRoot = projectRoot;
         try
         {
-            var normalizedRoot = Path.GetFullPath(projectRoot);
-            if (TryCreateCaseVariant(normalizedRoot, out var rootVariant))
-                return Directory.Exists(LongPath.EnsureWindowsPrefix(rootVariant));
+            normalizedRoot = Path.GetFullPath(projectRoot);
+            if (FileSystemIgnoreCaseProbeForTesting is { } probeOverride)
+                return probeOverride(normalizedRoot);
+
+            if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
+                return ignoreCase;
 
             using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
             var probePath = probe.Path;
@@ -1088,19 +1102,49 @@ public class FileIndexer
             File.WriteAllText(prefixedProbePath, string.Empty);
             try
             {
-                return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
+                if (TryCreateCaseVariant(probePath, out var probeVariant))
+                    return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
             }
             finally
             {
                 if (File.Exists(prefixedProbePath))
                     File.Delete(prefixedProbePath);
             }
+
+            throw new CaseSensitivityProbeException(
+                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
+                normalizedRoot,
+                probePath: probePath);
         }
-        catch
+        catch (CaseSensitivityProbeException)
         {
-            return OperatingSystem.IsWindows();
+            throw;
+        }
+        catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+        {
+            throw new CaseSensitivityProbeException(
+                "Failed to determine filesystem case sensitivity.",
+                normalizedRoot,
+                ex);
         }
     }
+
+    private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
+    {
+        ignoreCase = false;
+        if (!TryCreateCaseVariant(path, out var variant))
+            return false;
+
+        ignoreCase = Directory.Exists(LongPath.EnsureWindowsPrefix(variant));
+        return true;
+    }
+
+    private static bool IsCaseSensitivityProbeFailure(Exception ex)
+        => ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or System.Security.SecurityException;
 
     private static bool TryCreateCaseVariant(string path, out string variant)
     {
@@ -1184,7 +1228,17 @@ public class FileIndexer
     internal static bool IsIgnoreFilePath(string path)
         => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
 
+    internal LanguageDetectionResult TryDetectLanguageForIndexing(string filePath, string? content = null)
+        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot);
+
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
+        => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null);
+
+    internal static LanguageDetectionResult TryDetectLanguage(
+        string filePath,
+        string? content,
+        SymlinkPolicy symlinkPolicy,
+        string? projectRoot)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -1235,7 +1289,7 @@ public class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
 
-        return TryDetectLanguageFromShebang(filePath);
+        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot);
     }
 
     private static bool TryDetectLanguageOverride(string filePath, out string language)
@@ -1438,7 +1492,9 @@ public class FileIndexer
         FileSystemInfo? target;
         try
         {
-            target = info.ResolveLinkTarget(returnFinalTarget: true);
+            target = ResolveDirectoryLinkTargetForTesting != null
+                ? ResolveDirectoryLinkTargetForTesting(subDir)
+                : info.ResolveLinkTarget(returnFinalTarget: true);
         }
         catch (FileNotFoundException)
         {
@@ -1451,6 +1507,14 @@ public class FileIndexer
         catch (IOException)
         {
             target = null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            errors.Add(new ScanError(
+                relative,
+                "Skipped symlinked directory because its target could not be resolved due to permissions.",
+                ScanIssueSeverity.Warning));
+            return true;
         }
 
         if (target?.FullName is not { Length: > 0 } targetPath || !Directory.Exists(LongPath.EnsureWindowsPrefix(targetPath)))
@@ -1497,28 +1561,33 @@ public class FileIndexer
         catch (IOException)
         {
         }
+        catch (UnauthorizedAccessException)
+        {
+        }
 
         return directory;
     }
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
+        => GetFileIndexability(filePath, SymlinkPolicy.None, projectRoot: null);
+
+    internal FileProbeStatus GetFileIndexabilityForIndexing(string filePath)
+        => GetFileIndexability(filePath, _symlinkPolicy, _projectRoot);
+
+    internal static FileProbeStatus GetFileIndexability(
+        string filePath,
+        SymlinkPolicy symlinkPolicy,
+        string? projectRoot)
     {
         if (OperatingSystem.IsWindows() && IsWindowsDevicePath(filePath))
             return FileProbeStatus.Unsupported;
 
-        // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
-        // dry-run) gets the same skip behavior. On Windows, Hidden/System paths are also rejected to avoid
-        // indexing OS-owned caches such as System Volume Information and $Recycle.Bin during broad scans.
-        // Using File.GetAttributes uses lstat-like semantics on .NET (does not follow the symlink target),
-        // which is what we need on both Windows and Unix.
-        // The Unix stat() path below follows symlinks, so without this guard a symlink-to-regular-file
-        // would otherwise slip through as Supported.
-        // ここで symlink / reparse point を弾くことで、フルスキャン・--files/--commits の update モード・
-        // dry-run など全呼び出し元に同じ skip 挙動を効かせる。Windows では Hidden/System 属性も弾き、
-        // broad scan で System Volume Information や $Recycle.Bin などの OS 管理 cache を索引しない。
-        // File.GetAttributes は .NET 上で lstat 相当（symlink target を辿らない）なので、Windows でも Unix でも必要な判定になる。
-        // Unix 側の stat() は symlink を辿るため、このガードが無いと symlink→通常ファイルが
-        // Supported として通過してしまう。
+        // File.GetAttributes uses lstat-like semantics on .NET (does not follow the symlink target),
+        // which lets us apply the active symlink policy before the Unix stat() path follows the target.
+        // Windows Hidden/System paths remain rejected to avoid indexing OS-owned caches during broad scans.
+        // File.GetAttributes は .NET 上で lstat 相当（symlink target を辿らない）なので、
+        // Unix の stat() が target を辿る前に symlink policy を適用できる。Windows では
+        // broad scan で OS 管理 cache を索引しないよう Hidden/System も引き続き弾く。
         FileAttributes attributes;
         try
         {
@@ -1545,6 +1614,9 @@ public class FileIndexer
                 : FileProbeStatus.ProbeFailed;
         }
 
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            return GetFileSymlinkIndexability(filePath, symlinkPolicy, projectRoot);
+
         if (HasSkippedAttributes(attributes))
             return FileProbeStatus.Unsupported;
 
@@ -1557,6 +1629,49 @@ public class FileIndexer
         return (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile
             ? FileProbeStatus.Supported
             : FileProbeStatus.Unsupported;
+    }
+
+    private static FileProbeStatus GetFileSymlinkIndexability(
+        string filePath,
+        SymlinkPolicy symlinkPolicy,
+        string? projectRoot)
+    {
+        if (symlinkPolicy == SymlinkPolicy.None)
+            return FileProbeStatus.Unsupported;
+
+        FileSystemInfo? target;
+        try
+        {
+            FileInfo info = new(LongPath.EnsureWindowsPrefix(filePath));
+            target = info.ResolveLinkTarget(returnFinalTarget: true);
+        }
+        catch (FileNotFoundException)
+        {
+            return FileProbeStatus.Missing;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return FileProbeStatus.Missing;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return FileProbeStatus.ProbeFailed;
+        }
+        catch (IOException)
+        {
+            return FileProbeStatus.ProbeFailed;
+        }
+
+        if (target?.FullName is not { Length: > 0 } targetPath)
+            return FileProbeStatus.Unsupported;
+
+        if (symlinkPolicy == SymlinkPolicy.Internal)
+        {
+            if (string.IsNullOrWhiteSpace(projectRoot) || !IsPathEqualOrParent(projectRoot, targetPath))
+                return FileProbeStatus.Unsupported;
+        }
+
+        return GetFileIndexability(targetPath, SymlinkPolicy.None, projectRoot: null);
     }
 
     public string GetFamilyScopeKey(string absolutePath, string? lang)
@@ -1640,6 +1755,7 @@ public class FileIndexer
                 Math.Max(1, maxDirectories),
                 Math.Max(1, maxMarkerFiles),
                 traversalState,
+                errors,
                 cancellationToken);
         }
         else
@@ -1658,7 +1774,12 @@ public class FileIndexer
         var payload = string.Join('\n', projectMarkers);
         return new ProjectMarkerFingerprintResult(
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
-            !traversalState.Truncated);
+            !traversalState.Truncated)
+        {
+            Warnings = errors
+                .Where(static error => !error.IsFatal)
+                .ToArray(),
+        };
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
@@ -1754,6 +1875,7 @@ public class FileIndexer
         int maxDirectories,
         int maxMarkerFiles,
         ProjectMarkerFingerprintTraversalState traversalState,
+        List<ScanError> errors,
         CancellationToken cancellationToken)
     {
         var pendingDirectories = new Stack<ProjectMarkerFingerprintDirectory>();
@@ -1776,7 +1898,6 @@ public class FileIndexer
             try
             {
                 var fullyScanned = true;
-                var errors = new List<ScanError>();
                 var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, current.IgnoreRules, errors, ref fullyScanned);
                 if (!loadResult.IgnoreRulesAvailable)
                 {
@@ -1785,7 +1906,6 @@ public class FileIndexer
                 }
 
                 var activeIgnoreRules = loadResult.Rules;
-                var prefixedDir = LongPath.EnsureWindowsPrefix(currentDirectory);
                 foreach (var markerFile in EnumerateProjectMarkerFiles(currentDirectory, patterns, cancellationToken))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -1803,7 +1923,7 @@ public class FileIndexer
                 }
 
                 var passthrough = IsSubmoduleAncestorPassthrough(currentDirectory);
-                foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
+                foreach (var enumeratedSubDir in EnumerateProjectMarkerDirectories(currentDirectory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
@@ -1827,15 +1947,38 @@ public class FileIndexer
             }
             catch (UnauthorizedAccessException)
             {
-                // Best-effort like ScanFiles(): unreadable directories do not abort the whole index.
-                // ScanFiles() と同じく best-effort。読めないディレクトリでは index 全体を落とさない。
+                AddProjectMarkerTraversalWarning(errors, currentDirectory, nameof(UnauthorizedAccessException));
+                traversalState.Truncated = true;
             }
             catch (IOException)
             {
-                // Best-effort like ScanFiles(): transient IO failures should only skip that subtree.
-                // ScanFiles() と同じく best-effort。IO 失敗はその subtree だけスキップする。
+                AddProjectMarkerTraversalWarning(errors, currentDirectory, nameof(IOException));
+                traversalState.Truncated = true;
             }
         }
+    }
+
+    private static IEnumerable<string> EnumerateProjectMarkerDirectories(string dir)
+        => EnumerateProjectMarkerDirectoriesForTesting is { } enumerate
+            ? enumerate(dir)
+            : Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir));
+
+    private void AddProjectMarkerTraversalWarning(List<ScanError> errors, string directory, string exceptionType)
+    {
+        if (errors.Count(static error => error.Message.StartsWith("Project marker discovery skipped", StringComparison.Ordinal))
+            >= MaxProjectMarkerTraversalWarnings)
+        {
+            return;
+        }
+
+        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, directory));
+        if (string.IsNullOrEmpty(relativePath))
+            relativePath = ".";
+
+        errors.Add(new ScanError(
+            relativePath,
+            $"Project marker discovery skipped this subtree because it could not be traversed ({exceptionType}).",
+            ScanIssueSeverity.Warning));
     }
 
     private static IReadOnlyList<string>? GetProjectMarkerPatterns(string? lang) => lang switch
@@ -2313,11 +2456,10 @@ public class FileIndexer
 
     private bool TryAcceptSupportedScannedFile(string file, DirectoryScanState scanState)
     {
-        // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
-        // (--files / --commits) path gets the same skip behavior without a second probe here.
-        // GetFileIndexability もファイル symlink / reparse point を拒否するため、
-        // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
-        var indexability = GetFileIndexability(file);
+        // Use the instance symlink policy here so full scans and update paths apply the same
+        // file-link behavior.
+        // full scan と update 経路で同じ file-link 挙動になるよう instance の symlink policy を使う。
+        var indexability = GetFileIndexabilityForIndexing(file);
         if (indexability == FileProbeStatus.Missing)
         {
             var relativePath = ToRelativePath(file);
@@ -2346,7 +2488,7 @@ public class FileIndexer
         var relativeFile = ToRelativePath(file);
         // Include files with a known extension/filename or an extensionless recognized shebang
         // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-        var language = TryDetectLanguage(file);
+        var language = TryDetectLanguageForIndexing(file);
         if (language.Status == FileProbeStatus.Missing)
         {
             scanState.Errors.Add(new ScanError(
@@ -2394,7 +2536,7 @@ public class FileIndexer
         {
             cancellationToken.ThrowIfCancellationRequested();
             var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
-            if (!IsReparsePoint(entry) || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+            if (!IsReparsePoint(entry) || ReparsePointTargetExists(entry))
                 continue;
 
             var relativeEntry = ToRelativePath(entry);
@@ -2403,6 +2545,40 @@ public class FileIndexer
             scanState.ListedDirectories.Add(relativeEntry);
             scanState.FullyScannedDirectories.Add(relativeEntry);
             scanState.AttributePrunedDirectories.Add(relativeEntry);
+        }
+    }
+
+    private static bool ReparsePointTargetExists(string path)
+    {
+        var entryPath = LongPath.EnsureWindowsPrefix(path);
+        if (Directory.Exists(entryPath))
+            return true;
+
+        try
+        {
+            FileInfo info = new(entryPath);
+            var target = info.ResolveLinkTarget(returnFinalTarget: true);
+            if (target?.FullName is not { Length: > 0 } targetPath)
+                return false;
+
+            var targetEntryPath = LongPath.EnsureWindowsPrefix(targetPath);
+            return File.Exists(targetEntryPath) || Directory.Exists(targetEntryPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
         }
     }
 
@@ -2959,18 +3135,26 @@ public class FileIndexer
 
         try
         {
-            if (!TryReadBoundedUtf8SidecarLines(
-                    prefixedGitmodulesPath,
-                    MaxGitmodulesBytes,
-                    MaxGitmodulesLines,
-                    out var lines,
-                    out var skippedReason))
+            IReadOnlyList<string> lines;
+            if (ReadGitmodulesLinesForTesting is { } readGitmodulesLines)
             {
-                warnings.Add(new ScanError(
-                    NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
-                    $"Skipped .gitmodules because {skippedReason}.",
-                    ScanIssueSeverity.Warning));
-                return (submodulePaths, ancestorPaths, warnings);
+                lines = readGitmodulesLines(prefixedGitmodulesPath);
+            }
+            else
+            {
+                if (!TryReadBoundedUtf8SidecarLines(
+                        prefixedGitmodulesPath,
+                        MaxGitmodulesBytes,
+                        MaxGitmodulesLines,
+                        out lines,
+                        out var skippedReason))
+                {
+                    warnings.Add(new ScanError(
+                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        $"Skipped .gitmodules because {skippedReason}.",
+                        ScanIssueSeverity.Warning));
+                    return (submodulePaths, ancestorPaths, warnings);
+                }
             }
 
             foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
@@ -2999,14 +3183,28 @@ public class FileIndexer
                     ancestorPaths.Add(string.Join('/', segments, 0, i));
             }
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            AddGitmodulesDiscoveryWarning(warnings, projectRoot, gitmodulesPath, ex.GetType().Name);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
+            AddGitmodulesDiscoveryWarning(warnings, projectRoot, gitmodulesPath, ex.GetType().Name);
         }
 
         return (submodulePaths, ancestorPaths, warnings);
+    }
+
+    private static void AddGitmodulesDiscoveryWarning(
+        List<ScanError> warnings,
+        string projectRoot,
+        string gitmodulesPath,
+        string exceptionType)
+    {
+        warnings.Add(new ScanError(
+            NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+            $"Skipped .gitmodules because it could not be read ({exceptionType}).",
+            ScanIssueSeverity.Warning));
     }
 
     private static bool TryReadBoundedUtf8SidecarLines(
@@ -3173,7 +3371,7 @@ public class FileIndexer
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var indexability = GetFileIndexability(absolutePath);
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 
@@ -3188,7 +3386,7 @@ public class FileIndexer
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguage(absolutePath, loaded.Content).Language,
+            Lang = TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language,
             Size = loaded.SizeBytes,
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
@@ -3211,7 +3409,7 @@ public class FileIndexer
         return new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguage(absolutePath).Language,
+            Lang = TryDetectLanguageForIndexing(absolutePath).Language,
             Size = info.Exists ? info.Length : 0,
             Lines = 0,
             Checksum = null,
@@ -4099,9 +4297,12 @@ public class FileIndexer
     /// NUL bytes and over-cap first lines are treated as non-scripts.
     /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
     /// </summary>
-    private static LanguageDetectionResult TryDetectLanguageFromShebang(string filePath)
+    private static LanguageDetectionResult TryDetectLanguageFromShebang(
+        string filePath,
+        SymlinkPolicy symlinkPolicy,
+        string? projectRoot)
     {
-        var indexability = GetFileIndexability(filePath);
+        var indexability = GetFileIndexability(filePath, symlinkPolicy, projectRoot);
         if (indexability == FileProbeStatus.Missing)
             return new LanguageDetectionResult(FileProbeStatus.Missing, null);
 

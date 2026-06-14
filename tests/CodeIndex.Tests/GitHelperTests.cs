@@ -1109,6 +1109,28 @@ exit 7
         Assert.False(Directory.Exists(Path.Combine(nonRepoDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_ProbeFailureThrowsStructuredFilesystemError_Issue3439()
+    {
+        var nonRepoDir = Path.Combine(_tempDir, $"non_repo_probe_failure_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nonRepoDir);
+        var previousProbe = GitHelper.FileSystemIgnoreCaseProbeForTesting;
+        GitHelper.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
+        try
+        {
+            var ex = Assert.Throws<CodeIndexException>(() => GitHelper.ResolveIgnoreCase(nonRepoDir));
+
+            Assert.Equal(CommandErrorCodes.FileSystemCaseProbeFailed, ex.Code);
+            Assert.Equal(CodeIndexExceptionCategory.Filesystem, ex.Category);
+            Assert.Equal(Path.GetFullPath(nonRepoDir), ex.Path);
+            Assert.IsType<IOException>(ex.InnerException);
+        }
+        finally
+        {
+            GitHelper.FileSystemIgnoreCaseProbeForTesting = previousProbe;
+        }
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");

@@ -961,11 +961,18 @@ public partial class DbReader
         var filesSkipped = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunFilesSkippedMetaKey));
         var parseErrors = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunParseErrorsMetaKey));
         var bytesRead = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadMetaKey));
+        var bytesReadSkippedFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey));
+        var bytesReadIncomplete = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadIncompleteMetaKey));
         var rowsUpserted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsUpsertedMetaKey));
         var rowsDeleted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsDeletedMetaKey));
         var peakMemoryMb = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunPeakMemoryMbMetaKey));
+        var diagnostics = ParseMetaStringList(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsMetaKey));
+        var diagnosticCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticCountMetaKey));
+        var diagnosticsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey));
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
-            && parseErrors == null && bytesRead == null && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null)
+            && parseErrors == null && bytesRead == null && bytesReadSkippedFileCount == null && bytesReadIncomplete == null
+            && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
+            && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null)
         {
             return null;
         }
@@ -979,9 +986,14 @@ public partial class DbReader
             FilesSkipped = filesSkipped,
             ParseErrors = parseErrors,
             BytesRead = bytesRead,
+            BytesReadSkippedFileCount = bytesReadSkippedFileCount,
+            BytesReadIncomplete = bytesReadIncomplete,
             RowsUpserted = rowsUpserted,
             RowsDeleted = rowsDeleted,
             PeakMemoryMb = peakMemoryMb,
+            Diagnostics = diagnostics,
+            DiagnosticCount = diagnosticCount,
+            DiagnosticsTruncated = diagnosticsTruncated,
         };
     }
 
