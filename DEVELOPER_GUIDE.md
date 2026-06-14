@@ -139,7 +139,7 @@ git status --short -- '**/packages.lock.json'
 | CLI runners | `Cli/IndexCommandRunner.cs`, `Cli/QueryCommandRunner.cs` | Indexing commands, search/definition/reference/caller/callee/symbol/file/map/inspect/outline/status commands, and argument parsing. |
 | CLI support | `Cli/ConsoleUi.cs`, `Cli/CommandExitCodes.cs`, `Cli/SearchSnippetFormatter.cs`, `Cli/LineWidthFormatter.cs` | User-facing output, exit codes, focused snippet formatting, and line-width clamping. |
 | Workspace resolution | `Cli/DbPathResolver.cs`, `Cli/GitHelper.cs`, `Cli/IndexFreshnessChecker.cs`, `Cli/WorkspaceMetadataEnricher.cs`, `Cli/GlobalToolLog.cs` | DB path resolution, git-aware refresh inputs, DB/worktree freshness checks, workspace metadata, and persistent install logs. |
-| SQLite storage | `Database/DbContext.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL-backed SQLite schema, batch writes, stale-file cleanup, FTS5 search, symbol/reference lookups, excerpts, outlines, inspect bundles, status, and dependency queries. |
+| SQLite storage | `Database/DbContext.cs`, `Database/DbConnectionFactory.cs`, `Database/DbPragmaPolicy.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL-backed SQLite schema, connection/retry and pragma policy, batch writes, stale-file cleanup, FTS5 search, symbol/reference lookups, excerpts, outlines, inspect bundles, status, and dependency queries. |
 | Repository map | `Database/RepoMapBuilder.cs` | Repo-level overview for `map`: file stats, likely entrypoints, hotspots, and module grouping. |
 | File scanning | `Indexer/Scanning/FileIndexer.cs`, `Indexer/Scanning/ChunkSplitter.cs` | Shared full/update path filtering, ignore handling, language detection, file records, and 80-line chunks with 10-line overlap. |
 | Symbol extraction | `Indexer/Symbols/SymbolExtractor.cs`, `Indexer/Symbols/SymbolExtractor.Lisp.cs`, `Indexer/Symbols/CSharpSymbolNameNormalizer.cs` | Hybrid symbol extraction across supported languages plus C# persisted-name canonicalization. |
@@ -435,7 +435,7 @@ Current stable codes and triggers:
 
 | Area | Policy |
 |---|---|
-| Writable open pragmas | `DbContext` opens writable indexes in WAL mode, sets `PRAGMA auto_vacuum=INCREMENTAL` before schema creation for new empty databases, sets `PRAGMA application_id=0x43444958` (`CDIX`), sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. |
+| Writable open pragmas | `DbContext` opens writable indexes in WAL mode, applies connection performance pragmas through `DbPragmaPolicy`, sets `PRAGMA auto_vacuum=INCREMENTAL` before schema creation for new empty databases, sets `PRAGMA application_id=0x43444958` (`CDIX`), sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. |
 | Application id | The application id lets file-type detection tools distinguish cdidx databases from generic SQLite databases. |
 | Durable WAL file set | When WAL is active, the durable SQLite index is the `.db` file plus sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`. |
 | `synchronous=NORMAL` | Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. |
@@ -2324,7 +2324,7 @@ git status --short -- '**/packages.lock.json'
 | CLI ランナー | `Cli/IndexCommandRunner.cs`, `Cli/QueryCommandRunner.cs` | index と search / definition / reference / caller / callee / symbol / file / map / inspect / outline / status 系コマンド、引数解析。 |
 | CLI サポート | `Cli/ConsoleUi.cs`, `Cli/CommandExitCodes.cs`, `Cli/SearchSnippetFormatter.cs`, `Cli/LineWidthFormatter.cs` | ユーザー向け出力、終了コード、一致中心スニペット、行幅クランプ。 |
 | ワークスペース解決 | `Cli/DbPathResolver.cs`, `Cli/GitHelper.cs`, `Cli/IndexFreshnessChecker.cs`, `Cli/WorkspaceMetadataEnricher.cs`, `Cli/GlobalToolLog.cs` | DB パス解決、git-aware な更新入力、DB/作業ツリー鮮度確認、workspace metadata、install log。 |
-| SQLite ストレージ | `Database/DbContext.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL 付き SQLite schema、batch write、古い file の cleanup、FTS5 search、symbol/reference lookup、excerpt、outline、inspect bundle、status、dependency query。 |
+| SQLite ストレージ | `Database/DbContext.cs`, `Database/DbConnectionFactory.cs`, `Database/DbPragmaPolicy.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL 付き SQLite schema、connection/retry と pragma policy、batch write、古い file の cleanup、FTS5 search、symbol/reference lookup、excerpt、outline、inspect bundle、status、dependency query。 |
 | リポジトリマップ | `Database/RepoMapBuilder.cs` | `map` 用の repo overview: file stats、entrypoint 候補、hotspot、module grouping。 |
 | ファイル走査 | `Indexer/Scanning/FileIndexer.cs`, `Indexer/Scanning/ChunkSplitter.cs` | full/update 共通の path filtering、ignore 処理、language detection、file record、80 行 chunk と 10 行 overlap。 |
 | シンボル抽出 | `Indexer/Symbols/SymbolExtractor.cs`, `Indexer/Symbols/SymbolExtractor.Lisp.cs`, `Indexer/Symbols/CSharpSymbolNameNormalizer.cs` | 対応言語の hybrid symbol extraction と C# persisted name canonicalization。 |
@@ -2670,7 +2670,7 @@ alternative action を同じ場所へ追加してください。
 
 | 項目 | policy |
 |---|---|
-| writable open pragma | `DbContext` は writable な index を WAL mode で開き、新規の空 DB では schema 作成前に `PRAGMA auto_vacuum=INCREMENTAL` を設定し、`PRAGMA application_id=0x43444958` (`CDIX`)、`PRAGMA synchronous=NORMAL`、`PRAGMA wal_autocheckpoint=1000` を固定します。 |
+| writable open pragma | `DbContext` は writable な index を WAL mode で開き、connection performance pragma を `DbPragmaPolicy` 経由で適用し、新規の空 DB では schema 作成前に `PRAGMA auto_vacuum=INCREMENTAL` を設定し、`PRAGMA application_id=0x43444958` (`CDIX`)、`PRAGMA synchronous=NORMAL`、`PRAGMA wal_autocheckpoint=1000` を固定します。 |
 | application id | application id は file-type detection tool が cdidx database と generic SQLite database を区別するための印です。 |
 | durable WAL file set | WAL が有効な場合、永続化された SQLite index は `.db` file と sibling の `.db-wal` / `.db-shm` file の組です。backup、diagnostics bundle、手動 copy では sibling が存在する場合に 3 file すべてを含めるか、live connection から SQLite の `.backup` command/API を使う必要があります。`codeindex.db` だけを copy すると、committed page がまだ `codeindex.db-wal` に残っているため stale snapshot になる可能性があります。 |
 | `synchronous=NORMAL` | WAL では `NORMAL` により 500 row 単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency を保ちます。 |
