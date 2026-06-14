@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Xml.Linq;
 
 namespace CodeIndex.Tests;
@@ -41,6 +42,51 @@ public class CiWorkflowTests
         Assert.Equal(
             "./TestResults",
             document.Root?.Element("RunConfiguration")?.Element("ResultsDirectory")?.Value);
+    }
+
+    [Fact]
+    public void DotnetSdkAndMutationToolVersions_ArePinned()
+    {
+        var root = GetRepositoryRoot();
+        var codeowners = File.ReadAllText(Path.Combine(root, ".github", "CODEOWNERS"));
+        using var globalJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "global.json")));
+        var sdk = globalJson.RootElement.GetProperty("sdk");
+
+        Assert.Equal("9.0.301", sdk.GetProperty("version").GetString());
+        Assert.Equal("disable", sdk.GetProperty("rollForward").GetString());
+        Assert.Contains("/global.json @Widthdom", codeowners);
+
+        foreach (var workflowName in new[]
+        {
+            "changelog-fragments.yml",
+            "codeql.yml",
+            "dotnet.yml",
+            "mutation-testing.yml",
+            "release.yml",
+        })
+        {
+            var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", workflowName));
+            Assert.Contains("8.0.413", workflow);
+            Assert.Contains("9.0.301", workflow);
+            Assert.DoesNotContain("8.0.x", workflow);
+            Assert.DoesNotContain("9.0.x", workflow);
+        }
+
+        var mutationWorkflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "mutation-testing.yml"));
+        Assert.Contains("dotnet tool install --global dotnet-stryker --version 4.14.0", mutationWorkflow);
+    }
+
+    [Fact]
+    public void DotnetWorkflow_UsesSdkCompatibleNuGetAudit()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
+
+        Assert.Contains(
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1",
+            workflow);
+        Assert.DoesNotContain(
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore",
+            workflow);
     }
 
     [Fact]

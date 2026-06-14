@@ -1,16 +1,24 @@
 # Base image digests are multi-arch manifest list digests. Refresh with:
-# docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine
-FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build
+# docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:9.0.301-alpine3.22
+FROM mcr.microsoft.com/dotnet/sdk:9.0.301-alpine3.22@sha256:bdd1c9e2215a71e43d2f0c6978ace0a0652d7ecc21bf6f659d42d840500e1c44 AS build
 
 WORKDIR /src
 COPY Directory.Build.props nuget.config version.json ./
 COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/
-RUN dotnet restore src/CodeIndex/CodeIndex.csproj
+
+ARG TARGETARCH=amd64
+RUN case "$TARGETARCH" in \
+      amd64) rid="linux-musl-x64" ;; \
+      arm64) rid="linux-musl-arm64" ;; \
+      *) echo "Unsupported container architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    dotnet restore src/CodeIndex/CodeIndex.csproj \
+      --locked-mode
+
 COPY src/CodeIndex/ src/CodeIndex/
 COPY LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md ./
 COPY LICENSES/ LICENSES/
 
-ARG TARGETARCH=amd64
 ARG CDIDX_BUILD_COMMIT=unknown
 ARG CDIDX_BUILD_DATE
 ARG CDIDX_BUILD_DIRTY=unknown
@@ -23,6 +31,7 @@ RUN case "$TARGETARCH" in \
     dotnet publish src/CodeIndex/CodeIndex.csproj \
       --configuration Release \
       --runtime "$rid" \
+      --no-restore \
       --self-contained true \
       -p:PublishSingleFile=true \
       -p:PublishTrimmed=true \
