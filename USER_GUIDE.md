@@ -365,7 +365,9 @@ cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
 database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
-to the current checkout.
+to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
+use the sibling project directory; other database paths fall back to the process
+current directory.
 
 ## Flag compatibility and migrations
 
@@ -2808,7 +2810,9 @@ cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
 
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
-`--prune-paths` は import した `indexed_project_root` metadata を現在の checkout に書き換えます。
+`--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
+`.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
+それ以外の database path では process current directory に fallback します。
 
 ## フラグ互換性と移行
 
