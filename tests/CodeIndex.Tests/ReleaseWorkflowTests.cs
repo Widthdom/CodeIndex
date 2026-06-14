@@ -661,8 +661,8 @@ public class ReleaseWorkflowTests
         Assert.Contains("CDIDX_BUILD_DATE=${{ steps.container-metadata.outputs.date }}", workflow);
         Assert.Contains("CDIDX_BUILD_DIRTY=${{ steps.container-metadata.outputs.dirty }}", workflow);
         Assert.Contains("*-*) ;;", workflow);
-        Assert.Contains("docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:8.0-alpine", dockerfile);
-        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c370e3233822fbe7d43666715d9b5b5cda2ab AS build", dockerfile);
+        Assert.Contains("docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:9.0.301-alpine3.22", dockerfile);
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:9.0.301-alpine3.22@sha256:bdd1c9e2215a71e43d2f0c6978ace0a0652d7ecc21bf6f659d42d840500e1c44 AS build", dockerfile);
         Assert.Contains("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime", dockerfile);
         Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
         Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime", dockerfile);
@@ -693,6 +693,9 @@ public class ReleaseWorkflowTests
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
+        Assert.Contains("dotnet restore src/CodeIndex/CodeIndex.csproj", dockerfile);
+        Assert.Contains("--locked-mode", dockerfile);
+        Assert.Contains("--no-restore", dockerfile);
         Assert.Contains("ENTRYPOINT [\"/usr/local/bin/cdidx-entrypoint\"]", dockerfile);
         Assert.Contains("CdidxBuildCommitOverride", project);
         Assert.Contains("CdidxBuildDateOverride", project);

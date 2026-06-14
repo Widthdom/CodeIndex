@@ -36,7 +36,9 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.413
+            9.0.301
 
       - name: Validate changelog fragments
         run: dotnet run --project tools/CodeIndex.Changelog -- check

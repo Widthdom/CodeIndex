@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifiers>linux-musl-x64;linux-musl-arm64</RuntimeIdentifiers>
     <AssemblyName>cdidx</AssemblyName>
     <RootNamespace>CodeIndex</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -48,6 +48,7 @@ internal static class McpErrorEnvelope
     public const string CategoryIndexMissing = "index_missing";
     public const string CategoryIndexStale = "index_stale";
     public const string CategoryIndexCorrupted = "index_corrupted";
+    public const string CategoryRegexTimeout = "regex_timeout";
     public const string CategoryInternalError = "internal_error";
 
     /// <summary>

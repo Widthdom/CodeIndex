@@ -1413,11 +1413,12 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | `7` | Invalid argument value (for example invalid `--kind`, `--color`, or `--metrics`) |
 | `8` | Cancelled by signal / Ctrl-C (`SIGINT` / `SIGTERM`-style cancellation path) |
 | `9` | Install or upgrade installer failure (for example a failed `install.sh` start, timeout, download, checksum, or preparation step) |
+| `10` | Runtime error from bounded query/index execution (for example regex match timeout or extraction stall) |
 | `99` | Unhandled exception after command dispatch; run `cdidx report` and inspect the lifecycle log |
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). MCP tool errors today surface as `isError: true` text content without a structured `error_code` field, and the bracketed CLI constant is not guaranteed to appear in the MCP message text — see [Troubleshooting](#troubleshooting) for the documented MCP message per failure mode that MCP clients should match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -1433,6 +1434,8 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E010_USAGE_ERROR` | Argument parse error, conflicting flags, or unknown subcommand |
 | `E011_DIRECTORY_NOT_FOUND` | Project / target directory passed to `cdidx index` does not exist |
 | `E012_INTERRUPTED` | The user interrupted the command with Ctrl-C / signal cancellation |
+| `E013_INDEX_EXTRACTION_STALLED` | Index extraction made no forward progress within the bounded stall timeout |
+| `E014_REGEX_MATCH_TIMEOUT` | A user-supplied regular expression exceeded the bounded match timeout while executing |
 
 ### Debugging reader errors
 
@@ -2369,7 +2372,7 @@ Suggestion history readers can query the local store by lifecycle status, create
 
 ## Troubleshooting
 
-This section catalogs the failure modes you are most likely to hit while running `cdidx` and the concrete recovery steps for each one. Most coded CLI errors carry a stable code from the `E001`–`E011` taxonomy: human stderr prefixes the constant in brackets (for example `Error [E002_DB_LOCKED]: ...`) and the CLI `--json` envelope adds an optional `error_code` field. The canonical taxonomy lives in [Error codes](#error-codes) under `## Options` above; entries below that have a stable CLI error code tag it in the heading so CLI scripts can branch on it without parsing prose. Other entries cover warning, status-field, or verbose scan-message conditions that do not carry an `error_code` — those document the exact symptom string or `status --json` field to watch instead. MCP tool errors today surface as `isError: true` text content with no structured `error_code` field, and the bracketed CLI constant is not guaranteed to appear in the MCP message text (the E001 entry below is one such case). Until MCP exposes a structured error field, MCP clients should match the documented MCP message text where an entry records one (only the entries below that explicitly describe an MCP symptom), and otherwise rely on the CLI / `status --json` / `--verbose` symptom the entry documents.
+This section catalogs the failure modes you are most likely to hit while running `cdidx` and the concrete recovery steps for each one. Most coded CLI errors carry a stable code from the `E001`–`E014` taxonomy: human stderr prefixes the constant in brackets (for example `Error [E002_DB_LOCKED]: ...`) and the CLI `--json` envelope adds an optional `error_code` field. The canonical taxonomy lives in [Error codes](#error-codes) under `## Options` above; entries below that have a stable CLI error code tag it in the heading so CLI scripts can branch on it without parsing prose. Other entries cover warning, status-field, or verbose scan-message conditions that do not carry an `error_code` — those document the exact symptom string or `status --json` field to watch instead. MCP tool errors usually surface as `isError: true` text content, but newer entries can also expose structured fields under `structuredContent`; where such fields exist, the entry below records the stable keys. MCP clients should match the documented MCP message text where an entry records one (only the entries below that explicitly describe an MCP symptom), and otherwise rely on the CLI / `status --json` / `--verbose` symptom the entry documents.
 
 ### Common failure modes
 
@@ -2426,32 +2429,37 @@ When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`
    - Cause: the raw FTS5 string failed to parse — usually unbalanced quotes, an unsupported operator combo, a trailing `NEAR/OR`, or a column qualifier other than `content:`.
    - Recovery: drop `--fts` to use the default tokenizer, or fix the FTS5 expression. For prefix matching of a single token, prefer trailing `*` (e.g. `auth*`) without `--fts`.
 
-10. **Files indexed with replacement characters (non-UTF-8 input)**
+10. **Regex match timeout** (`E014_REGEX_MATCH_TIMEOUT`)
+    - Symptom: CLI `find --regex` exits `10` with `Error [E014_REGEX_MATCH_TIMEOUT]: ...`; `--json` responses include `error_code: "E014_REGEX_MATCH_TIMEOUT"` and `category: "regex_timeout"`. MCP `find_in_file` returns `isError: true` with `structuredContent.category: "regex_timeout"`, `retry_safe: true`, `error_code: "E014_REGEX_MATCH_TIMEOUT"`, and `timeout_ms`.
+    - Cause: the user-supplied regular expression exceeded the bounded match timeout while scanning indexed file contents.
+    - Recovery: simplify the pattern, narrow the scan with `--path` / `--lang`, or omit `--regex` when searching for literal text.
+
+11. **Files indexed with replacement characters (non-UTF-8 input)**
     - Symptom: `cdidx index --verbose` shows `[OK]` lines but the warning `<path>: contains invalid UTF-8 bytes (replaced with U+FFFD)` is recorded. `cdidx validate` later reports `Likely non-UTF8 encoding (N U+FFFD over M chars, X.X%); source may be SHIFT_JIS, GBK, ISO-8859-1, or UTF-16 without BOM` for the same files.
     - Cause: the file is encoded in something other than UTF-8 (UTF-16 LE/BE files with BOM are decoded losslessly). To preserve indexability `cdidx` falls back to UTF-8 with replacement, but symbol names and snippets are corrupted at the offending bytes.
     - Recovery: re-save the file as UTF-8 (or add a UTF-16 BOM if you must keep UTF-16) and re-index — a normal `cdidx index .` will pick up the fixed file. Run `cdidx validate` to enumerate every affected file in one pass.
 
-11. **Files skipped: permission denied mid-scan**
+12. **Files skipped: permission denied mid-scan**
     - Symptom: `Could not scan directory due to permissions.` or `Could not probe file for indexability/language.` in `--verbose` output; the file is absent from search results.
     - Cause: the indexing process lacks read permission on the directory or file — common with system directories, other users' homes, or files locked by an editor.
     - Recovery: fix file/directory permissions, or exclude the path via `.cdidxignore`. The index keeps running across the rest of the tree; no rebuild is required after permissions are fixed — a normal `cdidx index .` will pick up the now-readable files.
 
-12. **File rejected: too large**
+13. **File rejected: too large**
     - Symptom: `validate --kind file_too_large` reports `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` The file is listed in `files`, but no chunks, symbols, or references are indexed for it, so it does not appear in search.
     - Cause: the file exceeds the configured per-file size limit. Indexing huge generated files would waste tokens and bloat the DB.
     - Recovery: shrink or split the file, add it to `.cdidxignore`, or raise the limit with `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` when the file is legitimate source. Generated artifacts should generally be gitignored too.
 
-13. **Feature unavailable on trimmed / AOT build** (`E009_FEATURE_UNAVAILABLE`)
+14. **Feature unavailable on trimmed / AOT build** (`E009_FEATURE_UNAVAILABLE`)
     - Symptom: `Error [E009_FEATURE_UNAVAILABLE]: ...` when invoking flags such as `--json` on a build that lacks the required code paths.
     - Cause: the binary was produced with trimming or AOT settings that stripped the requested feature.
     - Recovery: use the standard published build, or rebuild without aggressive trimming. Check `cdidx --version` and the release notes for the feature matrix.
 
-14. **Argument or usage error** (`E010_USAGE_ERROR`)
+15. **Argument or usage error** (`E010_USAGE_ERROR`)
     - Symptom: `Error [E010_USAGE_ERROR]: ...` with a brief explanation of the offending flag combination, unknown subcommand, or missing argument.
     - Cause: conflicting flags (e.g. `--fts` with `--exact-substring`), an unknown option, or a literal starting with `--` mistaken for a flag.
     - Recovery: consult `cdidx <subcommand> --help`. For literals that begin with `--`, pass them via `--query "--path"` or quote them after `--`.
 
-15. **Project directory missing** (`E011_DIRECTORY_NOT_FOUND`)
+16. **Project directory missing** (`E011_DIRECTORY_NOT_FOUND`)
     - Symptom: `Error [E011_DIRECTORY_NOT_FOUND]: ...` with the requested path.
     - Cause: the project / target directory does not exist on disk, or the path was typed for a different host.
     - Recovery: pass an existing absolute path. `cdidx` does not create the project directory on your behalf.
@@ -3866,11 +3874,12 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `7` | 引数値が不正（例: 不正な `--kind`、`--color`、`--metrics`） |
 | `8` | シグナル / Ctrl-C によるキャンセル（`SIGINT` / `SIGTERM` 系のキャンセル経路） |
 | `9` | install / upgrade installer の失敗（例: `install.sh` 起動失敗、timeout、download、checksum、準備処理の失敗） |
+| `10` | 制限付きのクエリ／インデックス実行で発生した実行時エラー（regex match timeout や抽出停止など） |
 | `99` | コマンド dispatch 後の想定外例外。`cdidx report` とライフサイクルログを確認 |
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。MCP ツールエラーは現状 `isError: true` のテキストコンテンツとして返り、構造化された `error_code` フィールドを持たず、本文に CLI 側の角括弧付き定数が必ず含まれる保証もありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文は [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
@@ -3886,6 +3895,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E010_USAGE_ERROR` | 引数のパースエラー、フラグの競合、未知のサブコマンド |
 | `E011_DIRECTORY_NOT_FOUND` | `cdidx index` に渡したプロジェクト / 対象ディレクトリが存在しない |
 | `E012_INTERRUPTED` | Ctrl-C / signal cancellation でユーザーがコマンドを中断した |
+| `E013_INDEX_EXTRACTION_STALLED` | 制限付きの停止判定時間内に index 抽出が前進しなかった |
+| `E014_REGEX_MATCH_TIMEOUT` | ユーザー指定の正規表現が実行中に制限付き match timeout を超えた |
 
 ### reader エラーのデバッグ
 
@@ -4807,7 +4818,7 @@ cdidx には、AI エージェントがギャップや不具合に気づいた�
 
 ## トラブルシューティング
 
-`cdidx` を使っているときに遭遇しやすい代表的な失敗モードと、その具体的な復旧手順をまとめています。コード付きの CLI エラーには `E001`〜`E011` の安定コードが付与され、人間向け stderr では定数を角括弧でくるんで（例: `Error [E002_DB_LOCKED]: ...`）、CLI `--json` の envelope では任意フィールド `error_code` として付加されます。正準な分類表は上の `## オプション一覧` 内 [エラーコード](#エラーコード) にあるので、安定 CLI エラーコードを持つ項目では見出しで併記し、CLI スクリプトが文面 grep 不要で分岐できるようにしています。コードを持たない警告・ステータスフィールド・`--verbose` スキャン診断などの項目では、代わりに監視対象となる具体的なメッセージ文字列や `status --json` フィールドを記載しています。MCP ツールエラーは現状 `isError: true` のテキストコンテンツとして返り、構造化された `error_code` フィールドは持ちません。また、MCP メッセージ本文に CLI 側の角括弧付き定数が必ず含まれる保証もありません（下記 E001 の項目がその一例です）。MCP 側に構造化フィールドが追加されるまで、MCP クライアントは MCP の症状を明示記載している該当項目では記録済みの MCP メッセージ本文と照合し、それ以外の項目では各項目に記載した CLI / `status --json` / `--verbose` の症状を参照してください。
+`cdidx` を使っているときに遭遇しやすい代表的な失敗モードと、その具体的な復旧手順をまとめています。コード付きの CLI エラーには `E001`〜`E014` の安定コードが付与され、人間向け stderr では定数を角括弧でくるんで（例: `Error [E002_DB_LOCKED]: ...`）、CLI `--json` の envelope では任意フィールド `error_code` として付加されます。正準な分類表は上の `## オプション一覧` 内 [エラーコード](#エラーコード) にあるので、安定 CLI エラーコードを持つ項目では見出しで併記し、CLI スクリプトが文面 grep 不要で分岐できるようにしています。コードを持たない警告・ステータスフィールド・`--verbose` スキャン診断などの項目では、代わりに監視対象となる具体的なメッセージ文字列や `status --json` フィールドを記載しています。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい項目では `structuredContent` に構造化フィールドを持つこともあります。そのようなフィールドがある場合は、下記の項目で安定キーを記録しています。MCP クライアントは MCP の症状を明示記載している該当項目では記録済みの MCP メッセージ本文と照合し、それ以外の項目では各項目に記載した CLI / `status --json` / `--verbose` の症状を参照してください。
 
 ### よくある失敗モード
 
@@ -4873,32 +4884,37 @@ SELinux profile が取れれば confinement-aware hint を追加します。
    - 原因: 生の FTS5 文字列のパースに失敗した。引用符の不整合、サポートされない演算子の組み合わせ、末尾の `NEAR/OR`、または `content:` 以外の列修飾子などが多い。
    - 復旧: `--fts` を外してデフォルトトークナイザを使うか、FTS5 表現を直す。単一トークンのプレフィックスマッチなら `--fts` を使わずに `auth*` のような末尾 `*` で十分。
 
-10. **置換文字付きで索引化される（非 UTF-8 入力）**
+10. **正規表現の match timeout**（`E014_REGEX_MATCH_TIMEOUT`）
+    - 症状: CLI の `find --regex` が `Error [E014_REGEX_MATCH_TIMEOUT]: ...` を出して終了コード `10` で終了する。`--json` 応答には `error_code: "E014_REGEX_MATCH_TIMEOUT"` と `category: "regex_timeout"` が含まれる。MCP の `find_in_file` は `isError: true` を返し、`structuredContent.category: "regex_timeout"`、`retry_safe: true`、`error_code: "E014_REGEX_MATCH_TIMEOUT"`、`timeout_ms` を含む。
+    - 原因: ユーザー指定の正規表現が、索引済みファイル内容の走査中に制限付き match timeout を超えた。
+    - 復旧: 正規表現を単純化する、`--path` / `--lang` で走査範囲を絞る、またはリテラル検索では `--regex` を外す。
+
+11. **置換文字付きで索引化される（非 UTF-8 入力）**
     - 症状: `cdidx index --verbose` の出力は `[OK]` だが、`<path>: contains invalid UTF-8 bytes (replaced with U+FFFD)` という警告が記録される。あとで `cdidx validate` を実行すると同じファイルに対し `Likely non-UTF8 encoding (N U+FFFD over M chars, X.X%); source may be SHIFT_JIS, GBK, ISO-8859-1, or UTF-16 without BOM` を報告する。
     - 原因: ファイルが UTF-8 ではない（BOM 付き UTF-16 LE/BE は損失なく decode される）。索引化を継続するために `cdidx` は U+FFFD への置換付き UTF-8 にフォールバックするが、該当バイト位置のシンボル名やスニペットは壊れる。
     - 復旧: ファイルを UTF-8 で保存し直す（UTF-16 を維持する場合は BOM を付ける）と、通常の `cdidx index .` で取り込まれる。`cdidx validate` を使えば対象ファイルを一括で列挙できる。
 
-11. **ファイルがスキップされる: 走査中に権限エラー**
+12. **ファイルがスキップされる: 走査中に権限エラー**
     - 症状: `--verbose` 出力に `Could not scan directory due to permissions.` や `Could not probe file for indexability/language.` が出て、当該ファイルが検索結果に現れない。
     - 原因: インデックスプロセスがディレクトリ／ファイルの読み取り権限を持っていない。システムディレクトリ、他ユーザーのホーム、エディタが排他保持しているファイルなどで起きやすい。
     - 復旧: ファイル／ディレクトリ権限を直すか、`.cdidxignore` で除外する。インデックスはツリーの他の部分は走査を続けるので、権限修正後は通常の `cdidx index .` で取り込まれ、`--rebuild` は不要。
 
-12. **ファイルが拒否される: サイズ超過**
+13. **ファイルが拒否される: サイズ超過**
     - 症状: `validate --kind file_too_large` が `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` を報告する。対象 file は `files` に載るが、chunk、symbol、reference は index されないため search には現れない。
     - 原因: ファイルが設定された 1 ファイルあたりサイズ上限を超えている。巨大な生成ファイルを索引化するとトークンを浪費し DB が肥大化する。
     - 復旧: ファイルを縮小／分割する、`.cdidxignore` に追加する、または正当な source file なら `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` で上限を上げる。生成物は基本的に `.gitignore` 対象でもあるはず。
 
-13. **トリム / AOT ビルドで機能が無い**（`E009_FEATURE_UNAVAILABLE`）
+14. **トリム / AOT ビルドで機能が無い**（`E009_FEATURE_UNAVAILABLE`）
     - 症状: `--json` などのフラグで `Error [E009_FEATURE_UNAVAILABLE]: ...` が出る。
     - 原因: trimming / AOT の設定で必要なコードパスが落とされたバイナリ。
     - 復旧: 公式の通常ビルドを使う、または積極的なトリムなしで再ビルドする。`cdidx --version` と各リリースの機能マトリクスを確認すること。
 
-14. **引数 / 利用エラー**（`E010_USAGE_ERROR`）
+15. **引数 / 利用エラー**（`E010_USAGE_ERROR`）
     - 症状: `Error [E010_USAGE_ERROR]: ...` で衝突したフラグ、未知のサブコマンド、または不足引数の短い説明が出る。
     - 原因: 競合するフラグ（例: `--fts` と `--exact-substring`）、未知のオプション、または `--` で始まるリテラルをフラグと誤認した。
     - 復旧: `cdidx <subcommand> --help` を確認する。`--` で始まるリテラルは `--query "--path"` のように渡すか、`--` の後にクォートして渡す。
 
-15. **プロジェクトディレクトリが存在しない**（`E011_DIRECTORY_NOT_FOUND`）
+16. **プロジェクトディレクトリが存在しない**（`E011_DIRECTORY_NOT_FOUND`）
     - 症状: 指定パスを伴う `Error [E011_DIRECTORY_NOT_FOUND]: ...`。
     - 原因: プロジェクト／対象ディレクトリがディスク上に無い、または別ホスト用のパスを打っている。
     - 復旧: 実在する絶対パスを渡す。`cdidx` は対象ディレクトリを勝手に作らない。

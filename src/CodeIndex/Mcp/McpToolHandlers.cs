@@ -3635,7 +3635,21 @@ public partial class McpServer
             {
                 results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
             }
-            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+            catch (RegexMatchTimeoutException ex) when (regex)
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    $"regular expression timed out after {QueryCommandRunner.FormatRegexMatchTimeout(ex.MatchTimeout)} while scanning indexed file contents.",
+                    category: McpErrorEnvelope.CategoryRegexTimeout,
+                    suggestion: "Simplify the pattern, narrow the scan with path/lang filters, or disable regex mode for literal text.",
+                    retrySafe: true,
+                    extraData: new JsonObject
+                    {
+                        ["error_code"] = CommandErrorCodes.RegexMatchTimeout,
+                        ["timeout_ms"] = ex.MatchTimeout.TotalMilliseconds,
+                    });
+            }
+            catch (ArgumentException) when (regex)
             {
                 return CreateToolErrorResponse(id, "invalid regular expression. Check regex syntax and retry.");
             }
@@ -6038,7 +6052,8 @@ public partial class McpServer
 
     private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        var requestToken = _currentRequestToken.Value;
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound, requestToken))
         {
             var detail = isNotFound
                 ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."

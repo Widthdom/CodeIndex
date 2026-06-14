@@ -5,6 +5,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Cli;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -53,9 +54,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             Task<string?> responseTask;
@@ -71,45 +70,39 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             }
             catch (Exception ex)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending symbol extraction request.",
+                    stopwatch);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             if (sendException != null)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending symbol extraction request.",
+                    stopwatch);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, cancellationToken, out var responseException))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             if (responseException != null)
             {
-                KillWorker();
-                stopwatch.Stop();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading symbol extraction response.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading symbol extraction response.",
+                    stopwatch);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
             {
-                KillWorker();
-                stopwatch.Stop();
-                return TimedOut(stopwatch.ElapsedMilliseconds);
+                return TimedOutAfterKill(stopwatch);
             }
 
             stopwatch.Stop();
@@ -130,8 +123,9 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             }
             catch (JsonException ex)
             {
-                KillWorker();
-                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.", stopwatch.ElapsedMilliseconds);
+                return FailureAfterKill(
+                    $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.",
+                    stopwatch);
             }
 
             if (response == null)
@@ -171,10 +165,16 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 // Best effort: disposal should not throw after indexing has completed.
             }
 
-            if (!WaitForWorkerExit(process, 1000))
-                KillWorker();
+            var waitResult = WaitForWorkerExit(process, 1000);
+            if (!waitResult.Exited)
+            {
+                var cleanupDiagnostic = WorkerProcessCleanupDiagnostics.Combine(waitResult.Diagnostic, KillWorker());
+                LogCleanupDiagnostic("symbol_extraction_worker_cleanup_failed", cleanupDiagnostic);
+            }
             else
+            {
                 ClearExitedWorker();
+            }
         }
     }
 
@@ -220,13 +220,14 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
     }
 
-    private void KillWorker()
+    private string? KillWorker()
     {
         if (process == null)
-            return;
+            return null;
 
-        SymbolExtractionWorker.TryKillProcess(process);
+        var cleanupDiagnostic = SymbolExtractionWorker.TryKillProcess(process);
         ClearExitedWorker();
+        return cleanupDiagnostic;
     }
 
     private void ClearExitedWorker()
@@ -246,11 +247,27 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
-    private static SymbolExtractionWorkerResult TimedOut(long durationMs)
+    private SymbolExtractionWorkerResult FailureAfterKill(string message, Stopwatch stopwatch)
+    {
+        var cleanupDiagnostic = KillWorker();
+        stopwatch.Stop();
+        return Failure(
+            WorkerProcessCleanupDiagnostics.AppendToMessage(message, cleanupDiagnostic),
+            stopwatch.ElapsedMilliseconds);
+    }
+
+    private SymbolExtractionWorkerResult TimedOutAfterKill(Stopwatch stopwatch)
+    {
+        var cleanupDiagnostic = KillWorker();
+        stopwatch.Stop();
+        return TimedOut(stopwatch.ElapsedMilliseconds, cleanupDiagnostic);
+    }
+
+    private static SymbolExtractionWorkerResult TimedOut(long durationMs, string? workerError = null)
         => new(
             Success: false,
             TimedOut: true,
-            WorkerError: null,
+            WorkerError: workerError,
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
@@ -280,7 +297,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            KillWorker();
+            _ = KillWorker();
             throw;
         }
         catch (Exception ex)
@@ -308,16 +325,13 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
-    private static bool WaitForWorkerExit(Process process, int milliseconds)
+    internal static WorkerProcessExitWaitResult WaitForWorkerExit(Process process, int milliseconds)
+        => WorkerProcessCleanupDiagnostics.WaitForExit(process, milliseconds);
+
+    private static void LogCleanupDiagnostic(string message, string? diagnostic)
     {
-        try
-        {
-            return process.WaitForExit(milliseconds);
-        }
-        catch
-        {
-            return false;
-        }
+        if (!string.IsNullOrWhiteSpace(diagnostic))
+            GlobalToolLog.Error($"{message} {diagnostic}");
     }
 
     private static void ForwardCapturedStderr(string? capturedStderr)
@@ -347,7 +361,8 @@ internal static class SymbolExtractionWorker
         TextWriter error,
         out int exitCode,
         int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
-        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+        CancellationToken cancellationToken = default)
     {
         if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
         {
@@ -355,7 +370,7 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes, cancellationToken);
         return true;
     }
 
@@ -464,27 +479,8 @@ internal static class SymbolExtractionWorker
         return string.IsNullOrWhiteSpace(runnerAssemblyPath);
     }
 
-    internal static void TryKillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-        }
-        catch
-        {
-            // Best effort: timeout reporting must not fail because cleanup failed.
-        }
-
-        try
-        {
-            process.WaitForExit(WorkerKillWaitMilliseconds);
-        }
-        catch
-        {
-            // Best effort: the parent continues with the timeout diagnostic.
-        }
-    }
+    internal static string? TryKillProcess(Process process)
+        => WorkerProcessCleanupDiagnostics.TryKill(process, WorkerKillWaitMilliseconds);
 
     private static int RunCommand(
         string[] args,
@@ -492,7 +488,8 @@ internal static class SymbolExtractionWorker
         TextWriter output,
         TextWriter error,
         int maxProtocolLineCharacters,
-        int maxProtocolLineUtf8Bytes)
+        int maxProtocolLineUtf8Bytes,
+        CancellationToken cancellationToken)
     {
         if (!TryResolveWorkerOptions(
                 args,
@@ -512,6 +509,7 @@ internal static class SymbolExtractionWorker
         {
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 WorkerResponse response;
                 WorkerRequest request;
                 string? requestJson;
@@ -545,7 +543,11 @@ internal static class SymbolExtractionWorker
 
                 try
                 {
-                    response = InvokeInsideWorker(request, workerOptions);
+                    response = InvokeInsideWorker(request, workerOptions, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -558,6 +560,10 @@ internal static class SymbolExtractionWorker
 
             return 0;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CommandExitCodes.CancelledBySignal;
+        }
         catch (Exception ex)
         {
             error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
@@ -565,7 +571,7 @@ internal static class SymbolExtractionWorker
         }
     }
 
-    private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options)
+    private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options, CancellationToken cancellationToken)
     {
         var originalOut = Console.Out;
         var originalError = Console.Error;
@@ -576,15 +582,19 @@ internal static class SymbolExtractionWorker
             Console.SetOut(capturedOut);
             Console.SetError(capturedError);
             WriteConsoleOutputForTestingIfRequested(options);
-            DelayForTestingIfRequested(options);
+            DelayForTestingIfRequested(options, cancellationToken);
             var symbols = SymbolExtractor.Extract(
                 request.FileId,
                 request.Lang,
                 request.Content,
                 request.FilePath,
                 request.ProjectRoot,
-                CancellationToken.None);
+                cancellationToken);
             return new WorkerResponse(symbols, null, capturedError.GetCapturedText());
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -603,12 +613,13 @@ internal static class SymbolExtractionWorker
             Console.Out.WriteLine(options.ConsoleStdoutForTesting);
     }
 
-    private static void DelayForTestingIfRequested(WorkerOptions options)
+    private static void DelayForTestingIfRequested(WorkerOptions options, CancellationToken cancellationToken)
     {
         if (options.DelayMillisecondsForTesting is not { } milliseconds)
             return;
 
-        Thread.Sleep(milliseconds);
+        if (cancellationToken.WaitHandle.WaitOne(milliseconds))
+            cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
