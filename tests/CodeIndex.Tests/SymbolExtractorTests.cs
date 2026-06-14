@@ -242,6 +242,71 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Extract_FunctionalLanguages_IndexConservativeDeclarations_Issue3527()
+    {
+        const string clojure = """
+            (ns demo.core)
+            (defrecord User [id name])
+            (defprotocol Store
+              (save! [this value]))
+            (defn load-user [id]
+              id)
+            (defonce cache (atom {}))
+            """;
+
+        var clojureSymbols = SymbolExtractor.Extract(1, "clojure", clojure);
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo.core");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "protocol" && symbol.Name == "Store");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load-user");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "property" && symbol.Name == "cache");
+
+        const string erlang = """
+            -module(sample_app).
+            -record(user, {id, name}).
+            -type user_id() :: integer().
+            load_user(Id) ->
+                Id.
+            """;
+
+        var erlangSymbols = SymbolExtractor.Extract(2, "erlang", erlang);
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "sample_app");
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "user");
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "type" && symbol.Name == "user_id");
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+
+        const string ocaml = """
+            module Store = struct
+            type user = { id : int }
+            let rec find_user id = id
+            val save_user : user -> unit
+            open Core
+            """;
+
+        var ocamlSymbols = SymbolExtractor.Extract(3, "ocaml", ocaml);
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Store");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "type" && symbol.Name == "user");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "find_user");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "save_user");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "import" && symbol.Name == "Core");
+
+        const string raku = """
+            unit module Demo::Store;
+            role Persistable { }
+            class User { }
+            sub load-user($id) { $id }
+            my $cache = {};
+            """;
+
+        var rakuSymbols = SymbolExtractor.Extract(4, "raku", raku);
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Demo::Store");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "interface" && symbol.Name == "Persistable");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load-user");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "property" && symbol.Name == "$cache");
+    }
+
 
 
 

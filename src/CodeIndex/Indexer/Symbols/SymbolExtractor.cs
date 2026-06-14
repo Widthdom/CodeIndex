@@ -19,6 +19,7 @@ public static partial class SymbolExtractor
     public const int CSharpContractVersion = 2;
     public const int DockerfileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
+    public const int FunctionalLanguageContractVersion = 2;
     private static readonly Regex GraphQLInputBlockRegex = new(
         @"^\s*(?:extend\s+)?input\s+(?<name>\w+)[^{]*\{(?<body>.*?)^\s*\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Singleline);
@@ -55,6 +56,7 @@ public static partial class SymbolExtractor
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
             "sass" or "stylus" or "xml" => StyleAndXamlContractVersion,
+            "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
@@ -1707,6 +1709,42 @@ public static partial class SymbolExtractor
             new("interface", new Regex(@"^\s*defprotocol\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("protocol_impl", new Regex(@"^\s*defimpl\s+(?<name>[\w.]+(?:\s*,\s*for:\s*(?:\[[^\]]+\]|[\w.{}]+))?)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("import",   new Regex(@"^\s*(?:import|alias|use|require)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+        ],
+        ["clojure"] =
+        [
+            // Clojure forms are parenthesized, so use conservative line anchors.
+            // Clojure の form は括弧ベースなので、保守的な行アンカーだけを拾う。
+            new("namespace", new Regex(@"^\s*\(\s*ns\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class",    new Regex(@"^\s*\(\s*(?:defrecord|deftype)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("protocol", new Regex(@"^\s*\(\s*defprotocol\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*\(\s*(?:defn-?|defmacro|defmulti|defmethod)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*\(\s*(?:def|defonce)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["erlang"] =
+        [
+            new("namespace", new Regex(@"^\s*-module\s*\(\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*\)\s*\.", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("struct",   new Regex(@"^\s*-record\s*\(\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*,", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("type",     new Regex(@"^\s*-(?:type|opaque)\s+(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*(?:\(|::)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*\([^)\r\n]*\)\s*(?:when\b[^-\r\n]*)?->", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",   new Regex(@"^\s*-(?:import|include(?:_lib)?)\s*\(\s*(?<name>[^)\r\n]+)\)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["ocaml"] =
+        [
+            new("namespace", new Regex(@"^\s*module\s+(?:type\s+)?(?<name>[A-Z][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class",    new Regex(@"^\s*class(?:\s+type)?\s+(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("type",     new Regex(@"^\s*type\s+(?:nonrec\s+)?(?:'[\w]+\s+)*(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*let\s+(?:rec\s+)?(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*val\s+(?<name>[A-Za-z_][A-Za-z0-9_']*)\s*:", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",   new Regex(@"^\s*open\s+(?<name>[A-Z][\w.']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["raku"] =
+        [
+            new("namespace", new Regex(@"^\s*(?:unit\s+)?(?:module|package)\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("interface", new Regex(@"^\s*(?:unit\s+)?role\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
+            new("class",    new Regex(@"^\s*(?:unit\s+)?(?:class|grammar)\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:my|our|multi|proto|only)\s+)*(?:sub|method|submethod|macro)\s+(?<name>[\w:!?.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*(?:(?:my|our|state|constant)\s+)*(?<name>[$@%&]\w[\w-]*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["dart"] =
         [

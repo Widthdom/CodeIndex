@@ -2297,7 +2297,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         }
 
-        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "tcl" })
+        foreach (var searchOnly in new[] { "crystal", "d", "julia", "nim", "tcl" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -2307,6 +2307,23 @@ public partial class QueryCommandRunnerTests
                 $"{searchOnly} must advertise reference_extraction=false");
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
                 $"{searchOnly} must advertise graph_queries=false");
+        }
+
+        foreach (var symbolOnly in new[] { "clojure", "erlang", "ocaml", "raku" })
+        {
+            Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
+            var entry = languages[symbolOnly];
+            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{symbolOnly} must advertise symbol_extraction=true");
+            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{symbolOnly} must advertise reference_extraction=false");
+            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{symbolOnly} must advertise graph_queries=false");
+
+            var gaps = entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()).ToList();
+            Assert.DoesNotContain("missing-symbols", gaps);
+            Assert.Contains("missing-references", gaps);
+            Assert.Contains("missing-graph", gaps);
         }
 
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
