@@ -593,6 +593,8 @@ public partial class ReferenceExtractorTests
                     <TextBox x:Name="SearchBox" />
                     <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
                     <TextBlock Text="{x:Bind ViewModel.LiveTitle, Mode=OneWay}" />
+                    <!-- helper(arg) -->
+                    <TextBlock>helper(arg)</TextBlock>
                     <TextBox x:Name="DetailsBox" />
                     <Binding Path="DetailsModel.Name" ElementName="DetailsBox" />
                     <Binding.Path>SelectedItem.DisplayName</Binding.Path>
@@ -626,6 +628,9 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "OneWay"
             && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call");
         Assert.Contains(references, reference =>
             reference.SymbolName == "SearchBox"
             && reference.ReferenceKind == "reference");

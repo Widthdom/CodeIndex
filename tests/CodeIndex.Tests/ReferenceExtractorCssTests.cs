@@ -425,7 +425,9 @@ public partial class ReferenceExtractorTests
               border-radius: $radius
 
             .button
+              content: '@use "string-theme"'
               color: $primary
+              color: red // @use "comment-theme"
               padding: $spacing-base * 2
               +rounded(4px)
             """;
@@ -436,6 +438,12 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "theme"
             && reference.ReferenceKind == "import"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "string-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-theme"
+            && reference.ReferenceKind == "import");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
@@ -464,7 +472,9 @@ public partial class ReferenceExtractorTests
             // $commentedAccent
             // rounded(8px)
             .button
+              content: "@require 'string-theme'"
               color $primary
+              color red // @require "comment-theme"
               background $accent
               background-image url("logo.png")
               border-color rgb(0, 0, 0)
@@ -477,6 +487,12 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "theme"
             && reference.ReferenceKind == "import"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "string-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-theme"
+            && reference.ReferenceKind == "import");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
