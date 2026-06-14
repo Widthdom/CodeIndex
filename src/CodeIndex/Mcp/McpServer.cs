@@ -59,6 +59,12 @@ public partial class McpServer : IDisposable
     // JSON-RPC request id ごとの実行中 CTS。MCP `$/cancelRequest` 通知でサーバー全体ではなく
     // 対象ツール呼び出しだけを cancel するため (#1418)。
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRequests = new(StringComparer.Ordinal);
+    // A stdio cancellation frame can win the scheduler race against the request task that
+    // read the preceding request frame. Keep a tiny, short-lived tombstone so registration
+    // consumes that cancellation instead of silently dropping it (#1418).
+    // stdio の cancellation frame が、直前の request frame を読んだ task の登録より先に
+    // 処理されることがある。短命の tombstone を置き、登録時に cancel を消費する (#1418)。
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingRequestCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
     // Token observed by the currently executing tool call. Set just before
     // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
@@ -200,9 +206,11 @@ public partial class McpServer : IDisposable
     // tool calls wedge the SQLite reader lock or balloon memory (#1567).
     // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
     internal const int DefaultMaxConcurrency = 8;
+    private const int MaxPendingRequestCancellationCount = 64;
     internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan DefaultEofDrainTimeout = TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan DefaultEofPostCancelDrainTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PendingRequestCancellationTtl = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
         : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency, null)
@@ -1607,6 +1615,8 @@ public partial class McpServer : IDisposable
                 suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
                 retrySafe: true);
         }
+        if (TryConsumePendingRequestCancellation(requestKey))
+            CancelRequestCts(requestCts);
         RequestRegisteredForTests?.Invoke(id);
 
         var previousToken = _currentRequestToken.Value;
@@ -1736,9 +1746,51 @@ public partial class McpServer : IDisposable
             return;
         if (_activeRequests.TryGetValue(requestKey, out var cts))
         {
-            try { cts.Cancel(); }
-            catch (ObjectDisposedException) { /* completed while cancellation was being delivered. */ }
+            CancelRequestCts(cts);
+            return;
         }
+
+        RememberPendingRequestCancellation(requestKey);
+        if (_activeRequests.TryGetValue(requestKey, out cts) && TryConsumePendingRequestCancellation(requestKey))
+            CancelRequestCts(cts);
+    }
+
+    private void RememberPendingRequestCancellation(string requestKey)
+    {
+        var now = DateTimeOffset.UtcNow;
+        PrunePendingRequestCancellations(now);
+        if (_pendingRequestCancellations.Count < MaxPendingRequestCancellationCount)
+            _pendingRequestCancellations[requestKey] = now;
+    }
+
+    private bool TryConsumePendingRequestCancellation(string requestKey)
+    {
+        var now = DateTimeOffset.UtcNow;
+        PrunePendingRequestCancellations(now);
+        if (!_pendingRequestCancellations.TryGetValue(requestKey, out var cancelledAt))
+            return false;
+        if (now - cancelledAt > PendingRequestCancellationTtl)
+        {
+            _pendingRequestCancellations.TryRemove(requestKey, out _);
+            return false;
+        }
+
+        return _pendingRequestCancellations.TryRemove(requestKey, out _);
+    }
+
+    private void PrunePendingRequestCancellations(DateTimeOffset now)
+    {
+        foreach (var entry in _pendingRequestCancellations)
+        {
+            if (now - entry.Value > PendingRequestCancellationTtl)
+                _pendingRequestCancellations.TryRemove(entry.Key, out _);
+        }
+    }
+
+    private static void CancelRequestCts(CancellationTokenSource cts)
+    {
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { /* completed while cancellation was being delivered. */ }
     }
 
     private static bool IsCancellationFrame(string frame)

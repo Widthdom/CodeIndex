@@ -3547,6 +3547,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task CancellationNotificationBeforeRequestRegistration_CancelsMatchingRequest()
+    {
+        using var server = new McpServer(_dbPath, "test");
+        var cancel = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1418}}""")!;
+
+        Assert.Null(server.HandleMessage(cancel));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1418,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = await server.HandleMessageAsync(request);
+
+        var error = response!["error"]!;
+        Assert.Equal(McpErrorEnvelope.CodeRequestCancelled, error["code"]!.GetValue<int>());
+        Assert.Equal("request_cancelled", error["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task RunAsync_IndexWithProgressToken_EmitsProgressNotificationBeforeResult()
     {
         var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_progress_{Guid.NewGuid():N}");
