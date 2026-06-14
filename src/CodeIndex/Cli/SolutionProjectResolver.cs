@@ -78,7 +78,7 @@ internal static class SolutionProjectResolver
         SolutionProjectResolverLimits limits,
         IList<string>? traversalDiagnostics)
     {
-        var solution = ResolveSolutionPath(workspaceRoot, solutionPath, limits);
+        var solution = ResolveSolutionPath(workspaceRoot, solutionPath, limits, traversalDiagnostics);
         if (solution != null)
             return ParseSolution(solution, workspaceRoot, indexer);
 
@@ -201,7 +201,8 @@ internal static class SolutionProjectResolver
     private static string? ResolveSolutionPath(
         string workspaceRoot,
         string? solutionPath,
-        SolutionProjectResolverLimits limits)
+        SolutionProjectResolverLimits limits,
+        IList<string>? traversalDiagnostics)
     {
         if (!string.IsNullOrWhiteSpace(solutionPath))
         {
@@ -212,8 +213,37 @@ internal static class SolutionProjectResolver
         }
 
         var solutions = new List<string>();
-        foreach (var solution in Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(workspaceRoot), "*.sln", SearchOption.TopDirectoryOnly))
+        IEnumerable<string> solutionEntries;
+        try
         {
+            solutionEntries = Directory.EnumerateFiles(
+                LongPath.EnsureWindowsPrefix(workspaceRoot),
+                "*.sln",
+                SearchOption.TopDirectoryOnly);
+        }
+        catch (Exception ex) when (IsExpectedFilesystemDiscoveryException(ex))
+        {
+            AddAutomaticSolutionDiscoveryDiagnostic(workspaceRoot, workspaceRoot, ex, limits, traversalDiagnostics);
+            return null;
+        }
+
+        using var enumerator = solutionEntries.GetEnumerator();
+        while (true)
+        {
+            string solution;
+            try
+            {
+                if (!enumerator.MoveNext())
+                    break;
+
+                solution = enumerator.Current;
+            }
+            catch (Exception ex) when (IsExpectedFilesystemDiscoveryException(ex))
+            {
+                AddAutomaticSolutionDiscoveryDiagnostic(workspaceRoot, workspaceRoot, ex, limits, traversalDiagnostics);
+                break;
+            }
+
             if (solutions.Count >= limits.MaxAutomaticSolutionCandidates)
             {
                 throw new InvalidOperationException(
@@ -225,6 +255,31 @@ internal static class SolutionProjectResolver
 
         solutions.Sort(StringComparer.OrdinalIgnoreCase);
         return solutions.Count == 1 ? solutions[0] : null;
+    }
+
+    private static bool IsExpectedFilesystemDiscoveryException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException or NotSupportedException;
+
+    private static void AddAutomaticSolutionDiscoveryDiagnostic(
+        string workspaceRoot,
+        string directory,
+        Exception ex,
+        SolutionProjectResolverLimits limits,
+        IList<string>? traversalDiagnostics)
+    {
+        var reason = ex switch
+        {
+            UnauthorizedAccessException => "permissions",
+            NotSupportedException => "an unsupported path",
+            _ => "an I/O error",
+        };
+        AddTraversalDiagnostic(
+            workspaceRoot,
+            directory,
+            "solution files",
+            $"{reason}; pass --solution <path> to select a solution explicitly",
+            limits,
+            traversalDiagnostics);
     }
 
     private static IReadOnlyList<DotNetProjectInfo> ParseSolution(
