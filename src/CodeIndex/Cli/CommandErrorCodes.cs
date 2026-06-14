@@ -56,4 +56,7 @@ internal static class CommandErrorCodes
 
     /// <summary>A user-supplied regular expression exceeded the bounded match timeout while executing.</summary>
     public const string RegexMatchTimeout = "E014_REGEX_MATCH_TIMEOUT";
+
+    /// <summary>Filesystem case-sensitivity probing failed before a safe path-casing policy could be selected.</summary>
+    public const string FileSystemCaseProbeFailed = "E015_FS_CASE_PROBE_FAILED";
 }

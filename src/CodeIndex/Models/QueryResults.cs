@@ -1148,12 +1148,22 @@ public sealed class StatusLastIndexRun
     public long? ParseErrors { get; set; }
     [JsonPropertyName("bytes_read")]
     public long? BytesRead { get; set; }
+    [JsonPropertyName("bytes_read_skipped_file_count")]
+    public long? BytesReadSkippedFileCount { get; set; }
+    [JsonPropertyName("bytes_read_incomplete")]
+    public bool? BytesReadIncomplete { get; set; }
     [JsonPropertyName("rows_upserted")]
     public long? RowsUpserted { get; set; }
     [JsonPropertyName("rows_deleted")]
     public long? RowsDeleted { get; set; }
     [JsonPropertyName("peak_memory_mb")]
     public long? PeakMemoryMb { get; set; }
+    [JsonPropertyName("diagnostics")]
+    public List<string>? Diagnostics { get; set; }
+    [JsonPropertyName("diagnostic_count")]
+    public long? DiagnosticCount { get; set; }
+    [JsonPropertyName("diagnostics_truncated")]
+    public bool? DiagnosticsTruncated { get; set; }
 }
 
 public sealed class StatusFailedOrPartialIndexRun

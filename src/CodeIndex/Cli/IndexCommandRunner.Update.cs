@@ -34,6 +34,7 @@ public static partial class IndexCommandRunner
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
+        List<string>? indexRunDiagnostics,
         CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
@@ -107,6 +108,7 @@ public static partial class IndexCommandRunner
                 currentHeadCommit,
                 priorSymbolKindFilterSignature,
                 initialCwd,
+                indexRunDiagnostics,
                 showNextSteps: false,
                 cancellationToken);
         }
@@ -118,6 +120,7 @@ public static partial class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
+        warnings += AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();
         var readinessDemoted = false;
@@ -273,7 +276,7 @@ public static partial class IndexCommandRunner
             {
                 foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
                 {
-                    var detection = FileIndexer.TryDetectLanguage(filePath);
+                    var detection = indexer.TryDetectLanguageForIndexing(filePath);
                     if (detection.Status == FileIndexer.FileProbeStatus.Supported
                         && detection.Language == "csharp")
                     {
@@ -414,8 +417,8 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var indexability = FileIndexer.GetFileIndexability(absPath);
-                    var detection = FileIndexer.TryDetectLanguage(absPath);
+                    var indexability = indexer.GetFileIndexabilityForIndexing(absPath);
+                    var detection = indexer.TryDetectLanguageForIndexing(absPath);
                     if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
                     {
                         var message = $"{relPath}: skipped because it was deleted during indexing.";
@@ -562,7 +565,7 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var statReusableLanguage = TryDetectStatReusableLanguage(absPath);
+                    var statReusableLanguage = TryDetectStatReusableLanguage(indexer, absPath);
                     var statMatchedId = TryGetUnchangedFileIdFromStat(
                         writer,
                         projectRoot,
@@ -989,11 +992,15 @@ public static partial class IndexCommandRunner
         }
         if (errors == 0)
         {
-            StampIndexedHeadMetadata(writer, projectRoot, cancellationToken);
-            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit);
+            StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
+            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit, indexRunDiagnostics);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
+            var bytesRead = MeasureReadableFileBytes(
+                targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar))),
+                projectRoot,
+                indexRunDiagnostics);
             StampLastIndexRunMetadata(
                 writer,
                 "update",
@@ -1002,10 +1009,12 @@ public static partial class IndexCommandRunner
                 updated + removed + skipped,
                 skipped,
                 errors,
-                SumReadableFileBytes(targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar)))),
+                bytesRead.BytesRead,
+                bytesRead.SkippedFileCount,
                 updated,
                 removed,
-                memoryTimelineForStamp);
+                memoryTimelineForStamp,
+                indexRunDiagnostics);
         }
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);

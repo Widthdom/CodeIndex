@@ -25,9 +25,12 @@ public static partial class IndexCommandRunner
     internal const int MaxCommitRefLength = 256;
     internal const int MaxGitExcludeBytes = 256 * 1024;
     internal const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
+    private const int MaxIndexRunDiagnosticLength = 512;
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
     private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);
+
+    internal readonly record struct FileByteReadSummary(long BytesRead, long SkippedFileCount);
 
     private sealed record ScanCheckpoint(
         int Version,
@@ -264,7 +267,8 @@ public static partial class IndexCommandRunner
                 // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
                 db.InitializeSchema();
-                AddToGitExclude(options.ProjectPath, dbPath);
+                var indexRunDiagnostics = new List<string>();
+                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics);
 
                 var writer = new DbWriter(db);
                 var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
@@ -272,8 +276,8 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
-                    : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
+                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                     db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
@@ -412,9 +416,39 @@ public static partial class IndexCommandRunner
         long filesSkipped,
         long parseErrors,
         long bytesRead,
+        long bytesReadSkippedFileCount,
         long rowsUpserted,
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline)
+        => StampLastIndexRunMetadata(
+            writer,
+            mode,
+            startedAtUtc,
+            durationMs,
+            filesScanned,
+            filesSkipped,
+            parseErrors,
+            bytesRead,
+            bytesReadSkippedFileCount,
+            rowsUpserted,
+            rowsDeleted,
+            memoryTimeline,
+            diagnostics: null);
+
+    private static void StampLastIndexRunMetadata(
+        DbWriter writer,
+        string mode,
+        DateTime startedAtUtc,
+        long durationMs,
+        long filesScanned,
+        long filesSkipped,
+        long parseErrors,
+        long bytesRead,
+        long bytesReadSkippedFileCount,
+        long rowsUpserted,
+        long rowsDeleted,
+        IndexMemoryTimelineJsonResult? memoryTimeline,
+        IReadOnlyList<string>? diagnostics)
     {
         writer.SetMeta(DbContext.LastIndexRunModeMetaKey, mode);
         writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
@@ -423,12 +457,75 @@ public static partial class IndexCommandRunner
         writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesReadSkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
             ? null
             : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        StampLastIndexRunDiagnostics(writer, diagnostics);
         writer.ClearLastFailedIndexRunMetadata();
+    }
+
+    internal static void StampLastIndexRunDiagnostics(DbWriter writer, IReadOnlyList<string>? diagnostics)
+    {
+        var total = diagnostics?.Count ?? 0;
+        if (total == 0)
+        {
+            writer.SetMeta(DbContext.LastIndexRunDiagnosticsMetaKey, null);
+            writer.SetMeta(DbContext.LastIndexRunDiagnosticCountMetaKey, null);
+            writer.SetMeta(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, null);
+            return;
+        }
+
+        var sample = JsonStringListCodec.TakeSerializableSample(
+            diagnostics!,
+            DbContext.LastIndexRunDiagnosticSampleLimit);
+        writer.SetMeta(
+            DbContext.LastIndexRunDiagnosticsMetaKey,
+            JsonStringListCodec.Serialize(sample));
+        writer.SetMeta(
+            DbContext.LastIndexRunDiagnosticCountMetaKey,
+            total.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(
+            DbContext.LastIndexRunDiagnosticsTruncatedMetaKey,
+            (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    internal static string FormatIndexRunDiagnostic(string code, Exception ex)
+    {
+        var raw = $"{code}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
+        return raw.Length <= MaxIndexRunDiagnosticLength
+            ? raw
+            : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
+    }
+
+    internal static string FormatIndexRunDiagnostic(string code, string? target, Exception ex)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return FormatIndexRunDiagnostic(code, ex);
+
+        var raw = $"{code}: {CollapseLineBreaks(target)}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
+        return raw.Length <= MaxIndexRunDiagnosticLength
+            ? raw
+            : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
+    }
+
+    private static void RecordIndexRunDiagnostic(List<string>? diagnostics, string code, Exception ex)
+    {
+        if (diagnostics == null)
+            return;
+
+        diagnostics.Add(FormatIndexRunDiagnostic(code, ex));
+    }
+
+    private static void RecordIndexRunDiagnostic(List<string>? diagnostics, string code, string? target, Exception ex)
+    {
+        if (diagnostics == null)
+            return;
+
+        diagnostics.Add(FormatIndexRunDiagnostic(code, target, ex));
     }
 
     private static void TryStampLastFailedIndexRun(
@@ -468,9 +565,10 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static long SumReadableFileBytes(IEnumerable<string> paths)
+    internal static FileByteReadSummary MeasureReadableFileBytes(IEnumerable<string> paths, string? projectRoot = null, List<string>? diagnostics = null)
     {
         long total = 0;
+        long skipped = 0;
         foreach (var path in paths)
         {
             try
@@ -481,10 +579,28 @@ public static partial class IndexCommandRunner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
             {
+                skipped++;
+                RecordIndexRunDiagnostic(diagnostics, "file_size_bytes_skipped", FormatDiagnosticPath(projectRoot, path), ex);
             }
         }
 
-        return total;
+        return new FileByteReadSummary(total, skipped);
+    }
+
+    private static string FormatDiagnosticPath(string? projectRoot, string path)
+    {
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return path;
+
+        try
+        {
+            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            return IsOutsideProjectRoot(relative) ? path : relative;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return path;
+        }
     }
 
     private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
@@ -496,6 +612,41 @@ public static partial class IndexCommandRunner
             values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
         return values;
     }
+
+    private static int AddProjectMarkerFingerprintWarnings(
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints,
+        List<CliJsonMessage> warningList,
+        IndexCommandOptions options)
+    {
+        var added = 0;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fingerprint in currentFingerprints.Values)
+        {
+            foreach (var warning in fingerprint.Warnings)
+            {
+                if (!IsProjectMarkerFingerprintWarning(warning))
+                    continue;
+
+                var path = string.IsNullOrWhiteSpace(warning.Path)
+                    ? "<project_marker_fingerprint>"
+                    : warning.Path;
+                var key = $"{path}\0{warning.Message}";
+                if (!seen.Add(key))
+                    continue;
+
+                warningList.Add(new CliJsonMessage(path, warning.Message));
+                added++;
+                if (!options.Json && !options.Quiet)
+                    ConsoleUi.PrintWarning($"{path}: {warning.Message}");
+            }
+        }
+
+        return added;
+    }
+
+    private static bool IsProjectMarkerFingerprintWarning(FileIndexer.ScanError warning) =>
+        warning.Message.StartsWith("Project marker discovery skipped", StringComparison.Ordinal)
+        || warning.Message.StartsWith("Skipped .gitmodules", StringComparison.Ordinal);
 
     private static void RestampHotspotFamilyTrustForUpdate(
         DbWriter writer,
@@ -704,7 +855,7 @@ public static partial class IndexCommandRunner
         lang = string.Empty;
         error = null;
 
-        var indexability = FileIndexer.GetFileIndexability(absolutePath);
+        var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
         if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
         {
             error = "Could not probe file for indexability/language.";
@@ -714,7 +865,7 @@ public static partial class IndexCommandRunner
         if (indexability != FileIndexer.FileProbeStatus.Supported)
             return false;
 
-        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
         {
             error = "Could not probe file for indexability/language.";
@@ -748,7 +899,7 @@ public static partial class IndexCommandRunner
     // the index data itself is valid; the metadata stamp is best-effort. Issue #1509.
     // #1509: 成功 index 末尾で HEAD / branch / timestamp を codeindex_meta に保存する。
     // git 不在時は NULL stamp、stamp 自体の例外は warn せず無視（index 本体は成功）。
-    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot, CancellationToken cancellationToken)
+    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot, List<string>? diagnostics, CancellationToken cancellationToken)
     {
         try
         {
@@ -765,15 +916,16 @@ public static partial class IndexCommandRunner
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
+            RecordIndexRunDiagnostic(diagnostics, "indexed_head_metadata_write_failed", ex);
         }
-        StampWorkspacePathCaseSensitivity(writer, projectRoot, cancellationToken);
+        StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
     }
 
-    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit)
+    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit, List<string>? diagnostics)
     {
         try
         {
@@ -784,10 +936,11 @@ public static partial class IndexCommandRunner
                 : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
+            RecordIndexRunDiagnostic(diagnostics, "commit_scoped_head_metadata_write_failed", ex);
         }
     }
 
@@ -816,7 +969,7 @@ public static partial class IndexCommandRunner
     // an unwritable git config / temp probe never blocks an otherwise-successful index.
     // #1546: workspace FS の大小区別を実プローブして codeindex_meta に保存する。
     // probe 失敗時は黙って null stamp にして index 本体は成功扱いのままとする。
-    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot, CancellationToken cancellationToken)
+    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot, List<string>? diagnostics, CancellationToken cancellationToken)
     {
         try
         {
@@ -829,14 +982,15 @@ public static partial class IndexCommandRunner
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
+            RecordIndexRunDiagnostic(diagnostics, "path_case_sensitivity_metadata_write_failed", ex);
         }
     }
 
-    private static void AddToGitExclude(string projectPath, string dbPath)
+    private static void AddToGitExclude(string projectPath, string dbPath, List<string>? diagnostics)
     {
         try
         {
@@ -891,8 +1045,9 @@ public static partial class IndexCommandRunner
             foreach (var pattern in missing)
                 sw.WriteLine(pattern);
         }
-        catch
+        catch (Exception ex)
         {
+            RecordIndexRunDiagnostic(diagnostics, "git_exclude_metadata_write_failed", ex);
         }
     }
 
@@ -916,7 +1071,7 @@ public static partial class IndexCommandRunner
             if (!IsOutsideProjectRoot(relativePath))
                 pendingPaths.Add(relativePath);
 
-            var detection = FileIndexer.TryDetectLanguage(absolutePath);
+            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
                 || detection.Language != "csharp")
             {
@@ -1265,12 +1420,12 @@ public static partial class IndexCommandRunner
     private static bool IsCSharpIdentifierPart(char ch)
         => char.IsLetterOrDigit(ch) || ch == '_';
 
-    private static string? TryDetectStatReusableLanguage(string absolutePath)
+    private static string? TryDetectStatReusableLanguage(FileIndexer indexer, string absolutePath)
     {
         if (string.Equals(Path.GetExtension(absolutePath), ".h", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         return detection.Status == FileIndexer.FileProbeStatus.Supported
             ? detection.Language
             : null;

@@ -592,6 +592,7 @@ public static partial class IndexCommandRunner
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
+        List<string>? indexRunDiagnostics,
         bool showNextSteps,
         CancellationToken cancellationToken)
     {
@@ -663,6 +664,7 @@ public static partial class IndexCommandRunner
         var files = discovery.Files;
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
+        AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var currentHeadForCheckpoint = discovery.CurrentHeadForCheckpoint;
         var scanCheckpointPath = discovery.ScanCheckpointPath;
         var checkpointedDirectories = discovery.CheckpointedDirectories;
@@ -1469,10 +1471,11 @@ public static partial class IndexCommandRunner
             // reflects the true HEAD at the time of the most recent successful index.
             // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
-            StampIndexedHeadMetadata(writer, projectRoot, cancellationToken);
+            StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
+            var bytesRead = MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics);
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
@@ -1481,10 +1484,12 @@ public static partial class IndexCommandRunner
                 files.Count,
                 skipped,
                 errors,
-                SumReadableFileBytes(files),
+                bytesRead.BytesRead,
+                bytesRead.SkippedFileCount,
                 processed,
                 purged,
-                memoryTimelineForStamp);
+                memoryTimelineForStamp,
+                indexRunDiagnostics);
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
@@ -1505,7 +1510,7 @@ public static partial class IndexCommandRunner
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var languageCounts = files
-            .Select(static file => FileIndexer.TryDetectLanguage(file))
+            .Select(file => indexer.TryDetectLanguageForIndexing(file))
             .Where(static detection => detection.Status == FileIndexer.FileProbeStatus.Supported && detection.Language != null)
             .GroupBy(static detection => detection.Language!, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.Ordinal);

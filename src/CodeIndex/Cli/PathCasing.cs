@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -21,11 +22,12 @@ internal static class PathCasing
 
     /// <summary>
     /// True when the filesystem at <paramref name="referencePath"/> treats names as
-    /// case-insensitive. Falls back to <see cref="OperatingSystem.IsWindows"/> when the
-    /// probe cannot be performed (no existing ancestor, IO error). Cached per anchor
-    /// directory so repeated comparisons on the same workspace probe at most once.
+    /// case-insensitive. Probe failures are surfaced explicitly instead of falling back
+    /// to OS heuristics. Cached per anchor directory so repeated comparisons on the
+    /// same workspace probe at most once.
     /// 指定パスを抱える FS が case-insensitive なら true。アンカー（最寄り既存ディレクトリ）
-    /// ごとに 1 回プローブし結果をキャッシュする。判定不能時のみ OS 系列にフォールバック。
+    /// ごとに 1 回プローブし結果をキャッシュする。判定不能時は OS 系列にフォールバックせず
+    /// 明示的な失敗として返す。
     /// </summary>
     public static bool IsIgnoreCase(string referencePath)
     {
@@ -81,6 +83,8 @@ internal static class PathCasing
 
     internal static void ResetCacheForTests() => _ignoreCaseByAnchor.Clear();
 
+    internal static Func<string, bool>? IgnoreCaseProbeForTesting { get; set; }
+
     private static string ResolveAnchor(string path)
     {
         if (string.IsNullOrEmpty(path))
@@ -115,16 +119,69 @@ internal static class PathCasing
     {
         try
         {
+            if (IgnoreCaseProbeForTesting is { } probeOverride)
+                return probeOverride(anchor);
+
             if (Directory.Exists(anchor) && TryCreateCaseVariant(anchor, out var variant))
                 return Directory.Exists(variant);
-        }
-        catch
-        {
-            // Probe failed — fall back to OS heuristic below.
-        }
 
-        return OperatingSystem.IsWindows();
+            using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(anchor, "case-probe-");
+            var probePath = probe.Path;
+            var prefixedProbePath = LongPath.EnsureWindowsPrefix(probePath);
+            File.WriteAllText(prefixedProbePath, string.Empty);
+            try
+            {
+                if (TryCreateCaseVariant(probePath, out var probeVariant))
+                    return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
+            }
+            finally
+            {
+                if (File.Exists(prefixedProbePath))
+                    File.Delete(prefixedProbePath);
+            }
+
+            throw new CaseSensitivityProbeException(
+                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
+                anchor,
+                probePath: probePath);
+        }
+        catch (CaseSensitivityProbeException ex)
+        {
+            throw CreateCaseSensitivityProbeException(anchor, ex);
+        }
+        catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+        {
+            throw CreateCaseSensitivityProbeException(anchor, ex);
+        }
     }
+
+    private static CodeIndexException CreateCaseSensitivityProbeException(string anchor, Exception innerException)
+        => new(
+            code: CommandErrorCodes.FileSystemCaseProbeFailed,
+            category: CodeIndexExceptionCategory.Filesystem,
+            message: "Failed to determine filesystem case sensitivity.",
+            path: TryNormalizePathForError(anchor),
+            hint: "Ensure the workspace and its .cdidx probe directory are readable and writable, then rerun the command.",
+            innerException: innerException);
+
+    private static string TryNormalizePathForError(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+        {
+            return path;
+        }
+    }
+
+    private static bool IsCaseSensitivityProbeFailure(Exception ex)
+        => ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or System.Security.SecurityException;
 
     private static bool TryCreateCaseVariant(string path, out string variant)
     {

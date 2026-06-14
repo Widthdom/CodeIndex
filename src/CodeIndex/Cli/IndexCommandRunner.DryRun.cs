@@ -537,13 +537,13 @@ public static partial class IndexCommandRunner
 
     private static DryRunFileProbe ProbeDryRunFile(FileIndexer indexer, string absolutePath)
     {
-        var indexability = FileIndexer.GetFileIndexability(absolutePath);
+        var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
         if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
             return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
         if (indexability != FileIndexer.FileProbeStatus.Supported)
             return DryRunFileProbe.FromUnsupported();
 
-        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
             return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
         if (detection.Status != FileIndexer.FileProbeStatus.Supported)
