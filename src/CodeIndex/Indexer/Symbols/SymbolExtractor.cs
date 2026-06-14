@@ -122,6 +122,13 @@ public static partial class SymbolExtractor
     private const string CythonDeclarationPrefixPattern = @"(?:(?:public|readonly|api|inline|extern|nogil|const|volatile)\s+)*";
     private const string CythonNativeReturnTypePattern =
         @"(?<returnType>(?:(?:const|volatile|unsigned|signed|long|short|int|double|float|char|void|bint|object|Py_ssize_t|size_t|" + CythonDottedIdentifierPattern + @")(?:\s*[*&])?\s+)+)";
+    private const string HdlIdentifierPattern = @"[A-Za-z_$][A-Za-z0-9_$]*";
+    private const string HdlDeclaratorPrefixPattern =
+        @"(?:(?:signed|unsigned|automatic|static|wire|reg|logic|bit|byte|shortint|int|longint|integer|time|real|realtime|string|chandle|event)\s+|\[[^\]\r\n]+\]\s+)*";
+    private const string VhdlIdentifierPattern = @"[A-Za-z][A-Za-z0-9_]*";
+    private static readonly Regex HdlInlineParameterRegex = new(
+        @"\b(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RPacmanPackageLoaderStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?p_load\s*\(",
         RegexOptions.Compiled);
@@ -1821,6 +1828,47 @@ public static partial class SymbolExtractor
             new("class",    new Regex(@"^\s*service\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*rpc\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+""(?<name>[^""]+)"";", RegexOptions.Compiled), BodyStyle.None),
+        ],
+        ["verilog"] =
+        [
+            new("module", new Regex(@"^\s*(?:module|macromodule|primitive)\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:input|output|inout|wire|reg|logic)\s+" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["systemverilog"] =
+        [
+            new("module", new Regex(@"^\s*(?:module|macromodule|primitive|program)\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("interface", new Regex(@"^\s*interface\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("package", new Regex(@"^\s*package\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*(?:virtual\s+)?class\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("enum", new Regex(@"^\s*typedef\s+enum\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("struct", new Regex(@"^\s*typedef\s+struct\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*typedef\s+(?!(?:enum|struct|union)\b)[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+|virtual\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+|virtual\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:input|output|inout|wire|reg|logic|rand|randc)\s+" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*import\s+(?<name>" + HdlIdentifierPattern + @"(?:::(?:" + HdlIdentifierPattern + @"|\*))?)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["vhdl"] =
+        [
+            new("import", new Regex(@"^\s*library\s+(?<name>" + VhdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*use\s+(?<name>" + VhdlIdentifierPattern + @"(?:\." + VhdlIdentifierPattern + @")*)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*entity\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*architecture\s+(?<name>" + VhdlIdentifierPattern + @")\s+of\s+" + VhdlIdentifierPattern + @"\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("package", new Regex(@"^\s*package\s+body\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("package", new Regex(@"^\s*package\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*component\s+(?<name>" + VhdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*configuration\s+(?<name>" + VhdlIdentifierPattern + @")\s+of\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?<name>" + VhdlIdentifierPattern + @")\s*(?:\(|return\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*procedure\s+(?<name>" + VhdlIdentifierPattern + @")\s*(?:\(|is\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>" + VhdlIdentifierPattern + @")\s*:\s*process\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*(?:type|subtype)\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:signal|constant|variable|generic|port)\s+(?<name>" + VhdlIdentifierPattern + @")\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["shell"] =
         [
@@ -4108,6 +4156,8 @@ public static partial class SymbolExtractor
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "cpp")
             ExtractCppFriendDeclarationSymbols(fileId, lines, symbols);
+        if (lang is "verilog" or "systemverilog")
+            ExtractHdlInlineParameterSymbols(fileId, lines, symbols);
         if (string.Equals(NormalizePluginLanguage(originalLang), "cuda", StringComparison.Ordinal))
             ClassifyCudaFunctionSubKinds(symbols);
         if (lang == "python")
@@ -4167,6 +4217,44 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static void ExtractHdlInlineParameterSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (!line.Contains("parameter", StringComparison.Ordinal))
+                continue;
+
+            foreach (Match match in HdlInlineParameterRegex.Matches(line))
+            {
+                var name = match.Groups["name"].Value.Trim();
+                if (name.Length == 0)
+                    continue;
+
+                var lineNumber = index + 1;
+                if (symbols.Any(symbol =>
+                    symbol.StartLine == lineNumber
+                    && symbol.Kind == "property"
+                    && string.Equals(symbol.Name, name, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = match.Groups["name"].Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                });
+            }
+        }
     }
 
     private static bool? TryClassifyCSharpExtractorMetadataTarget(string? lang, string kind, string? signature)

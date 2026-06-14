@@ -221,6 +221,97 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Hdl_DetectsVerilogSystemVerilogAndVhdlSymbols_Issue3532()
+    {
+        const string verilog = """
+            `include "defs.vh"
+            module fifo #(parameter int WIDTH = 8) (
+                input logic clk,
+                output logic [WIDTH-1:0] data_o
+            );
+                localparam int Depth = 16;
+                function automatic int occupancy(input int count);
+                    occupancy = count;
+                endfunction
+                task reset_fifo;
+                endtask
+            endmodule
+            """;
+        const string systemVerilog = """
+            package bus_pkg;
+                typedef enum logic [1:0] { Idle, Busy } state_t;
+                typedef struct packed { logic valid; } packet_t;
+                import util_pkg::*;
+            endpackage
+
+            interface bus_if(input logic clk);
+            endinterface
+
+            virtual class Driver;
+                rand bit enabled;
+                function void run();
+                endfunction
+            endclass
+            """;
+        const string vhdl = """
+            library ieee;
+            use ieee.std_logic_1164.all;
+
+            entity Fifo is
+                generic Width : natural := 8;
+                port clk : in std_logic;
+            end Fifo;
+
+            architecture rtl of Fifo is
+                type state_t is (Idle, Busy);
+                signal counter : unsigned(7 downto 0);
+                function next_state return state_t is
+                begin
+                    return Idle;
+                end function;
+            begin
+                main : process
+                begin
+                    null;
+                end process;
+            end rtl;
+            """;
+
+        var verilogSymbols = SymbolExtractor.Extract(1, "verilog", verilog);
+        var systemVerilogSymbols = SymbolExtractor.Extract(2, "systemverilog", systemVerilog);
+        var vhdlSymbols = SymbolExtractor.Extract(3, "vhdl", vhdl);
+
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "import" && symbol.Name == "defs.vh");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "module" && symbol.Name == "fifo");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "WIDTH");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "clk");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "Depth");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "function" && symbol.Name == "occupancy");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "function" && symbol.Name == "reset_fifo");
+
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "package" && symbol.Name == "bus_pkg");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "enum" && symbol.Name == "state_t");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "packet_t");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "import" && symbol.Name == "util_pkg::*");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "interface" && symbol.Name == "bus_if");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "class" && symbol.Name == "Driver");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "enabled");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "import" && symbol.Name == "ieee");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "import" && symbol.Name == "ieee.std_logic_1164.all");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "module" && symbol.Name == "Fifo");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "module" && symbol.Name == "rtl");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "typealias" && symbol.Name == "state_t");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "property" && symbol.Name == "counter");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "next_state");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "main");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "verilog");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "systemverilog");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "vhdl");
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_HandlesOutOfTreeLanguage()
     {
         lock (TestConsoleLock.Gate)
@@ -446,9 +537,12 @@ public partial class SymbolExtractorTests
             ["stylus"] = "primary = #3366cc\nrounded(radius)\n  border-radius radius\n.button\n  rounded(4px)\n",
             ["svelte"] = "<script>\n  export let name;\n  function run() { return name; }\n</script>\n",
             ["swift"] = "class Service { func run() -> Int { 1 } }\n",
+            ["systemverilog"] = "module demo #(parameter int WIDTH = 8) (input logic clk);\nfunction int run(); return WIDTH; endfunction\nendmodule\n",
             ["terraform"] = "resource \"local_file\" \"demo\" {\n  filename = \"demo.txt\"\n}\n",
             ["typescript"] = "export class Service { run(): number { return 1; } }\n",
             ["vb"] = "Public Class Service\n  Public Sub Run()\n  End Sub\nEnd Class\n",
+            ["verilog"] = "module demo #(parameter WIDTH = 8) (input clk);\nfunction run; run = WIDTH; endfunction\nendmodule\n",
+            ["vhdl"] = "library ieee;\nentity demo is\nend demo;\narchitecture rtl of demo is\nsignal ready : std_logic;\nbegin\nend rtl;\n",
             ["vue"] = "<script setup lang=\"ts\">\nfunction run() { return 1 }\n</script>\n",
             ["zig"] = "pub fn run() i32 { return 1; }\n",
         };

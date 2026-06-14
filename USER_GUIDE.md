@@ -1775,9 +1775,9 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | HLSL | `.hlsl` | -- |
 | WGSL | `.wgsl` | -- |
 | Metal | `.metal` | -- |
-| Verilog | `.v` | -- |
-| SystemVerilog | `.sv`, `.svh` | -- |
-| VHDL | `.vhd`, `.vhdl` | -- |
+| Verilog | `.v` | yes |
+| SystemVerilog | `.sv`, `.svh` | yes |
+| VHDL | `.vhd`, `.vhdl` | yes |
 | Common Lisp | `.lisp`, `.lsp`, `.cl` | yes |
 | Racket | `.rkt` | yes |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
@@ -1810,6 +1810,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 - C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
 - Cython and CUDA: Cython `cdef` / `cpdef` declarations, `cimport` entries, and extern declarations are indexed as symbols. CUDA files reuse C++ symbols and classify `__global__`, `__device__`, and `__host__` functions with CUDA-specific sub-kinds.
+- HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols. References and graph queries are not advertised for HDL yet.
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
 - Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
@@ -1843,6 +1844,7 @@ commands and when to fall back to `search`.
 | Cython | `cdef` / `cpdef` declarations, cimports, extern declarations | none yet | Cython native-extension declarations are searchable as symbols; use `search` for call/reference questions. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
 | CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | none yet | CUDA kernel/device/host declarations are indexed as C++-style symbols with CUDA sub-kinds; use `search` for call/reference questions. |
+| Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | none yet | HDL declarations are available to `symbols`, `definition`, `outline`, and symbol-aware `search`; use plain `search` for netlist/reference questions. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / Sass / Stylus / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Use `search` for prose and generated markup. |
@@ -4235,9 +4237,9 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | HLSL | `.hlsl` | -- |
 | WGSL | `.wgsl` | -- |
 | Metal | `.metal` | -- |
-| Verilog | `.v` | -- |
-| SystemVerilog | `.sv`, `.svh` | -- |
-| VHDL | `.vhd`, `.vhdl` | -- |
+| Verilog | `.v` | yes |
+| SystemVerilog | `.sv`, `.svh` | yes |
+| VHDL | `.vhd`, `.vhdl` | yes |
 | Common Lisp | `.lisp`, `.lsp`, `.cl` | yes |
 | Racket | `.rkt` | yes |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
@@ -4270,6 +4272,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 - C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
 - Cython と CUDA: Cython の `cdef` / `cpdef` 宣言、`cimport`、extern 宣言をシンボルとして索引します。CUDA ファイルは C++ のシンボル抽出を再利用し、`__global__`、`__device__`、`__host__` 関数に CUDA 固有の sub-kind を付けます。
+- HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引します。HDL の references と graph queries はまだ対応として広告しません。
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
 - Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
@@ -4300,6 +4303,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Cython | `cdef` / `cpdef` 宣言、cimport、extern 宣言 | まだなし | Cython の native extension 宣言はシンボルとして検索できます。call/reference の調査には `search` を使ってください。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
 | CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | まだなし | CUDA の kernel / device / host 宣言は CUDA sub-kind 付きの C++ 風シンボルとして索引します。call/reference の調査には `search` を使ってください。 |
+| Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | まだなし | HDL 宣言は `symbols`、`definition`、`outline`、symbol-aware `search` で使えます。netlist / reference の調査には通常の `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / Sass / Stylus / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | prose や generated markup には `search` を使ってください。 |
