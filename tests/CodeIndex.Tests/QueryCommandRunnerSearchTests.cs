@@ -2990,11 +2990,12 @@ jobs:
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            var longLine = new string('a', 320) + " TARGET " + new string('b', 320);
+            var targetColumn = longLine.IndexOf("TARGET", StringComparison.Ordinal) + 1;
             TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-column", (longLine.IndexOf("TARGET", StringComparison.Ordinal) + 1).ToString(), "--focus-length", "6"],
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-column", targetColumn.ToString(), "--focus-length", "6"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -3023,11 +3024,20 @@ jobs:
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.Contains("TARGET", json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+            Assert.Equal("source", json.GetProperty("semantic_token_coordinate_space").GetString());
+            var span = Assert.Single(json.GetProperty("content_line_spans").EnumerateArray());
+            Assert.Equal(1, span.GetProperty("content_line").GetInt32());
+            Assert.Equal(1, span.GetProperty("source_line").GetInt32());
+            Assert.True(span.GetProperty("content_start_column").GetInt32() > 1);
+            Assert.True(span.GetProperty("source_start_column").GetInt32() <= targetColumn);
+            Assert.True(span.GetProperty("source_end_column").GetInt32() >= targetColumn + "TARGET".Length);
             var semanticTokens = json.GetProperty("semantic_tokens").EnumerateArray().ToArray();
             Assert.Contains(semanticTokens, token =>
-                token.GetProperty("type").GetString() == "variable" &&
+                token.GetProperty("type").GetString() == "type" &&
                 token.GetProperty("start_line").GetInt32() == 1 &&
-                token.GetProperty("start_column").GetInt32() > 0);
+                token.GetProperty("start_column").GetInt32() == targetColumn &&
+                token.GetProperty("end_column").GetInt32() == targetColumn + "TARGET".Length);
+            Assert.DoesNotContain(semanticTokens, token => token.GetProperty("type").GetString() == "number");
         }
         finally
         {

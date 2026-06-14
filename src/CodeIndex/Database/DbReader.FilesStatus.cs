@@ -561,14 +561,32 @@ public partial class DbReader
         var focusLineIndex = focusLine.HasValue ? selectedLines.IndexOf(focusLine.Value) : -1;
         if (focusLineIndex >= 0 && focusColumn.HasValue && focusColumn.Value > contentLines[focusLineIndex].Length)
             return null;
-        var clampedContent = maxLineWidth.HasValue
-            ? LineWidthFormatter.ClampLines(
-                contentLines,
-                maxLineWidth.Value,
-                focusLineIndex >= 0 ? focusLineIndex : null,
-                focusLineIndex >= 0 ? focusColumn : null,
-                focusLength)
-            : new ClampedTextResult(string.Join("\n", contentLines), false);
+        var excerptLines = new string[contentLines.Count];
+        var contentLineSpans = new List<ExcerptContentLineSpan>(contentLines.Count);
+        var contentTruncated = false;
+        for (var i = 0; i < contentLines.Count; i++)
+        {
+            var clampedLine = maxLineWidth.HasValue
+                ? LineWidthFormatter.ClampLine(
+                    contentLines[i],
+                    maxLineWidth.Value,
+                    i == focusLineIndex ? focusColumn : null,
+                    focusLength)
+                : ClampedTextResult.Unclamped(contentLines[i]);
+
+            excerptLines[i] = clampedLine.Text;
+            contentTruncated |= clampedLine.Truncated;
+            var visibleLength = Math.Max(0, clampedLine.OriginalVisibleEndColumn - clampedLine.OriginalVisibleStartColumn + 1);
+            contentLineSpans.Add(new ExcerptContentLineSpan
+            {
+                ContentLine = i + 1,
+                SourceLine = selectedLines[i],
+                ContentStartColumn = clampedLine.TextVisibleStartColumn,
+                ContentEndColumn = clampedLine.TextVisibleStartColumn + visibleLength,
+                SourceStartColumn = clampedLine.OriginalVisibleStartColumn,
+                SourceEndColumn = clampedLine.OriginalVisibleStartColumn + visibleLength,
+            });
+        }
 
         return new FileExcerptResult
         {
@@ -580,12 +598,13 @@ public partial class DbReader
             RequestedEndLine = requestedEndCeiling,
             EffectiveStartLine = selectedLines[0],
             EffectiveEndLine = selectedLines[^1],
-            Content = clampedContent.Text,
-            ContentTruncated = clampedContent.Truncated,
-            ContentTruncationReasons = clampedContent.Truncated ? ["line_width_cap"] : [],
-            ContentRecovery = clampedContent.Truncated
+            Content = string.Join("\n", excerptLines),
+            ContentTruncated = contentTruncated,
+            ContentTruncationReasons = contentTruncated ? ["line_width_cap"] : [],
+            ContentRecovery = contentTruncated
                 ? FileExcerptResult.CreateRecoveryHint(path, selectedLines[0], selectedLines[^1])
                 : null,
+            ContentLineSpans = contentLineSpans,
         };
     }
 
