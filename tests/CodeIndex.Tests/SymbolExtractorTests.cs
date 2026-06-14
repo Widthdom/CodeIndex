@@ -15085,6 +15085,12 @@ public partial class SymbolExtractorTests
         var content = """
             @use "theme"
             $primary: #3366cc
+            /*
+            @use "commented-theme"
+            $commented: #fff
+            =commented-rounded()
+            .commented
+            */
 
             =rounded($radius)
               border-radius: $radius
@@ -15108,6 +15114,10 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spacing");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "%button-base");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".button");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"commented-theme\"");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "commented");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "commented-rounded");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".commented");
     }
 
     [Fact]
@@ -15116,6 +15126,12 @@ public partial class SymbolExtractorTests
         var content = """
             @require "theme"
             primary = #3366cc
+            /*
+            @require "commented-theme"
+            commented = #fff
+            commentedRounded()
+            .commented
+            */
 
             rounded(radius)
               border-radius radius
@@ -15131,6 +15147,10 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary");
         Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "rounded"));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".button");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "\"commented-theme\"");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "commented");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "commentedRounded");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".commented");
     }
 
     [Fact]

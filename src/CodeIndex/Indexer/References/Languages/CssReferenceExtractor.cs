@@ -275,6 +275,59 @@ internal static class CssReferenceExtractor
         }
     }
 
+    internal static string MaskSassStylusBlockCommentLine(string line, ref bool inBlockComment)
+    {
+        var chars = line.ToCharArray();
+        var quote = '\0';
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+
+            if (inBlockComment)
+            {
+                chars[i] = ' ';
+                if (ch == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    chars[i + 1] = ' ';
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (quote != '\0')
+            {
+                if (ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                inBlockComment = true;
+                i++;
+            }
+        }
+
+        return new string(chars);
+    }
+
     private static void EmitPreprocessorImportReferences(
         Regex importRegex,
         string originalLine,

@@ -2387,6 +2387,9 @@ public static partial class SymbolExtractor
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        var sassStylusScannerLines = lang is "sass" or "stylus"
+            ? MaskSassStylusBlockCommentLines(lines)
+            : null;
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
             : null;
@@ -2464,6 +2467,7 @@ public static partial class SymbolExtractor
 
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
+            var sassStylusScannerLine = sassStylusScannerLines?[i];
             var shellScannerLine = shellScannerLines?[i];
             var matchLine = structuralLine;
             if (lang == "css" && cssScannerLine != null)
@@ -2474,6 +2478,10 @@ public static partial class SymbolExtractor
                 // CSS のシンボル名マッチは raw line を使い、引用付きセレクタや @import 値を
                 // 保持する。brace/depth 判定だけ別の scanner line を使う。
                 matchLine = line;
+            }
+            else if (lang is "sass" or "stylus" && sassStylusScannerLine != null)
+            {
+                matchLine = sassStylusScannerLine;
             }
             else if (lang == "shell" && shellScannerLine != null)
             {
@@ -8216,6 +8224,15 @@ public static partial class SymbolExtractor
             firstCharChecked = false;
         }
         return !tagHeadConsumed;
+    }
+
+    private static string[] MaskSassStylusBlockCommentLines(string[] originalLines)
+    {
+        var maskedLines = new string[originalLines.Length];
+        var inBlockComment = false;
+        for (var i = 0; i < originalLines.Length; i++)
+            maskedLines[i] = CssReferenceExtractor.MaskSassStylusBlockCommentLine(originalLines[i], ref inBlockComment);
+        return maskedLines;
     }
 
     private static bool IsJsTsStyledTagHeadBreakingOperator(char c) => c switch

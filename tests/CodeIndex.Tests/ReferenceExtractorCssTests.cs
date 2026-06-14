@@ -420,6 +420,10 @@ public partial class ReferenceExtractorTests
             @use "theme"
             $primary: #3366cc
             $spacing-base: 8px
+            /*
+            @use "comment-block-theme"
+            +commented-rounded(4px)
+            */
 
             =rounded($radius)
               border-radius: $radius
@@ -444,6 +448,12 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "comment-theme"
             && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-block-theme"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "commented-rounded"
+            && reference.ReferenceKind == "call");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
@@ -465,6 +475,10 @@ public partial class ReferenceExtractorTests
             @require "theme"
             primary = #3366cc
             $accent = #ffcc00
+            /*
+            @require "comment-block-theme"
+            commentedRounded(8px)
+            */
 
             rounded(radius)
               border-radius radius
@@ -494,6 +508,9 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "comment-theme"
             && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "comment-block-theme"
+            && reference.ReferenceKind == "import");
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "primary"
             && reference.ReferenceKind == "call"));
@@ -502,6 +519,9 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "call"));
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "commentedAccent");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "commentedRounded"
+            && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "url"
             && reference.ReferenceKind == "call");

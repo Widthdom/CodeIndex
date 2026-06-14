@@ -433,15 +433,16 @@ internal static class XamlReferenceExtractor
 
     private static string NormalizeBindingPath(string value)
     {
-        var normalized = NormalizeXamlMarkupArgument(value);
-        if (normalized.Length == 0)
+        var normalized = NormalizeXamlMarkupArgument(value).Trim();
+        if (normalized.Length == 0 || normalized == ".")
             return "";
 
         var lastDot = normalized.LastIndexOf('.');
         if (lastDot >= 0 && lastDot + 1 < normalized.Length)
             normalized = normalized[(lastDot + 1)..];
 
-        return normalized.Trim();
+        normalized = normalized.Trim();
+        return normalized == "." ? "" : normalized;
     }
 
     private static IEnumerable<BindingMarkupExtension> EnumerateBindingMarkupExtensions(string line)

@@ -210,6 +210,8 @@ public static partial class ReferenceExtractor
             : null;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
+        var sassStylusPreparedInBlockComment = false;
+        var sassStylusOriginalInBlockComment = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -219,6 +221,16 @@ public static partial class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
+            var originalLineForLanguage = originalLine;
+            if (language is "sass" or "stylus")
+            {
+                preparedLine = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
+                    preparedLine,
+                    ref sassStylusPreparedInBlockComment);
+                originalLineForLanguage = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
+                    originalLine,
+                    ref sassStylusOriginalInBlockComment);
+            }
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             SymbolRecord? phpLineContainer = null;
@@ -953,9 +965,9 @@ public static partial class ReferenceExtractor
                     container);
             }
             else if (language == "sass")
-                CssReferenceExtractor.EmitSass(preparedLine, originalLine, references, seen, fileId, context, lineNumber, container);
+                CssReferenceExtractor.EmitSass(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, container);
             else if (language == "stylus")
-                CssReferenceExtractor.EmitStylus(preparedLine, originalLine, references, seen, fileId, context, lineNumber, allDefinitionNames, container);
+                CssReferenceExtractor.EmitStylus(preparedLine, originalLineForLanguage, references, seen, fileId, context, lineNumber, allDefinitionNames, container);
             else if (language == "xml" && xamlReferenceEnabled)
             {
                 var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);
