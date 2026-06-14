@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.Json.Serialization;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Diagnostics;
@@ -25,7 +26,8 @@ public sealed record PostExtractionHookDiagnostic(
     string? TypeName,
     string Message,
     string? Callback = null,
-    long? DurationMs = null);
+    long? DurationMs = null,
+    [property: JsonPropertyName("category")] string Category = "unspecified");
 
 public sealed record PostExtractionHookDiscoverySnapshot(
     IReadOnlyList<PostExtractionHookInfo> Hooks,
@@ -128,7 +130,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             }
             catch (Exception)
             {
-                runner.EnqueueDiagnostic(dllPath, null, "Failed to load hook assembly.");
+                runner.EnqueueDiagnostic(dllPath, null, "Failed to load hook assembly.", category: "assembly_load_failed");
                 continue;
             }
 
@@ -139,7 +141,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             }
             catch (ReflectionTypeLoadException)
             {
-                runner.EnqueueDiagnostic(dllPath, null, "Failed to inspect hook assembly.");
+                runner.EnqueueDiagnostic(dllPath, null, "Failed to inspect hook assembly.", category: "assembly_inspection_failed");
                 continue;
             }
 
@@ -152,7 +154,11 @@ public sealed class PostExtractionHookRunner : IDisposable
                 {
                     if (type.GetConstructor(Type.EmptyTypes) == null)
                     {
-                        runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook: public parameterless constructor not found.");
+                        runner.EnqueueDiagnostic(
+                            dllPath,
+                            type.FullName,
+                            "Failed to instantiate hook: public parameterless constructor not found.",
+                            category: "hook_constructor_missing");
                         continue;
                     }
 
@@ -164,7 +170,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                 }
                 catch (Exception)
                 {
-                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.");
+                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "hook_registration_failed");
                 }
             }
         }
@@ -189,7 +195,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                 runner.EnqueueDiagnostic(
                     hooksDirectory,
                     null,
-                    $"Hook discovery skipped remaining assemblies after the {discoveryLimit} DLL candidate limit.");
+                    $"Hook discovery skipped remaining assemblies after the {discoveryLimit} DLL candidate limit.",
+                    category: "hook_candidate_limit_exceeded");
                 break;
             }
 
@@ -212,7 +219,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                "Failed to enumerate hook directory.");
+                "Failed to enumerate hook directory.",
+                category: "hook_directory_enumeration_failed");
             return null;
         }
     }
@@ -232,7 +240,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                "Hook assembly skipped: could not inspect file.");
+                "Hook assembly skipped: could not inspect file.",
+                category: "hook_file_inspection_failed");
             return false;
         }
 
@@ -241,7 +250,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                "Hook assembly skipped: file does not exist.");
+                "Hook assembly skipped: file does not exist.",
+                category: "hook_file_missing");
             return false;
         }
 
@@ -250,7 +260,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                "Hook assembly skipped: path is a directory.");
+                "Hook assembly skipped: path is a directory.",
+                category: "hook_path_is_directory");
             return false;
         }
 
@@ -259,7 +270,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes}).");
+                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes}).",
+                category: "hook_file_too_large");
             return false;
         }
 
@@ -286,7 +298,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                "Failed to enumerate hook directory.");
+                "Failed to enumerate hook directory.",
+                category: "hook_directory_enumeration_failed");
             return false;
         }
     }
@@ -368,7 +381,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                     $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
                     result.WorkerError),
                 callback,
-                result.DurationMs);
+                result.DurationMs,
+                "callback_timeout");
             return false;
         }
 
@@ -382,7 +396,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                     $"{callback} failed in isolated worker.",
                     result.WorkerError),
                 callback,
-                result.DurationMs);
+                result.DurationMs,
+                ClassifyWorkerFailureCategory(result.WorkerError));
             return false;
         }
 
@@ -398,10 +413,26 @@ public sealed class PostExtractionHookRunner : IDisposable
                 hook.Info.TypeName,
                 $"{callback} failed.",
                 callback,
-                result.DurationMs);
+                result.DurationMs,
+                "hook_callback_failed");
         }
 
         return true;
+    }
+
+    private static string ClassifyWorkerFailureCategory(string? workerError)
+    {
+        if (string.IsNullOrWhiteSpace(workerError))
+            return "callback_worker_failed";
+
+        if (workerError.StartsWith("worker_execution_failed:", StringComparison.Ordinal))
+            return "hook_constructor_failed";
+        if (workerError.StartsWith("worker_start_failed:", StringComparison.Ordinal))
+            return "worker_start_failed";
+        if (workerError.StartsWith("worker_protocol_error:", StringComparison.Ordinal))
+            return "worker_protocol_error";
+
+        return "callback_worker_failed";
     }
 
     private void EnqueueDiagnostic(
@@ -409,9 +440,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         string? typeName,
         string message,
         string? callback = null,
-        long? durationMs = null)
+        long? durationMs = null,
+        string category = "unspecified")
     {
-        diagnostics.Enqueue(CreateDiagnostic(assemblyPath, typeName, message, callback, durationMs));
+        diagnostics.Enqueue(CreateDiagnostic(assemblyPath, typeName, message, callback, durationMs, category));
     }
 
     private void EnqueueDiagnostics(IEnumerable<PostExtractionHookDiagnostic> items)
@@ -547,7 +579,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             diagnostics.Add(CreateDiagnostic(
                 overridePath,
                 null,
-                "Hook directory override rejected: path could not be resolved."));
+                "Hook directory override rejected: path could not be resolved.",
+                category: "hook_directory_override_invalid_path"));
             return new HookDirectoryResolution(null, diagnostics);
         }
 
@@ -559,7 +592,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                 diagnostics.Add(CreateDiagnostic(
                     fullPath,
                     null,
-                    "Hook directory override rejected: directory does not exist."));
+                    "Hook directory override rejected: directory does not exist.",
+                    category: "hook_directory_override_missing"));
                 return new HookDirectoryResolution(null, diagnostics);
             }
 
@@ -569,7 +603,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                 diagnostics.Add(CreateDiagnostic(
                     fullPath,
                     null,
-                    "Hook directory override rejected: symbolic links and reparse points are not supported."));
+                    "Hook directory override rejected: symbolic links and reparse points are not supported.",
+                    category: "hook_directory_override_rejected"));
                 return new HookDirectoryResolution(null, diagnostics);
             }
         }
@@ -578,7 +613,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             diagnostics.Add(CreateDiagnostic(
                 fullPath,
                 null,
-                "Hook directory override rejected: directory could not be inspected."));
+                "Hook directory override rejected: directory could not be inspected.",
+                category: "hook_directory_override_inspection_failed"));
             return new HookDirectoryResolution(null, diagnostics);
         }
 
@@ -588,7 +624,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             diagnostics.Add(CreateDiagnostic(
                 fullPath,
                 null,
-                "Hook directory override accepted: hook assemblies execute local extension code from this trusted directory."));
+                "Hook directory override accepted: hook assemblies execute local extension code from this trusted directory.",
+                category: "hook_directory_override_accepted"));
         }
 
         return new HookDirectoryResolution(fullPath, diagnostics);
@@ -607,7 +644,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                 diagnostics.Add(CreateDiagnostic(
                     fullPath,
                     null,
-                    "Hook directory override warning: directory is group- or world-writable; only trusted users should be able to modify hook assemblies."));
+                    "Hook directory override warning: directory is group- or world-writable; only trusted users should be able to modify hook assemblies.",
+                    category: "hook_directory_override_unsafe_permissions"));
             }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
@@ -615,7 +653,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             diagnostics.Add(CreateDiagnostic(
                 fullPath,
                 null,
-                "Hook directory override warning: directory permissions could not be inspected."));
+                "Hook directory override warning: directory permissions could not be inspected.",
+                category: "hook_directory_override_permission_inspection_failed"));
         }
     }
 
@@ -624,13 +663,15 @@ public sealed class PostExtractionHookRunner : IDisposable
         string? typeName,
         string message,
         string? callback = null,
-        long? durationMs = null)
+        long? durationMs = null,
+        string category = "unspecified")
         => new(
             DiagnosticSanitizer.ForPath(assemblyPath),
             DiagnosticSanitizer.ForOptionalLabel(typeName),
             DiagnosticSanitizer.ForMessage(message),
             DiagnosticSanitizer.ForOptionalLabel(callback),
-            durationMs);
+            durationMs,
+            DiagnosticSanitizer.ForMessage(category));
 
     public void Dispose()
     {

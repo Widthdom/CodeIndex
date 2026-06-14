@@ -137,6 +137,9 @@ names visible so documentation and tests stay synchronized.
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`. |
 
+Runtime diagnostics under `extractors.diagnostics[]` and `hook_diagnostics[]`
+include sanitized `category` machine codes alongside bounded paths and messages.
+
 ## Verifying Releases
 
 GitHub releases ship checksums, a detached checksum signature, SBOM assets, and
@@ -293,6 +296,9 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`。 |
+
+`extractors.diagnostics[]` と `hook_diagnostics[]` の runtime diagnostics は、
+bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
 
 ## リリース成果物の検証
 

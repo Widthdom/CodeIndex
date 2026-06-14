@@ -126,6 +126,7 @@ public class PostExtractionHookTests
                 var diagnostic = Assert.Single(
                     runner.Diagnostics,
                     diagnostic => diagnostic.TypeName == typeof(ThrowingPostExtractionHook).FullName);
+                Assert.Equal("hook_callback_failed", diagnostic.Category);
                 Assert.DoesNotContain("boom", diagnostic.Message, StringComparison.Ordinal);
             }
             CollectUnloadedHookAssemblies();
@@ -162,6 +163,7 @@ public class PostExtractionHookTests
                     var diagnostic = Assert.Single(
                         runner.Diagnostics,
                         diagnostic => diagnostic.TypeName == typeof(ThrowingConstructorPostExtractionHook).FullName);
+                    Assert.Equal("hook_constructor_failed", diagnostic.Category);
                     Assert.Contains("isolated worker", diagnostic.Message, StringComparison.Ordinal);
                     Assert.DoesNotContain("ctor boom", diagnostic.Message, StringComparison.Ordinal);
                 }
@@ -241,6 +243,7 @@ public class PostExtractionHookTests
                         runner.Diagnostics,
                         item => item.TypeName == typeof(SlowPostExtractionHook).FullName
                                 && item.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted));
+                    Assert.Equal("callback_timeout", diagnostic.Category);
                     Assert.True(
                         diagnostic.Message.Contains("exceeded", StringComparison.Ordinal),
                         diagnostic.Message);
@@ -298,6 +301,7 @@ public class PostExtractionHookTests
                         runner.Diagnostics,
                         item => item.TypeName == typeof(SlowConstructorPostExtractionHook).FullName
                                 && item.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted));
+                    Assert.Equal("callback_timeout", diagnostic.Category);
                     Assert.Contains("exceeded", diagnostic.Message, StringComparison.Ordinal);
                     Assert.True(diagnostic.DurationMs > 0);
                 }
@@ -355,6 +359,7 @@ public class PostExtractionHookTests
                 Assert.Contains(
                     snapshot.Diagnostics,
                     diagnostic => diagnostic.AssemblyPath.EndsWith("hooks", StringComparison.Ordinal)
+                                  && diagnostic.Category == "hook_directory_override_accepted"
                                   && diagnostic.Message.Contains("override accepted", StringComparison.Ordinal));
                 Assert.All(
                     snapshot.Diagnostics,
@@ -384,6 +389,7 @@ public class PostExtractionHookTests
                 Assert.Empty(snapshot.Hooks);
                 var diagnostic = Assert.Single(snapshot.Diagnostics);
                 Assert.EndsWith("missing-hooks", diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.Equal("hook_directory_override_missing", diagnostic.Category);
                 Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal);
                 Assert.Contains("override rejected", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains("does not exist", diagnostic.Message, StringComparison.Ordinal);
@@ -418,11 +424,13 @@ public class PostExtractionHookTests
                 Assert.Contains(
                     runner.Diagnostics,
                     diagnostic => diagnostic.AssemblyPath.EndsWith("hooks", StringComparison.Ordinal)
+                                  && diagnostic.Category == "hook_candidate_limit_exceeded"
                                   && !diagnostic.AssemblyPath.Contains(projectRoot, StringComparison.Ordinal)
                                   && diagnostic.Message.Contains("candidate limit", StringComparison.Ordinal));
                 Assert.Equal(
                     2,
-                    runner.Diagnostics.Count(diagnostic => diagnostic.Message.StartsWith("Failed to load hook assembly", StringComparison.Ordinal)));
+                    runner.Diagnostics.Count(diagnostic => diagnostic.Category == "assembly_load_failed"
+                                                           && diagnostic.Message.StartsWith("Failed to load hook assembly", StringComparison.Ordinal)));
             }
             finally
             {
@@ -455,6 +463,7 @@ public class PostExtractionHookTests
                 Assert.Empty(runner.Hooks);
                 var diagnostic = Assert.Single(runner.Diagnostics);
                 Assert.EndsWith("oversize.dll", diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.Equal("hook_file_too_large", diagnostic.Category);
                 Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal);
                 Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains("maximum 16", diagnostic.Message, StringComparison.Ordinal);
