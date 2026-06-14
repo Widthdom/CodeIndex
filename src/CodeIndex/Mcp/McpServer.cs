@@ -718,23 +718,30 @@ public partial class McpServer : IDisposable
             SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
         }
 
-        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
-    private async Task DrainInFlightTasksAsync(List<Task> tasks, TimeSpan gracePeriod, TimeSpan postCancelGracePeriod)
+    internal async Task DrainInFlightTasksAsync(
+        List<Task> tasks,
+        TimeSpan gracePeriod,
+        TimeSpan postCancelGracePeriod,
+        CancellationToken cancellationToken = default)
     {
         tasks.RemoveAll(task => task.IsCompleted);
         if (tasks.Count == 0)
             return;
 
         var allTasks = Task.WhenAll(tasks);
-        var completed = await Task.WhenAny(allTasks, Task.Delay(gracePeriod)).ConfigureAwait(false);
+        var graceDelay = Task.Delay(gracePeriod, cancellationToken);
+        var completed = await Task.WhenAny(allTasks, graceDelay).ConfigureAwait(false);
         if (completed == allTasks)
         {
             await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
             return;
         }
+        if (graceDelay.IsCanceled)
+            return;
 
         Console.Error.WriteLine($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
         try
@@ -747,12 +754,15 @@ public partial class McpServer : IDisposable
             // Disposal raced EOF drain; no further action is possible.
         }
 
-        completed = await Task.WhenAny(allTasks, Task.Delay(postCancelGracePeriod)).ConfigureAwait(false);
+        var postCancelDelay = Task.Delay(postCancelGracePeriod, cancellationToken);
+        completed = await Task.WhenAny(allTasks, postCancelDelay).ConfigureAwait(false);
         if (completed == allTasks)
         {
             await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
             return;
         }
+        if (postCancelDelay.IsCanceled)
+            return;
 
         _ = allTasks.ContinueWith(task =>
         {

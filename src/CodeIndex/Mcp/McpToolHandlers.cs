@@ -6007,7 +6007,8 @@ public partial class McpServer
 
     private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        var requestToken = _currentRequestToken.Value;
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound, requestToken))
         {
             var detail = isNotFound
                 ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."

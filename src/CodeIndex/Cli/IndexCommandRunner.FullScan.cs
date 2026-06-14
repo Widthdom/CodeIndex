@@ -30,8 +30,13 @@ public static partial class IndexCommandRunner
     private static string FormatExtractionStalledMessage(IndexExtractionStalledException ex)
     {
         var pathSuffix = string.IsNullOrWhiteSpace(ex.ActivePath) ? string.Empty : $" Last active phase: {ex.ActivePath}.";
-        return $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)}.{pathSuffix}";
+        return $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)}.{pathSuffix}{FormatWorkerDiagnosticSuffix(ex.WorkerError)}";
     }
+
+    private static string FormatWorkerDiagnosticSuffix(string? workerError)
+        => string.IsNullOrWhiteSpace(workerError)
+            ? string.Empty
+            : $" Worker diagnostic: {CollapseLineBreaks(workerError)}.";
 
     private static FileIssue BuildSymbolCountExceededIssue(string path, int symbolCount, int maxSymbolsPerFile) =>
         new()
@@ -116,7 +121,7 @@ public static partial class IndexCommandRunner
         var result = worker.Invoke(fileId, lang, content, filePath, projectRoot, timeout, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (result.TimedOut)
-            throw new IndexExtractionStalledException(0, null, timeout, phasePath);
+            throw new IndexExtractionStalledException(0, null, timeout, phasePath, result.WorkerError);
         if (!result.Success)
             throw new InvalidOperationException(result.WorkerError ?? "isolated symbol extraction worker failed.");
 
@@ -176,7 +181,7 @@ public static partial class IndexCommandRunner
         return WriteCommandError(
             json,
             jsonOptions,
-            $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)} ({ex.FilesProcessed:N0}{totalSuffix} files processed).{pathSuffix}",
+            $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)} ({ex.FilesProcessed:N0}{totalSuffix} files processed).{pathSuffix}{FormatWorkerDiagnosticSuffix(ex.WorkerError)}",
             CommandExitCodes.CancelledBySignal,
             "Rerun with `--verbose` to inspect progress, lower `--parallelism`, exclude the reported file, or lower `--max-symbols-per-file` to skip pathological symbol output.",
             CommandErrorCodes.IndexExtractionStalled);

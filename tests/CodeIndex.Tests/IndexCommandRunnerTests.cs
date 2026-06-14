@@ -261,6 +261,73 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_RunCommand_CancellationTokenStopsDelayedExtraction_Issue3399()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                0,
+                "csharp",
+                "public class App { }\n",
+                Path.Combine(projectRoot, "App.cs"),
+                projectRoot);
+            using var input = new StringReader(JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + Environment.NewLine);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+            var stopwatch = Stopwatch.StartNew();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName, "--test-delay-ms", "500"],
+                input,
+                output,
+                error,
+                out var exitCode,
+                cancellationToken: cts.Token);
+
+            stopwatch.Stop();
+            Assert.True(handled);
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, output.ToString());
+            Assert.Equal(string.Empty, error.ToString());
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WorkerProcessCleanupDiagnostics_ReturnBoundedProcessStateCategories_Issue3468()
+    {
+        using var symbolProcess = new Process();
+
+        var symbolWait = SymbolExtractionWorkerClient.WaitForWorkerExit(symbolProcess, 1);
+        var symbolKillDiagnostic = SymbolExtractionWorker.TryKillProcess(symbolProcess);
+
+        Assert.False(symbolWait.Exited);
+        Assert.Equal("worker_wait_failed: InvalidOperationException", symbolWait.Diagnostic);
+        Assert.Equal(
+            "worker_kill_failed: InvalidOperationException; worker_kill_wait_failed: InvalidOperationException",
+            symbolKillDiagnostic);
+        Assert.DoesNotContain("No process", symbolKillDiagnostic, StringComparison.Ordinal);
+
+        using var hookProcess = new Process();
+
+        var hookWait = PostExtractionHookCallbackWorkerClient.WaitForWorkerExit(hookProcess, 1);
+        var hookKillDiagnostic = PostExtractionHookCallbackWorker.TryKillProcess(hookProcess);
+
+        Assert.False(hookWait.Exited);
+        Assert.Equal("worker_wait_failed: InvalidOperationException", hookWait.Diagnostic);
+        Assert.Equal(
+            "worker_kill_failed: InvalidOperationException; worker_kill_wait_failed: InvalidOperationException",
+            hookKillDiagnostic);
+        Assert.DoesNotContain("No process", hookKillDiagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398()
     {
         var projectRoot = CreateTempProject();

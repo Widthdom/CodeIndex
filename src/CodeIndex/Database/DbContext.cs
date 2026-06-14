@@ -137,7 +137,11 @@ public class DbContext : IDisposable
     internal PreparedCommandCache PreparedCommands
         => _preparedCommands ??= new PreparedCommandCache(_connection);
 
-    public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
+    public static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        out string message,
+        out bool isNotFound,
+        CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
             var builder = new SqliteConnectionStringBuilder
@@ -146,7 +150,7 @@ public class DbContext : IDisposable
                 Mode = SqliteOpenMode.ReadWrite,
             };
             return new SqliteConnection(builder.ConnectionString);
-        }, static connection => connection.Open(), static milliseconds => System.Threading.Thread.Sleep(milliseconds), out message, out isNotFound);
+        }, static connection => connection.Open(), null, out message, out isNotFound, cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
         string dbPath,
@@ -154,10 +158,12 @@ public class DbContext : IDisposable
         Action<SqliteConnection> openConnection,
         Action<int>? sleep,
         out string message,
-        out bool isNotFound)
+        out bool isNotFound,
+        CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
         {
@@ -200,7 +206,8 @@ public class DbContext : IDisposable
                 () => createConnection(openTarget),
                 openConnection,
                 sleep,
-                dbPath: dbPath);
+                dbPath: dbPath,
+                cancellationToken: cancellationToken);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA application_id";
