@@ -2339,12 +2339,36 @@ public class DbContext : IDisposable
         return cmd.ExecuteScalar() as string;
     }
 
+    private string BuildRebuildSelectProjection(string sourceTableName, string columns)
+    {
+        var existingColumns = LoadColumnNames(sourceTableName);
+        var projectedColumns = columns
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(column => existingColumns.Contains(column) ? column : $"NULL AS {column}");
+        return string.Join(", ", projectedColumns);
+    }
+
+    private HashSet<string> LoadColumnNames(string tableName)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            columns.Add(reader.GetString(1));
+        return columns;
+    }
+
     private void RebuildTableWithCurrentKindChecks(string tableName, string oldTableName, string createSql, string columns)
     {
         Execute($"DROP TABLE IF EXISTS {oldTableName}");
         Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
         Execute(createSql);
-        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        var sourceColumns = BuildRebuildSelectProjection(oldTableName, columns);
+        Execute($"INSERT INTO {tableName} ({columns}) SELECT {sourceColumns} FROM {oldTableName}");
         Execute($"DROP TABLE {oldTableName}");
     }
 
@@ -2366,7 +2390,8 @@ public class DbContext : IDisposable
         Execute($"DELETE FROM {tableName} WHERE file_id IS NULL");
         Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
         Execute(createSql);
-        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        var sourceColumns = BuildRebuildSelectProjection(oldTableName, columns);
+        Execute($"INSERT INTO {tableName} ({columns}) SELECT {sourceColumns} FROM {oldTableName}");
         if (!string.Equals(tableName, "reference_lines", StringComparison.Ordinal))
             Execute($"DROP TABLE {oldTableName}");
     }
