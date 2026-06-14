@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeIndex.Changelog;
 
 namespace CodeIndex.Tests;
@@ -33,6 +34,71 @@ public sealed class ChangelogToolTests
                 Directory.SetCurrentDirectory(previousDirectory);
                 Directory.Delete(unrelatedDirectory, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public void ProgramMainPrepareBadVersionReturnsFriendlyError_Issue3444()
+    {
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["prepare", "--version", "not-a-version", "--date", "2026-05-01"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--version must be a version like X.Y.Z.", stderr);
+    }
+
+    [Fact]
+    public void ProgramMainPrepareBadDateReturnsFriendlyError_Issue3444()
+    {
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["prepare", "--version", "1.17.0", "--date", "05/01/2026"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--date must use yyyy-MM-dd.", stderr);
+    }
+
+    [Fact]
+    public void ProgramMainReleaseNotesBadPreviousVersionReturnsFriendlyError_Issue3444()
+    {
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["release-notes", "--version", "1.17.0", "--previous-version", "bad"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--previous-version must be a version like X.Y.Z.", stderr);
+    }
+
+    [Fact]
+    public void ProgramMainRenderUsesInvariantInputsUnderNonInvariantCulture_Issue3444()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CodeIndex.sln", string.Empty);
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var previousCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            var (exitCode, stdout, stderr) = CaptureChangelogMain(
+                ["render", "--version", "1.17.0", "--date", "2026-05-01"]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("### [1.17.0] - 2026-05-01", stdout);
+            Assert.Contains("English release note", stdout);
+            Assert.Contains("Japanese release note", stdout);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
         }
     }
 
@@ -282,6 +348,93 @@ public sealed class ChangelogToolTests
             """.Replace("\r\n", "\n"), scope.ReadFile("version.json").Replace("\r\n", "\n"));
         Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
         Assert.DoesNotContain(scope.ListFiles("."), path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PrepareConsumedFragmentDeleteFailureReportsSanitizedDiagnostic_Issue3457()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var fragmentPath = Path.Combine(scope.Root, "changelog.d/unreleased/195.fixed.md");
+        var fullFragmentPath = Path.GetFullPath(fragmentPath);
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.DeleteFileForTesting = path =>
+        {
+            if (string.Equals(Path.GetFullPath(path), fullFragmentPath, pathComparison))
+                throw new IOException($"raw filesystem detail {path}");
+            File.Delete(path);
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.DeleteFileForTesting = File.Delete;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("fragment_delete_failed", ex.Message);
+        Assert.Contains("affected_paths=changelog.d/unreleased/195.fixed.md", ex.Message);
+        Assert.Contains("reason=io_error", ex.Message);
+        Assert.Contains("Hint: Delete the listed fragment manually before retrying prepare.", ex.Message);
+        Assert.DoesNotContain("raw filesystem detail", ex.Message);
+        Assert.DoesNotContain(scope.Root, ex.Message);
+    }
+
+    [Fact]
+    public void PrepareRollbackFailureReportsSanitizedDiagnostic_Issue3457()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+        var versionPath = Path.Combine(scope.Root, "version.json");
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.PrepareWritePhaseForTesting = phase =>
+        {
+            if (phase == PrepareWritePhase.BeforeFragmentsDeleted)
+                throw new ChangelogException("injected fragment deletion failure");
+        };
+        ChangelogTool.BeforeRestoreTextForTesting = path =>
+        {
+            if (string.Equals(path, versionPath, StringComparison.Ordinal))
+                throw new IOException($"raw rollback detail {path}");
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.PrepareWritePhaseForTesting = null;
+            ChangelogTool.BeforeRestoreTextForTesting = null;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("rollback_failed", ex.Message);
+        Assert.Contains("affected_paths=version.json,CHANGELOG.md", ex.Message);
+        Assert.Contains("reason=io_error", ex.Message);
+        Assert.Contains("Hint: Restore the listed release files from version control or backup before retrying prepare.", ex.Message);
+        Assert.DoesNotContain("raw rollback detail", ex.Message);
+        Assert.DoesNotContain(scope.Root, ex.Message);
     }
 
     [Fact]
@@ -566,6 +719,29 @@ public sealed class ChangelogToolTests
         }
 
         return count;
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) CaptureChangelogMain(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousOut = Console.Out;
+            var previousError = Console.Error;
+            using var outWriter = new StringWriter();
+            using var errorWriter = new StringWriter();
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            try
+            {
+                var exitCode = CodeIndex.Changelog.Program.Main(args);
+                return (exitCode, outWriter.ToString(), errorWriter.ToString());
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousError);
+            }
+        }
     }
 
     private static string OversizedContent(long maxBytes) => new('x', checked((int)maxBytes + 1));

@@ -94,6 +94,30 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     }
 
     [Fact]
+    public void TryLoad_OversizedIssueNumberScalar_ReturnsInvalidPreflightFile_Issue3466()
+    {
+        var issueNumber = new string('9', IssueDuplicatePreflight.MaxOpenIssueNumberLength + 1);
+        var path = WriteOpenIssuesJson(
+            $$"""
+            [
+              {
+                "number": "{{issueNumber}}",
+                "title": "Oversized number should fail",
+                "labels": [{"name": "bug"}],
+                "url": "https://example.com/issues/1"
+              }
+            ]
+            """);
+
+        var loaded = IssueDuplicatePreflight.TryLoad(path, out var preflight, out var error);
+
+        Assert.False(loaded);
+        Assert.False(preflight.Checked);
+        Assert.Contains("invalid-preflight-file", error);
+        Assert.Contains(IssueDuplicatePreflight.MaxOpenIssueNumberLength.ToString(System.Globalization.CultureInfo.InvariantCulture), error);
+    }
+
+    [Fact]
     public void TryLoad_GitHubSourceFetchesOpenIssuesWithExplicitToken_Issue3449()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "explicit-token");
