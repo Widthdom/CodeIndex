@@ -117,6 +117,11 @@ public static partial class SymbolExtractor
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
     private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
+    private const string CythonIdentifierPattern = @"[A-Za-z_]\w*";
+    private const string CythonDottedIdentifierPattern = CythonIdentifierPattern + @"(?:\." + CythonIdentifierPattern + @")*";
+    private const string CythonDeclarationPrefixPattern = @"(?:(?:public|readonly|api|inline|extern|nogil|const|volatile)\s+)*";
+    private const string CythonNativeReturnTypePattern =
+        @"(?<returnType>(?:(?:const|volatile|unsigned|signed|long|short|int|double|float|char|void|bint|object|Py_ssize_t|size_t|" + CythonDottedIdentifierPattern + @")(?:\s*[*&])?\s+)+)";
     private static readonly Regex RPacmanPackageLoaderStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?p_load\s*\(",
         RegexOptions.Compiled);
@@ -777,6 +782,23 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:[_\p{L}]\w*\s*=\s*)?(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+        ],
+        ["cython"] =
+        [
+            new("import", new Regex(@"^\s*from\s+(?<name>" + CythonDottedIdentifierPattern + @")\s+cimport\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*cimport\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*import\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*include\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*cdef\s+extern\s+from\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*cdef\s+class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("class", new Regex(@"^\s*class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("struct", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+struct\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("enum", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+enum\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("typealias", new Regex(@"^\s*ctypedef\s+(?!(?:struct|enum|union)\b)(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*(?:cdef|cpdef)\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?:(?<returnType>[\w.<>*,\[\]\s]+?)\s+)?(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]+\]\s*)?\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("function", new Regex(@"^\s*" + CythonNativeReturnTypePattern + @"(?<name>" + CythonIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("property", new Regex(@"^\s*cdef\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*(?::|=|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
         ],
         ["cobol"] =
         [
@@ -2092,7 +2114,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity", "cuda" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2107,7 +2129,9 @@ public static partial class SymbolExtractor
             ? "typescript"
             : lang is "razor" or "blazor" or "cshtml"
                 ? "csharp"
-                : lang;
+                : lang == "cuda"
+                    ? "cpp"
+                    : lang;
     }
 
     private static string? NormalizePluginLanguage(string? lang)
@@ -4084,6 +4108,8 @@ public static partial class SymbolExtractor
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "cpp")
             ExtractCppFriendDeclarationSymbols(fileId, lines, symbols);
+        if (string.Equals(NormalizePluginLanguage(originalLang), "cuda", StringComparison.Ordinal))
+            ClassifyCudaFunctionSubKinds(symbols);
         if (lang == "python")
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         if (lang == "python")

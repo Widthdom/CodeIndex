@@ -2134,7 +2134,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
 
         Assert.NotEmpty(languages);
-        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "cython");
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "groovy");
         Assert.All(languages, lang =>
         {
             Assert.False(lang.GetProperty("symbol_extraction").GetBoolean());
@@ -2188,6 +2188,27 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".m", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsCythonAndCudaSymbolExtraction_Issue3530()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var cython = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "cython");
+        var cuda = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "cuda");
+
+        Assert.True(cython.GetProperty("symbol_extraction").GetBoolean());
+        Assert.False(cython.GetProperty("reference_extraction").GetBoolean());
+        Assert.False(cython.GetProperty("graph_queries").GetBoolean());
+        Assert.True(cuda.GetProperty("symbol_extraction").GetBoolean());
+        Assert.False(cuda.GetProperty("reference_extraction").GetBoolean());
+        Assert.False(cuda.GetProperty("graph_queries").GetBoolean());
     }
 
     [Fact]
@@ -2268,11 +2289,9 @@ public partial class QueryCommandRunnerTests
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside richer extractors
-        // (Cython .pyx/.pxd and the newly added extension-only languages) must advertise
-        // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
+        // must advertise symbol_extraction=false / graph_queries=false so AI clients can tell the difference
         // between "indexed with symbols" and "indexed for search only".
         // 意図的に richer な抽出器の対象外になっている search-only 言語
-        // （Cython の .pyx/.pxd と新規追加の拡張子ベース言語）は、
         // symbol_extraction=false / graph_queries=false で広告しなければならない。
         // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
@@ -2282,20 +2301,6 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-
-        foreach (var searchOnly in new[] { "cython" })
-        {
-            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
-            var entry = languages[searchOnly];
-            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
-                $"{searchOnly} must advertise symbol_extraction=false");
-            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
-                $"{searchOnly} must advertise reference_extraction=false");
-            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
-                $"{searchOnly} must advertise graph_queries=false");
-            Assert.Contains("missing-symbols", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
-            Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
-        }
 
         foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "tcl" })
         {

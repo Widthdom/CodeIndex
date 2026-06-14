@@ -154,6 +154,73 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cython_DetectsNativeDeclarations_Issue3530()
+    {
+        const string content = """
+            cimport numpy as cnp
+            from libc.stdlib cimport malloc
+            cdef extern from "math.h":
+                double sqrt(double)
+
+            cdef public int exported_count
+            ctypedef unsigned long size_t_alias
+
+            cdef class NativeThing:
+                cdef int value
+                cpdef int update(self, int delta):
+                    return delta
+
+            cpdef double distance(double x):
+                return x
+
+            cdef int helper(int x) nogil:
+                return x
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cython", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "numpy");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "libc.stdlib");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "math.h");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "sqrt");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "exported_count");
+        Assert.Contains(symbols, symbol => symbol.Kind == "typealias" && symbol.Name == "size_t_alias");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "NativeThing");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "value");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "update");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "distance");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cython");
+    }
+
+    [Fact]
+    public void Extract_Cuda_DetectsKernelAndDeviceFunctions_Issue3530()
+    {
+        const string content = """
+            #include <cuda_runtime.h>
+
+            struct Params { int count; };
+
+            template <typename T>
+            __global__ void saxpy(T *out, const T *in)
+            {
+            }
+
+            __device__ float weight(float x) { return x; }
+            __host__ __device__ inline float clamp(float x) { return x; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cuda", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "cuda_runtime.h");
+        Assert.Contains(symbols, symbol => symbol.Kind == "struct" && symbol.Name == "Params");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "saxpy" && symbol.SubKind == "cuda_kernel");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "weight" && symbol.SubKind == "cuda_device");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "clamp" && symbol.SubKind == "cuda_host_device");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cuda");
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_HandlesOutOfTreeLanguage()
     {
         lock (TestConsoleLock.Gate)
@@ -342,6 +409,7 @@ public partial class SymbolExtractorTests
             ["cpp"] = "namespace demo { int answer() { return 42; } }\n",
             ["csharp"] = "namespace Demo; public class Service { public int Run() => 1; }\n",
             ["css"] = ".card { color: red; }\n@keyframes fade { from { opacity: 0; } }\n",
+            ["cython"] = "cdef class Service:\n    cpdef int run(self):\n        return 1\n",
             ["dart"] = "class Service { int run() => 1; }\n",
             ["dockerfile"] = "FROM alpine AS build\nARG VERSION=1\n",
             ["elixir"] = "defmodule Demo do\n  def run do\n    :ok\n  end\nend\n",

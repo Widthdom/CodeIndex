@@ -128,14 +128,10 @@ public class FileIndexer
         [".py"] = "python",
         [".pyi"] = "python",  // Python type stub (PEP 561) / Python 型スタブ
         [".pyw"] = "python",  // Windowed Python script / Windows 用 Python スクリプト
-        // Cython's `.pyx` / `.pxd` live in their own search-only bucket: they extend Python syntax
-        // with `cdef class` / `cpdef` / `cdef` forms that the Python regex extractor cannot parse,
-        // so mapping them to `python` would advertise `symbol_extraction=true` while emitting zero
-        // symbols — the same "advertised contract vs. actual behavior" gap that sunk the earlier
-        // `.sass` / `.styl` → `css` mapping.
-        // Cython の `.pyx` / `.pxd` は `cdef class` / `cpdef` / `cdef` を含み Python 用正規表現では
-        // 拾えない。python にマップすると `symbol_extraction=true` と広告しつつ 0 件しか出ない
-        // 齟齬になるため、`.sass` / `.styl` と同じく独立の search-only バケットに分ける。
+        // Cython keeps its own bucket because it extends Python with native declarations
+        // (`cdef`, `cpdef`, `cimport`) that need Cython-specific symbol patterns.
+        // Cython は `cdef` / `cpdef` / `cimport` など Python を拡張した native 宣言を持つため、
+        // Python ではなく Cython 専用の symbol pattern を使う独立 bucket にする。
         [".pyx"] = "cython",  // Cython source / Cython ソース
         [".pxd"] = "cython",  // Cython declaration / Cython 宣言
         [".js"] = "javascript",
