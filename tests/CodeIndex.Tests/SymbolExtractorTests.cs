@@ -307,6 +307,85 @@ public partial class SymbolExtractorTests
         Assert.Contains(rakuSymbols, symbol => symbol.Kind == "property" && symbol.Name == "$cache");
     }
 
+    [Fact]
+    public void Extract_DynamicLanguages_IndexConservativeDeclarations_Issue3528()
+    {
+        const string crystal = """
+            require "json"
+            module Demo
+              class User
+                def load_user(id)
+                  id
+                end
+              end
+              struct Point
+              end
+            end
+            """;
+
+        var crystalSymbols = SymbolExtractor.Extract(1, "crystal", crystal);
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "import" && symbol.Name == "\"json\"");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Demo");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "Point");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+
+        const string groovy = """
+            package demo.app
+            import groovy.transform.CompileStatic
+            trait Persistable {}
+            class UserService {
+              def loadUser(id) { id }
+              handler = { event -> event }
+            }
+            """;
+
+        var groovySymbols = SymbolExtractor.Extract(2, "groovy", groovy);
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo.app");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "import" && symbol.Name == "groovy.transform.CompileStatic");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "interface" && symbol.Name == "Persistable");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "class" && symbol.Name == "UserService");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "function" && symbol.Name == "loadUser");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "lambda" && symbol.Name == "handler");
+
+        const string julia = """
+            module DemoStore
+            struct User
+              id::Int
+            end
+            function load_user(id)
+              id
+            end
+            macro timed(ex)
+              ex
+            end
+            const CACHE = Dict()
+            end
+            """;
+
+        var juliaSymbols = SymbolExtractor.Extract(3, "julia", julia);
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "DemoStore");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "User");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "function" && symbol.Name == "timed");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "property" && symbol.Name == "CACHE");
+
+        const string tcl = """
+            package require Tcl 8.6
+            namespace eval demo {}
+            oo::class create User {}
+            proc load_user {id} { return $id }
+            variable cache
+            """;
+
+        var tclSymbols = SymbolExtractor.Extract(4, "tcl", tcl);
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "import" && symbol.Name == "Tcl");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "property" && symbol.Name == "cache");
+    }
+
 
 
 

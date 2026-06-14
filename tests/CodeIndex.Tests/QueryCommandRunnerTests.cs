@@ -2297,7 +2297,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         }
 
-        foreach (var searchOnly in new[] { "crystal", "d", "julia", "nim", "tcl" })
+        foreach (var searchOnly in new[] { "d", "nim" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -2309,7 +2309,7 @@ public partial class QueryCommandRunnerTests
                 $"{searchOnly} must advertise graph_queries=false");
         }
 
-        foreach (var symbolOnly in new[] { "clojure", "erlang", "ocaml", "raku" })
+        foreach (var symbolOnly in new[] { "clojure", "crystal", "erlang", "groovy", "julia", "ocaml", "raku", "tcl" })
         {
             Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
             var entry = languages[symbolOnly];
