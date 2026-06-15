@@ -357,9 +357,10 @@ cdidx export ctags --lang csharp --path src/ --exclude-tests --json
 query commands: `--lang <lang>`, repeatable `--path <glob>`, repeatable
 `--exclude-path <glob>`, and `--exclude-tests`. The default human mode keeps
 writing the tags file and prints the output path. `--json` prints a machine
-summary with `output_path`, `db_path`, `tag_count`, `emitted_count`,
-`skipped_count`, `filters`, and `metadata_fields`. Tag lines keep the standard
-`kind` and `line` fields and may also include indexed metadata such as
+summary with `output_path`, `db_path`, total candidate `tag_count`,
+`emitted_count`, `skipped_count`, `filters`, and `metadata_fields`; filtered
+exports satisfy `tag_count == emitted_count + skipped_count`. Tag lines keep
+the standard `kind` and `line` fields and may also include indexed metadata such as
 `language`, `container_kind`, `container`, and `visibility`.
 
 Use `cdidx export <archive>` to package the current `codeindex.db` with a
@@ -2828,9 +2829,11 @@ cdidx export ctags --lang csharp --path src/ --exclude-tests --json
 `cdidx export ctags` は query command と同じ language / path filter の形を受け付けます。
 `--lang <lang>`、繰り返し指定できる `--path <glob>` / `--exclude-path <glob>`、
 `--exclude-tests` を使えます。既定の human mode は tags file を書き出し、output path を
-表示します。`--json` は `output_path`、`db_path`、`tag_count`、`emitted_count`、
-`skipped_count`、`filters`、`metadata_fields` を含む機械処理向け summary を出力します。
-tag line は標準の `kind` / `line` fields を維持し、indexed metadata として
+表示します。`--json` は `output_path`、`db_path`、総候補数の `tag_count`、
+`emitted_count`、`skipped_count`、`filters`、`metadata_fields` を含む機械処理向け
+summary を出力します。filter 付き export では
+`tag_count == emitted_count + skipped_count` になります。tag line は標準の
+`kind` / `line` fields を維持し、indexed metadata として
 `language`、`container_kind`、`container`、`visibility` も含めることがあります。
 
 `cdidx export <archive>` は現在の `codeindex.db` と manifest を archive 化します。

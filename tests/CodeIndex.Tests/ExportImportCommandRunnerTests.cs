@@ -250,8 +250,10 @@ public class ExportImportCommandRunnerTests
             Assert.Equal(Path.GetFullPath(dbPath), root.GetProperty("db_path").GetString());
             Assert.True(root.GetProperty("tag_count").GetInt64() > 0);
             Assert.True(root.GetProperty("emitted_count").GetInt64() > 0);
-            Assert.Equal(root.GetProperty("tag_count").GetInt64(), root.GetProperty("emitted_count").GetInt64());
             Assert.True(root.GetProperty("skipped_count").GetInt64() > 0);
+            Assert.Equal(
+                root.GetProperty("tag_count").GetInt64(),
+                root.GetProperty("emitted_count").GetInt64() + root.GetProperty("skipped_count").GetInt64());
 
             var filters = root.GetProperty("filters");
             Assert.Equal("csharp", filters.GetProperty("lang").GetString());

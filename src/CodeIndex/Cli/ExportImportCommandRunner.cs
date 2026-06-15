@@ -441,7 +441,7 @@ internal static class ExportImportCommandRunner
                     "success",
                     fullOutputPath,
                     fullSourceDbPath,
-                    emittedCount,
+                    totalTagCount,
                     emittedCount,
                     skippedCount,
                     new CtagsExportFilterResult(filters.Lang, filters.PathPatterns, filters.ExcludePathPatterns, filters.ExcludeTests),
