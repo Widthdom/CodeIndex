@@ -254,6 +254,13 @@ Query commands that accept path filters (`search`, `definition`, `references`, `
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
+The `cdidx lsp` server advertises full text document synchronization and keeps
+open document text in a bounded in-memory cache only. Position-based providers
+must read that live cache before disk so unsaved editor buffers can identify the
+requested token, but provider results remain conservative and index-backed:
+return empty arrays or null when the database cannot answer safely instead of
+inventing language-server analysis.
+
 ### Extractor performance contract
 
 Symbol and reference extractors run during `cdidx index`, so language-specific
@@ -2488,6 +2495,12 @@ path filter を受け付ける query コマンド（`search`, `definition`, `ref
 `cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
+
+`cdidx lsp` server は full text document synchronization を advertise し、open document text は
+上限付きの in-memory cache にだけ保持する。position-based provider は未保存 editor buffer から
+request token を特定できるよう disk より先に live cache を読む必要があるが、provider result は
+保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
+analysis を作り上げず、空配列または null を返す。
 
 ### 抽出器の性能契約
 

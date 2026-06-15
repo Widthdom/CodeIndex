@@ -2115,7 +2115,14 @@ server over stdio. It reuses the existing CodeIndex database and exposes
 `textDocument/definition`, `textDocument/declaration`,
 `textDocument/typeDefinition`, `textDocument/implementation`, and
 `textDocument/references` for editors that can launch an arbitrary LSP command
-but do not speak MCP.
+but do not speak MCP. It also advertises full `textDocument` sync and
+conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
+`codeLens`, and `inlayHint` providers backed by indexed symbols and references
+where available.
+Open buffers sent through `textDocument/didOpen`, `textDocument/didChange`, and
+`textDocument/didClose` are kept in a bounded in-memory cache. Position-based
+requests read the live buffer first, so unsaved edits can drive token lookup
+without writing back to the CodeIndex database.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
@@ -4579,7 +4586,14 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 `initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
 `textDocument/definition`、`textDocument/declaration`、
 `textDocument/typeDefinition`、`textDocument/implementation`、
-`textDocument/references` を公開します。
+`textDocument/references` を公開します。さらに full `textDocument` sync と、
+indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
+`documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
+advertise します。
+`textDocument/didOpen`、`textDocument/didChange`、`textDocument/didClose` で送られた
+open buffer は上限付きの in-memory cache に保持されます。position-based request は
+live buffer を先に読むため、未保存の編集内容でも CodeIndex database に書き戻さず token lookup に
+利用できます。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
