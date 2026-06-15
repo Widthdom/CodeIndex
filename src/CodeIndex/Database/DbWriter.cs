@@ -1482,25 +1482,27 @@ public class DbWriter
             cmd.ExecuteNonQuery();
         }
 
-        var fileIds = contextsByLine.Keys.Select(key => key.FileId).Distinct().ToArray();
         var lineIds = new Dictionary<(long FileId, int Line, string Context), long>();
-        int fileIdsPerStatement = GetRowsPerInsertStatement(columnCount: 1);
-        for (int i = 0; i < fileIds.Length; i += fileIdsPerStatement)
+        int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
-            int fileEnd = Math.Min(i + fileIdsPerStatement, fileIds.Length);
+            int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var parameters = new List<string>(fileEnd - i);
-            for (int j = i; j < fileEnd; j++)
+            var predicates = new List<string>(keyEnd - i);
+            for (int j = i; j < keyEnd; j++)
             {
-                var parameterName = $"@fid{j - i}";
-                parameters.Add(parameterName);
-                cmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[j];
+                var suffix = j - i;
+                var ((fileId, line, _), context) = rows[j];
+                predicates.Add($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
+                cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
+                cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
+                cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
             }
 
             cmd.CommandText = $@"
                 SELECT id, file_id, line, context
                 FROM reference_lines
-                WHERE file_id IN ({string.Join(", ", parameters)})";
+                WHERE {string.Join(" OR ", predicates)}";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
