@@ -117,6 +117,22 @@ public static partial class SymbolExtractor
     private const string JavaReturnTypePattern =
         @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
     private const string KotlinIdentifierPattern = @"(?:\w+|`[^`\r\n]+`)";
+    private const string CythonIdentifierPattern = @"[A-Za-z_]\w*";
+    private const string CythonDottedIdentifierPattern = CythonIdentifierPattern + @"(?:\." + CythonIdentifierPattern + @")*";
+    private const string CythonDeclarationPrefixPattern = @"(?:(?:public|readonly|api|inline|extern|nogil|const|volatile)\s+)*";
+    private const string CythonNativeReturnTypePattern =
+        @"(?<returnType>(?:(?:const|volatile|unsigned|signed|long|short|int|double|float|char|void|bint|object|Py_ssize_t|size_t|" + CythonDottedIdentifierPattern + @")(?:\s*[*&])?\s+)+)";
+    private const string HdlIdentifierPattern = @"[A-Za-z_$][A-Za-z0-9_$]*";
+    private const string HdlDeclaratorPrefixPattern =
+        @"(?:(?:signed|unsigned|automatic|static|wire|reg|logic|bit|byte|shortint|int|longint|integer|time|real|realtime|string|chandle|event)\s+|\[[^\]\r\n]+\]\s+)*";
+    private const string VhdlIdentifierPattern = @"[A-Za-z][A-Za-z0-9_]*";
+    private static readonly Regex HdlInlineParameterRegex = new(
+        @"\b(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const string ShaderIdentifierPattern = @"[A-Za-z_]\w*";
+    private const string ShaderTypePattern = @"[\w:<>,]+(?:\s*[*&])?(?:\s*\[[^\]\r\n]+\])?";
+    private const string ShaderAttributePrefixPattern = @"(?:(?:layout\s*\([^)]*\)|\[[^\]\r\n]+\]|@\w+(?:\([^)]*\))?)\s*)*";
+    private const string ShaderFunctionStartBlacklistPattern = @"^(?!\s*(?:if|for|while|switch|return|discard)\b)";
     private static readonly Regex RPacmanPackageLoaderStartRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?p_load\s*\(",
         RegexOptions.Compiled);
@@ -777,6 +793,23 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:[_\p{L}]\w*\s*=\s*)?(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+        ],
+        ["cython"] =
+        [
+            new("import", new Regex(@"^\s*from\s+(?<name>" + CythonDottedIdentifierPattern + @")\s+cimport\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*cimport\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*import\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*include\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*cdef\s+extern\s+from\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*cdef\s+class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("class", new Regex(@"^\s*class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("struct", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+struct\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("enum", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+enum\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("typealias", new Regex(@"^\s*ctypedef\s+(?!(?:struct|enum|union)\b)(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*(?:cdef|cpdef)\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?:(?<returnType>[\w.<>*,\[\]\s]+?)\s+)?(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]+\]\s*)?\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("function", new Regex(@"^\s*" + CythonNativeReturnTypePattern + @"(?<name>" + CythonIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("property", new Regex(@"^\s*cdef\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*(?::|=|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
         ],
         ["cobol"] =
         [
@@ -1800,6 +1833,76 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*rpc\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+""(?<name>[^""]+)"";", RegexOptions.Compiled), BodyStyle.None),
         ],
+        ["verilog"] =
+        [
+            new("module", new Regex(@"^\s*(?:module|macromodule|primitive)\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:input|output|inout|wire|reg|logic)\s+" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["systemverilog"] =
+        [
+            new("module", new Regex(@"^\s*(?:module|macromodule|primitive|program)\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("interface", new Regex(@"^\s*interface\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("package", new Regex(@"^\s*package\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*(?:virtual\s+)?class\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("enum", new Regex(@"^\s*typedef\s+enum\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("struct", new Regex(@"^\s*typedef\s+struct\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*typedef\s+(?!(?:enum|struct|union)\b)[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+|virtual\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+|virtual\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:input|output|inout|wire|reg|logic|rand|randc)\s+" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*import\s+(?<name>" + HdlIdentifierPattern + @"(?:::(?:" + HdlIdentifierPattern + @"|\*))?)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["vhdl"] =
+        [
+            new("import", new Regex(@"^\s*library\s+(?<name>" + VhdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*use\s+(?<name>" + VhdlIdentifierPattern + @"(?:\." + VhdlIdentifierPattern + @")*)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*entity\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*architecture\s+(?<name>" + VhdlIdentifierPattern + @")\s+of\s+" + VhdlIdentifierPattern + @"\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("package", new Regex(@"^\s*package\s+body\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("package", new Regex(@"^\s*package\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*component\s+(?<name>" + VhdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("module", new Regex(@"^\s*configuration\s+(?<name>" + VhdlIdentifierPattern + @")\s+of\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?<name>" + VhdlIdentifierPattern + @")\s*(?:\(|return\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*procedure\s+(?<name>" + VhdlIdentifierPattern + @")\s*(?:\(|is\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>" + VhdlIdentifierPattern + @")\s*:\s*process\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*(?:type|subtype)\s+(?<name>" + VhdlIdentifierPattern + @")\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:signal|constant|variable|generic|port)\s+(?<name>" + VhdlIdentifierPattern + @")\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["glsl"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*" + ShaderAttributePrefixPattern + @"(?:uniform|buffer)\s+(?:(?<returnType>" + ShaderTypePattern + @")\s+)?(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property", new Regex(@"^\s*" + ShaderAttributePrefixPattern + @"(?:in|out|attribute|varying)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*" + ShaderAttributePrefixPattern + @"(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+        ],
+        ["hlsl"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*(?:cbuffer|tbuffer)\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*(?:globallycoherent\s+)?(?:RW)?(?:Texture\w*|Buffer|StructuredBuffer|RWStructuredBuffer|ByteAddressBuffer|RWByteAddressBuffer|Sampler\w*)\s*(?:<[^>\r\n]+>)?\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:groupshared|static|uniform)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*" + ShaderAttributePrefixPattern + @"(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+        ],
+        ["metal"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("property", new Regex(@"^\s*(?:constant|device|threadgroup)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*(?:kernel|vertex|fragment)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+        ],
+        ["wgsl"] =
+        [
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("typealias", new Regex(@"^\s*alias\s+(?<name>" + ShaderIdentifierPattern + @")\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*(?:var(?:<[^>\r\n]+>)?|let|const|override)\s+(?<name>" + ShaderIdentifierPattern + @")\s*:", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*fn\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+        ],
         ["shell"] =
         [
             // Bash/Zsh function declarations / Bash/Zsh 関数宣言
@@ -2092,7 +2195,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity", "cuda" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2107,7 +2210,9 @@ public static partial class SymbolExtractor
             ? "typescript"
             : lang is "razor" or "blazor" or "cshtml"
                 ? "csharp"
-                : lang;
+                : lang == "cuda"
+                    ? "cpp"
+                    : lang;
     }
 
     private static string? NormalizePluginLanguage(string? lang)
@@ -4084,6 +4189,10 @@ public static partial class SymbolExtractor
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "cpp")
             ExtractCppFriendDeclarationSymbols(fileId, lines, symbols);
+        if (lang is "verilog" or "systemverilog")
+            ExtractHdlInlineParameterSymbols(fileId, lines, symbols);
+        if (string.Equals(NormalizePluginLanguage(originalLang), "cuda", StringComparison.Ordinal))
+            ClassifyCudaFunctionSubKinds(symbols);
         if (lang == "python")
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
         if (lang == "python")
@@ -4141,6 +4250,44 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static void ExtractHdlInlineParameterSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (!line.Contains("parameter", StringComparison.Ordinal))
+                continue;
+
+            foreach (Match match in HdlInlineParameterRegex.Matches(line))
+            {
+                var name = match.Groups["name"].Value.Trim();
+                if (name.Length == 0)
+                    continue;
+
+                var lineNumber = index + 1;
+                if (symbols.Any(symbol =>
+                    symbol.StartLine == lineNumber
+                    && symbol.Kind == "property"
+                    && string.Equals(symbol.Name, name, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = match.Groups["name"].Index,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                });
+            }
+        }
     }
 
     private static bool? TryClassifyCSharpExtractorMetadataTarget(string? lang, string kind, string? signature)
