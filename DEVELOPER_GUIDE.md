@@ -236,6 +236,12 @@ When an error code is available, the first line is `Error [<code>]: <message>`. 
 
 CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
 
+`cdidx export ctags --json` follows the same contract: stdout contains only a
+single JSON summary or structured error, while the tag file itself remains the
+artifact. The summary includes resolved output/database paths, tag/emitted/
+skipped counts, filters, and advertised metadata field names so editor
+integrations can validate filtered exports without parsing human output.
+
 Interactive terminal controls are allowed only when stdout is not redirected or captured, terminal capability hints are present, and the environment has not opted out. Treat `TERM=dumb`, truthy `CI`, missing Unix terminal hints, `NO_COLOR`, and `CLICOLOR=0` as reasons to suppress ANSI/progress controls unless an explicitly human-facing override is documented for that control.
 
 ### C# / .NET integration
@@ -247,6 +253,13 @@ Query commands that accept path filters (`search`, `definition`, `references`, `
 `cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
+
+The `cdidx lsp` server advertises full text document synchronization and keeps
+open document text in a bounded in-memory cache only. Position-based providers
+must read that live cache before disk so unsaved editor buffers can identify the
+requested token, but provider results remain conservative and index-backed:
+return empty arrays or null when the database cannot answer safely instead of
+inventing language-server analysis.
 
 ### Extractor performance contract
 
@@ -2463,6 +2476,11 @@ CLI JSON output は機械処理向けにきれいでなければなりません�
 `ConsoleUi.ColorizeKind` など共有 formatter の近くに置き、将来の query output path も同じ
 invariant を継承できるようにしてください。
 
+`cdidx export ctags --json` も同じ contract に従います。stdout は単一の JSON summary または
+structured error だけを含み、tags file 自体は artifact として残します。summary には解決済みの
+output / database path、tag / emitted / skipped counts、filters、metadata field names を含め、
+editor integration が human output を parse せず filtered export を検証できるようにします。
+
 interactive terminal control は stdout が redirected / captured されておらず、terminal
 capability hint があり、environment が opt out していない場合にだけ許可します。`TERM=dumb`、
 truthy `CI`、Unix terminal hint の欠落、`NO_COLOR`、`CLICOLOR=0` は、明示的な human-facing
@@ -2477,6 +2495,12 @@ path filter を受け付ける query コマンド（`search`, `definition`, `ref
 `cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
+
+`cdidx lsp` server は full text document synchronization を advertise し、open document text は
+上限付きの in-memory cache にだけ保持する。position-based provider は未保存 editor buffer から
+request token を特定できるよう disk より先に live cache を読む必要があるが、provider result は
+保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
+analysis を作り上げず、空配列または null を返す。
 
 ### 抽出器の性能契約
 

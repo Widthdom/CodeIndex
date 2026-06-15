@@ -144,14 +144,189 @@ public class LspServerTests
             var response = server.HandleMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
 
             Assert.NotNull(response);
-            Assert.True(response!["result"]!["capabilities"]!["definitionProvider"]!.GetValue<bool>());
-            Assert.True(response["result"]!["capabilities"]!["declarationProvider"]!.GetValue<bool>());
-            Assert.True(response["result"]!["capabilities"]!["typeDefinitionProvider"]!.GetValue<bool>());
-            Assert.True(response["result"]!["capabilities"]!["implementationProvider"]!.GetValue<bool>());
-            Assert.True(response["result"]!["capabilities"]!["documentSymbolProvider"]!.GetValue<bool>());
-            Assert.True(response["result"]!["capabilities"]!["workspace"]!["workspaceFolders"]!["supported"]!.GetValue<bool>());
-            Assert.True(response["result"]!["capabilities"]!["workspace"]!["workspaceFolders"]!["changeNotifications"]!.GetValue<bool>());
+            var capabilities = response!["result"]!["capabilities"]!;
+            Assert.True(capabilities["definitionProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["declarationProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["typeDefinitionProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["implementationProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["documentSymbolProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["hoverProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["documentHighlightProvider"]!.GetValue<bool>());
+            Assert.Equal(1, capabilities["textDocumentSync"]!["change"]!.GetValue<int>());
+            Assert.True(capabilities["textDocumentSync"]!["openClose"]!.GetValue<bool>());
+            Assert.False(capabilities["completionProvider"]!["resolveProvider"]!.GetValue<bool>());
+            Assert.False(capabilities["codeLensProvider"]!["resolveProvider"]!.GetValue<bool>());
+            Assert.False(capabilities["inlayHintProvider"]!["resolveProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["semanticTokensProvider"]!["full"]!.GetValue<bool>());
+            Assert.Contains(capabilities["semanticTokensProvider"]!["legend"]!["tokenTypes"]!.AsArray(), node => node!.GetValue<string>() == "class");
+            Assert.True(capabilities["workspace"]!["workspaceFolders"]!["supported"]!.GetValue<bool>());
+            Assert.True(capabilities["workspace"]!["workspaceFolders"]!["changeNotifications"]!.GetValue<bool>());
             Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_LiveDocumentSync_UsesChangedBufferForPositionRequests_Issue3536()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_live_sync");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var diskSource = "class App { void Needle() { } void Call() { Missing(); } }\n";
+            var liveSource = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, diskSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", diskSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, diskSource, version: 1)));
+            Assert.Null(server.HandleMessage(CreateDidChangeRequest(sourcePath, liveSource, version: 2)));
+            var liveResponse = server.HandleMessage(CreateDefinitionRequest(
+                sourcePath,
+                3536,
+                0,
+                liveSource.LastIndexOf("Needle();", StringComparison.Ordinal)));
+
+            Assert.NotNull(liveResponse);
+            Assert.NotEmpty(liveResponse!["result"]!.AsArray());
+
+            Assert.Null(server.HandleMessage(CreateDidCloseRequest(sourcePath)));
+            var closedResponse = server.HandleMessage(CreateDefinitionRequest(
+                sourcePath,
+                35361,
+                0,
+                liveSource.LastIndexOf("Needle();", StringComparison.Ordinal)));
+
+            Assert.NotNull(closedResponse);
+            Assert.Empty(closedResponse!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_LiveDocumentSync_EvictsOldestBufferWhenCacheIsFull_Issue3536()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_live_sync_bound");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            string? firstPath = null;
+            string? firstLiveSource = null;
+            string? lastPath = null;
+            string? lastLiveSource = null;
+            var sources = new List<(string Path, string DiskSource, string LiveSource)>();
+            for (var i = 0; i <= LspServer.MaxLiveDocuments; i++)
+            {
+                var sourcePath = Path.Combine(projectRoot, $"file{i}.cs");
+                var needle = $"Needle{i}";
+                var missing = $"Missing{i}";
+                var diskSource = $"class App{i} {{ void {needle}() {{ }} void Call() {{ {missing}(); }} }}\n";
+                var liveSource = $"class App{i} {{ void {needle}() {{ }} void Call() {{ {needle}(); }} }}\n";
+                File.WriteAllText(sourcePath, diskSource);
+                TestProjectHelper.InsertIndexedFile(dbPath, $"file{i}.cs", "csharp", diskSource);
+                sources.Add((sourcePath, diskSource, liveSource));
+                if (i == 0)
+                {
+                    firstPath = sourcePath;
+                    firstLiveSource = liveSource;
+                }
+                if (i == LspServer.MaxLiveDocuments)
+                {
+                    lastPath = sourcePath;
+                    lastLiveSource = liveSource;
+                }
+            }
+
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            for (var i = 0; i < sources.Count; i++)
+            {
+                var source = sources[i];
+                Assert.Null(server.HandleMessage(CreateDidOpenRequest(source.Path, source.DiskSource, version: i + 1)));
+                Assert.Null(server.HandleMessage(CreateDidChangeRequest(source.Path, source.LiveSource, version: i + 100)));
+            }
+
+            Assert.NotNull(firstPath);
+            Assert.NotNull(firstLiveSource);
+            var evictedResponse = server.HandleMessage(CreateDefinitionRequest(
+                firstPath!,
+                35368,
+                0,
+                firstLiveSource!.LastIndexOf("Needle0();", StringComparison.Ordinal)));
+
+            Assert.NotNull(evictedResponse);
+            Assert.Empty(evictedResponse!["result"]!.AsArray());
+
+            Assert.NotNull(lastPath);
+            Assert.NotNull(lastLiveSource);
+            var retainedResponse = server.HandleMessage(CreateDefinitionRequest(
+                lastPath!,
+                35369,
+                0,
+                lastLiveSource!.LastIndexOf($"Needle{LspServer.MaxLiveDocuments}();", StringComparison.Ordinal)));
+
+            Assert.NotNull(retainedResponse);
+            Assert.NotEmpty(retainedResponse!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_RicherProviders_ReturnIndexBackedResponses_Issue3536()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_richer_providers");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = """
+                public class App
+                {
+                    public int Count() { return 1; }
+                    public void Call() { Count(); }
+                }
+                """;
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            MarkGraphReady(dbPath);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var countCallCharacter = CharacterOf(source, 3, "Count();");
+
+            var hover = server.HandleMessage(CreatePositionRequest("textDocument/hover", sourcePath, 35362, 3, countCallCharacter));
+            Assert.NotNull(hover);
+            Assert.Contains("Count", hover!["result"]!["contents"]!["value"]!.GetValue<string>(), StringComparison.Ordinal);
+
+            var completion = server.HandleMessage(CreatePositionRequest("textDocument/completion", sourcePath, 35363, 3, countCallCharacter + 3));
+            Assert.NotNull(completion);
+            Assert.Contains(completion!["result"]!["items"]!.AsArray(), item => item!["label"]!.GetValue<string>() == "Count");
+
+            var highlights = server.HandleMessage(CreatePositionRequest("textDocument/documentHighlight", sourcePath, 35364, 3, countCallCharacter));
+            Assert.NotNull(highlights);
+            Assert.NotEmpty(highlights!["result"]!.AsArray());
+
+            var semanticTokens = server.HandleMessage(CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 35365));
+            Assert.NotNull(semanticTokens);
+            Assert.NotEmpty(semanticTokens!["result"]!["data"]!.AsArray());
+
+            var codeLens = server.HandleMessage(CreateTextDocumentRequest("textDocument/codeLens", sourcePath, 35366));
+            Assert.NotNull(codeLens);
+            Assert.NotEmpty(codeLens!["result"]!.AsArray());
+
+            var inlayHints = server.HandleMessage(CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
+            Assert.NotNull(inlayHints);
+            Assert.NotEmpty(inlayHints!["result"]!.AsArray());
         }
         finally
         {
@@ -262,14 +437,14 @@ public class LspServerTests
             {
                 jsonrpc = "2.0",
                 id = 1,
-                method = "textDocument/hover",
+                method = "textDocument/unknownHover",
             });
 
             var response = server.HandleMessage(request);
 
             Assert.NotNull(response);
             Assert.Equal(-32601, response!["error"]!["code"]!.GetValue<int>());
-            Assert.Equal("Method not found: textDocument/hover", response["error"]!["message"]!.GetValue<string>());
+            Assert.Equal("Method not found: textDocument/unknownHover", response["error"]!["message"]!.GetValue<string>());
         }
         finally
         {
@@ -1815,6 +1990,65 @@ public class LspServerTests
             {
                 textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
                 position = new { line, character },
+            },
+        });
+
+    private static string CreateTextDocumentRequest(string method, string sourcePath, int id) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method,
+            @params = new
+            {
+                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+            },
+        });
+
+    private static string CreateDidOpenRequest(string sourcePath, string text, int version) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            method = "textDocument/didOpen",
+            @params = new
+            {
+                textDocument = new
+                {
+                    uri = new Uri(sourcePath).AbsoluteUri,
+                    languageId = "csharp",
+                    version,
+                    text,
+                },
+            },
+        });
+
+    private static string CreateDidChangeRequest(string sourcePath, string text, int version) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            method = "textDocument/didChange",
+            @params = new
+            {
+                textDocument = new
+                {
+                    uri = new Uri(sourcePath).AbsoluteUri,
+                    version,
+                },
+                contentChanges = new[]
+                {
+                    new { text },
+                },
+            },
+        });
+
+    private static string CreateDidCloseRequest(string sourcePath) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            method = "textDocument/didClose",
+            @params = new
+            {
+                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
             },
         });
 

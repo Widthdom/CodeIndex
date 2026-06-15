@@ -31,12 +31,14 @@ internal static class ExportImportCommandRunner
     private const string PhasePrunePaths = "prune_paths";
     private const string PhaseReplaceDb = "replace_db";
     private const string PhaseWriteArchive = "write_archive";
+    private const string PhaseWriteCtags = "write_ctags";
     private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]";
+    private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]";
 
     public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
     {
         if (args.Length > 0 && args[0] == "ctags")
-            return RunExportCtags(args[1..]);
+            return RunExportCtags(args[1..], jsonOptions);
 
         return RunExportArchive(args, jsonOptions, appVersion);
     }
@@ -309,18 +311,34 @@ internal static class ExportImportCommandRunner
         }
     }
 
-    private static int RunExportCtags(string[] args)
+    private static int RunExportCtags(string[] args, JsonSerializerOptions jsonOptions)
     {
         var outputPath = "tags";
         string? dbPath = null;
+        string? lang = null;
+        var pathPatterns = new List<string>();
+        var excludePathPatterns = new List<string>();
+        var excludeTests = false;
+        var wantsJson = Array.Exists(args, arg => arg == "--json");
 
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
+            if (arg == "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+            if (arg == "--exclude-tests")
+            {
+                excludeTests = true;
+                continue;
+            }
+
             if (TryReadValueOption(args, ref i, "--output", arg, out var outputValue, out var outputError))
             {
                 if (outputError != null)
-                    return WriteError(outputError, "use `cdidx export ctags --output tags`.", "cdidx export ctags [--output <path>] [--db <path>]");
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_output_requires_value", outputError, "use `cdidx export ctags --output tags`.", CtagsExportUsage);
                 outputPath = outputValue!;
                 continue;
             }
@@ -328,12 +346,36 @@ internal static class ExportImportCommandRunner
             if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
             {
                 if (dbError != null)
-                    return WriteError(dbError, "use `cdidx export ctags --db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_db_requires_value", dbError, "use `cdidx export ctags --db <path>`.", CtagsExportUsage);
                 dbPath = dbValue;
                 continue;
             }
 
-            return WriteError($"unknown ctags export option `{arg}`.", "use `--output <path>` or `--db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
+            if (TryReadValueOption(args, ref i, "--lang", arg, out var langValue, out var langError))
+            {
+                if (langError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_lang_requires_value", langError, "pass a language name such as `csharp`, `cs`, or `python`.", CtagsExportUsage);
+                lang = DbReader.NormalizeQueryLanguage(langValue);
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--path", arg, out var pathValue, out var pathError))
+            {
+                if (pathError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_path_requires_value", pathError, "pass a path substring or glob such as `src/` or `src/*.cs`.", CtagsExportUsage);
+                pathPatterns.Add(pathValue!);
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--exclude-path", arg, out var excludePathValue, out var excludePathError))
+            {
+                if (excludePathError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_exclude_path_requires_value", excludePathError, "pass a path substring or glob to omit.", CtagsExportUsage);
+                excludePathPatterns.Add(excludePathValue!);
+                continue;
+            }
+
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_unknown_option", $"unknown ctags export option `{arg}`.", "use `--output`, `--db`, `--json`, or filter flags.", CtagsExportUsage);
         }
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
@@ -342,12 +384,13 @@ internal static class ExportImportCommandRunner
         var fullOutputPath = Path.GetFullPath(outputPath);
         if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
         {
-            return WriteError("ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", "cdidx export ctags [--output <path>] [--db <path>]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_output_overlaps_database", "ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", CtagsExportUsage);
         }
 
         if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
-            return WriteError(validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "ctags_export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", CtagsExportUsage);
 
+        var filters = new CtagsExportOptions(lang, pathPatterns.ToArray(), excludePathPatterns.ToArray(), excludeTests);
         try
         {
             using var db = new DbContext(normalizedDbPath);
@@ -356,18 +399,14 @@ internal static class ExportImportCommandRunner
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
+            var totalTagCount = CountCtagsSymbols(db.Connection, CtagsExportOptions.Unfiltered);
+            long emittedCount = 0;
             WriteCtagsFile(fullOutputPath, writer =>
             {
                 writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
                 writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
 
-                using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT s.name, f.path, COALESCE(s.start_line, s.line, 1), s.kind
-                    FROM symbols s
-                    JOIN files f ON s.file_id = f.id
-                    WHERE s.name IS NOT NULL AND s.name != ''
-                    ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
+                using var cmd = CreateCtagsSymbolCommand(db.Connection, filters, countOnly: false);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -375,17 +414,135 @@ internal static class ExportImportCommandRunner
                     var path = SanitizeCtagsField(reader.GetString(1));
                     var line = Math.Max(1, reader.GetInt32(2));
                     var kind = SanitizeCtagsField(reader.GetString(3));
-                    writer.WriteLine($"{name}\t{path}\t{line};\"\tkind:{kind}\tline:{line}");
+                    var tagLine = new StringBuilder()
+                        .Append(name)
+                        .Append('\t')
+                        .Append(path)
+                        .Append('\t')
+                        .Append(line.ToString(CultureInfo.InvariantCulture))
+                        .Append(";\"\tkind:")
+                        .Append(kind)
+                        .Append("\tline:")
+                        .Append(line.ToString(CultureInfo.InvariantCulture));
+                    AppendCtagsExtensionField(tagLine, "language", GetNullableString(reader, 4));
+                    AppendCtagsExtensionField(tagLine, "container_kind", GetNullableString(reader, 5));
+                    AppendCtagsExtensionField(tagLine, "container", GetNullableString(reader, 6));
+                    AppendCtagsExtensionField(tagLine, "visibility", GetNullableString(reader, 7));
+                    writer.WriteLine(tagLine.ToString());
+                    emittedCount++;
                 }
             });
 
-            Console.WriteLine($"Exported ctags to {fullOutputPath}");
+            if (wantsJson)
+            {
+                var skippedCount = Math.Max(0, totalTagCount - emittedCount);
+                var result = new CtagsExportResult(
+                    "1",
+                    "success",
+                    fullOutputPath,
+                    fullSourceDbPath,
+                    totalTagCount,
+                    emittedCount,
+                    skippedCount,
+                    new CtagsExportFilterResult(filters.Lang, filters.PathPatterns, filters.ExcludePathPatterns, filters.ExcludeTests),
+                    ["kind", "line", "language", "container_kind", "container", "visibility"]);
+                Console.WriteLine(JsonSerializer.Serialize(
+                    result,
+                    CliJsonSerializerContextFactory.Create(jsonOptions).CtagsExportResult));
+            }
+            else
+            {
+                Console.WriteLine($"Exported ctags to {fullOutputPath}");
+            }
             return CommandExitCodes.Success;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
-            return WriteError($"ctags export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output paths.", "cdidx export ctags [--output <path>] [--db <path>]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseWriteCtags, "ctags_export_failed", $"ctags export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output paths.", CtagsExportUsage);
         }
+    }
+
+    private static SqliteCommand CreateCtagsSymbolCommand(SqliteConnection connection, CtagsExportOptions filters, bool countOnly)
+    {
+        var cmd = connection.CreateCommand();
+        var sql = countOnly
+            ? @"
+                SELECT COUNT(*)
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.name IS NOT NULL AND s.name != ''"
+            : @"
+                SELECT
+                    s.name,
+                    f.path,
+                    COALESCE(s.start_line, s.line, 1),
+                    s.kind,
+                    f.lang,
+                    s.container_kind,
+                    s.container_name,
+                    s.visibility
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.name IS NOT NULL AND s.name != ''";
+        AppendCtagsFilters(ref sql, filters);
+        if (!countOnly)
+            sql += " ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
+        cmd.CommandText = sql;
+        AddCtagsFilterParameters(cmd, filters);
+        return cmd;
+    }
+
+    private static long CountCtagsSymbols(SqliteConnection connection, CtagsExportOptions filters)
+    {
+        using var cmd = CreateCtagsSymbolCommand(connection, filters, countOnly: true);
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static void AppendCtagsFilters(ref string sql, CtagsExportOptions filters)
+    {
+        if (!string.IsNullOrWhiteSpace(filters.Lang))
+            sql += " AND f.lang = @lang";
+
+        if (filters.PathPatterns.Count > 0)
+        {
+            var ors = new List<string>(filters.PathPatterns.Count);
+            for (var i = 0; i < filters.PathPatterns.Count; i++)
+                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+
+        for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
+            sql += $" AND f.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+
+        if (filters.ExcludeTests)
+            sql += $" AND NOT {DbReader.TestPathCondition}";
+    }
+
+    private static void AddCtagsFilterParameters(SqliteCommand cmd, CtagsExportOptions filters)
+    {
+        if (!string.IsNullOrWhiteSpace(filters.Lang))
+            cmd.Parameters.AddWithValue("@lang", filters.Lang);
+
+        for (var i = 0; i < filters.PathPatterns.Count; i++)
+            cmd.Parameters.AddWithValue($"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
+
+        for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
+            cmd.Parameters.AddWithValue($"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
+    }
+
+    private static string? GetNullableString(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+
+    private static void AppendCtagsExtensionField(StringBuilder builder, string name, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        builder
+            .Append('\t')
+            .Append(name)
+            .Append(':')
+            .Append(SanitizeCtagsField(value));
     }
 
     private static ExportManifest BuildManifest(SqliteConnection connection, string appVersion)
@@ -1237,6 +1394,29 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("replacement_would_be_allowed")] bool ReplacementWouldBeAllowed,
         [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases);
     internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
+    private sealed record CtagsExportOptions(
+        string? Lang,
+        IReadOnlyList<string> PathPatterns,
+        IReadOnlyList<string> ExcludePathPatterns,
+        bool ExcludeTests)
+    {
+        internal static CtagsExportOptions Unfiltered { get; } = new(null, [], [], false);
+    }
+    internal sealed record CtagsExportFilterResult(
+        [property: JsonPropertyName("lang")] string? Lang,
+        [property: JsonPropertyName("path")] IReadOnlyList<string> PathPatterns,
+        [property: JsonPropertyName("exclude_path")] IReadOnlyList<string> ExcludePathPatterns,
+        [property: JsonPropertyName("exclude_tests")] bool ExcludeTests);
+    internal sealed record CtagsExportResult(
+        [property: JsonPropertyName("api_version")] string ApiVersion,
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("output_path")] string OutputPath,
+        [property: JsonPropertyName("db_path")] string DbPath,
+        [property: JsonPropertyName("tag_count")] long TagCount,
+        [property: JsonPropertyName("emitted_count")] long EmittedCount,
+        [property: JsonPropertyName("skipped_count")] long SkippedCount,
+        [property: JsonPropertyName("filters")] CtagsExportFilterResult Filters,
+        [property: JsonPropertyName("metadata_fields")] IReadOnlyList<string> MetadataFields);
     internal sealed record ImportResult(
         string ApiVersion,
         string DbPath,

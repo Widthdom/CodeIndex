@@ -21,6 +21,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspHeaderCount = 64;
     internal const int MaxLspHeaderBytes = 64 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
+    internal const int MaxLiveDocuments = 64;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxLspRequestIdRawBytes = 4 * 1024;
     internal const int MaxJsonDepth = 32;
@@ -29,6 +30,10 @@ internal sealed class LspServer : IDisposable
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal const int MaxPositionLineChars = 16 * 1024;
+    internal const int MaxCompletionItems = 100;
+    internal const int MaxCodeLensItems = 200;
+    internal const int MaxInlayHintItems = 200;
+    internal const int MaxSemanticTokenItems = 1000;
     internal const int MaxDocumentPathFallbackCandidates = 32;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
@@ -49,6 +54,45 @@ internal sealed class LspServer : IDisposable
     private const string FailurePositionLineMissing = "position_line_missing";
     private const string FailurePositionFileUnreadable = "position_file_unreadable";
     private const string FailureNoTokenAtPosition = "no_token_at_position";
+    private static readonly string[] SemanticTokenTypes =
+    [
+        "namespace",
+        "type",
+        "class",
+        "enum",
+        "interface",
+        "struct",
+        "typeParameter",
+        "parameter",
+        "variable",
+        "property",
+        "enumMember",
+        "event",
+        "function",
+        "method",
+        "macro",
+        "keyword",
+        "modifier",
+        "comment",
+        "string",
+        "number",
+        "regexp",
+        "operator",
+        "decorator",
+    ];
+    private static readonly string[] SemanticTokenModifiers =
+    [
+        "declaration",
+        "definition",
+        "readonly",
+        "static",
+        "deprecated",
+        "abstract",
+        "async",
+        "modification",
+        "documentation",
+        "defaultLibrary",
+    ];
     private static readonly JsonReaderOptions LspJsonReaderOptions = new()
     {
         MaxDepth = MaxJsonDepth,
@@ -67,9 +111,12 @@ internal sealed class LspServer : IDisposable
     private bool _exitRequested;
     private bool _exitRequestedBeforeShutdown;
     private readonly List<string> _workspaceFolders = [];
+    private readonly Dictionary<string, string> _liveDocuments;
+    private readonly List<string> _liveDocumentOrder = [];
 
-    private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot);
+    private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
+    private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -78,6 +125,10 @@ internal sealed class LspServer : IDisposable
         _jsonOptions = jsonOptions;
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
         _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
+        _liveDocuments = new Dictionary<string, string>(
+            _pathStringComparison == StringComparison.OrdinalIgnoreCase
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
         if (_projectRoot != null)
             _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
     }
@@ -138,6 +189,9 @@ internal sealed class LspServer : IDisposable
                     "shutdown" => HandleShutdown(id),
                     "exit" => HandleExit(),
                     "workspace/didChangeWorkspaceFolders" => HandleDidChangeWorkspaceFolders(root),
+                    "textDocument/didOpen" => HandleDidOpenTextDocument(root),
+                    "textDocument/didChange" => HandleDidChangeTextDocument(root),
+                    "textDocument/didClose" => HandleDidCloseTextDocument(root),
                     "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
                     "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
                     "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
@@ -145,6 +199,12 @@ internal sealed class LspServer : IDisposable
                     "textDocument/typeDefinition" => Result(id, Definition(root, "textDocument/typeDefinition")),
                     "textDocument/implementation" => Result(id, Definition(root, "textDocument/implementation")),
                     "textDocument/references" => Result(id, References(root, "textDocument/references")),
+                    "textDocument/hover" => Result(id, Hover(root, "textDocument/hover")),
+                    "textDocument/completion" => Result(id, Completion(root, "textDocument/completion")),
+                    "textDocument/documentHighlight" => Result(id, DocumentHighlight(root, "textDocument/documentHighlight")),
+                    "textDocument/semanticTokens/full" => Result(id, SemanticTokensFull(root)),
+                    "textDocument/codeLens" => Result(id, CodeLens(root)),
+                    "textDocument/inlayHint" => Result(id, InlayHint(root)),
                     _ => hasId ? Error(id, -32601, $"Method not found: {SanitizeUnknownMethod(method)}") : null,
                 };
             }
@@ -316,6 +376,100 @@ internal sealed class LspServer : IDisposable
         return null;
     }
 
+    private JsonObject? HandleDidOpenTextDocument(JsonElement root)
+    {
+        var uri = GetTextDocumentUri(root);
+        if (TryGet(root, out var textElement, "params", "textDocument", "text") && textElement.ValueKind == JsonValueKind.String)
+            SetLiveDocumentText(uri, textElement.GetString() ?? string.Empty);
+        return null;
+    }
+
+    private JsonObject? HandleDidChangeTextDocument(JsonElement root)
+    {
+        var uri = GetTextDocumentUri(root);
+        if (!TryGet(root, out var changes, "params", "contentChanges") || changes.ValueKind != JsonValueKind.Array)
+            return null;
+
+        string? latestText = null;
+        foreach (var change in changes.EnumerateArray())
+        {
+            if (change.ValueKind == JsonValueKind.Object
+                && change.TryGetProperty("text", out var textElement)
+                && textElement.ValueKind == JsonValueKind.String)
+            {
+                latestText = textElement.GetString() ?? string.Empty;
+            }
+        }
+
+        if (latestText != null)
+            SetLiveDocumentText(uri, latestText);
+        return null;
+    }
+
+    private JsonObject? HandleDidCloseTextDocument(JsonElement root)
+    {
+        var uri = GetTextDocumentUri(root);
+        if (TryGetLiveDocumentKeyFromUri(uri, out var key))
+            RemoveLiveDocument(key);
+        return null;
+    }
+
+    private void SetLiveDocumentText(string uri, string text)
+    {
+        if (!TryGetLiveDocumentKeyFromUri(uri, out var key))
+            return;
+
+        if (Encoding.UTF8.GetByteCount(text) > MaxPositionDocumentBytes)
+        {
+            RemoveLiveDocument(key);
+            return;
+        }
+
+        EnsureLiveDocumentCapacity(key);
+        _liveDocuments[key] = text;
+    }
+
+    private void EnsureLiveDocumentCapacity(string key)
+    {
+        if (_liveDocuments.ContainsKey(key))
+            return;
+
+        while (_liveDocuments.Count >= MaxLiveDocuments && _liveDocumentOrder.Count > 0)
+        {
+            var oldestKey = _liveDocumentOrder[0];
+            _liveDocumentOrder.RemoveAt(0);
+            _liveDocuments.Remove(oldestKey);
+        }
+
+        if (_liveDocuments.Count >= MaxLiveDocuments)
+        {
+            _liveDocuments.Clear();
+            _liveDocumentOrder.Clear();
+        }
+
+        _liveDocumentOrder.Add(key);
+    }
+
+    private void RemoveLiveDocument(string key)
+    {
+        _liveDocuments.Remove(key);
+        _liveDocumentOrder.RemoveAll(existing => string.Equals(existing, key, _pathStringComparison));
+    }
+
+    private bool TryGetLiveDocumentKeyFromUri(string uri, out string key)
+    {
+        key = string.Empty;
+        try
+        {
+            key = Path.GetFullPath(UriToPath(uri));
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private static Activity? StartLspRequestActivity(string method)
     {
         var activity = CodeIndexTelemetry.ActivitySource.StartActivity("lsp.request", ActivityKind.Server);
@@ -336,7 +490,36 @@ internal sealed class LspServer : IDisposable
             ["referencesProvider"] = true,
             ["documentSymbolProvider"] = true,
             ["workspaceSymbolProvider"] = true,
-            ["textDocumentSync"] = 0,
+            ["hoverProvider"] = true,
+            ["completionProvider"] = new JsonObject
+            {
+                ["resolveProvider"] = false,
+                ["triggerCharacters"] = new JsonArray(".", ":", "_"),
+            },
+            ["documentHighlightProvider"] = true,
+            ["semanticTokensProvider"] = new JsonObject
+            {
+                ["legend"] = new JsonObject
+                {
+                    ["tokenTypes"] = ToJsonStringArray(SemanticTokenTypes),
+                    ["tokenModifiers"] = ToJsonStringArray(SemanticTokenModifiers),
+                },
+                ["full"] = true,
+                ["range"] = false,
+            },
+            ["codeLensProvider"] = new JsonObject
+            {
+                ["resolveProvider"] = false,
+            },
+            ["inlayHintProvider"] = new JsonObject
+            {
+                ["resolveProvider"] = false,
+            },
+            ["textDocumentSync"] = new JsonObject
+            {
+                ["openClose"] = true,
+                ["change"] = 1,
+            },
             ["workspace"] = new JsonObject
             {
                 ["workspaceFolders"] = new JsonObject
@@ -352,6 +535,14 @@ internal sealed class LspServer : IDisposable
             ["version"] = _version,
         },
     };
+
+    private static JsonArray ToJsonStringArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+            array.Add(value);
+        return array;
+    }
 
     private JsonArray WorkspaceSymbol(JsonElement root)
     {
@@ -450,6 +641,267 @@ internal sealed class LspServer : IDisposable
                 context);
         return array;
     }
+
+    private JsonNode? Hover(JsonElement root, string method)
+    {
+        if (!TryExtractPositionToken(root, out var context, out var failureReason))
+        {
+            RecordLookupFailure(method, failureReason);
+            return null;
+        }
+
+        var definition = ResolveLspDefinitions(context).FirstOrDefault();
+        if (definition == null)
+            return null;
+
+        return new JsonObject
+        {
+            ["contents"] = new JsonObject
+            {
+                ["kind"] = "plaintext",
+                ["value"] = FormatHoverText(definition),
+            },
+            ["range"] = ToRange(context.Line + 1, context.StartCharacter + 1, context.Line + 1, context.EndCharacter + 1),
+        };
+    }
+
+    private JsonObject Completion(JsonElement root, string method)
+    {
+        if (!TryExtractPositionToken(root, out var context, out var failureReason))
+        {
+            RecordLookupFailure(method, failureReason);
+            return CompletionList([]);
+        }
+
+        var symbols = _reader.SearchSymbols(context.Token, MaxCompletionItems, pathPatterns: [context.IndexedPath])
+            .Concat(_reader.SearchSymbols(context.Token, MaxCompletionItems))
+            .DistinctBy(BuildCompletionIdentity)
+            .Take(MaxCompletionItems)
+            .ToList();
+        var items = new JsonArray();
+        for (var i = 0; i < symbols.Count; i++)
+            items.Add((JsonNode)ToCompletionItem(symbols[i], i));
+        return CompletionList(items);
+    }
+
+    private JsonArray DocumentHighlight(JsonElement root, string method)
+    {
+        if (!TryExtractPositionToken(root, out var context, out var failureReason))
+        {
+            RecordLookupFailure(method, failureReason);
+            return [];
+        }
+
+        var array = new JsonArray();
+        var seenRanges = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var definition in ResolveLspDefinitions(context).Where(definition => string.Equals(definition.Path, context.IndexedPath, StringComparison.Ordinal)))
+            AddDocumentHighlight(array, seenRanges, definition.StartLine, 1, definition.EndLine, 1);
+
+        foreach (var reference in ResolveLspReferences(context).References.Where(reference => string.Equals(reference.Path, context.IndexedPath, StringComparison.Ordinal)))
+        {
+            var startColumn = Math.Max(reference.Column, 1);
+            AddDocumentHighlight(array, seenRanges, reference.Line, startColumn, reference.Line, startColumn + Math.Max(context.Token.Length, 1));
+        }
+
+        if (array.Count == 0)
+            AddDocumentHighlight(array, seenRanges, context.Line + 1, context.StartCharacter + 1, context.Line + 1, context.EndCharacter + 1);
+        return array;
+    }
+
+    private JsonObject SemanticTokensFull(JsonElement root)
+    {
+        if (!TryResolveIndexedDocument(root, out var document))
+            return new JsonObject { ["data"] = new JsonArray() };
+
+        var symbols = GetDocumentSymbols(document.IndexedPath, MaxSemanticTokenItems)
+            .Where(symbol => !string.IsNullOrWhiteSpace(symbol.Name))
+            .Take(MaxSemanticTokenItems)
+            .Select(symbol => BuildSemanticToken(document, symbol))
+            .Where(token => token.HasValue)
+            .Select(token => token!.Value)
+            .OrderBy(token => token.Line)
+            .ThenBy(token => token.StartCharacter)
+            .ToList();
+        var data = new JsonArray();
+        var previousLine = 0;
+        var previousStart = 0;
+        foreach (var token in symbols)
+        {
+            var deltaLine = token.Line - previousLine;
+            var deltaStart = deltaLine == 0 ? token.StartCharacter - previousStart : token.StartCharacter;
+            data.Add(deltaLine);
+            data.Add(deltaStart);
+            data.Add(token.Length);
+            data.Add(token.TokenType);
+            data.Add(token.TokenModifiers);
+            previousLine = token.Line;
+            previousStart = token.StartCharacter;
+        }
+
+        return new JsonObject { ["data"] = data };
+    }
+
+    private JsonArray CodeLens(JsonElement root)
+    {
+        if (!TryResolveIndexedDocument(root, out var document))
+            return [];
+
+        var array = new JsonArray();
+        foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxCodeLensItems).Take(MaxCodeLensItems))
+            array.Add((JsonNode)ToCodeLens(symbol));
+        return array;
+    }
+
+    private JsonArray InlayHint(JsonElement root)
+    {
+        if (!TryResolveIndexedDocument(root, out var document))
+            return [];
+
+        var array = new JsonArray();
+        foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxInlayHintItems)
+            .Where(symbol => !string.IsNullOrWhiteSpace(symbol.ReturnType))
+            .Take(MaxInlayHintItems))
+        {
+            array.Add((JsonNode)ToInlayHint(document, symbol));
+        }
+        return array;
+    }
+
+    private static JsonObject CompletionList(JsonArray items) => new()
+    {
+        ["isIncomplete"] = false,
+        ["items"] = items,
+    };
+
+    private static string BuildCompletionIdentity(SymbolResult symbol)
+        => string.Join('\0', symbol.Name, symbol.Kind, symbol.Path, symbol.Line.ToString(CultureInfo.InvariantCulture));
+
+    private static JsonObject ToCompletionItem(SymbolResult symbol, int index) => new()
+    {
+        ["label"] = symbol.Name,
+        ["kind"] = CompletionItemKind(symbol.Kind),
+        ["detail"] = FormatSymbolDetail(symbol),
+        ["sortText"] = index.ToString("D4", CultureInfo.InvariantCulture) + "_" + symbol.Name,
+    };
+
+    private static string FormatHoverText(SymbolResult symbol)
+    {
+        var builder = new StringBuilder();
+        builder.Append(symbol.Kind).Append(' ').Append(symbol.Name);
+        if (!string.IsNullOrWhiteSpace(symbol.Signature))
+            builder.AppendLine().Append(symbol.Signature);
+        builder.AppendLine().Append(symbol.Path).Append(':').Append(symbol.Line.ToString(CultureInfo.InvariantCulture));
+        if (!string.IsNullOrWhiteSpace(symbol.ContainerName))
+            builder.AppendLine().Append("container: ").Append(symbol.ContainerName);
+        if (!string.IsNullOrWhiteSpace(symbol.ReturnType))
+            builder.AppendLine().Append("returns: ").Append(symbol.ReturnType);
+        return builder.ToString();
+    }
+
+    private static string FormatSymbolDetail(SymbolResult symbol)
+    {
+        var detail = string.IsNullOrWhiteSpace(symbol.Signature)
+            ? $"{symbol.Kind} {symbol.Path}:{symbol.Line.ToString(CultureInfo.InvariantCulture)}"
+            : symbol.Signature;
+        return detail.Length <= MaxDocumentSymbolDetailChars
+            ? detail
+            : detail[..(MaxDocumentSymbolDetailChars - "...".Length)] + "...";
+    }
+
+    private static int CompletionItemKind(string kind) => kind switch
+    {
+        "class" => 7,
+        "function" or "test.method" => 3,
+        "property" => 10,
+        "enum" => 13,
+        "interface" => 8,
+        "namespace" => 9,
+        "struct" => 22,
+        _ => 6,
+    };
+
+    private static void AddDocumentHighlight(JsonArray array, HashSet<string> seenRanges, int startLine, int startColumn, int endLine, int endColumn)
+    {
+        var key = string.Join('\0', startLine, startColumn, endLine, endColumn);
+        if (!seenRanges.Add(key))
+            return;
+
+        array.Add(new JsonObject
+        {
+            ["range"] = ToRange(startLine, startColumn, endLine, endColumn),
+            ["kind"] = 1,
+        });
+    }
+
+    private JsonObject ToCodeLens(SymbolResult symbol) => new()
+    {
+        ["range"] = ToRange(symbol.Line, 1, symbol.Line, 1),
+        ["command"] = new JsonObject
+        {
+            ["title"] = $"cdidx: {symbol.Kind}",
+            ["command"] = "cdidx.showSymbol",
+            ["arguments"] = new JsonArray(new JsonObject
+            {
+                ["name"] = symbol.Name,
+                ["kind"] = symbol.Kind,
+                ["path"] = symbol.Path,
+                ["line"] = symbol.Line,
+            }),
+        },
+    };
+
+    private JsonObject ToInlayHint(IndexedDocumentContext document, SymbolResult symbol)
+    {
+        var startCharacter = FindSymbolStartCharacter(document, symbol);
+        return new JsonObject
+        {
+            ["position"] = ToPosition(symbol.Line, startCharacter + symbol.Name.Length + 1),
+            ["label"] = ": " + symbol.ReturnType,
+            ["kind"] = 1,
+            ["paddingLeft"] = true,
+        };
+    }
+
+    private readonly record struct SemanticToken(int Line, int StartCharacter, int Length, int TokenType, int TokenModifiers);
+
+    private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol)
+    {
+        var line = Math.Max(symbol.Line, symbol.StartLine);
+        if (line <= 0)
+            return null;
+
+        var startCharacter = FindSymbolStartCharacter(document, symbol);
+        var length = Math.Max(symbol.Name.Length, 1);
+        return new SemanticToken(
+            line - 1,
+            startCharacter,
+            length,
+            SemanticTokenType(symbol.Kind),
+            1 << 1);
+    }
+
+    private int FindSymbolStartCharacter(IndexedDocumentContext document, SymbolResult symbol)
+    {
+        var line = Math.Max(symbol.Line, symbol.StartLine);
+        if (line <= 0 || string.IsNullOrWhiteSpace(symbol.Name))
+            return 0;
+
+        return TryReadPositionLine(document.ResolvedPath, line - 1, out var sourceLine, out _)
+            ? Math.Max(0, sourceLine.IndexOf(symbol.Name, StringComparison.Ordinal))
+            : 0;
+    }
+
+    private static int SemanticTokenType(string kind) => kind switch
+    {
+        "namespace" => 0,
+        "class" => 2,
+        "enum" => 3,
+        "interface" => 4,
+        "struct" => 5,
+        "property" => 9,
+        "function" or "test.method" => 13,
+        _ => 8,
+    };
 
     private void AddLocation(
         JsonArray array,
@@ -654,11 +1106,95 @@ internal sealed class LspServer : IDisposable
             return false;
         }
 
-        context = new PositionTokenContext(token, indexedPath, workspaceRoot);
+        var (startCharacter, endCharacter) = FindTokenRangeAtUtf16Position(sourceLine, character);
+        context = new PositionTokenContext(token, indexedPath, workspaceRoot, line, startCharacter, endCharacter);
         return true;
     }
 
-    private static bool TryReadPositionLine(string path, int targetLine, out string sourceLine, out string? failureReason)
+    private bool TryResolveIndexedDocument(JsonElement root, out IndexedDocumentContext context)
+    {
+        context = default;
+        var documentPath = GetDocumentPath(root);
+        if (!TryResolveDocumentPath(documentPath, out var resolvedPath, out var projectRelativePath, out var workspaceRoot))
+            return false;
+
+        var indexedPath = ResolveIndexedPath(documentPath, resolvedPath, projectRelativePath, workspaceRoot);
+        if (indexedPath == null)
+            return false;
+
+        var indexedPathRoot = _projectRoot == null ? workspaceRoot : null;
+        if (!TryResolveIndexedFilePath(indexedPath, indexedPathRoot, out var indexedFullPath))
+            return false;
+
+        if (!string.Equals(resolvedPath, indexedFullPath, _pathStringComparison))
+            return false;
+
+        context = new IndexedDocumentContext(documentPath, resolvedPath, indexedPath, workspaceRoot);
+        return true;
+    }
+
+    private List<SymbolResult> GetDocumentSymbols(string indexedPath, int limit)
+        => _reader.SearchSymbols((string?)null, limit, pathPatterns: [indexedPath])
+            .OrderBy(s => s.StartLine)
+            .ThenByDescending(s => s.EndLine)
+            .ThenBy(s => s.ContainerName == null ? 0 : 1)
+            .ThenBy(s => s.Name, StringComparer.Ordinal)
+            .ToList();
+
+    private bool TryReadPositionLine(string path, int targetLine, out string sourceLine, out string? failureReason)
+    {
+        if (_liveDocuments.TryGetValue(Path.GetFullPath(path), out var liveText))
+            return TryReadPositionLineFromText(liveText, targetLine, out sourceLine, out failureReason);
+
+        return TryReadPositionLineFromFile(path, targetLine, out sourceLine, out failureReason);
+    }
+
+    private static bool TryReadPositionLineFromText(string text, int targetLine, out string sourceLine, out string? failureReason)
+    {
+        sourceLine = string.Empty;
+        failureReason = null;
+        if (targetLine < 0)
+        {
+            failureReason = FailureInvalidPosition;
+            return false;
+        }
+
+        var currentLine = 0;
+        var lineStart = 0;
+        for (var i = 0; i <= text.Length; i++)
+        {
+            var atEnd = i == text.Length;
+            var isLineBreak = !atEnd && (text[i] == '\r' || text[i] == '\n');
+            if (!atEnd && !isLineBreak)
+                continue;
+
+            if (currentLine == targetLine)
+            {
+                var length = i - lineStart;
+                if (length > MaxPositionLineChars)
+                {
+                    failureReason = FailurePositionLineTooLong;
+                    return false;
+                }
+
+                sourceLine = text.Substring(lineStart, length);
+                return true;
+            }
+
+            if (atEnd)
+                break;
+
+            if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+                i++;
+            currentLine++;
+            lineStart = i + 1;
+        }
+
+        failureReason = FailurePositionLineMissing;
+        return false;
+    }
+
+    private static bool TryReadPositionLineFromFile(string path, int targetLine, out string sourceLine, out string? failureReason)
     {
         sourceLine = string.Empty;
         failureReason = null;
@@ -761,6 +1297,27 @@ internal sealed class LspServer : IDisposable
         while (end < line.Length && IsTokenChar(line[end]))
             end++;
         return line[start..end].TrimStart('@');
+    }
+
+    private static (int Start, int End) FindTokenRangeAtUtf16Position(string line, int character)
+    {
+        if (character < 0)
+            return (0, 0);
+        var index = Math.Min(character, line.Length);
+        while (index > 0 && index == line.Length)
+            index--;
+        if (index < line.Length && !IsTokenChar(line[index]) && index > 0 && IsTokenChar(line[index - 1]))
+            index--;
+        if (index >= line.Length || !IsTokenChar(line[index]))
+            return (Math.Max(0, Math.Min(character, line.Length)), Math.Max(0, Math.Min(character, line.Length)));
+
+        var start = index;
+        while (start > 0 && IsTokenChar(line[start - 1]))
+            start--;
+        var end = index + 1;
+        while (end < line.Length && IsTokenChar(line[end]))
+            end++;
+        return (start, end);
     }
 
     private static bool IsTokenChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '@';
@@ -984,6 +1541,12 @@ internal sealed class LspServer : IDisposable
             ["line"] = Math.Max(endLine - 1, 0),
             ["character"] = Math.Max(endColumn - 1, 0),
         },
+    };
+
+    private static JsonObject ToPosition(int line, int column) => new()
+    {
+        ["line"] = Math.Max(line - 1, 0),
+        ["character"] = Math.Max(column - 1, 0),
     };
 
     private static int SymbolKind(string kind) => kind switch

@@ -469,6 +469,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DiffSummaryOnlyJsonResult))]
 [JsonSerializable(typeof(DiffSummaryJsonResult))]
 [JsonSerializable(typeof(ExactZeroHintResult))]
+[JsonSerializable(typeof(ExportImportCommandRunner.CtagsExportFilterResult))]
+[JsonSerializable(typeof(ExportImportCommandRunner.CtagsExportResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportArchiveResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportImportErrorResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportManifest))]
