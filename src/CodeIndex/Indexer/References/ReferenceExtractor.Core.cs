@@ -134,7 +134,8 @@ public static partial class ReferenceExtractor
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
         var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, lines, structuralLines);
+        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
@@ -170,6 +171,617 @@ public static partial class ReferenceExtractor
                 && lineNumber >= alias.ScopeStartLine
                 && lineNumber <= alias.ScopeEndLine
                 && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal));
+        }
+
+        string ResolveCSharpUsingAliasReferenceName(string referenceName, int lineNumber)
+        {
+            if (language != "csharp")
+                return referenceName;
+
+            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
+            {
+                var alias = csharpUsingAliases[aliasIndex];
+                if (alias.Line > lineNumber
+                    || lineNumber < alias.ScopeStartLine
+                    || lineNumber > alias.ScopeEndLine
+                    || !string.Equals(alias.AliasName, referenceName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var targetName = GetLastQualifiedSegment(TrimLeadingCSharpGlobalQualifier(alias.TargetQualifiedName));
+                return string.IsNullOrWhiteSpace(targetName) ? referenceName : targetName;
+            }
+
+            return referenceName;
+        }
+
+        void ApplyCSharpUsingAliasReferenceNames(List<ReferenceRecord> references)
+        {
+            if (language != "csharp")
+                return;
+
+            foreach (var reference in references)
+            {
+                if (reference.ReferenceKind is not ("instantiate" or "attribute"))
+                    continue;
+                if (reference.Line <= 0 || reference.Line > lines.Length || reference.Column <= 0)
+                    continue;
+                if (!IsUnqualifiedCSharpTokenAtColumn(reference.Line, reference.Column, reference.SymbolName))
+                    continue;
+
+                var resolvedName = ResolveCSharpUsingAliasReferenceName(reference.SymbolName, reference.Line);
+                if (string.Equals(resolvedName, reference.SymbolName, StringComparison.Ordinal))
+                    continue;
+
+                reference.SymbolName = resolvedName;
+                reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
+            }
+
+            var deduped = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < references.Count;)
+            {
+                var reference = references[index];
+                var key = BuildReferenceDedupeKey(
+                    reference.FileId,
+                    language,
+                    reference.Line,
+                    reference.Column,
+                    reference.ReferenceKind,
+                    reference.SymbolName,
+                    new SymbolRecord
+                    {
+                        Kind = reference.ContainerKind ?? string.Empty,
+                        Name = reference.ContainerName ?? string.Empty,
+                    });
+                if (deduped.Add(key))
+                {
+                    index++;
+                    continue;
+                }
+
+                references.RemoveAt(index);
+            }
+        }
+
+        bool IsUnqualifiedCSharpTokenAtColumn(int lineNumber, int column, string symbolName)
+        {
+            if (lineNumber <= 0
+                || lineNumber > lines.Length
+                || column <= 0
+                || string.IsNullOrWhiteSpace(symbolName))
+                return false;
+
+            var line = lines[lineNumber - 1];
+            var tokenStart = column - 1;
+            if (tokenStart >= line.Length)
+                return false;
+
+            var tokenNameStart = tokenStart;
+            if (line[tokenNameStart] == '@')
+                tokenNameStart++;
+
+            if (tokenNameStart + symbolName.Length > line.Length)
+                return false;
+            if (!line.AsSpan(tokenNameStart, symbolName.Length).Equals(symbolName, StringComparison.Ordinal))
+                return false;
+
+            var previousIndex = tokenStart - 1;
+            var nextIndex = tokenNameStart + symbolName.Length;
+            var hasQualifiedPrefix = HasCSharpQualifiedSeparatorBeforeToken(line, tokenStart)
+                || (previousIndex >= 0 && IsCSharpIdentifierPart(line[previousIndex]));
+            var hasIdentifierSuffix = nextIndex < line.Length && IsCSharpIdentifierPart(line[nextIndex]);
+            return !hasQualifiedPrefix && !hasIdentifierSuffix;
+        }
+
+        bool HasActiveCSharpUsingNamespace(string targetQualifiedName, int lineNumber)
+        {
+            var normalizedTarget = NormalizeCSharpBclRegexQualifiedName(targetQualifiedName);
+            return csharpUsingNamespaces.Any(import =>
+                import.Line <= lineNumber
+                && lineNumber >= import.ScopeStartLine
+                && lineNumber <= import.ScopeEndLine
+                && string.Equals(NormalizeCSharpBclRegexQualifiedName(import.TargetQualifiedName), normalizedTarget, StringComparison.Ordinal));
+        }
+
+        CSharpUsingAliasRecord? FindActiveCSharpUsingAlias(string aliasName, int lineNumber)
+        {
+            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
+            {
+                var alias = csharpUsingAliases[aliasIndex];
+                if (alias.Line > lineNumber
+                    || lineNumber < alias.ScopeStartLine
+                    || lineNumber > alias.ScopeEndLine
+                    || !string.Equals(alias.AliasName, aliasName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                return alias;
+            }
+
+            return null;
+        }
+
+        void EmitCSharpBclRegexWithoutTimeoutReferences(List<ReferenceRecord> references, HashSet<string> seen)
+        {
+            if (language != "csharp")
+                return;
+
+            foreach (var reference in references.ToArray())
+            {
+                if (reference.ReferenceKind != "instantiate"
+                    || !string.Equals(reference.SymbolName, "Regex", StringComparison.Ordinal)
+                    || reference.Line <= 0
+                    || reference.Line > lines.Length
+                    || reference.Column <= 0
+                    || !IsCSharpBclRegexInstantiateReference(reference)
+                    || !IsCSharpRegexConstructorWithoutTimeout(reference.Line, reference.Column, reference.SymbolName))
+                {
+                    continue;
+                }
+
+                var container = new SymbolRecord
+                {
+                    Kind = reference.ContainerKind ?? string.Empty,
+                    Name = reference.ContainerName ?? string.Empty,
+                };
+                var dedupeKey = BuildReferenceDedupeKey(
+                    reference.FileId,
+                    language,
+                    reference.Line,
+                    reference.Column,
+                    "bcl_regex_without_timeout",
+                    reference.SymbolName,
+                    container);
+                if (!seen.Add(dedupeKey))
+                    continue;
+
+                references.Add(new ReferenceRecord
+                {
+                    FileId = reference.FileId,
+                    SymbolName = reference.SymbolName,
+                    ReferenceKind = "bcl_regex_without_timeout",
+                    Line = reference.Line,
+                    Column = reference.Column,
+                    Context = reference.Context,
+                    ContainerKind = reference.ContainerKind,
+                    ContainerName = reference.ContainerName,
+                    IsSelfReference = reference.IsSelfReference,
+                });
+            }
+        }
+
+        bool IsCSharpBclRegexInstantiateReference(ReferenceRecord reference)
+        {
+            var line = lines[reference.Line - 1];
+            if (!TryGetCSharpIdentifierAtColumn(line, reference.Column, out _, out _, out var tokenName))
+                return false;
+
+            if (TryGetCSharpQualifiedPrefixAtColumn(line, reference.Column, tokenName, out var prefix)
+                && string.Equals(NormalizeCSharpBclRegexQualifiedName($"{prefix}.{tokenName}"), "System.Text.RegularExpressions.Regex", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var alias = FindActiveCSharpUsingAlias(tokenName, reference.Line);
+            if (alias != null)
+            {
+                return string.Equals(
+                    NormalizeCSharpBclRegexQualifiedName(alias.TargetQualifiedName),
+                    "System.Text.RegularExpressions.Regex",
+                    StringComparison.Ordinal);
+            }
+
+            return string.Equals(tokenName, "Regex", StringComparison.Ordinal)
+                && !HasActiveSameFileCSharpTypeCandidate(tokenName, reference.Line)
+                && HasActiveCSharpUsingNamespace("System.Text.RegularExpressions", reference.Line);
+        }
+
+        bool IsCSharpRegexConstructorWithoutTimeout(int lineNumber, int column, string symbolName)
+        {
+            var line = lines[lineNumber - 1];
+            _ = symbolName;
+            if (!TryGetCSharpIdentifierAtColumn(line, column, out _, out var tokenNameStart, out var tokenName))
+                return false;
+
+            var cursor = tokenNameStart + tokenName.Length;
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+            if (cursor >= line.Length || line[cursor] != '(')
+                return false;
+
+            if (!TryCollectCSharpInvocationArguments(lines, lineNumber - 1, cursor, out var args))
+                return false;
+
+            var argCount = CountTopLevelCSharpArguments(args.AsSpan(), out var hasNamedMatchTimeout);
+            return argCount is 1 or 2 && !hasNamedMatchTimeout;
+        }
+
+        static bool HasCSharpQualifiedSeparatorBeforeToken(string line, int tokenStart)
+        {
+            var probe = tokenStart - 1;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+
+            if (probe < 0)
+                return false;
+            if (line[probe] == '.')
+                return true;
+            return line[probe] == ':' && probe >= 1 && line[probe - 1] == ':';
+        }
+
+        static bool TryGetCSharpTokenBoundsAtColumn(string line, int column, string symbolName, out int tokenStart, out int tokenNameStart)
+        {
+            if (!TryGetCSharpIdentifierAtColumn(line, column, out tokenStart, out tokenNameStart, out var tokenName)
+                || string.IsNullOrWhiteSpace(symbolName))
+            {
+                return false;
+            }
+
+            return string.Equals(tokenName, symbolName, StringComparison.Ordinal);
+        }
+
+        static bool TryGetCSharpIdentifierAtColumn(string line, int column, out int tokenStart, out int tokenNameStart, out string tokenName)
+        {
+            tokenStart = column - 1;
+            tokenNameStart = tokenStart;
+            tokenName = string.Empty;
+            if (tokenStart < 0 || tokenStart >= line.Length)
+                return false;
+
+            if (line[tokenNameStart] == '@')
+                tokenNameStart++;
+
+            if (tokenNameStart >= line.Length || !IsCSharpIdentifierPart(line[tokenNameStart]))
+                return false;
+
+            var tokenEnd = tokenNameStart + 1;
+            while (tokenEnd < line.Length && IsCSharpIdentifierPart(line[tokenEnd]))
+                tokenEnd++;
+
+            tokenName = NormalizeCSharpIdentifier(line[tokenStart..tokenEnd]);
+            return !string.IsNullOrWhiteSpace(tokenName);
+        }
+
+        static bool TryGetCSharpQualifiedPrefixAtColumn(string line, int column, string symbolName, out string prefix)
+        {
+            prefix = string.Empty;
+            if (!TryGetCSharpTokenBoundsAtColumn(line, column, symbolName, out var tokenStart, out _)
+                || !HasCSharpQualifiedSeparatorBeforeToken(line, tokenStart))
+            {
+                return false;
+            }
+
+            var cursor = tokenStart - 1;
+            while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+                cursor--;
+            if (cursor >= 0 && line[cursor] == '.')
+                cursor--;
+            else if (cursor >= 1 && line[cursor] == ':' && line[cursor - 1] == ':')
+                cursor -= 2;
+            else
+                return false;
+
+            var segments = new List<string>();
+            while (cursor >= 0)
+            {
+                while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+                    cursor--;
+
+                var segmentEnd = cursor;
+                while (cursor >= 0 && (IsCSharpIdentifierPart(line[cursor]) || line[cursor] == '@'))
+                    cursor--;
+
+                var segmentStart = cursor + 1;
+                if (segmentStart > segmentEnd)
+                    return false;
+
+                segments.Add(NormalizeCSharpIdentifier(line[segmentStart..(segmentEnd + 1)]));
+                while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
+                    cursor--;
+
+                if (cursor >= 0 && line[cursor] == '.')
+                {
+                    cursor--;
+                    continue;
+                }
+
+                if (cursor >= 1 && line[cursor] == ':' && line[cursor - 1] == ':')
+                {
+                    cursor -= 2;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (segments.Count == 0)
+                return false;
+
+            segments.Reverse();
+            prefix = string.Join('.', segments);
+            return true;
+        }
+
+        static bool TryCollectCSharpInvocationArguments(string[] sourceLines, int lineIndex, int openParen, out string args)
+        {
+            const int MaxInvocationLines = 32;
+            var builder = new StringBuilder();
+            var depth = 0;
+            var started = false;
+            var lineLimit = Math.Min(sourceLines.Length, lineIndex + MaxInvocationLines);
+
+            for (var currentLineIndex = lineIndex; currentLineIndex < lineLimit; currentLineIndex++)
+            {
+                var line = sourceLines[currentLineIndex];
+                for (var i = currentLineIndex == lineIndex ? openParen : 0; i < line.Length;)
+                {
+                    var skippedIndex = i;
+                    if (TrySkipCSharpStringOrCharLiteral(line.AsSpan(), ref skippedIndex))
+                    {
+                        if (started && depth > 0)
+                            builder.Append(line.AsSpan(i, skippedIndex - i));
+                        i = skippedIndex;
+                        continue;
+                    }
+
+                    skippedIndex = i;
+                    if (TrySkipCSharpComment(line.AsSpan(), ref skippedIndex))
+                    {
+                        if (started && depth > 0)
+                            builder.Append(' ');
+                        i = skippedIndex;
+                        continue;
+                    }
+
+                    var ch = line[i++];
+                    if (ch == '(')
+                    {
+                        if (started && depth > 0)
+                            builder.Append(ch);
+                        depth++;
+                        started = true;
+                        continue;
+                    }
+
+                    if (ch == ')' && started)
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            args = builder.ToString();
+                            return true;
+                        }
+
+                        builder.Append(ch);
+                        continue;
+                    }
+
+                    if (started && depth > 0)
+                        builder.Append(ch);
+                }
+
+                if (started && depth > 0)
+                    builder.Append('\n');
+            }
+
+            args = string.Empty;
+            return false;
+        }
+
+        static int CountTopLevelCSharpArguments(ReadOnlySpan<char> args, out bool hasNamedMatchTimeout)
+        {
+            hasNamedMatchTimeout = false;
+            var count = 0;
+            var tokenStart = 0;
+            var parenDepth = 0;
+            var bracketDepth = 0;
+            var braceDepth = 0;
+
+            for (var i = 0; i <= args.Length; i++)
+            {
+                var atEnd = i == args.Length;
+                if (!atEnd)
+                {
+                    if (TrySkipCSharpStringOrCharLiteral(args, ref i)
+                        || TrySkipCSharpComment(args, ref i))
+                    {
+                        i--;
+                        continue;
+                    }
+
+                    var ch = args[i];
+                    if (ch == '(')
+                        parenDepth++;
+                    else if (ch == ')' && parenDepth > 0)
+                        parenDepth--;
+                    else if (ch == '[')
+                        bracketDepth++;
+                    else if (ch == ']' && bracketDepth > 0)
+                        bracketDepth--;
+                    else if (ch == '{')
+                        braceDepth++;
+                    else if (ch == '}' && braceDepth > 0)
+                        braceDepth--;
+
+                    if (ch != ',' || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+                        continue;
+                }
+
+                var segment = args[tokenStart..i].Trim();
+                if (!segment.IsEmpty)
+                {
+                    count++;
+                    if (CSharpArgumentHasNamedMatchTimeout(segment))
+                        hasNamedMatchTimeout = true;
+                }
+
+                tokenStart = i + 1;
+            }
+
+            return count;
+        }
+
+        static bool TrySkipCSharpComment(ReadOnlySpan<char> text, ref int index)
+        {
+            if (index + 1 >= text.Length || text[index] != '/')
+                return false;
+
+            if (text[index + 1] == '/')
+            {
+                index = text.Length;
+                return true;
+            }
+
+            if (text[index + 1] != '*')
+                return false;
+
+            index += 2;
+            while (index + 1 < text.Length)
+            {
+                if (text[index] == '*' && text[index + 1] == '/')
+                {
+                    index += 2;
+                    return true;
+                }
+
+                index++;
+            }
+
+            index = text.Length;
+            return true;
+        }
+
+        static bool TrySkipCSharpStringOrCharLiteral(ReadOnlySpan<char> text, ref int index)
+        {
+            var cursor = index;
+            var verbatim = false;
+
+            if (cursor < text.Length && text[cursor] == '@')
+            {
+                verbatim = true;
+                cursor++;
+                while (cursor < text.Length && text[cursor] == '$')
+                    cursor++;
+            }
+            else
+            {
+                while (cursor < text.Length && text[cursor] == '$')
+                    cursor++;
+                if (cursor < text.Length && text[cursor] == '@')
+                {
+                    verbatim = true;
+                    cursor++;
+                }
+            }
+
+            if (cursor >= text.Length || (text[cursor] != '"' && text[cursor] != '\''))
+                return false;
+
+            var quote = text[cursor];
+            if (quote == '\'')
+            {
+                index = cursor + 1;
+                while (index < text.Length)
+                {
+                    if (text[index] == '\\')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    if (text[index++] == '\'')
+                        return true;
+                }
+
+                return true;
+            }
+
+            var quoteCount = 0;
+            while (cursor + quoteCount < text.Length && text[cursor + quoteCount] == '"')
+                quoteCount++;
+
+            if (!verbatim && quoteCount >= 3)
+            {
+                index = cursor + quoteCount;
+                while (index + quoteCount <= text.Length)
+                {
+                    var matched = true;
+                    for (var offset = 0; offset < quoteCount; offset++)
+                    {
+                        if (text[index + offset] != '"')
+                        {
+                            matched = false;
+                            break;
+                        }
+                    }
+
+                    if (matched)
+                    {
+                        index += quoteCount;
+                        return true;
+                    }
+
+                    index++;
+                }
+
+                index = text.Length;
+                return true;
+            }
+
+            index = cursor + 1;
+            while (index < text.Length)
+            {
+                if (!verbatim && text[index] == '\\')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                if (text[index] == '"')
+                {
+                    if (verbatim && index + 1 < text.Length && text[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    index++;
+                    return true;
+                }
+
+                index++;
+            }
+
+            return true;
+        }
+
+        static bool CSharpArgumentHasNamedMatchTimeout(ReadOnlySpan<char> argument)
+        {
+            const string MatchTimeoutName = "matchTimeout";
+            var cursor = 0;
+            while (cursor < argument.Length && char.IsWhiteSpace(argument[cursor]))
+                cursor++;
+            if (cursor + MatchTimeoutName.Length > argument.Length
+                || !argument[cursor..(cursor + MatchTimeoutName.Length)].Equals(MatchTimeoutName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            cursor += MatchTimeoutName.Length;
+            while (cursor < argument.Length && char.IsWhiteSpace(argument[cursor]))
+                cursor++;
+            return cursor < argument.Length && argument[cursor] == ':';
+        }
+
+        static string NormalizeCSharpBclRegexQualifiedName(string value)
+        {
+            var normalized = NormalizeCSharpAliasTargetForTypeLookup(value);
+            normalized = TrimLeadingCSharpGlobalQualifier(normalized);
+            if (normalized.StartsWith("global.", StringComparison.Ordinal))
+                normalized = normalized["global.".Length..];
+            return normalized;
         }
 
         var references = new List<ReferenceRecord>();
@@ -2368,6 +2980,8 @@ public static partial class ReferenceExtractor
                 fileId);
         }
 
+        ApplyCSharpUsingAliasReferenceNames(references);
+        EmitCSharpBclRegexWithoutTimeoutReferences(references, seen);
         MarkMutualRecursionReferences(references);
         return references;
     }

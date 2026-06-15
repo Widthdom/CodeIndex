@@ -466,11 +466,11 @@ public static partial class ReferenceExtractor
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingNamespaceRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+?)\s*;?\s*$",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpUsingStaticRegex = new(
         @"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)",
-        RegexOptions.Compiled);
-    private static readonly Regex CSharpUsingNamespaceRegex = new(
-        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)",
         RegexOptions.Compiled);
     private static readonly Regex CSharpLocalValueNameRegex = new(
         @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:(?:const\s+)?[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",

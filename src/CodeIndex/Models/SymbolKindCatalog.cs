@@ -79,6 +79,7 @@ public static class SymbolKindCatalog
         "annotation",
         "attribute",
         "augmentation",
+        "bcl_regex_without_timeout",
         "call",
         "capture",
         "column_reference",
