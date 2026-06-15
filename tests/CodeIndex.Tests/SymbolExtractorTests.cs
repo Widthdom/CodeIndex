@@ -154,6 +154,275 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Cython_DetectsNativeDeclarations_Issue3530()
+    {
+        const string content = """
+            cimport numpy as cnp
+            from libc.stdlib cimport malloc
+            cdef extern from "math.h":
+                double sqrt(double)
+
+            cdef public int exported_count
+            ctypedef unsigned long size_t_alias
+
+            cdef class NativeThing:
+                cdef int value
+                cpdef int update(self, int delta):
+                    return delta
+
+            cpdef double distance(double x):
+                return x
+
+            cdef int helper(int x) nogil:
+                return x
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cython", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "numpy");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "libc.stdlib");
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "math.h");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "sqrt");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "exported_count");
+        Assert.Contains(symbols, symbol => symbol.Kind == "typealias" && symbol.Name == "size_t_alias");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "NativeThing");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "value");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "update");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "distance");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cython");
+    }
+
+    [Fact]
+    public void Extract_Cuda_DetectsKernelAndDeviceFunctions_Issue3530()
+    {
+        const string content = """
+            #include <cuda_runtime.h>
+
+            struct Params { int count; };
+
+            template <typename T>
+            __global__ void saxpy(T *out, const T *in)
+            {
+            }
+
+            __device__ float weight(float x) { return x; }
+            __host__ __device__ inline float clamp(float x) { return x; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cuda", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "cuda_runtime.h");
+        Assert.Contains(symbols, symbol => symbol.Kind == "struct" && symbol.Name == "Params");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "saxpy" && symbol.SubKind == "cuda_kernel");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "weight" && symbol.SubKind == "cuda_device");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "clamp" && symbol.SubKind == "cuda_host_device");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "cuda");
+    }
+
+    [Fact]
+    public void Extract_Hdl_DetectsVerilogSystemVerilogAndVhdlSymbols_Issue3532()
+    {
+        const string verilog = """
+            `include "defs.vh"
+            module fifo #(parameter int WIDTH = 8) (
+                input logic clk,
+                output logic [WIDTH-1:0] data_o
+            );
+                localparam int Depth = 16;
+                function automatic int occupancy(input int count);
+                    occupancy = count;
+                endfunction
+                task reset_fifo;
+                endtask
+            endmodule
+            """;
+        const string systemVerilog = """
+            package bus_pkg;
+                typedef enum logic [1:0] { Idle, Busy } state_t;
+                typedef struct packed { logic valid; } packet_t;
+                import util_pkg::*;
+            endpackage
+
+            interface bus_if(input logic clk);
+            endinterface
+
+            virtual class Driver;
+                rand bit enabled;
+                function void run();
+                endfunction
+            endclass
+            """;
+        const string vhdl = """
+            library ieee;
+            use ieee.std_logic_1164.all;
+
+            entity Fifo is
+                generic Width : natural := 8;
+                port clk : in std_logic;
+            end Fifo;
+
+            architecture rtl of Fifo is
+                type state_t is (Idle, Busy);
+                signal counter : unsigned(7 downto 0);
+                function next_state return state_t is
+                begin
+                    return Idle;
+                end function;
+            begin
+                main : process
+                begin
+                    null;
+                end process;
+            end rtl;
+            """;
+
+        var verilogSymbols = SymbolExtractor.Extract(1, "verilog", verilog);
+        var systemVerilogSymbols = SymbolExtractor.Extract(2, "systemverilog", systemVerilog);
+        var vhdlSymbols = SymbolExtractor.Extract(3, "vhdl", vhdl);
+
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "import" && symbol.Name == "defs.vh");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "module" && symbol.Name == "fifo");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "WIDTH");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "clk");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "Depth");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "function" && symbol.Name == "occupancy");
+        Assert.Contains(verilogSymbols, symbol => symbol.Kind == "function" && symbol.Name == "reset_fifo");
+
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "package" && symbol.Name == "bus_pkg");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "enum" && symbol.Name == "state_t");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "packet_t");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "import" && symbol.Name == "util_pkg::*");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "interface" && symbol.Name == "bus_if");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "class" && symbol.Name == "Driver");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "property" && symbol.Name == "enabled");
+        Assert.Contains(systemVerilogSymbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "import" && symbol.Name == "ieee");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "import" && symbol.Name == "ieee.std_logic_1164.all");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "module" && symbol.Name == "Fifo");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "module" && symbol.Name == "rtl");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "typealias" && symbol.Name == "state_t");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "property" && symbol.Name == "counter");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "next_state");
+        Assert.Contains(vhdlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "main");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "verilog");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "systemverilog");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "vhdl");
+    }
+
+    [Fact]
+    public void Extract_ShaderLanguages_DetectsEntryPointsAndResources_Issue3533()
+    {
+        const string glsl = """
+            layout(location = 0) in vec3 position;
+            layout(set = 0, binding = 0) uniform sampler2D diffuseMap;
+
+            struct Light {
+                vec3 color;
+            };
+
+            void main()
+            {
+            }
+            """;
+        const string hlsl = """
+            cbuffer FrameData : register(b0)
+            {
+                float4 Tint;
+            };
+
+            Texture2D<float4> DiffuseTexture : register(t0);
+            SamplerState LinearSampler : register(s0);
+
+            struct VertexOut
+            {
+                float4 Position : SV_Position;
+            };
+
+            float4 PSMain(VertexOut input) : SV_Target
+            {
+                return DiffuseTexture.Sample(LinearSampler, input.Position.xy);
+            }
+            """;
+        const string metal = """
+            struct VertexOut {
+                float4 position [[position]];
+            };
+
+            constant float4 Tint;
+
+            vertex VertexOut vertex_main(uint vid [[vertex_id]])
+            {
+                return VertexOut();
+            }
+
+            fragment float4 fragment_main(VertexOut in [[stage_in]])
+            {
+                return Tint;
+            }
+
+            kernel void compute_main(device float4* values [[buffer(0)]])
+            {
+            }
+            """;
+        const string wgsl = """
+            struct VertexOut {
+                @builtin(position) position: vec4<f32>,
+            }
+
+            alias Index = u32;
+            @group(0) @binding(0) var diffuse_texture: texture_2d<f32>;
+            override WorkgroupSize: u32 = 64;
+
+            @vertex
+            fn vs_main() -> VertexOut
+            {
+                return VertexOut();
+            }
+
+            @fragment fn fs_main() -> @location(0) vec4<f32>
+            {
+                return vec4<f32>();
+            }
+            """;
+
+        var glslSymbols = SymbolExtractor.Extract(1, "glsl", glsl);
+        var hlslSymbols = SymbolExtractor.Extract(2, "hlsl", hlsl);
+        var metalSymbols = SymbolExtractor.Extract(3, "metal", metal);
+        var wgslSymbols = SymbolExtractor.Extract(4, "wgsl", wgsl);
+
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "position");
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "diffuseMap");
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "Light");
+        Assert.Contains(glslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "main");
+
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "FrameData");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "DiffuseTexture");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "LinearSampler");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "VertexOut");
+        Assert.Contains(hlslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "PSMain");
+
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "VertexOut");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "property" && symbol.Name == "Tint");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "vertex_main");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "fragment_main");
+        Assert.Contains(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "compute_main");
+        Assert.DoesNotContain(metalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "VertexOut");
+
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "VertexOut");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "typealias" && symbol.Name == "Index");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "diffuse_texture");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "property" && symbol.Name == "WorkgroupSize");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "vs_main");
+        Assert.Contains(wgslSymbols, symbol => symbol.Kind == "function" && symbol.Name == "fs_main");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "glsl");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "hlsl");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "metal");
+        Assert.Contains(SymbolExtractor.GetSupportedLanguages(), lang => lang == "wgsl");
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_HandlesOutOfTreeLanguage()
     {
         lock (TestConsoleLock.Gate)
@@ -545,6 +814,7 @@ public partial class SymbolExtractorTests
             ["csharp"] = "namespace Demo; public class Service { public int Run() => 1; }\n",
             ["crystal"] = "module Demo\n  def run\n    1\n  end\nend\n",
             ["css"] = ".card { color: red; }\n@keyframes fade { from { opacity: 0; } }\n",
+            ["cython"] = "cdef class Service:\n    cpdef int run(self):\n        return 1\n",
             ["d"] = "module demo;\nint run() { return 1; }\n",
             ["dart"] = "class Service { int run() => 1; }\n",
             ["dockerfile"] = "FROM alpine AS build\nARG VERSION=1\n",
@@ -554,10 +824,12 @@ public partial class SymbolExtractorTests
             ["fsharp"] = "module Demo\nlet run x = x + 1\n",
             ["go"] = "package demo\nfunc Run() int { return 1 }\n",
             ["gradle"] = "task buildDocs {\n}\n",
+            ["glsl"] = "uniform mat4 model;\nvec4 run(vec4 value) { return model * value; }\n",
             ["graphql"] = "type Query { answer: Int }\nquery GetAnswer { answer }\n",
             ["groovy"] = "package demo\nclass Service { def run() { 1 } }\n",
             ["haskell"] = "module Demo where\nrun :: Int -> Int\nrun x = x + 1\n",
             ["html"] = "<div id=\"app\"></div>\n<script>function run() { return 1; }</script>\n",
+            ["hlsl"] = "cbuffer Params { float4 color; }\nfloat4 run(float4 value) { return value * color; }\n",
             ["java"] = "package demo; public class Service { int run() { return 1; } }\n",
             ["javascript"] = "export function run() { return 1; }\n",
             ["julia"] = "module Demo\nfunction run()\n  1\nend\nend\n",
@@ -565,6 +837,7 @@ public partial class SymbolExtractorTests
             ["kotlin"] = "package demo\nclass Service { fun run(): Int = 1 }\n",
             ["lua"] = "local function run()\n  return 1\nend\n",
             ["makefile"] = "build:\n\t@echo build\n",
+            ["metal"] = "struct VertexOut { float4 position; };\nvertex VertexOut run(uint id) { return VertexOut(); }\n",
             ["msbuild"] = "<Project><Target Name=\"Build\" /></Project>\n",
             ["nim"] = "proc run*(): int =\n  1\n",
             ["objc"] = "@interface Service\n- (void)run;\n@end\n",
@@ -588,11 +861,15 @@ public partial class SymbolExtractorTests
             ["stylus"] = "primary = #3366cc\nrounded(radius)\n  border-radius radius\n.button\n  rounded(4px)\n",
             ["svelte"] = "<script>\n  export let name;\n  function run() { return name; }\n</script>\n",
             ["swift"] = "class Service { func run() -> Int { 1 } }\n",
+            ["systemverilog"] = "module demo #(parameter int WIDTH = 8) (input logic clk);\nfunction int run(); return WIDTH; endfunction\nendmodule\n",
             ["tcl"] = "namespace eval demo {}\nproc run {} { return 1 }\n",
             ["terraform"] = "resource \"local_file\" \"demo\" {\n  filename = \"demo.txt\"\n}\n",
             ["typescript"] = "export class Service { run(): number { return 1; } }\n",
             ["vb"] = "Public Class Service\n  Public Sub Run()\n  End Sub\nEnd Class\n",
+            ["verilog"] = "module demo #(parameter WIDTH = 8) (input clk);\nfunction run; run = WIDTH; endfunction\nendmodule\n",
+            ["vhdl"] = "library ieee;\nentity demo is\nend demo;\narchitecture rtl of demo is\nsignal ready : std_logic;\nbegin\nend rtl;\n",
             ["vue"] = "<script setup lang=\"ts\">\nfunction run() { return 1 }\n</script>\n",
+            ["wgsl"] = "@group(0) @binding(0) var<uniform> params: mat4x4<f32>;\nfn run() -> vec4<f32> { return vec4<f32>(); }\n",
             ["zig"] = "pub fn run() i32 { return 1; }\n",
         };
 
