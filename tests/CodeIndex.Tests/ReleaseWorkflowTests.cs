@@ -237,8 +237,7 @@ public class ReleaseWorkflowTests
             CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
             var beforeHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
 
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-                PackageNormalizeCli.Run(["--dry-run", "--summary", packagePath]));
+            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--dry-run", "--summary", packagePath]);
 
             var afterHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
             Assert.Equal(0, exitCode);
@@ -268,8 +267,7 @@ public class ReleaseWorkflowTests
             var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
             CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
 
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-                PackageNormalizeCli.Run(["--dry-run", "--json", "--continue-on-error", missingPackagePath, packagePath]));
+            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--dry-run", "--json", "--continue-on-error", missingPackagePath, packagePath]);
 
             Assert.Equal(1, exitCode);
             Assert.Empty(stderr);
@@ -303,7 +301,7 @@ public class ReleaseWorkflowTests
             .Select(index => $"package-{index}.nupkg")
             .ToArray();
 
-        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => PackageNormalizeCli.Run(args));
+        var (exitCode, stdout, stderr) = RunPackageNormalizeCli(args);
 
         Assert.Equal(1, exitCode);
         Assert.Empty(stdout);
@@ -318,8 +316,7 @@ public class ReleaseWorkflowTests
         {
             var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
 
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-                PackageNormalizeCli.Run(["--json", missingPackagePath]));
+            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", missingPackagePath]);
 
             Assert.Equal(1, exitCode);
             Assert.Empty(stderr);
@@ -350,8 +347,7 @@ public class ReleaseWorkflowTests
                 ("package/services/metadata/core-properties/random.psmdcp", ""),
                 (longEntryName, "payload"));
 
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-                PackageNormalizeCli.Run(["--json", packagePath]));
+            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", packagePath]);
 
             Assert.Equal(1, exitCode);
             Assert.Empty(stderr);
@@ -736,6 +732,14 @@ public class ReleaseWorkflowTests
         }
 
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) RunPackageNormalizeCli(string[] args)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var exitCode = PackageNormalizeCli.Run(args, stdout, stderr);
+        return (exitCode, stdout.ToString(), stderr.ToString());
     }
 
     private static void CreateMinimalNuGetPackage(string packagePath, string corePropertiesFileName)
