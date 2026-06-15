@@ -76,12 +76,11 @@ public static partial class ReferenceExtractor
             : content;
         var lines = maskedContent.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines, out var jsTaggedTemplateHits);
-        var csharpLinesInsideMultilineStringContent = language == "csharp"
-            ? BuildCSharpMultilineStringContentLines(lines)
-            : null;
-        var csharpLinesInsideBlockComment = language == "csharp"
-            ? BuildCSharpBlockCommentLines(lines)
-            : null;
+        var csharpLineState = language == "csharp"
+            ? BuildCSharpLineStateMasks(lines)
+            : (MultilineStringContent: null, BlockComment: null);
+        var csharpLinesInsideMultilineStringContent = csharpLineState.MultilineStringContent;
+        var csharpLinesInsideBlockComment = csharpLineState.BlockComment;
         var referenceStructuralLines = language == "pascal"
             ? MaskPascalBlockCommentLines(structuralLines)
             : language == "haskell"
