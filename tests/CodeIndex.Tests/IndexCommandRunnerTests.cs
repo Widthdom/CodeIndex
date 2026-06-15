@@ -1658,9 +1658,9 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScanAfterHeadChange_ParallelizesExtraction()
+    public void Run_FullScanAfterHeadChange_DoesNotPreExtractUnchangedFiles()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_parallel_extract");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_skip_before_extract");
         bool? parallelized = null;
         string? reason = null;
         try
@@ -1673,8 +1673,8 @@ public class IndexCommandRunnerTests
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            File.AppendAllText(Path.Combine(projectRoot, "app.cs"), "public class Next { public void Run() { } }\n");
-            RunGit(projectRoot, "add", "app.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "feature.cs"), "public class Feature { public void Run() { } }\n");
+            RunGit(projectRoot, "add", "feature.cs");
             RunGit(projectRoot, "commit", "-m", "next");
 
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, why) =>
@@ -1687,8 +1687,10 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
             Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-            Assert.True(parallelized);
-            Assert.Equal("head_changed", reason);
+            Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
+            Assert.False(parallelized);
+            Assert.Null(reason);
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
         }
         finally
         {

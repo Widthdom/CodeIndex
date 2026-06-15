@@ -786,12 +786,16 @@ public static partial class IndexCommandRunner
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(options.MaxFileSizeBytes);
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
-        var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)
+        var existingFileCount = writer.GetCounts().files;
+        var parallelizeExtraction = (options.Rebuild || existingFileCount == 0)
             && !options.SymbolKindFilter.IsActive
             && !hasPostExtractionHooks;
+        var parallelizeExtractionReason = parallelizeExtraction
+            ? options.Rebuild ? "rebuild" : "empty_index"
+            : null;
         FullScanExtractionSchedulingForTesting?.Invoke(
             parallelizeExtraction,
-            headChangeDetected ? "head_changed" : null);
+            parallelizeExtractionReason);
 
         void StartIndexSpinnerIfNeeded()
         {
