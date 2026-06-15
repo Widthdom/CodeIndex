@@ -94,6 +94,7 @@ public static partial class IndexCommandRunner
                 runStartedAtUtc,
                 spinnerFrames,
                 jsonOptions,
+                priorReadiness,
                 priorFoldVersion,
                 priorFoldFingerprint,
                 priorSymbolExtractorVersionsMatchCurrent,

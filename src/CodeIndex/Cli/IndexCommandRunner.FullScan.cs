@@ -578,6 +578,7 @@ public static partial class IndexCommandRunner
         DateTime runStartedAtUtc,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
+        int priorReadiness,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
         bool priorSymbolExtractorVersionsMatchCurrent,
@@ -612,6 +613,7 @@ public static partial class IndexCommandRunner
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var priorGraphReady = (priorReadiness & DbContext.GraphReadyFlag) != 0;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
@@ -682,6 +684,8 @@ public static partial class IndexCommandRunner
         writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
+        if (options.SymbolsOnly)
+            writer.ClearSqlGraphContractReady();
         writer.ClearMetadataTargetReady();
         FullScanWritePhaseStartedForTesting?.Invoke();
         ThrowIfFullScanCancelled(0, files.Count);
@@ -763,11 +767,19 @@ public static partial class IndexCommandRunner
                 ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
         }
 
-        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        // Purge references for languages no longer graph-supported, or all references in
+        // symbols-only mode so old graph rows cannot survive behind degraded readiness.
+        // グラフ非対応になった言語の参照をパージする。symbols-only では古い graph 行が
+        // degraded readiness の裏に残らないよう全参照を消す。
         ThrowIfFullScanCancelled(0, files.Count);
-        var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        var purgedRefs = options.SymbolsOnly
+            ? writer.PurgeAllReferences()
+            : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
-            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
+        {
+            var reason = options.SymbolsOnly ? "symbols-only mode" : "unsupported language";
+            Console.WriteLine($"  Purged {purgedRefs:N0} stale references ({reason})");
+        }
 
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
@@ -928,31 +940,38 @@ public static partial class IndexCommandRunner
             jsonHeartbeatTask = null;
         }
 
-        WriteFullScanJsonLiveness(options, "preparing C# workspace symbols...");
-        string? currentCSharpWorkspaceFile = null;
-        var csharpWorkspaceHeartbeat = StartFullScanJsonPhaseHeartbeat(
-            options,
-            "preparing C# workspace symbols",
-            () => currentCSharpWorkspaceFile);
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
-        try
+        if (options.SymbolsOnly)
         {
-            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
-                writer,
-                indexer,
-                projectRoot,
-                files,
-                path => currentCSharpWorkspaceFile = path,
-                cancellationToken);
+            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        else
         {
-            throw new IndexInterruptedException(0, files.Count);
-        }
-        finally
-        {
-            currentCSharpWorkspaceFile = null;
-            StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+            WriteFullScanJsonLiveness(options, "preparing C# workspace symbols...");
+            string? currentCSharpWorkspaceFile = null;
+            var csharpWorkspaceHeartbeat = StartFullScanJsonPhaseHeartbeat(
+                options,
+                "preparing C# workspace symbols",
+                () => currentCSharpWorkspaceFile);
+            try
+            {
+                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    projectRoot,
+                    files,
+                    path => currentCSharpWorkspaceFile = path,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new IndexInterruptedException(0, files.Count);
+            }
+            finally
+            {
+                currentCSharpWorkspaceFile = null;
+                StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+            }
         }
 
         EnsureIndexingActivityVisible();
@@ -1017,15 +1036,22 @@ public static partial class IndexCommandRunner
                                     continue;
                                 }
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
-                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
-                                references = ReferenceExtractor.Extract(
-                                    0,
-                                    record.Lang,
-                                    content,
-                                    symbols,
-                                    record.Path,
-                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                    extractionCancellationToken);
+                                if (options.SymbolsOnly)
+                                {
+                                    references = [];
+                                }
+                                else
+                                {
+                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
+                                    references = ReferenceExtractor.Extract(
+                                        0,
+                                        record.Lang,
+                                        content,
+                                        symbols,
+                                        record.Path,
+                                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                        extractionCancellationToken);
+                                }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                             }
@@ -1158,7 +1184,7 @@ public static partial class IndexCommandRunner
                     }
 
                     long? existingId = null;
-                    if (!options.Rebuild && !startedWithNoIndexedFiles)
+                    if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                     {
                         existingId = writer.GetUnchangedFileId(
                             record.Path,
@@ -1169,6 +1195,7 @@ public static partial class IndexCommandRunner
                             language: record.Lang,
                             generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
+                                && priorGraphReady
                                 && record.Lang is not ("javascript" or "typescript")
                                 && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -1281,17 +1308,25 @@ public static partial class IndexCommandRunner
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
-                    var references = item.References == null
-                        ? ReferenceExtractor.Extract(
-                            fileId,
-                            record.Lang,
-                            item.Content!,
-                            symbols,
-                            record.Path,
-                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                            cancellationToken)
-                        : ReassignReferenceFileIds(item.References, fileId);
-                    postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
+                    IReadOnlyList<ReferenceRecord> references;
+                    if (options.SymbolsOnly)
+                    {
+                        references = [];
+                    }
+                    else
+                    {
+                        references = item.References == null
+                            ? ReferenceExtractor.Extract(
+                                fileId,
+                                record.Lang,
+                                item.Content!,
+                                symbols,
+                                record.Path,
+                                record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                cancellationToken)
+                            : ReassignReferenceFileIds(item.References, fileId);
+                        postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
+                    }
                     writer.InsertReferences(references, refreshMutualRecursionFlags: false);
                     if (references.Count > 0)
                         mutualRecursionRefreshNeeded = true;
@@ -1388,9 +1423,12 @@ public static partial class IndexCommandRunner
             // backfill verification below because incremental-by-default full scans skip
             // unchanged legacy files whose folded columns remain NULL.
             // full-scan は全repo をカバーするため、Graph / Issues は常に stamp。Fold のみ条件付き。
-            writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            writer.MarkSqlGraphContractReady();
+            if (!options.SymbolsOnly)
+            {
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+            }
             writer.MarkCSharpSymbolNameContractReady();
             // Issue #435: resolve every C# class-like row and stamp readiness. Full-scan
             // touches the entire repo, so the resolver output is authoritative regardless
@@ -1407,10 +1445,13 @@ public static partial class IndexCommandRunner
             {
                 csharpMetadataTargetReadyAfter = true;
             }
-            graphTableAvailableAfter = true;
+            graphTableAvailableAfter = !options.SymbolsOnly;
             issuesTableAvailableAfter = true;
             csharpSymbolNameReadyAfter = true;
-            writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+            if (!options.SymbolsOnly)
+            {
+                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+            }
             RestampHotspotFamilyTrustForFullScan(
                 writer,
                 reusedHotspotFamilyLanguages,

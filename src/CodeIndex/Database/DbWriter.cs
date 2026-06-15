@@ -2043,6 +2043,23 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Delete all reference graph rows while preserving files, chunks, symbols, and issues.
+    /// files / chunks / symbols / issues は残し、参照グラフ行だけを全削除する。
+    /// </summary>
+    public int PurgeAllReferences()
+    {
+        using var referenceCmd = _conn.CreateCommand();
+        referenceCmd.CommandText = "DELETE FROM symbol_references";
+        var deletedReferences = referenceCmd.ExecuteNonQuery();
+
+        using var lineCmd = _conn.CreateCommand();
+        lineCmd.CommandText = "DELETE FROM reference_lines";
+        lineCmd.ExecuteNonQuery();
+
+        return deletedReferences;
+    }
+
+    /// <summary>
     /// Get total counts for the summary output.
     /// サマリー出力用の合計件数を取得する。
     /// </summary>
@@ -2230,6 +2247,11 @@ public class DbWriter
         SetMeta(
             DbContext.SqlGraphContractVersionMetaKey,
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public void ClearSqlGraphContractReady()
+    {
+        SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);
     }
 
     /// <summary>

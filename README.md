@@ -85,6 +85,10 @@ CI checkouts, refresh with `cdidx .`, `--files`, `--commits`, or
 and [incremental update reliability](USER_GUIDE.md#incremental-update-reliability)
 for the full workflow.
 
+For a faster first pass when you only need text search, `definition`, `symbols`,
+or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
+until you rerun `cdidx .` without that flag.
+
 ## Highlights
 
 | Area | What to use |
@@ -254,6 +258,10 @@ cdidx lsp --db .cdidx/codeindex.db
 状況に応じて `cdidx .`、`--files`、`--commits`、`--changed-between` で更新します。
 全体の流れは [ユーザーガイドのクイックスタート](USER_GUIDE.md#クイックスタート) と
 [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性) を参照してください。
+
+まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
+`cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで
+`cdidx .` を再実行するまで degraded のままです。
 
 ## 特長
 
