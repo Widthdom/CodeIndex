@@ -3791,6 +3791,351 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
     }
 
+    [Fact]
+    public void Extract_CSharpConstructorAlias_UsesAliasTargetName()
+    {
+        const string content = """
+            using Regex = CodeIndex.Indexer.BoundedRegex;
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    _ = new Regex("safe");
+                    _ = new System.Text.RegularExpressions.Regex("bcl");
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("new Regex", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("new Regex", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("System.Text.RegularExpressions.Regex", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharpConstructorAlias_DoesNotRewriteQualifiedCallWhenAliasNameAppearsElsewhereOnLine()
+    {
+        const string content = """
+            using Regex = CodeIndex.Indexer.BoundedRegex;
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    _ = new Regex("alias");
+                    var note = "Regex"; _ = new System.Text.RegularExpressions.Regex("bcl");
+                    _ = new System.Text.RegularExpressions.Regex("comment"); // Regex
+                    _ = new System.Text.RegularExpressions . Regex("spaced");
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"alias\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"bcl\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"comment\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"spaced\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && (reference.Context.Contains("\"bcl\"", StringComparison.Ordinal)
+                || reference.Context.Contains("\"comment\"", StringComparison.Ordinal)
+                || reference.Context.Contains("\"spaced\"", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Extract_CSharpBclRegexWithoutTimeout_EmitsAuditReferenceKind()
+    {
+        const string content = """
+            using System;
+            using System.Text.RegularExpressions;
+            using AliasRegex = CodeIndex.Indexer.BoundedRegex;
+            using BclRegex = System.Text.RegularExpressions.Regex;
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    _ = new AliasRegex("alias");
+                    _ = new BclRegex("alias bcl");
+                    _ = new System.Text.RegularExpressions.Regex("bcl");
+                    _ = new System.Text.RegularExpressions . Regex("spaced");
+                    _ = new global::System.Text.RegularExpressions.Regex("safe", RegexOptions.None, TimeSpan.FromSeconds(1));
+                    _ = new Regex("using namespace");
+                    _ = new Regex("named timeout", RegexOptions.None, matchTimeout: TimeSpan.FromSeconds(1));
+                    _ = new System.Text.RegularExpressions.Regex( // multi bcl
+                        "multi bcl");
+                    _ = new Regex( // multi safe
+                        "multi safe",
+                        RegexOptions.None,
+                        TimeSpan.FromSeconds(1));
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "bcl_regex_without_timeout"
+            && reference.Context.Contains("\"alias bcl\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "bcl_regex_without_timeout"
+            && reference.Context.Contains("\"bcl\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "bcl_regex_without_timeout"
+            && reference.Context.Contains("\"spaced\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "bcl_regex_without_timeout"
+            && reference.Context.Contains("\"using namespace\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "bcl_regex_without_timeout"
+            && reference.Context.Contains("multi bcl", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "bcl_regex_without_timeout"
+            && (reference.Context.Contains("\"alias\"", StringComparison.Ordinal)
+                || reference.Context.Contains("\"safe\"", StringComparison.Ordinal)
+                || reference.Context.Contains("\"named timeout\"", StringComparison.Ordinal)
+                || reference.Context.Contains("multi safe", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Extract_CSharpBclRegexWithoutTimeout_DoesNotFlagShadowedNamespaceImport()
+    {
+        const string aliasContent = """
+            using System.Text.RegularExpressions;
+            using Regex = MyCompany.Text.Regex;
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    _ = new Regex("alias shadow");
+                }
+            }
+            """;
+        const string localTypeContent = """
+            using System.Text.RegularExpressions;
+
+            public class Regex
+            {
+                public Regex(string pattern) { }
+            }
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    _ = new Regex("local shadow");
+                }
+            }
+            """;
+
+        AssertNoAuditReference(aliasContent, "alias shadow");
+        AssertNoAuditReference(localTypeContent, "local shadow");
+
+        static void AssertNoAuditReference(string content, string marker)
+        {
+            var symbols = SymbolExtractor.Extract(1, "csharp", content);
+            var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+            Assert.DoesNotContain(references, reference =>
+                reference.ReferenceKind == "bcl_regex_without_timeout"
+                && reference.Context.Contains(marker, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharpConstructorAlias_UsesNearestScopedAlias()
+    {
+        const string content = """
+            using Regex = External.OuterRegex;
+
+            namespace Scoped
+            {
+                using Regex = CodeIndex.Indexer.BoundedRegex;
+
+                public class Worker
+                {
+                    public void Execute()
+                    {
+                        _ = new Regex("scoped");
+                    }
+                }
+            }
+
+            namespace Sibling
+            {
+                public class Worker
+                {
+                    public void Execute()
+                    {
+                        _ = new Regex("sibling");
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"scoped\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "OuterRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"scoped\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OuterRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"sibling\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"sibling\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharpConstructorAlias_DoesNotLeakAliasFromSiblingNamespace()
+    {
+        const string content = """
+            namespace Scoped
+            {
+                using Regex = CodeIndex.Indexer.BoundedRegex;
+
+                public class Worker
+                {
+                    public void Execute()
+                    {
+                        _ = new Regex("scoped");
+                    }
+                }
+            }
+
+            namespace Sibling
+            {
+                public class Worker
+                {
+                    public void Execute()
+                    {
+                        _ = new Regex("sibling");
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"scoped\"", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"sibling\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"sibling\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharpConstructorAlias_IgnoresAliasTextInsideBlockComment()
+    {
+        const string content = """
+            /*
+            using Regex = CodeIndex.Indexer.BoundedRegex;
+            */
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    _ = new Regex("plain");
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"plain\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("\"plain\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharpUsingAlias_DoesNotRewritePlainCall()
+    {
+        const string content = """
+            using Regex = CodeIndex.Indexer.BoundedRegex;
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    Regex("plain call");
+                }
+
+                private void Regex(string value)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Regex"
+            && reference.ReferenceKind == "call"
+            && reference.Context.Contains("\"plain call\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "BoundedRegex"
+            && reference.ReferenceKind == "call"
+            && reference.Context.Contains("\"plain call\"", StringComparison.Ordinal));
+    }
+
 
 
 

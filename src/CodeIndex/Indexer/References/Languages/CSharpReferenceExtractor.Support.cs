@@ -13,12 +13,18 @@ public static partial class ReferenceExtractor
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     internal sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    internal sealed record CSharpUsingNamespaceRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     internal sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     internal sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     internal sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
-    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols, IReadOnlySet<string> csharpKnownTypeNames)
+    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<string>? lines = null,
+        IReadOnlyList<string>? aliasScanLines = null)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
@@ -41,9 +47,112 @@ public static partial class ReferenceExtractor
             if (!match.Success)
                 continue;
 
-            var alias = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
-            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
+            AddCSharpUsingAliasRecord(aliases, namespaceScopes, symbol.Line, match, csharpKnownTypeNames);
+        }
+
+        if (lines != null)
+        {
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var scanLine = aliasScanLines != null && i < aliasScanLines.Count
+                    ? aliasScanLines[i]
+                    : lines[i];
+                if (!CSharpUsingAliasRegex.IsMatch(scanLine))
+                    continue;
+
+                var match = CSharpUsingAliasRegex.Match(lines[i]);
+                if (!match.Success)
+                    continue;
+
+                var lineNumber = i + 1;
+                if (aliases.Any(existing => existing.Line == lineNumber
+                    && string.Equals(existing.AliasName, NormalizeCSharpIdentifier(match.Groups["alias"].Value), StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                AddCSharpUsingAliasRecord(aliases, namespaceScopes, lineNumber, match, csharpKnownTypeNames);
+            }
+        }
+
+        aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return aliases;
+    }
+
+    private static void AddCSharpUsingAliasRecord(
+        List<CSharpUsingAliasRecord> aliases,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber,
+        Match match,
+        IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        var alias = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
+        var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value)
+            ?? NormalizeCSharpUsingAliasRawTarget(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
+            return;
+
+        var scopeStartLine = 1;
+        var scopeEndLine = int.MaxValue;
+        var scopeWidth = int.MaxValue;
+        foreach (var (startLine, endLine) in namespaceScopes)
+        {
+            if (lineNumber < startLine || lineNumber > endLine)
+                continue;
+
+            var width = endLine - startLine;
+            if (width > scopeWidth)
+                continue;
+
+            scopeStartLine = startLine;
+            scopeEndLine = endLine;
+            scopeWidth = width;
+        }
+
+        aliases.Add(new CSharpUsingAliasRecord(
+            alias,
+            target,
+            lineNumber,
+            scopeStartLine,
+            scopeEndLine,
+            IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+    }
+
+    private static string NormalizeCSharpUsingAliasRawTarget(string target)
+    {
+        var trimmed = target.Trim();
+        var genericStart = trimmed.IndexOf('<');
+        if (genericStart >= 0)
+            trimmed = trimmed[..genericStart].TrimEnd();
+        return trimmed;
+    }
+
+    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var imports = new List<CSharpUsingNamespaceRecord>();
+        if (language != "csharp")
+            return imports;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            var match = CSharpUsingNamespaceRegex.Match(symbol.Signature!);
+            if (!match.Success)
+                continue;
+
+            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value)
+                ?? NormalizeCSharpUsingAliasRawTarget(match.Groups["target"].Value);
+            if (string.IsNullOrWhiteSpace(target))
                 continue;
 
             var scopeStartLine = 1;
@@ -63,17 +172,11 @@ public static partial class ReferenceExtractor
                 scopeWidth = width;
             }
 
-            aliases.Add(new CSharpUsingAliasRecord(
-                alias,
-                target,
-                symbol.Line,
-                scopeStartLine,
-                scopeEndLine,
-                IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+            imports.Add(new CSharpUsingNamespaceRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
         }
 
-        aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return aliases;
+        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return imports;
     }
 
     private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(string language, IReadOnlyList<SymbolRecord> symbols)

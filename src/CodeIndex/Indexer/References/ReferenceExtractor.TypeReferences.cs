@@ -3544,6 +3544,12 @@ public static partial class ReferenceExtractor
             if (separator == null)
                 break;
 
+            if (separator != '\\')
+            {
+                while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
+                    probe--;
+            }
+
             var segmentEnd = probe;
             while (probe >= 0 && IsIdentifierChar(preparedLine[probe]))
                 probe--;

@@ -339,6 +339,7 @@ public class DatabaseTests : IDisposable
 
     [Theory]
     [InlineData("annotation")]
+    [InlineData("bcl_regex_without_timeout")]
     [InlineData("column_reference")]
     [InlineData("const_generic_reference")]
     [InlineData("cte_body_reference")]
