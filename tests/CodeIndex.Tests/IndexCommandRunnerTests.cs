@@ -1568,6 +1568,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_FinalizesMutualRecursionAfterBulkReferenceInsert()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "cycle_a.cs"), """
+                public static class FullScanCycleA
+                {
+                    public static void CrossCycleA() { CrossCycleB(); }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "cycle_b.cs"), """
+                public static class FullScanCycleB
+                {
+                    public static void CrossCycleB() { CrossCycleA(); }
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(CountMutualRecursionReferences(Path.Combine(projectRoot, ".cdidx", "codeindex.db")) >= 2);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_SkipsOversizedGitExclude()
     {
         var projectRoot = CreateTempProject();
@@ -11050,6 +11082,15 @@ public class IndexCommandRunnerTests
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static int CountMutualRecursionReferences(string dbPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
         return Convert.ToInt32(command.ExecuteScalar());
     }
 

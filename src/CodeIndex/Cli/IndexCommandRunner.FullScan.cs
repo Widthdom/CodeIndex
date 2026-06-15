@@ -772,6 +772,7 @@ public static partial class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         var symbolsDroppedByKindFilter = 0;
+        var mutualRecursionRefreshNeeded = false;
 
         var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
@@ -787,7 +788,8 @@ public static partial class IndexCommandRunner
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var existingFileCount = writer.GetCounts().files;
-        var parallelizeExtraction = (options.Rebuild || existingFileCount == 0)
+        var startedWithNoIndexedFiles = existingFileCount == 0;
+        var parallelizeExtraction = (options.Rebuild || startedWithNoIndexedFiles)
             && !options.SymbolKindFilter.IsActive
             && !hasPostExtractionHooks;
         var parallelizeExtractionReason = parallelizeExtraction
@@ -1156,7 +1158,7 @@ public static partial class IndexCommandRunner
                     }
 
                     long? existingId = null;
-                    if (!options.Rebuild)
+                    if (!options.Rebuild && !startedWithNoIndexedFiles)
                     {
                         existingId = writer.GetUnchangedFileId(
                             record.Path,
@@ -1209,8 +1211,9 @@ public static partial class IndexCommandRunner
                     }
 
                     using var txn = writer.BeginTransaction();
-                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
-                    var fileId = writer.UpsertFile(record);
+                    if (!startedWithNoIndexedFiles)
+                        writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
@@ -1289,7 +1292,9 @@ public static partial class IndexCommandRunner
                             cancellationToken)
                         : ReassignReferenceFileIds(item.References, fileId);
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
-                    writer.InsertReferences(references);
+                    writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+                    if (references.Count > 0)
+                        mutualRecursionRefreshNeeded = true;
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                     var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
                     writer.InsertIssues(fileId, issues);
@@ -1339,6 +1344,20 @@ public static partial class IndexCommandRunner
 
         PauseIndexSpinnerForConsoleWrite();
 
+        ThrowIfFullScanCancelled(processed, files.Count);
+        if (mutualRecursionRefreshNeeded)
+        {
+            WriteFullScanJsonLiveness(options, "finalizing reference graph...");
+            var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "finalizing reference graph");
+            try
+            {
+                writer.RefreshMutualRecursionFlags();
+            }
+            finally
+            {
+                StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
+            }
+        }
         ThrowIfFullScanCancelled(processed, files.Count);
         WriteFullScanJsonLiveness(options, "optimizing index...");
         var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");

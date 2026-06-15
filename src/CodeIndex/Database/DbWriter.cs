@@ -965,17 +965,22 @@ public class DbWriter
     /// Upsert a file record and return its ID.
     /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
     /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
-    /// Cleans up old chunks/symbols before re-indexing.
+    /// Cleans up old chunks/symbols before re-indexing unless the caller knows
+    /// the path cannot already exist in the current database.
     /// ファイルレコードをUPSERTしてIDを返す。
     /// ON CONFLICT DO UPDATEで既存IDを保持する（INSERT OR REPLACEの
     /// delete+insertによる不要なAUTOINCREMENT増加を回避）。
+    /// 呼び出し元が現在のDBに同じ path が存在しないと保証できる場合を除き、
     /// 再インデックス前に古いチャンク/シンボルをクリーンアップする。
     /// </summary>
-    public long UpsertFile(FileRecord file)
+    public long UpsertFile(FileRecord file, bool cleanExistingData = true)
     {
-        // Clean up old chunks/symbols so new ones can be inserted
-        // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
-        CleanExistingFileData(file.Path);
+        if (cleanExistingData)
+        {
+            // Clean up old chunks/symbols so new ones can be inserted
+            // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
+            CleanExistingFileData(file.Path);
+        }
 
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
@@ -1360,7 +1365,7 @@ public class DbWriter
     /// Insert indexed references in batches.
     /// インデックス済み参照をバッチ挿入する。
     /// </summary>
-    public void InsertReferences(IReadOnlyList<ReferenceRecord> references)
+    public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags = true)
     {
         if (references.Count == 0) return;
 
@@ -1421,7 +1426,8 @@ public class DbWriter
             transaction.Commit();
         }
 
-        RefreshMutualRecursionFlags();
+        if (refreshMutualRecursionFlags)
+            RefreshMutualRecursionFlags();
     }
 
     private static void ValidateSymbolKinds(SymbolRecord symbol)
@@ -1511,7 +1517,7 @@ public class DbWriter
         return lineIds;
     }
 
-    private void RefreshMutualRecursionFlags()
+    internal void RefreshMutualRecursionFlags()
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
