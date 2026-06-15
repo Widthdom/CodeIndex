@@ -350,7 +350,18 @@ instead of querying `cdidx` directly:
 ```bash
 cdidx export ctags --output tags
 cdidx export ctags --db .cdidx/codeindex.db --output .tags
+cdidx export ctags --lang csharp --path src/ --exclude-tests --json
 ```
+
+`cdidx export ctags` accepts the same language and path filtering style used by
+query commands: `--lang <lang>`, repeatable `--path <glob>`, repeatable
+`--exclude-path <glob>`, and `--exclude-tests`. The default human mode keeps
+writing the tags file and prints the output path. `--json` prints a machine
+summary with `output_path`, `db_path`, total candidate `tag_count`,
+`emitted_count`, `skipped_count`, `filters`, and `metadata_fields`; filtered
+exports satisfy `tag_count == emitted_count + skipped_count`. Tag lines keep
+the standard `kind` and `line` fields and may also include indexed metadata such as
+`language`, `container_kind`, `container`, and `visibility`.
 
 Use `cdidx export <archive>` to package the current `codeindex.db` with a
 manifest, and `cdidx import <archive>` to restore it on another checkout or CI
@@ -2105,7 +2116,14 @@ server over stdio. It reuses the existing CodeIndex database and exposes
 `textDocument/definition`, `textDocument/declaration`,
 `textDocument/typeDefinition`, `textDocument/implementation`, and
 `textDocument/references` for editors that can launch an arbitrary LSP command
-but do not speak MCP.
+but do not speak MCP. It also advertises full `textDocument` sync and
+conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
+`codeLens`, and `inlayHint` providers backed by indexed symbols and references
+where available.
+Open buffers sent through `textDocument/didOpen`, `textDocument/didChange`, and
+`textDocument/didClose` are kept in a bounded in-memory cache. Position-based
+requests read the live buffer first, so unsaved edits can drive token lookup
+without writing back to the CodeIndex database.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
@@ -2805,7 +2823,18 @@ Editor が `cdidx` を直接 query するのではなく従来の ctags file を
 ```bash
 cdidx export ctags --output tags
 cdidx export ctags --db .cdidx/codeindex.db --output .tags
+cdidx export ctags --lang csharp --path src/ --exclude-tests --json
 ```
+
+`cdidx export ctags` は query command と同じ language / path filter の形を受け付けます。
+`--lang <lang>`、繰り返し指定できる `--path <glob>` / `--exclude-path <glob>`、
+`--exclude-tests` を使えます。既定の human mode は tags file を書き出し、output path を
+表示します。`--json` は `output_path`、`db_path`、総候補数の `tag_count`、
+`emitted_count`、`skipped_count`、`filters`、`metadata_fields` を含む機械処理向け
+summary を出力します。filter 付き export では
+`tag_count == emitted_count + skipped_count` になります。tag line は標準の
+`kind` / `line` fields を維持し、indexed metadata として
+`language`、`container_kind`、`container`、`visibility` も含めることがあります。
 
 `cdidx export <archive>` は現在の `codeindex.db` と manifest を archive 化します。
 別 checkout や CI job では `cdidx import <archive>` で復元できます。
@@ -4560,7 +4589,14 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 `initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
 `textDocument/definition`、`textDocument/declaration`、
 `textDocument/typeDefinition`、`textDocument/implementation`、
-`textDocument/references` を公開します。
+`textDocument/references` を公開します。さらに full `textDocument` sync と、
+indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
+`documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
+advertise します。
+`textDocument/didOpen`、`textDocument/didChange`、`textDocument/didClose` で送られた
+open buffer は上限付きの in-memory cache に保持されます。position-based request は
+live buffer を先に読むため、未保存の編集内容でも CodeIndex database に書き戻さず token lookup に
+利用できます。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。

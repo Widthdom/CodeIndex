@@ -1,0 +1,231 @@
+namespace CodeIndex.Indexer.Extensibility;
+
+public static partial class ExtractorPluginRegistry
+{
+    private static IEnumerable<string> EnumeratePluginAssemblyPaths()
+        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot: null));
+
+    private static IEnumerable<string> EnumeratePluginAssemblyPaths(IEnumerable<string> directories)
+    {
+        var totalCandidates = 0;
+        foreach (var directory in directories)
+        {
+            if (!Directory.Exists(directory))
+                continue;
+
+            using var enumerator = TryEnumeratePluginFiles(directory);
+            if (enumerator == null)
+                continue;
+
+            var directoryCandidates = 0;
+            while (TryMoveNextPluginFile(directory, enumerator, out var pluginPath))
+            {
+                if (directoryCandidates >= MaxPluginAssemblyCandidatesPerDirectory)
+                {
+                    ReportPluginDirectorySkipped(
+                        directory,
+                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesPerDirectory} per directory)",
+                        "plugin_candidate_limit_exceeded");
+                    break;
+                }
+
+                if (totalCandidates >= MaxPluginAssemblyCandidatesTotal)
+                {
+                    ReportPluginDirectorySkipped(
+                        directory,
+                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesTotal} total)",
+                        "plugin_candidate_limit_exceeded");
+                    yield break;
+                }
+
+                directoryCandidates++;
+                totalCandidates++;
+                yield return pluginPath;
+            }
+        }
+    }
+
+    private static IEnumerator<string>? TryEnumeratePluginFiles(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
+            return null;
+        }
+    }
+
+    private static bool TryMoveNextPluginFile(string directory, IEnumerator<string> enumerator, out string pluginPath)
+    {
+        pluginPath = string.Empty;
+        try
+        {
+            if (!enumerator.MoveNext())
+                return false;
+
+            pluginPath = enumerator.Current;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
+            return false;
+        }
+    }
+
+    private static IEnumerable<string> EnumeratePluginDirectories(string? projectRoot)
+    {
+        if (WorkspacePluginsTrusted() && !string.IsNullOrWhiteSpace(projectRoot))
+        {
+            foreach (var directory in EnumerateWorkspacePluginDirectories(Path.GetFullPath(projectRoot)))
+                yield return directory;
+        }
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home))
+            yield return Path.Combine(home, ".cdidx", "plugins");
+    }
+
+    private static IEnumerable<string> EnumerateWorkspacePluginDirectories(string projectRoot)
+    {
+        yield return Path.Combine(projectRoot, ".cdidx", "plugins");
+    }
+
+    private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot, bool includeUserDirectory = true)
+    {
+        foreach (var path in EnumeratePatternConfigPathsFromDirectory(
+                     Path.Combine(workspaceRoot, ".cdidx", "patterns"),
+                     workspaceRoot))
+        {
+            yield return path;
+        }
+
+        if (!includeUserDirectory)
+            yield break;
+
+        foreach (var path in EnumerateUserPatternConfigPaths())
+            yield return path;
+    }
+
+    private static IEnumerable<string> EnumerateUserPatternConfigPaths()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home))
+        {
+            foreach (var path in EnumeratePatternConfigPathsFromDirectory(
+                         Path.Combine(home, ".config", "cdidx", "patterns"),
+                         workspaceRoot: null))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumeratePatternConfigPathsFromDirectory(string directory, string? workspaceRoot)
+    {
+        if (!Directory.Exists(directory) || !PatternDirectoryIsSafe(directory, workspaceRoot))
+            yield break;
+
+        var directoryCandidates = 0;
+        foreach (var searchPattern in PatternConfigSearchPatterns)
+        {
+            using var enumerator = TryEnumeratePatternFiles(directory, searchPattern);
+            if (enumerator == null)
+                continue;
+
+            while (TryMoveNextPatternFile(directory, enumerator, out var path))
+            {
+                if (directoryCandidates >= MaxPatternConfigCandidatesPerDirectory)
+                {
+                    ReportPatternDirectorySkipped(
+                        directory,
+                        $"too many pattern config candidates (maximum {MaxPatternConfigCandidatesPerDirectory} per directory)");
+                    yield break;
+                }
+
+                directoryCandidates++;
+                yield return path;
+            }
+        }
+    }
+
+    private static IEnumerator<string>? TryEnumeratePatternFiles(string directory, string searchPattern)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            return null;
+        }
+    }
+
+    private static bool TryMoveNextPatternFile(string directory, IEnumerator<string> enumerator, out string patternPath)
+    {
+        patternPath = string.Empty;
+        try
+        {
+            if (!enumerator.MoveNext())
+                return false;
+
+            patternPath = enumerator.Current;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            return false;
+        }
+    }
+
+    private static bool PatternDirectoryIsSafe(string directory, string? workspaceRoot)
+    {
+        if (workspaceRoot != null)
+        {
+            var workspaceCdidxDirectory = Path.Combine(workspaceRoot, ".cdidx");
+            if (DirectoryIsSymlinkOrReparsePoint(workspaceCdidxDirectory))
+            {
+                ReportPatternDirectoryRejected(workspaceCdidxDirectory, "symbolic links and reparse points are not supported");
+                return false;
+            }
+        }
+
+        if (DirectoryIsSymlinkOrReparsePoint(directory))
+        {
+            ReportPatternDirectoryRejected(directory, "symbolic links and reparse points are not supported");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool DirectoryIsSymlinkOrReparsePoint(string directory)
+    {
+        try
+        {
+            var info = new DirectoryInfo(directory);
+            return (info.Attributes & FileAttributes.ReparsePoint) != 0
+                   || !string.IsNullOrEmpty(info.LinkTarget);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPatternDirectoryRejected(directory, "could not inspect pattern directory");
+            return true;
+        }
+    }
+
+    private static bool WorkspacePluginsTrusted()
+    {
+        var value = Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable);
+        return value != null
+               && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("on", StringComparison.OrdinalIgnoreCase));
+    }
+}

@@ -206,6 +206,89 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportCtags_JsonReportsFiltersAndMetadata_Issue3551()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("ctags_json_filters");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { public void Run() {} }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "public class AppTests { public void Run() {} }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.cs", "csharp", "public class Generated { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/tool.py", "python", "def run():\n    pass\n");
+            var outputPath = Path.Combine(projectRoot, "tags");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [
+                        "ctags",
+                        "--db",
+                        dbPath,
+                        "--output",
+                        outputPath,
+                        "--json",
+                        "--lang",
+                        "csharp",
+                        "--path",
+                        "src/",
+                        "--exclude-path",
+                        "src/Generated*",
+                        "--exclude-tests"
+                    ],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(File.Exists(outputPath));
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal("1", root.GetProperty("api_version").GetString());
+            Assert.Equal("success", root.GetProperty("status").GetString());
+            Assert.Equal(Path.GetFullPath(outputPath), root.GetProperty("output_path").GetString());
+            Assert.Equal(Path.GetFullPath(dbPath), root.GetProperty("db_path").GetString());
+            Assert.True(root.GetProperty("tag_count").GetInt64() > 0);
+            Assert.True(root.GetProperty("emitted_count").GetInt64() > 0);
+            Assert.True(root.GetProperty("skipped_count").GetInt64() > 0);
+            Assert.Equal(
+                root.GetProperty("tag_count").GetInt64(),
+                root.GetProperty("emitted_count").GetInt64() + root.GetProperty("skipped_count").GetInt64());
+
+            var filters = root.GetProperty("filters");
+            Assert.Equal("csharp", filters.GetProperty("lang").GetString());
+            Assert.Equal("src/", filters.GetProperty("path")[0].GetString());
+            Assert.Equal("src/Generated*", filters.GetProperty("exclude_path")[0].GetString());
+            Assert.True(filters.GetProperty("exclude_tests").GetBoolean());
+            Assert.Contains(root.GetProperty("metadata_fields").EnumerateArray(), field => field.GetString() == "language");
+
+            var tags = File.ReadAllText(outputPath);
+            Assert.Contains("App\tsrc/App.cs", tags);
+            Assert.Contains("language:csharp", tags);
+            Assert.DoesNotContain("AppTests", tags);
+            Assert.DoesNotContain("Generated", tags);
+            Assert.DoesNotContain("tool.py", tags);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportCtags_JsonUnknownOptionReturnsStructuredError_Issue3551()
+    {
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunExport(["ctags", "--json", "--bogus"], jsonOptions, "test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        AssertExportImportError(stdout, "export", "parse_args", "ctags_export_unknown_option");
+    }
+
+    [Fact]
     public void IsDatabaseOrSqliteSidecarPath_UsesStampedCaseSensitivity_Issue3368()
     {
         var dbPath = Path.Combine("Project", ".cdidx", "codeindex.db");
