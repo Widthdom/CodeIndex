@@ -24,6 +24,12 @@ public partial class DbReader
         "jsonpropertyname",
         "jsonproperty",
         "jsoninclude",
+        "jsonextensiondata",
+        "jsonconverter",
+        "jsonrequired",
+        "jsonpropertyorder",
+        "jsonnumberhandling",
+        "jsonobjectcreationhandling",
         "datamember",
         "bsonelement",
         "bsonid",
@@ -37,13 +43,25 @@ public partial class DbReader
         "parameter",
         "inject",
         "bindnever",
+        "dynamicallyaccessedmembers",
+        "dynamicdependency",
+        "preserve",
+        "usedimplicitly",
+        "publicapi",
     };
     private static readonly HashSet<string> ReflectionTypeAttributeNames = new(StringComparer.Ordinal)
     {
         "serializable",
         "jsonserializable",
+        "jsonsourcegenerationoptions",
+        "jsonconverter",
+        "jsonderivedtype",
+        "jsonpolymorphic",
         "datacontract",
         "xmlroot",
+        "xmltype",
+        "xmlinclude",
+        "knowntype",
         "protocontract",
         "messagepackobject",
         "table",
@@ -51,6 +69,24 @@ public partial class DbReader
         "owned",
         "keyless",
         "attributeusage",
+        "dynamicallyaccessedmembers",
+        "dynamicdependency",
+        "preserve",
+        "usedimplicitly",
+        "publicapi",
+    };
+    private static readonly HashSet<string> ReflectionFunctionAttributeNames = new(StringComparer.Ordinal)
+    {
+        "jsonconstructor",
+        "onserializing",
+        "onserialized",
+        "ondeserializing",
+        "ondeserialized",
+        "dynamicdependency",
+        "dynamicallyaccessedmembers",
+        "preserve",
+        "usedimplicitly",
+        "publicapi",
     };
     private static readonly HashSet<string> ReflectionIgnoreAttributeNames = new(StringComparer.Ordinal)
     {
@@ -4157,11 +4193,14 @@ public partial class DbReader
 
     private static HashSet<string>? GetReflectionAttributeNamesForKind(string kind)
     {
-        if (kind == "property")
+        if (kind is "property" or "field")
             return ReflectionPropertyAttributeNames;
 
         if (kind is "class" or "struct" or "interface" or "enum")
             return ReflectionTypeAttributeNames;
+
+        if (kind == "function")
+            return ReflectionFunctionAttributeNames;
 
         return null;
     }

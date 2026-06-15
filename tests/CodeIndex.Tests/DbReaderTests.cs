@@ -15420,6 +15420,173 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_SerializationAndReflectionContractAttributes_AreClassifiedAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/serialization_reflection_contract_fixture.cs",
+            Lang = "csharp",
+            Size = 940,
+            Lines = 26,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 26,
+                Content = """
+                using System;
+                using System.Collections.Generic;
+                using System.Diagnostics.CodeAnalysis;
+                using System.Text.Json.Serialization;
+
+                public class ContractDto
+                {
+                    [JsonExtensionData]
+                    public Dictionary<string, object?> ExtensionData { get; set; } = new();
+
+                    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
+                    public Type? ReflectedType { get; set; }
+
+                    [JsonInclude]
+                    public string? IncludedField;
+
+                    public string? PlainName { get; set; }
+
+                    [JsonConstructor]
+                    public ContractDto(string name) { }
+
+                    [DynamicDependency(nameof(PlainMethod))]
+                    public void PreservedMethod() { }
+
+                    public void PlainMethod() { }
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "ContractDto",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 26,
+                Signature = "public class ContractDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ExtensionData",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 9,
+                Signature = "public Dictionary<string, object?> ExtensionData { get; set; } = new();",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ReflectedType",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public Type? ReflectedType { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 17,
+                StartLine = 17,
+                EndLine = 17,
+                Signature = "public string? PlainName { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "field",
+                Name = "IncludedField",
+                Line = 15,
+                StartLine = 15,
+                EndLine = 15,
+                Signature = "public string? IncludedField;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "ContractDto",
+                Line = 20,
+                StartLine = 20,
+                EndLine = 20,
+                Signature = "public ContractDto(string name) { }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "PreservedMethod",
+                Line = 23,
+                StartLine = 23,
+                EndLine = 23,
+                Signature = "public void PreservedMethod() { }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "PlainMethod",
+                Line = 25,
+                StartLine = 25,
+                EndLine = 25,
+                Signature = "public void PlainMethod() { }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ContractDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["serialization_reflection_contract_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ExtensionData").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ReflectedType").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "IncludedField").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "PlainName").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ContractDto" && symbol.Kind == "function").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "PreservedMethod").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "PlainMethod").UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_MultilineReflectionAttribute_IsClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
