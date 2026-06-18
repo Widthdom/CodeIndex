@@ -867,8 +867,9 @@ public static partial class ReferenceExtractor
                 && !topLevelArrowExpressionContinuation);
     }
 
-    private static bool[] BuildCSharpBlockCommentLines(string[] lines)
+    private static (bool[] MultilineStringContent, bool[] BlockComment) BuildCSharpLineStateMasks(string[] lines)
     {
+        var insideStringContent = new bool[lines.Length];
         var insideBlockComment = new bool[lines.Length];
         var inBlockComment = false;
         var inVerbatimString = false;
@@ -877,6 +878,7 @@ public static partial class ReferenceExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
+            insideStringContent[i] = inVerbatimString || rawStringDelimiterLength > 0;
             insideBlockComment[i] = inBlockComment;
 
             var index = 0;
@@ -1004,8 +1006,14 @@ public static partial class ReferenceExtractor
             }
         }
 
-        return insideBlockComment;
+        return (insideStringContent, insideBlockComment);
     }
+
+    private static bool[] BuildCSharpBlockCommentLines(string[] lines) =>
+        BuildCSharpLineStateMasks(lines).BlockComment;
+
+    private static bool[] BuildCSharpMultilineStringContentLines(string[] lines) =>
+        BuildCSharpLineStateMasks(lines).MultilineStringContent;
 
     private static bool IsCSharpTopLevelAssignmentOperator(string line, int index)
     {
@@ -1504,146 +1512,6 @@ public static partial class ReferenceExtractor
         }
 
         return -1;
-    }
-
-    private static bool[] BuildCSharpMultilineStringContentLines(string[] lines)
-    {
-        var insideStringContent = new bool[lines.Length];
-        var inBlockComment = false;
-        var inVerbatimString = false;
-        var rawStringDelimiterLength = 0;
-
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i];
-            insideStringContent[i] = inVerbatimString || rawStringDelimiterLength > 0;
-
-            var index = 0;
-            while (index < line.Length)
-            {
-                if (inBlockComment)
-                {
-                    var closeIndex = line.IndexOf("*/", index, StringComparison.Ordinal);
-                    if (closeIndex < 0)
-                        break;
-
-                    index = closeIndex + 2;
-                    inBlockComment = false;
-                    continue;
-                }
-
-                if (rawStringDelimiterLength > 0)
-                {
-                    var closeCandidateIndex = index;
-                    while (closeCandidateIndex < line.Length && char.IsWhiteSpace(line[closeCandidateIndex]))
-                        closeCandidateIndex++;
-
-                    var closeLength = CountCharacterRun(line, closeCandidateIndex, '"');
-                    if (closeLength >= rawStringDelimiterLength
-                        && closeLength > 0)
-                    {
-                        rawStringDelimiterLength = 0;
-                        index = closeCandidateIndex + closeLength;
-                        continue;
-                    }
-
-                    break;
-                }
-
-                if (inVerbatimString)
-                {
-                    if (line[index] == '"' && index + 1 < line.Length && line[index + 1] == '"')
-                    {
-                        index += 2;
-                        continue;
-                    }
-
-                    if (line[index] == '"')
-                    {
-                        index++;
-                        inVerbatimString = false;
-                        continue;
-                    }
-
-                    index++;
-                    continue;
-                }
-
-                if (StartsWithOrdinal(line, index, "//"))
-                    break;
-
-                if (StartsWithOrdinal(line, index, "/*"))
-                {
-                    inBlockComment = true;
-                    index += 2;
-                    continue;
-                }
-
-                if (TryStartCSharpRawString(line, index, out var rawOpeningLength, out var rawDelimiterLength))
-                {
-                    rawStringDelimiterLength = rawDelimiterLength;
-                    index += rawOpeningLength;
-                    continue;
-                }
-
-                if (TryStartCSharpVerbatimString(line, index, out var verbatimOpeningLength))
-                {
-                    inVerbatimString = true;
-                    index += verbatimOpeningLength;
-                    continue;
-                }
-
-                if (TryStartCSharpRegularString(line, index, out var regularOpeningLength))
-                {
-                    index += regularOpeningLength;
-                    while (index < line.Length)
-                    {
-                        if (line[index] == '\\')
-                        {
-                            index += Math.Min(2, line.Length - index);
-                            continue;
-                        }
-
-                        if (line[index] == '"')
-                        {
-                            index++;
-                            break;
-                        }
-
-                        index++;
-                    }
-
-                    continue;
-                }
-
-                if (line[index] == '\'')
-                {
-                    index++;
-                    while (index < line.Length)
-                    {
-                        if (line[index] == '\\')
-                        {
-                            index += Math.Min(2, line.Length - index);
-                            continue;
-                        }
-
-                        if (line[index] == '\'')
-                        {
-                            index++;
-                            break;
-                        }
-
-                        index++;
-                    }
-
-                    continue;
-                }
-
-                index++;
-            }
-        }
-
-        return insideStringContent;
     }
 
     private static bool TryStartCSharpRawString(

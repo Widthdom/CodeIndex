@@ -965,17 +965,22 @@ public class DbWriter
     /// Upsert a file record and return its ID.
     /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
     /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
-    /// Cleans up old chunks/symbols before re-indexing.
+    /// Cleans up old chunks/symbols before re-indexing unless the caller knows
+    /// the path cannot already exist in the current database.
     /// ファイルレコードをUPSERTしてIDを返す。
     /// ON CONFLICT DO UPDATEで既存IDを保持する（INSERT OR REPLACEの
     /// delete+insertによる不要なAUTOINCREMENT増加を回避）。
+    /// 呼び出し元が現在のDBに同じ path が存在しないと保証できる場合を除き、
     /// 再インデックス前に古いチャンク/シンボルをクリーンアップする。
     /// </summary>
-    public long UpsertFile(FileRecord file)
+    public long UpsertFile(FileRecord file, bool cleanExistingData = true)
     {
-        // Clean up old chunks/symbols so new ones can be inserted
-        // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
-        CleanExistingFileData(file.Path);
+        if (cleanExistingData)
+        {
+            // Clean up old chunks/symbols so new ones can be inserted
+            // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
+            CleanExistingFileData(file.Path);
+        }
 
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
@@ -1360,7 +1365,7 @@ public class DbWriter
     /// Insert indexed references in batches.
     /// インデックス済み参照をバッチ挿入する。
     /// </summary>
-    public void InsertReferences(IReadOnlyList<ReferenceRecord> references)
+    public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags = true)
     {
         if (references.Count == 0) return;
 
@@ -1421,7 +1426,8 @@ public class DbWriter
             transaction.Commit();
         }
 
-        RefreshMutualRecursionFlags();
+        if (refreshMutualRecursionFlags)
+            RefreshMutualRecursionFlags();
     }
 
     private static void ValidateSymbolKinds(SymbolRecord symbol)
@@ -1476,25 +1482,27 @@ public class DbWriter
             cmd.ExecuteNonQuery();
         }
 
-        var fileIds = contextsByLine.Keys.Select(key => key.FileId).Distinct().ToArray();
         var lineIds = new Dictionary<(long FileId, int Line, string Context), long>();
-        int fileIdsPerStatement = GetRowsPerInsertStatement(columnCount: 1);
-        for (int i = 0; i < fileIds.Length; i += fileIdsPerStatement)
+        int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
-            int fileEnd = Math.Min(i + fileIdsPerStatement, fileIds.Length);
+            int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var parameters = new List<string>(fileEnd - i);
-            for (int j = i; j < fileEnd; j++)
+            var predicates = new List<string>(keyEnd - i);
+            for (int j = i; j < keyEnd; j++)
             {
-                var parameterName = $"@fid{j - i}";
-                parameters.Add(parameterName);
-                cmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[j];
+                var suffix = j - i;
+                var ((fileId, line, _), context) = rows[j];
+                predicates.Add($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
+                cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
+                cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
+                cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
             }
 
             cmd.CommandText = $@"
                 SELECT id, file_id, line, context
                 FROM reference_lines
-                WHERE file_id IN ({string.Join(", ", parameters)})";
+                WHERE {string.Join(" OR ", predicates)}";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1511,7 +1519,7 @@ public class DbWriter
         return lineIds;
     }
 
-    private void RefreshMutualRecursionFlags()
+    internal void RefreshMutualRecursionFlags()
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
@@ -2035,6 +2043,23 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Delete all reference graph rows while preserving files, chunks, symbols, and issues.
+    /// files / chunks / symbols / issues は残し、参照グラフ行だけを全削除する。
+    /// </summary>
+    public int PurgeAllReferences()
+    {
+        using var referenceCmd = _conn.CreateCommand();
+        referenceCmd.CommandText = "DELETE FROM symbol_references";
+        var deletedReferences = referenceCmd.ExecuteNonQuery();
+
+        using var lineCmd = _conn.CreateCommand();
+        lineCmd.CommandText = "DELETE FROM reference_lines";
+        lineCmd.ExecuteNonQuery();
+
+        return deletedReferences;
+    }
+
+    /// <summary>
     /// Get total counts for the summary output.
     /// サマリー出力用の合計件数を取得する。
     /// </summary>
@@ -2222,6 +2247,11 @@ public class DbWriter
         SetMeta(
             DbContext.SqlGraphContractVersionMetaKey,
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public void ClearSqlGraphContractReady()
+    {
+        SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);
     }
 
     /// <summary>

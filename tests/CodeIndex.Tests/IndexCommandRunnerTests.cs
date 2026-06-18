@@ -1127,6 +1127,89 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_SymbolsOnly_FullScanSkipsReferenceGraphUntilNormalIndex()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { public void Run() { Helper(); } private void Helper() { } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "query.sql"),
+                "CREATE TABLE users (id INTEGER PRIMARY KEY);\nSELECT id FROM users;\n");
+
+            var (symbolsOnlyExitCode, symbolsOnlyJson) = RunAndCaptureJson([projectRoot, "--symbols-only", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, symbolsOnlyExitCode);
+            Assert.Equal("success", symbolsOnlyJson.GetProperty("status").GetString());
+            Assert.False(symbolsOnlyJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(symbolsOnlyJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(symbolsOnlyJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.True(symbolsOnlyJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+            Assert.Equal(0, CountRows(dbPath, "reference_lines"));
+
+            var (normalExitCode, normalJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, normalExitCode);
+            Assert.True(normalJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(normalJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.True(normalJson.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(CountRows(dbPath, "symbol_references") > 0);
+            Assert.True(CountRows(dbPath, "reference_lines") > 0);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SymbolsOnly_OnGraphReadyDbDemotesReferencesAndSqlContract()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { public void Run() { Helper(); } private void Helper() { } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "query.sql"),
+                "CREATE TABLE users (id INTEGER PRIMARY KEY);\nSELECT id FROM users;\n");
+
+            var (normalExitCode, normalJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(CommandExitCodes.Success, normalExitCode);
+            Assert.True(normalJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(normalJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.True(CountRows(dbPath, "symbol_references") > 0);
+            Assert.True(CountRows(dbPath, "reference_lines") > 0);
+
+            var (symbolsOnlyExitCode, symbolsOnlyJson) = RunAndCaptureJson([projectRoot, "--symbols-only", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, symbolsOnlyExitCode);
+            Assert.False(symbolsOnlyJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(symbolsOnlyJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.True(symbolsOnlyJson.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+            Assert.Equal(0, CountRows(dbPath, "reference_lines"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
     {
         var projectRoot = CreateTempProject();
@@ -1568,6 +1651,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_FinalizesMutualRecursionAfterBulkReferenceInsert()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "cycle_a.cs"), """
+                public static class FullScanCycleA
+                {
+                    public static void CrossCycleA() { CrossCycleB(); }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "cycle_b.cs"), """
+                public static class FullScanCycleB
+                {
+                    public static void CrossCycleB() { CrossCycleA(); }
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(CountMutualRecursionReferences(Path.Combine(projectRoot, ".cdidx", "codeindex.db")) >= 2);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_SkipsOversizedGitExclude()
     {
         var projectRoot = CreateTempProject();
@@ -1658,9 +1773,9 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScanAfterHeadChange_ParallelizesExtraction()
+    public void Run_FullScanAfterHeadChange_DoesNotPreExtractUnchangedFiles()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_parallel_extract");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_skip_before_extract");
         bool? parallelized = null;
         string? reason = null;
         try
@@ -1673,8 +1788,8 @@ public class IndexCommandRunnerTests
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            File.AppendAllText(Path.Combine(projectRoot, "app.cs"), "public class Next { public void Run() { } }\n");
-            RunGit(projectRoot, "add", "app.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "feature.cs"), "public class Feature { public void Run() { } }\n");
+            RunGit(projectRoot, "add", "feature.cs");
             RunGit(projectRoot, "commit", "-m", "next");
 
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, why) =>
@@ -1687,8 +1802,10 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
             Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-            Assert.True(parallelized);
-            Assert.Equal("head_changed", reason);
+            Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
+            Assert.False(parallelized);
+            Assert.Null(reason);
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
         }
         finally
         {
@@ -2591,6 +2708,14 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_SymbolsOnlyFlag_SetsOption()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--symbols-only"]);
+
+        Assert.True(options.SymbolsOnly);
+    }
+
+    [Fact]
     public void ParseArgs_MaxSymbolsPerFileFlag_AcceptsMaximum_Issue3172()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--max-symbols-per-file", $"{IndexCommandRunner.MaxSymbolsPerFileLimit}"]);
@@ -3080,6 +3205,24 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("--watch cannot be combined with --commits, --changed-between, --files, or --dry-run", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SymbolsOnlyWithFiles_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--symbols-only", "--files", "app.cs"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--symbols-only can only be combined with a full index scan", stderr);
+            Assert.Contains("fast symbol/search-only bootstrap", stderr);
         }
         finally
         {
@@ -11048,6 +11191,15 @@ public class IndexCommandRunnerTests
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static int CountMutualRecursionReferences(string dbPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
         return Convert.ToInt32(command.ExecuteScalar());
     }
 

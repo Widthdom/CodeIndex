@@ -1287,6 +1287,7 @@ public class DbContext : IDisposable
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
+    public const string SymbolsOnlyGraphOmittedMetaKey = "symbols_only_graph_omitted";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
     // Git HEAD commit captured at the end of the most recent full-scan index run (`--rebuild` or
     // the default incremental full scan). Reading this back lets the CLI detect that a user

@@ -1395,6 +1395,7 @@ same source location.
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
 | `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 4MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
 | `--max-symbols-per-file <n>` | `index` | Skip file content, symbols, and references when one file emits too many symbols. Defaults to `5000`; values above `50000` are rejected. |
+| `--symbols-only` | `index` | Full-scan only. Build chunks, symbols, and issues while skipping reference extraction and graph finalization for a faster first pass. `search`, `definition`, `symbols`, and `map` are available; reference graph commands remain degraded until a normal `cdidx index <projectPath>` run. |
 | `--parallelism <n>` | `index` | Set full-scan extraction worker count. Defaults to CPU count capped at 16, or `CDIDX_INDEX_PARALLELISM` when set. SQLite writes stay single-consumer. |
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
@@ -3881,6 +3882,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
 | `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
 | `--max-file-bytes <bytes>` | `index` | この実行で使うファイル単位の索引サイズ上限を上書きする。既定は 4MiB、または `CDIDX_MAX_FILE_BYTES` 設定値。値は raw byte 数、または `50M` のような `K` / `M` / `G` 接尾辞を受け付ける。 |
+| `--symbols-only` | `index` | フルスキャン専用。参照抽出と graph finalization を省き、chunks、symbols、issues だけを作ることで初回利用を速くする。`search`、`definition`、`symbols`、`map` は使えるが、reference graph 系コマンドは通常の `cdidx index <projectPath>` を実行するまで degraded のまま。 |
 | `--parallelism <n>` | `index` | フルスキャンの抽出 worker 数を指定する。既定は CPU 数を最大 16 に丸めた値、または `CDIDX_INDEX_PARALLELISM` 設定値。SQLite 書き込みは単一 consumer のまま。 |
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。連続的な差分更新を内蔵しているため `--commits` / `--changed-between` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |

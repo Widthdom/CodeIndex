@@ -30,6 +30,17 @@ public static partial class IndexCommandRunner
                 CommandErrorCodes.UsageError);
         }
 
+        if (options.SymbolsOnly && (options.DryRun || options.Watch || isUpdateMode || options.OptimizeOnly))
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "--symbols-only can only be combined with a full index scan; it cannot be used with --dry-run, --watch, --commits, --changed-between, --files, or --optimize",
+                CommandExitCodes.UsageError,
+                "Use `cdidx index <projectPath> --symbols-only` for a fast symbol/search-only bootstrap, then rerun `cdidx index <projectPath>` when reference graph queries are needed.",
+                CommandErrorCodes.UsageError);
+        }
+
         if (options.Rebuild && isUpdateMode)
             return WriteRebuildUpdateModeConflict(options, jsonOptions);
 

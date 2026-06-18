@@ -15,7 +15,7 @@ public static partial class IndexCommandRunner
         "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
         "--notify",
-        "--parallelism", "--memory-trace", "--follow-symlinks",
+        "--parallelism", "--memory-trace", "--follow-symlinks", "--symbols-only",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
         "--read-only", "--immutable",
@@ -42,6 +42,7 @@ public static partial class IndexCommandRunner
         bool yes = false;
         bool watch = false;
         bool optimizeOnly = false;
+        bool symbolsOnly = false;
         bool memoryTrace = false;
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
@@ -122,6 +123,9 @@ public static partial class IndexCommandRunner
                     break;
                 case "--optimize":
                     optimizeOnly = true;
+                    break;
+                case "--symbols-only":
+                    symbolsOnly = true;
                     break;
                 case "--memory-trace":
                     memoryTrace = true;
@@ -317,6 +321,7 @@ public static partial class IndexCommandRunner
             Yes = yes,
             Watch = watch,
             OptimizeOnly = optimizeOnly,
+            SymbolsOnly = symbolsOnly,
             MemoryTrace = memoryTrace,
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
