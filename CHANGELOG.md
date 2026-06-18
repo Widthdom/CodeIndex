@@ -11,6 +11,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.32.0] - 2026-06-18
+
+#### Added
+
+- **Added `cdidx index --symbols-only` for fast first-pass indexing** — full scans can now build chunks, symbols, and issues while skipping reference graph extraction, so search, definition, symbols, and map workflows become usable sooner; graph commands stay degraded until a normal index run.
+- **Functional language symbol extraction now covers Clojure, Erlang, OCaml, and Raku (#3527)** — `cdidx` now indexes conservative namespace/module, type, function, and binding symbols for these languages while keeping graph/reference support disabled until dedicated reference extractors are added.
+- **Dynamic language symbol extraction now covers Crystal, Groovy, Julia, and Tcl (#3528)** — `cdidx` now indexes conservative package/module, type, function, import, and binding symbols for these languages while keeping graph/reference support disabled until dedicated reference extractors are added.
+- **Systems language symbol extraction now covers Ada, D, and Nim (#3529)** — `cdidx` now indexes conservative package/module, type, function, import, and binding symbols for these languages while keeping graph/reference support disabled until dedicated reference extractors are added.
+- **Cython and CUDA files now expose native-extension symbols (#3530)** - `cdidx` extracts Cython `cdef` / `cpdef` declarations, `cimport` entries, and CUDA kernel/device/host functions so `.pyx`, `.pxd`, `.cu`, and `.cuh` files are no longer search-only.
+- **HDL files now expose declaration symbols (#3532)** - Verilog, SystemVerilog, and VHDL files report modules, packages, interfaces, classes, functions/tasks/processes, types, signals, parameters, and imports through symbol extraction.
+- **Shader files now expose entry-point and resource symbols (#3533)** - GLSL, HLSL, Metal, and WGSL files report shader entry points, structs, type aliases, constant buffers, samplers, textures, resource bindings, and uniform/input/output declarations through symbol extraction.
+- **Sass and Stylus now expose preprocessor navigation anchors (#3534)** — `.sass` and `.styl` files now surface conservative symbol and reference records for imports, variables, mixins, functions, selectors, and related call sites.
+- **XAML and AXAML now expose UI navigation references (#3535)** — XML-backed XAML files now surface conservative type, resource, binding, element, and event-handler references for WPF and Avalonia navigation.
+- **LSP now supports live document sync and richer editor providers (#3536)** — `cdidx lsp` now advertises full text document sync plus conservative hover, completion, document highlight, semantic tokens, code lens, and inlay hint providers backed by indexed symbols and references where available.
+
+#### Fixed
+
+- **C# reference extraction now reuses one line-state scan** — Fresh full indexes avoid a duplicate pass over C# source lines when masking multiline string content and block comments, shaving CPU from first-time `cdidx .` runs.
+- **Reduced first-time `cdidx .` indexing time.** Fresh full scans now defer mutual-recursion reference finalization until after bulk reference insertion instead of refreshing it after every file, and skip empty-database cleanup probes that cannot match existing rows.
+- **Reduced `cdidx .` time after a branch or HEAD change.** Default incremental full scans no longer pre-extract every file solely because the stored full-scan HEAD differs from the current worktree HEAD. Unchanged files can now be reused before symbol/reference extraction, while the existing HEAD-change warning, stale-file purge, readiness stamping, and current-HEAD metadata update remain intact.
+- **Reduced first-time reference indexing work.** Reference-line ID lookups now query only the current insert batch's exact `(file, line, context)` keys instead of rereading every reference line for the file on each batch.
+- **C# constructor reference search now resolves using-alias targets (#3391)** — `references BoundedRegex --kind instantiate` can now distinguish `using Regex = CodeIndex.Indexer.BoundedRegex; new Regex(...)` from direct `System.Text.RegularExpressions.Regex` construction, and `references Regex --kind bcl_regex_without_timeout --lang csharp` reports direct BCL Regex construction without a timeout argument.
+- **Unused-symbol analysis now recognizes more serialization and reflection contract annotations (#3396)** — public C# members, including properties, DTO fields, constructors, and methods annotated with System.Text.Json contract attributes or trimming/reflection preservation attributes, are classified under `reflection_or_config_suspect` instead of the general public no-reference bucket.
+- **ctags export now reports filtered JSON summaries and richer metadata (#3551)** — `cdidx export ctags` now supports `--json`, `--lang`, repeated `--path` / `--exclude-path`, and `--exclude-tests`, while emitted tags include indexed metadata fields such as language, container, and visibility when available.
+- **Package normalize dry-run tests no longer capture unrelated stderr (#3631)** — release workflow tests now invoke the package normalizer with dedicated output writers so MCP telemetry from other test activity cannot make dry-run stderr assertions flaky.
+- **GitHelper cancellation tests now tolerate macOS CI cleanup jitter (#3643)** — cancellation assertions keep a bounded wall-clock limit while allowing small scheduling and process-cleanup overhead above the previous two-second cutoff.
+
+#### Internal
+
+- **Build and Test CI now avoids repeated slow validation work** — vulnerability auditing, formatting validation, and XPlat Code Coverage collection now run on the representative `ubuntu-latest` / `net8.0` lane while the full OS/framework matrix continues to run the test suite.
+- **Split query batch orchestration into a focused partial (#3380)** — `QueryCommandRunner` now keeps batch-mode parsing, DB setup, and query dispatch in a dedicated partial without changing CLI behavior.
+- **Split C# symbol pattern definitions out of the central symbol extractor (#3381)** — C# declaration and type regex constants now live in a dedicated partial module, reducing the mixed-language pattern surface in `SymbolExtractor.cs` without changing extraction behavior.
+- **Split Lua symbol extractor coverage into a language-specific test file (#3383)** — Moved the Lua symbol extraction regression case out of the mega `SymbolExtractorTests.cs` file and into `SymbolExtractorLuaTests.cs` for more targeted validation and review.
+- **Split top-level command dispatch into a focused partial (#3418)** — `ProgramRunner` now keeps immediate command handling, query dispatch, and non-query dispatch in a dedicated partial without changing CLI behavior.
+- **Moved Lua reference extraction helpers into the Lua reference extractor (#3421)** — Lua require/type, colon-call, table-field, and long-bracket masking logic now live in the language module instead of the shared support class, reducing the central helper surface without changing extraction behavior.
+- **Split extractor plugin registry responsibilities (#3422)** — `ExtractorPluginRegistry` now keeps discovery, pattern config handling, plugin assembly loading, and diagnostic reporting in focused partial files while preserving the existing extension behavior.
+
 ### [1.31.2] - 2026-06-15
 
 #### Internal
@@ -3926,6 +3963,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.32.0] - 2026-06-18
+
+#### 追加
+
+- **高速な初回 index 向けに `cdidx index --symbols-only` を追加しました** — フルスキャンで chunks、symbols、issues だけを作り、reference graph 抽出を省けるため、search、definition、symbols、map をより早く使い始められます。graph 系コマンドは通常の index 実行まで degraded のままです。
+- **関数型言語のシンボル抽出が Clojure、Erlang、OCaml、Raku を扱うようになりました (#3527)** — `cdidx` はこれらの言語で保守的な namespace/module、type、function、binding シンボルをインデックスし、専用の参照抽出器が追加されるまでは graph/reference 対応を無効のままにします。
+- **動的言語のシンボル抽出が Crystal、Groovy、Julia、Tcl を扱うようになりました (#3528)** — `cdidx` はこれらの言語で保守的な package/module、type、function、import、binding シンボルをインデックスし、専用の参照抽出器が追加されるまでは graph/reference 対応を無効のままにします。
+- **システム系言語のシンボル抽出が Ada、D、Nim を扱うようになりました (#3529)** — `cdidx` はこれらの言語で保守的な package/module、type、function、import、binding シンボルをインデックスし、専用の参照抽出器が追加されるまでは graph/reference 対応を無効のままにします。
+- **Cython と CUDA ファイルが native extension のシンボルを公開するようになりました (#3530)** - `cdidx` は Cython の `cdef` / `cpdef` 宣言、`cimport`、CUDA の kernel / device / host 関数を抽出し、`.pyx`、`.pxd`、`.cu`、`.cuh` が search-only ではなくなりました。
+- **HDL ファイルが宣言シンボルを公開するようになりました (#3532)** - Verilog、SystemVerilog、VHDL ファイルで module、package、interface、class、function/task/process、type、signal、parameter、import を symbol extraction から取得できます。
+- **Shader ファイルが entry point と resource シンボルを公開するようになりました (#3533)** - GLSL、HLSL、Metal、WGSL ファイルで shader entry point、struct、type alias、constant buffer、sampler、texture、resource binding、uniform/input/output 宣言を symbol extraction から取得できます。
+- **Sass と Stylus がプリプロセッサのナビゲーションアンカーを公開するようになりました (#3534)** — `.sass` と `.styl` ファイルで、import、変数、mixin、関数、セレクタ、および関連する呼び出し箇所の保守的な symbol / reference record を出力するようになりました。
+- **XAML と AXAML が UI ナビゲーション参照を公開するようになりました (#3535)** — XML ベースの XAML ファイルで、WPF と Avalonia の型、リソース、バインディング、要素、イベントハンドラへの保守的な reference record を出力するようになりました。
+- **LSP が live document sync と richer editor providers に対応しました (#3536)** — `cdidx lsp` は full text document sync と、indexed symbols / references で答えられる範囲に限定した hover、completion、document highlight、semantic tokens、code lens、inlay hint providers を advertise するようになりました。
+
+#### 修正
+
+- **C# reference extraction が 1 回の行状態スキャンを再利用するようになりました** — 初回 `cdidx .` で multiline string content と block comment のマスク用に C# ソース行を二重走査しないようにし、CPU 使用量を削減しました。
+- **初回の `cdidx .` インデックス時間を短縮しました。** fresh full scan では、相互再帰参照の確定処理をファイルごとではなく参照の一括挿入後にまとめて行い、空DBでは既存行に一致しない cleanup probe も省略します。
+- **branch / HEAD 変更後の `cdidx .` 時間を短縮しました。** 既定の incremental full scan は、保存済み full-scan HEAD と現在の worktree HEAD が違うという理由だけで全ファイルを先行抽出しなくなりました。既存の HEAD 変更警告、stale file purge、readiness stamp、現在 HEAD metadata 更新は維持しつつ、未変更ファイルを symbol / reference 抽出前に再利用できます。
+- **初回の reference indexing 処理量を削減しました。** reference line ID の取得時に、各 batch でファイル全体の reference line を読み直さず、現在の insert batch の `(file, line, context)` だけを正確に取得します。
+- **C# constructor reference search が using alias の参照先を解決するようになりました (#3391)** — `references BoundedRegex --kind instantiate` で、`using Regex = CodeIndex.Indexer.BoundedRegex; new Regex(...)` と直接の `System.Text.RegularExpressions.Regex` 生成を区別できるようになり、`references Regex --kind bcl_regex_without_timeout --lang csharp` で timeout 引数なしの直接 BCL Regex 生成を報告します。
+- **unused-symbol analysis が serialization / reflection contract annotation をより多く認識するようになりました (#3396)** — System.Text.Json の contract 属性や trimming / reflection preservation 属性が付いた C# public member（property、DTO field、constructor、method を含む）を、一般の public no-reference bucket ではなく `reflection_or_config_suspect` に分類するようになりました。
+- **ctags export が filtered JSON summary と richer metadata を出力できるようになりました (#3551)** — `cdidx export ctags` は `--json`、`--lang`、繰り返し指定できる `--path` / `--exclude-path`、`--exclude-tests` を受け付け、出力 tag には利用可能な場合に language、container、visibility などの indexed metadata fields も含めるようになりました。
+- **Package normalize の dry-run テストが無関係な stderr を捕捉しないようになりました (#3631)** — release workflow テストは package normalizer を専用の出力 writer で実行するため、他のテスト活動からの MCP telemetry が dry-run の stderr アサーションを不安定にしなくなりました。
+- **GitHelper の cancellation テストが macOS CI の cleanup 揺れを許容するようになりました (#3643)** — cancellation の assertion は wall-clock の上限を維持しつつ、従来の 2 秒閾値を少し超える scheduling や process cleanup の遅れを許容します。
+
+#### 内部変更
+
+- **Build and Test CI が重い検証処理の重複を避けるようになりました** — 脆弱性監査、format 検証、XPlat Code Coverage 収集を代表 `ubuntu-latest` / `net8.0` lane に寄せ、OS/framework の full matrix では引き続き test suite を実行します。
+- **query batch orchestration を focused partial に分割しました (#3380)** — `QueryCommandRunner` の batch mode parsing、DB setup、query dispatch を専用 partial に移し、CLI 挙動は変更していません。
+- **C# シンボル pattern 定義を central symbol extractor から分離しました (#3381)** — C# の宣言・型 regex 定数を専用 partial module に移し、抽出挙動は変えずに `SymbolExtractor.cs` の多言語 pattern 混在を減らしました。
+- **Lua symbol extractor coverage を言語別 test file に分離しました (#3383)** — Lua の symbol extraction regression case を巨大な `SymbolExtractorTests.cs` から `SymbolExtractorLuaTests.cs` に移し、より対象を絞った検証と review をしやすくしました。
+- **top-level command dispatch を focused partial に分割しました (#3418)** — `ProgramRunner` の immediate command handling、query dispatch、non-query dispatch を専用 partial に移し、CLI 挙動は変更していません。
+- **Lua 参照抽出 helper を Lua reference extractor へ移しました (#3421)** — Lua の require/type、colon-call、table-field、long-bracket masking の処理を共有 support class ではなく言語 module に置き、抽出挙動は変えずに central helper surface を減らしました。
+- **extractor plugin registry の責務を分割しました (#3422)** — `ExtractorPluginRegistry` は既存の extension 挙動を維持したまま、探索、pattern config 処理、plugin assembly loading、diagnostic reporting を責務別の partial file に分けました。
+
 ### [1.31.2] - 2026-06-15
 
 #### 内部変更
@@ -7823,7 +7897,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.31.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.0...HEAD
+[1.32.0]: https://github.com/Widthdom/CodeIndex/compare/v1.31.2...v1.32.0
 [1.31.2]: https://github.com/Widthdom/CodeIndex/compare/v1.31.1...v1.31.2
 [1.31.1]: https://github.com/Widthdom/CodeIndex/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/Widthdom/CodeIndex/compare/v1.30.2...v1.31.0
