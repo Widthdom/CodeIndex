@@ -1760,10 +1760,10 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Groovy | `.groovy`, `.gvy`, `.gy`, `.gsh` | yes |
 | Crystal | `.cr` | yes |
 | Clojure | `.clj`, `.cljs`, `.cljc`, `.edn` | yes |
-| D | `.d` | -- |
+| D | `.d` | yes |
 | Erlang | `.erl`, `.hrl` | yes |
 | Julia | `.jl` | yes |
-| Nim | `.nim`, `.nims` | -- |
+| Nim | `.nim`, `.nims` | yes |
 | OCaml | `.ml`, `.mli` | yes |
 | Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
 | Solidity | `.sol` | yes |
@@ -1792,7 +1792,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Common Lisp | `.lisp`, `.lsp`, `.cl` | yes |
 | Racket | `.rkt` | yes |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
-| Ada | `.ada`, `.adb`, `.ads` | -- |
+| Ada | `.ada`, `.adb`, `.ads` | yes |
 | Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |
 | Raku | `.raku`, `.rakumod`, `.rakutest` | yes |
 | Perl test | `.t` | -- |
@@ -1827,6 +1827,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
 - Functional symbol-only languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
 - Dynamic symbol-only languages: Crystal, Groovy, Julia, and Tcl expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
+- Systems symbol-only languages: Ada, D, and Nim expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
 - Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
@@ -4244,10 +4245,10 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Groovy | `.groovy`, `.gvy`, `.gy`, `.gsh` | yes |
 | Crystal | `.cr` | yes |
 | Clojure | `.clj`, `.cljs`, `.cljc`, `.edn` | yes |
-| D | `.d` | -- |
+| D | `.d` | yes |
 | Erlang | `.erl`, `.hrl` | yes |
 | Julia | `.jl` | yes |
-| Nim | `.nim`, `.nims` | -- |
+| Nim | `.nim`, `.nims` | yes |
 | OCaml | `.ml`, `.mli` | yes |
 | Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
 | Solidity | `.sol` | yes |
@@ -4276,7 +4277,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Common Lisp | `.lisp`, `.lsp`, `.cl` | yes |
 | Racket | `.rkt` | yes |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
-| Ada | `.ada`, `.adb`, `.ads` | -- |
+| Ada | `.ada`, `.adb`, `.ads` | yes |
 | Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |
 | Raku | `.raku`, `.rakumod`, `.rakutest` | yes |
 | Perl test | `.t` | -- |
@@ -4311,6 +4312,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
 - 関数型言語のシンボル専用対応: Clojure、Erlang、OCaml、Raku は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
 - 動的言語のシンボル専用対応: Crystal、Groovy、Julia、Tcl は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
+- システム系言語のシンボル専用対応: Ada、D、Nim は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
 - Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
