@@ -13,6 +13,16 @@ public class DiagnosticSanitizerTests
         Assert.Equal("failed at <path> with details", sanitized);
     }
 
+    [Theory]
+    [InlineData(@"failed at C:\Users\me\.config\cdidx\hook.dll, with details", "failed at <path>, with details")]
+    [InlineData(@"failed at C:/Users/me/.config/cdidx/hook.dll; with details", "failed at <path>; with details")]
+    public void ForMessage_RedactsWindowsPaths(string message, string expected)
+    {
+        var sanitized = DiagnosticSanitizer.ForMessage(message);
+
+        Assert.Equal(expected, sanitized);
+    }
+
     [Fact]
     public void ForMessage_RedactionTimeout_ReturnsFallbackMessage()
     {

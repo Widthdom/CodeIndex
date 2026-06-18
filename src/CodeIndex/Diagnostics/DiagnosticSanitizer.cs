@@ -7,10 +7,6 @@ internal static class DiagnosticSanitizer
     private const int MaxDiagnosticFieldLength = 240;
     private const int MaxSanitizerInputLength = MaxDiagnosticFieldLength * 8;
     internal const string RegexTimeoutFallbackMessage = "[message omitted after sanitization timeout]";
-    private static readonly Regex AbsolutePathPattern = new(
-        @"(?:[A-Za-z]:)?[/\\][^\s'"";:,)]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant,
-        TimeSpan.FromMilliseconds(50));
 
     public static string ForPath(string? path)
     {
@@ -34,7 +30,7 @@ internal static class DiagnosticSanitizer
         => string.IsNullOrWhiteSpace(value) ? value : ForMessage(value);
 
     public static string ForMessage(string? message)
-        => ForMessage(message, value => AbsolutePathPattern.Replace(value, "<path>"));
+        => ForMessage(message, RedactAbsolutePaths);
 
     internal static string ForMessage(string? message, Func<string, string> redactPaths)
     {
@@ -94,6 +90,64 @@ internal static class DiagnosticSanitizer
 
         return collapsed.ToString();
     }
+
+    private static string RedactAbsolutePaths(string value)
+    {
+        var redacted = new System.Text.StringBuilder(value.Length);
+        for (int index = 0; index < value.Length;)
+        {
+            if (!TryGetAbsolutePathEnd(value, index, out var end))
+            {
+                redacted.Append(value[index]);
+                index++;
+                continue;
+            }
+
+            redacted.Append("<path>");
+            index = end;
+        }
+
+        return redacted.ToString();
+    }
+
+    private static bool TryGetAbsolutePathEnd(string value, int start, out int end)
+    {
+        end = start;
+        int bodyStart;
+        if (IsPathSeparator(value[start]))
+        {
+            bodyStart = start + 1;
+        }
+        else if (start + 2 < value.Length
+            && IsAsciiLetter(value[start])
+            && value[start + 1] == ':'
+            && IsPathSeparator(value[start + 2]))
+        {
+            bodyStart = start + 3;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (bodyStart >= value.Length || IsPathTerminator(value[bodyStart]))
+            return false;
+
+        end = bodyStart + 1;
+        while (end < value.Length && !IsPathTerminator(value[end]))
+            end++;
+
+        return true;
+    }
+
+    private static bool IsAsciiLetter(char value)
+        => (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+
+    private static bool IsPathSeparator(char value)
+        => value is '/' or '\\';
+
+    private static bool IsPathTerminator(char value)
+        => char.IsWhiteSpace(value) || value is '\'' or '"' or ';' or ':' or ',' or ')';
 
     private static string Truncate(string value)
         => value.Length <= MaxDiagnosticFieldLength
