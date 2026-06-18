@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.32.5] - 2026-06-19
+
+#### Fixed
+
+- **Diagnostic path redaction no longer times out on cold CI runs** — diagnostic message sanitization now redacts absolute paths without relying on a regular-expression timeout, preventing short messages from being replaced by the timeout fallback under heavily loaded release test runs.
+
 ### [1.32.4] - 2026-06-19
 
 #### Fixed
@@ -3987,6 +3993,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.32.5] - 2026-06-19
+
+#### 修正
+
+- **diagnostic path redaction が cold CI run で timeout しないようになりました** — diagnostic message sanitization は regular-expression timeout に依存せず absolute path を redact するようになり、負荷の高い release test run で短い message が timeout fallback に置き換わる問題を防ぎます。
+
 ### [1.32.4] - 2026-06-19
 
 #### 修正
@@ -7945,7 +7957,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.4...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.5...HEAD
+[1.32.5]: https://github.com/Widthdom/CodeIndex/compare/v1.32.4...v1.32.5
 [1.32.4]: https://github.com/Widthdom/CodeIndex/compare/v1.32.3...v1.32.4
 [1.32.3]: https://github.com/Widthdom/CodeIndex/compare/v1.32.2...v1.32.3
 [1.32.2]: https://github.com/Widthdom/CodeIndex/compare/v1.32.1...v1.32.2
