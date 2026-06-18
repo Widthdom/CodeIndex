@@ -4276,11 +4276,15 @@ public partial class McpServer
                 resultsArray.RemoveAt(resultsArray.Count - 1);
                 continue;
             }
+            if (RemoveBatchTruncatedQueryToolDisplay(truncatedQueries))
+                continue;
             if (truncatedQueries.Count > 1)
             {
                 truncatedQueries.RemoveAt(truncatedQueries.Count - 1);
                 continue;
             }
+            if (CompactBatchTruncatedQueryArgsSummaries(truncatedQueries))
+                continue;
             break;
         }
 
@@ -4368,6 +4372,34 @@ public partial class McpServer
             ["suggested_query_count"] = Math.Max(1, retainedResultCount),
             ["resume_cursor"] = $"batch_query:v1:{nextRequestIndex}",
         };
+    }
+
+    private static bool RemoveBatchTruncatedQueryToolDisplay(JsonArray truncatedQueries)
+    {
+        var changed = false;
+        foreach (var item in truncatedQueries)
+        {
+            if (item is JsonObject entry)
+                changed |= entry.Remove("tool");
+        }
+        return changed;
+    }
+
+    private static bool CompactBatchTruncatedQueryArgsSummaries(JsonArray truncatedQueries)
+    {
+        var changed = false;
+        foreach (var item in truncatedQueries)
+        {
+            if (item is JsonObject entry
+                && entry["args_summary"] is JsonValue value
+                && value.TryGetValue<string>(out var summary)
+                && summary.Length > 0)
+            {
+                entry["args_summary"] = string.Empty;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private static string? ReadBatchSlotId(JsonObject? queryObject)
