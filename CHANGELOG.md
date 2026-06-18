@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.32.4] - 2026-06-19
+
+#### Fixed
+
+- **Ready-bit stamping no longer depends on provider transaction state** — `SetReadyBit` now uses raw SQLite `BEGIN IMMEDIATE` / `COMMIT` for `PRAGMA user_version` updates so concurrent writer tests do not trip over stale provider-managed transaction state on pooled connections.
+
 ### [1.32.3] - 2026-06-19
 
 #### Fixed
@@ -3981,6 +3987,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.32.4] - 2026-06-19
+
+#### 修正
+
+- **ready-bit stamp が provider transaction state に依存しないようになりました** — `SetReadyBit` は `PRAGMA user_version` 更新に raw SQLite の `BEGIN IMMEDIATE` / `COMMIT` を使うようになり、pooled connection 上の provider-managed transaction state により並行 writer テストが失敗しないようにしました。
+
 ### [1.32.3] - 2026-06-19
 
 #### 修正
@@ -7933,7 +7945,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.4...HEAD
+[1.32.4]: https://github.com/Widthdom/CodeIndex/compare/v1.32.3...v1.32.4
 [1.32.3]: https://github.com/Widthdom/CodeIndex/compare/v1.32.2...v1.32.3
 [1.32.2]: https://github.com/Widthdom/CodeIndex/compare/v1.32.1...v1.32.2
 [1.32.1]: https://github.com/Widthdom/CodeIndex/compare/v1.32.0...v1.32.1
