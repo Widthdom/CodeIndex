@@ -579,6 +579,7 @@ public static partial class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
+        bool priorSymbolsOnlyGraphOmitted,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
         bool priorSymbolExtractorVersionsMatchCurrent,
@@ -613,7 +614,6 @@ public static partial class IndexCommandRunner
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
-        var priorGraphReady = (priorReadiness & DbContext.GraphReadyFlag) != 0;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
@@ -1195,7 +1195,7 @@ public static partial class IndexCommandRunner
                             language: record.Lang,
                             generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
-                                && priorGraphReady
+                                && !priorSymbolsOnlyGraphOmitted
                                 && record.Lang is not ("javascript" or "typescript")
                                 && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -1428,6 +1428,11 @@ public static partial class IndexCommandRunner
             {
                 writer.MarkGraphReady();
                 writer.MarkSqlGraphContractReady();
+                writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, null);
+            }
+            else
+            {
+                writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, "true");
             }
             writer.MarkCSharpSymbolNameContractReady();
             // Issue #435: resolve every C# class-like row and stamp readiness. Full-scan
