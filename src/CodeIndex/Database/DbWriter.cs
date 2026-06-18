@@ -3833,11 +3833,18 @@ public class DbWriter
             // value, OR in their own flag, and the slower writer's PRAGMA write clobbers
             // the faster writer's flag. Wrap the read-modify-write in BEGIN IMMEDIATE so
             // SQLite's reserved write lock serialises it across processes (issue #1513).
+            // Use raw BEGIN/COMMIT instead of a provider-managed transaction object here:
+            // PRAGMA user_version updates are connection-level metadata, and keeping this
+            // path to plain SQL avoids provider transaction state leaking across pooled
+            // connections under highly parallel release tests.
             bool ownTransaction = !IsInTransaction();
-            bool beganTransaction = ownTransaction;
-            SqliteTransaction? transaction = ownTransaction
-                ? _conn.BeginTransaction(deferred: false)
-                : _activeTransaction;
+            bool beganTransaction = false;
+            if (ownTransaction)
+            {
+                Execute("BEGIN IMMEDIATE");
+                beganTransaction = true;
+            }
+            var transaction = ownTransaction ? null : _activeTransaction;
             try
             {
                 int current;
@@ -3853,22 +3860,17 @@ public class DbWriter
                     Execute($"PRAGMA user_version = {next}", transaction);
                 if (ownTransaction)
                 {
-                    transaction!.Commit();
-                    ownTransaction = false;
+                    Execute("COMMIT");
+                    beganTransaction = false;
                 }
             }
             catch (Exception)
             {
-                if (ownTransaction)
+                if (beganTransaction)
                 {
-                    try { transaction?.Rollback(); } catch (SqliteException) { /* best effort */ }
+                    try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
                 }
                 throw;
-            }
-            finally
-            {
-                if (beganTransaction)
-                    transaction?.Dispose();
             }
         }
         finally
