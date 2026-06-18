@@ -2132,9 +2132,10 @@ public partial class QueryCommandRunnerTests
 
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+        var names = languages.Select(lang => lang.GetProperty("lang").GetString()).ToList();
 
         Assert.NotEmpty(languages);
-        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "groovy");
+        Assert.DoesNotContain("groovy", names);
         Assert.All(languages, lang =>
         {
             Assert.False(lang.GetProperty("symbol_extraction").GetBoolean());
@@ -2326,12 +2327,11 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
-        // Search-only languages that intentionally live outside richer extractors
-        // must advertise symbol_extraction=false / graph_queries=false so AI clients can tell the difference
-        // between "indexed with symbols" and "indexed for search only".
-        // 意図的に richer な抽出器の対象外になっている search-only 言語
-        // symbol_extraction=false / graph_queries=false で広告しなければならない。
-        // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
+        // Languages that have conservative symbol extractors but no dedicated reference
+        // extractors must advertise symbol_extraction=true while keeping graph/reference
+        // support disabled.
+        // 保守的な symbol extractor はあるが専用の reference extractor がない言語は、
+        // symbol_extraction=true としつつ graph/reference 対応を無効のまま広告する。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -2340,16 +2340,21 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "tcl" })
+        foreach (var symbolOnly in new[] { "ada", "clojure", "crystal", "d", "erlang", "groovy", "julia", "nim", "ocaml", "raku", "tcl" })
         {
-            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
-            var entry = languages[searchOnly];
-            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
-                $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
+            var entry = languages[symbolOnly];
+            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{symbolOnly} must advertise symbol_extraction=true");
             Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
-                $"{searchOnly} must advertise reference_extraction=false");
+                $"{symbolOnly} must advertise reference_extraction=false");
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
-                $"{searchOnly} must advertise graph_queries=false");
+                $"{symbolOnly} must advertise graph_queries=false");
+
+            var gaps = entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()).ToList();
+            Assert.DoesNotContain("missing-symbols", gaps);
+            Assert.Contains("missing-references", gaps);
+            Assert.Contains("missing-graph", gaps);
         }
 
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()

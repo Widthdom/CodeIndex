@@ -511,9 +511,209 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Extract_FunctionalLanguages_IndexConservativeDeclarations_Issue3527()
+    {
+        const string clojure = """
+            (ns demo.core)
+            (defrecord User [id name])
+            (defprotocol Store
+              (save! [this value]))
+            (defn load-user [id]
+              id)
+            (defonce cache (atom {}))
+            """;
 
+        var clojureSymbols = SymbolExtractor.Extract(1, "clojure", clojure);
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo.core");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "protocol" && symbol.Name == "Store");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load-user");
+        Assert.Contains(clojureSymbols, symbol => symbol.Kind == "property" && symbol.Name == "cache");
 
+        const string erlang = """
+            -module(sample_app).
+            -record(user, {id, name}).
+            -type user_id() :: integer().
+            load_user(Id) ->
+                Id.
+            """;
 
+        var erlangSymbols = SymbolExtractor.Extract(2, "erlang", erlang);
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "sample_app");
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "user");
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "type" && symbol.Name == "user_id");
+        Assert.Contains(erlangSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+
+        const string ocaml = """
+            module Store = struct
+            type user = { id : int }
+            let rec find_user id = id
+            val save_user : user -> unit
+            open Core
+            """;
+
+        var ocamlSymbols = SymbolExtractor.Extract(3, "ocaml", ocaml);
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Store");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "type" && symbol.Name == "user");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "find_user");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "function" && symbol.Name == "save_user");
+        Assert.Contains(ocamlSymbols, symbol => symbol.Kind == "import" && symbol.Name == "Core");
+
+        const string raku = """
+            unit module Demo::Store;
+            role Persistable { }
+            class User { }
+            sub load-user($id) { $id }
+            my $cache = {};
+            """;
+
+        var rakuSymbols = SymbolExtractor.Extract(4, "raku", raku);
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Demo::Store");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "interface" && symbol.Name == "Persistable");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load-user");
+        Assert.Contains(rakuSymbols, symbol => symbol.Kind == "property" && symbol.Name == "$cache");
+    }
+
+    [Fact]
+    public void Extract_DynamicLanguages_IndexConservativeDeclarations_Issue3528()
+    {
+        const string crystal = """
+            require "json"
+            module Demo
+              class User
+                def load_user(id)
+                  id
+                end
+              end
+              struct Point
+              end
+            end
+            """;
+
+        var crystalSymbols = SymbolExtractor.Extract(1, "crystal", crystal);
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "import" && symbol.Name == "\"json\"");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Demo");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "Point");
+        Assert.Contains(crystalSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+
+        const string groovy = """
+            package demo.app
+            import groovy.transform.CompileStatic
+            trait Persistable {}
+            class UserService {
+              def loadUser(id) { id }
+              handler = { event -> event }
+            }
+            """;
+
+        var groovySymbols = SymbolExtractor.Extract(2, "groovy", groovy);
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo.app");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "import" && symbol.Name == "groovy.transform.CompileStatic");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "interface" && symbol.Name == "Persistable");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "class" && symbol.Name == "UserService");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "function" && symbol.Name == "loadUser");
+        Assert.Contains(groovySymbols, symbol => symbol.Kind == "lambda" && symbol.Name == "handler");
+
+        const string julia = """
+            module DemoStore
+            struct User
+              id::Int
+            end
+            function load_user(id)
+              id
+            end
+            macro timed(ex)
+              ex
+            end
+            const CACHE = Dict()
+            end
+            """;
+
+        var juliaSymbols = SymbolExtractor.Extract(3, "julia", julia);
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "DemoStore");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "User");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "function" && symbol.Name == "timed");
+        Assert.Contains(juliaSymbols, symbol => symbol.Kind == "property" && symbol.Name == "CACHE");
+
+        const string tcl = """
+            package require Tcl 8.6
+            namespace eval demo {}
+            oo::class create User {}
+            proc load_user {id} { return $id }
+            variable cache
+            """;
+
+        var tclSymbols = SymbolExtractor.Extract(4, "tcl", tcl);
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "import" && symbol.Name == "Tcl");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "class" && symbol.Name == "User");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "function" && symbol.Name == "load_user");
+        Assert.Contains(tclSymbols, symbol => symbol.Kind == "property" && symbol.Name == "cache");
+    }
+
+    [Fact]
+    public void Extract_SystemsLanguages_IndexConservativeDeclarations_Issue3529()
+    {
+        const string ada = """
+            with Ada.Text_IO;
+            package body Demo.Store is
+               type User_Id is new Integer;
+               protected type Cache is
+               end Cache;
+               procedure Load_User(Id : User_Id) is
+               begin
+                  null;
+               end Load_User;
+            end Demo.Store;
+            """;
+
+        var adaSymbols = SymbolExtractor.Extract(1, "ada", ada);
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "import" && symbol.Name == "Ada.Text_IO");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Demo.Store");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "type" && symbol.Name == "User_Id");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "type" && symbol.Name == "Cache");
+        Assert.Contains(adaSymbols, symbol => symbol.Kind == "function" && symbol.Name == "Load_User");
+
+        const string d = """
+            module demo.store;
+            import std.json;
+            class UserService {
+            }
+            struct Point {
+            }
+            alias UserId = int;
+            int loadUser(int id) {
+                return id;
+            }
+            """;
+
+        var dSymbols = SymbolExtractor.Extract(2, "d", d);
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo.store");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "import" && symbol.Name == "std.json");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "class" && symbol.Name == "UserService");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "struct" && symbol.Name == "Point");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "typealias" && symbol.Name == "UserId");
+        Assert.Contains(dSymbols, symbol => symbol.Kind == "function" && symbol.Name == "loadUser");
+
+        const string nim = """
+            import std/json
+            type User* = object
+              id*: int
+            proc loadUser*(id: int): int =
+              id
+            const Cache* = 1
+            """;
+
+        var nimSymbols = SymbolExtractor.Extract(3, "nim", nim);
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "import" && symbol.Name == "std/json");
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "type" && symbol.Name == "User");
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "function" && symbol.Name == "loadUser");
+        Assert.Contains(nimSymbols, symbol => symbol.Kind == "property" && symbol.Name == "Cache");
+    }
 
     [Theory]
     [InlineData("csharp", "Pages/Product.razor")]
@@ -603,36 +803,45 @@ public partial class SymbolExtractorTests
     {
         var samples = new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["ada"] = "with Ada.Text_IO;\npackage Demo is\nprocedure Run;\nend Demo;\n",
             ["assembly"] = "Start:\n    call Target\nTarget:\n    ret\n",
             ["batch"] = ":run\necho ok\n",
             ["c"] = "int answer(void) { return 42; }\n",
+            ["clojure"] = "(ns demo.core)\n(defn run [x] x)\n",
             ["cmake"] = "add_library(core core.cpp)\noption(ENABLE_TESTS \"tests\" ON)\n",
             ["cobol"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
             ["cpp"] = "namespace demo { int answer() { return 42; } }\n",
             ["csharp"] = "namespace Demo; public class Service { public int Run() => 1; }\n",
+            ["crystal"] = "module Demo\n  def run\n    1\n  end\nend\n",
             ["css"] = ".card { color: red; }\n@keyframes fade { from { opacity: 0; } }\n",
             ["cython"] = "cdef class Service:\n    cpdef int run(self):\n        return 1\n",
+            ["d"] = "module demo;\nint run() { return 1; }\n",
             ["dart"] = "class Service { int run() => 1; }\n",
             ["dockerfile"] = "FROM alpine AS build\nARG VERSION=1\n",
             ["elixir"] = "defmodule Demo do\n  def run do\n    :ok\n  end\nend\n",
+            ["erlang"] = "-module(demo).\nrun() -> ok.\n",
             ["fortran"] = "module demo\ncontains\nsubroutine run()\nend subroutine\nend module\n",
             ["fsharp"] = "module Demo\nlet run x = x + 1\n",
             ["go"] = "package demo\nfunc Run() int { return 1 }\n",
             ["gradle"] = "task buildDocs {\n}\n",
             ["glsl"] = "uniform mat4 model;\nvec4 run(vec4 value) { return model * value; }\n",
             ["graphql"] = "type Query { answer: Int }\nquery GetAnswer { answer }\n",
+            ["groovy"] = "package demo\nclass Service { def run() { 1 } }\n",
             ["haskell"] = "module Demo where\nrun :: Int -> Int\nrun x = x + 1\n",
             ["html"] = "<div id=\"app\"></div>\n<script>function run() { return 1; }</script>\n",
             ["hlsl"] = "cbuffer Params { float4 color; }\nfloat4 run(float4 value) { return value * color; }\n",
             ["java"] = "package demo; public class Service { int run() { return 1; } }\n",
             ["javascript"] = "export function run() { return 1; }\n",
+            ["julia"] = "module Demo\nfunction run()\n  1\nend\nend\n",
             ["justfile"] = "build:\n    echo build\n",
             ["kotlin"] = "package demo\nclass Service { fun run(): Int = 1 }\n",
             ["lua"] = "local function run()\n  return 1\nend\n",
             ["makefile"] = "build:\n\t@echo build\n",
             ["metal"] = "struct VertexOut { float4 position; };\nvertex VertexOut run(uint id) { return VertexOut(); }\n",
             ["msbuild"] = "<Project><Target Name=\"Build\" /></Project>\n",
+            ["nim"] = "proc run*(): int =\n  1\n",
             ["objc"] = "@interface Service\n- (void)run;\n@end\n",
+            ["ocaml"] = "module Demo = struct\nlet run x = x\nend\n",
             ["pascal"] = "unit Demo;\ninterface\nprocedure Run;\nimplementation\nprocedure Run; begin end;\nend.\n",
             ["perl"] = "package Demo;\nsub run { return 1; }\n",
             ["php"] = "<?php\nclass Service { function run() { return 1; } }\n",
@@ -641,6 +850,7 @@ public partial class SymbolExtractorTests
             ["python"] = "class Service:\n    def run(self):\n        return 1\n",
             ["r"] = "run <- function(x) {\n  x + 1\n}\n",
             ["racket"] = "(define (run x) x)\n",
+            ["raku"] = "unit module Demo;\nsub run() { 1 }\n",
             ["ruby"] = "class Service\n  def run\n    1\n  end\nend\n",
             ["rust"] = "pub struct Service;\npub fn run() -> i32 { 1 }\n",
             ["sass"] = "$primary: #3366cc\n@mixin rounded($radius)\n.button\n  +rounded(4px)\n",
@@ -652,6 +862,7 @@ public partial class SymbolExtractorTests
             ["svelte"] = "<script>\n  export let name;\n  function run() { return name; }\n</script>\n",
             ["swift"] = "class Service { func run() -> Int { 1 } }\n",
             ["systemverilog"] = "module demo #(parameter int WIDTH = 8) (input logic clk);\nfunction int run(); return WIDTH; endfunction\nendmodule\n",
+            ["tcl"] = "namespace eval demo {}\nproc run {} { return 1 }\n",
             ["terraform"] = "resource \"local_file\" \"demo\" {\n  filename = \"demo.txt\"\n}\n",
             ["typescript"] = "export class Service { run(): number { return 1; } }\n",
             ["vb"] = "Public Class Service\n  Public Sub Run()\n  End Sub\nEnd Class\n",
