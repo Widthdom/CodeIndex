@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.32.2] - 2026-06-18
+
+#### Security
+
+- **Release audit now resolves the patched native SQLite bundle** — `Microsoft.Data.Sqlite` and the `SQLitePCLRaw.bundle_e_sqlite3` graph are pinned to patched versions so the GitHub Actions NuGet vulnerability audit no longer resolves the vulnerable `SQLitePCLRaw.lib.e_sqlite3` package.
+
 ### [1.32.1] - 2026-06-18
 
 #### Fixed
@@ -3969,6 +3975,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.32.2] - 2026-06-18
+
+#### セキュリティ
+
+- **release audit が修正済み native SQLite bundle を解決するようになりました** — `Microsoft.Data.Sqlite` と `SQLitePCLRaw.bundle_e_sqlite3` graph を修正済み version に固定し、GitHub Actions の NuGet vulnerability audit が脆弱な `SQLitePCLRaw.lib.e_sqlite3` package を解決しないようにしました。
+
 ### [1.32.1] - 2026-06-18
 
 #### 修正
@@ -7909,7 +7921,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.2...HEAD
+[1.32.2]: https://github.com/Widthdom/CodeIndex/compare/v1.32.1...v1.32.2
 [1.32.1]: https://github.com/Widthdom/CodeIndex/compare/v1.32.0...v1.32.1
 [1.32.0]: https://github.com/Widthdom/CodeIndex/compare/v1.31.2...v1.32.0
 [1.31.2]: https://github.com/Widthdom/CodeIndex/compare/v1.31.1...v1.31.2
