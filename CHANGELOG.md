@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.32.3] - 2026-06-19
+
+#### Fixed
+
+- **MCP `batch_query` now keeps tight truncated responses under budget** — when result and truncated-query metadata compaction still leaves a response slightly too large, `batch_query` now shortens only the human summary before returning so the structured response remains within `maxResponseBytes`.
+
 ### [1.32.2] - 2026-06-18
 
 #### Security
@@ -3975,6 +3981,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.32.3] - 2026-06-19
+
+#### 修正
+
+- **MCP `batch_query` の tight な truncated response が budget 内に収まるようになりました** — result と truncated-query metadata を compact しても response がわずかに大きい場合、`batch_query` は structured response を保ったまま human summary だけを短縮し、`maxResponseBytes` 内で返すようになりました。
+
 ### [1.32.2] - 2026-06-18
 
 #### セキュリティ
@@ -7921,7 +7933,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.32.3...HEAD
+[1.32.3]: https://github.com/Widthdom/CodeIndex/compare/v1.32.2...v1.32.3
 [1.32.2]: https://github.com/Widthdom/CodeIndex/compare/v1.32.1...v1.32.2
 [1.32.1]: https://github.com/Widthdom/CodeIndex/compare/v1.32.0...v1.32.1
 [1.32.0]: https://github.com/Widthdom/CodeIndex/compare/v1.31.2...v1.32.0
