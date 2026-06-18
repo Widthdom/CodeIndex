@@ -2132,9 +2132,10 @@ public partial class QueryCommandRunnerTests
 
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+        var names = languages.Select(lang => lang.GetProperty("lang").GetString()).ToList();
 
         Assert.NotEmpty(languages);
-        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "groovy");
+        Assert.DoesNotContain("groovy", names);
         Assert.All(languages, lang =>
         {
             Assert.False(lang.GetProperty("symbol_extraction").GetBoolean());
