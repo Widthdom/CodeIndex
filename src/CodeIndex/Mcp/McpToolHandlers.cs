@@ -4240,6 +4240,7 @@ public partial class McpServer
 
         JsonObject payload;
         string summary;
+        var compactSummary = false;
         while (true)
         {
             payload = BuildPayload();
@@ -4251,6 +4252,8 @@ public partial class McpServer
             }
 
             summary = BuildSummary();
+            if (compactSummary)
+                summary = $"Response truncated at {responseByteLimit} bytes.";
             estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()), responseByteLimit);
             if (estimatedResponseBytes <= responseByteLimit)
                 break;
@@ -4285,6 +4288,11 @@ public partial class McpServer
             }
             if (CompactBatchTruncatedQueryArgsSummaries(truncatedQueries))
                 continue;
+            if (truncated && !compactSummary)
+            {
+                compactSummary = true;
+                continue;
+            }
             break;
         }
 

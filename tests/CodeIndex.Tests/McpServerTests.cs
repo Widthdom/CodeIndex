@@ -9877,14 +9877,15 @@ public class McpServerTests : IDisposable
     public void ToolsCall_BatchQuery_CompactsTruncatedMetadataToHonorTightResponseBudget()
     {
         InsertIndexedFile("src/large-per-call-tight.cs", "csharp", "// " + new string('x', 5000));
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"maxResponseBytes":930,"queries":[{"slotId":"first","tool":"ping"},{"slotId":"second","tool":"excerpt","arguments":{"path":"src/large-per-call-tight.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"maxResponseBytes":900,"queries":[{"slotId":"first","tool":"ping"},{"slotId":"second","tool":"excerpt","arguments":{"path":"src/large-per-call-tight.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
 
         var response = _server.HandleMessage(request)!;
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.True(structured["truncated"]!.GetValue<bool>(), response.ToJsonString());
-        Assert.Equal(930, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
-        Assert.True(Encoding.UTF8.GetByteCount(response.ToJsonString()) <= 930, response.ToJsonString());
+        Assert.Equal(900, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+        Assert.True(Encoding.UTF8.GetByteCount(response.ToJsonString()) <= 900, response.ToJsonString());
+        Assert.Equal("Response truncated at 900 bytes.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
 
         var truncatedQuery = Assert.Single(structured["truncated_queries"]!.AsArray());
         Assert.NotNull(truncatedQuery!["slot_id"]);
