@@ -1533,6 +1533,43 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesList_CursorReturnsDeepPage_Issue3781()
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var transaction = writer.BeginTransaction();
+        for (var i = 0; i < 450; i++)
+        {
+            writer.UpsertFile(new FileRecord
+            {
+                Path = $"zz/deep-{i:D5}.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = $"deep-{i}",
+            });
+        }
+        transaction.Commit();
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = "200",
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var resources = response["result"]!["resources"]!.AsArray();
+        Assert.Equal("400", response["result"]!["nextCursor"]!.GetValue<string>());
+        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00000.cs");
+        Assert.Contains(resources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
+    }
+
+    [Fact]
     public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
     {
         var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";

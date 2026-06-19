@@ -2164,20 +2164,10 @@ public partial class McpServer : IDisposable
             }
         }
 
-        int listLimit;
-        try
-        {
-            listLimit = checked(offset + pageSize + 1);
-        }
-        catch (OverflowException)
-        {
-            return CreateResourcesListCursorError(id);
-        }
-
         return WithDbReader(id, args: null, reader =>
         {
-            var files = reader.ListFiles(limit: listLimit);
-            var page = files.Skip(offset).Take(pageSize).ToArray();
+            var files = reader.ListFiles(limit: pageSize + 1, offset: offset);
+            var page = files.Take(pageSize).ToArray();
             var resources = new JsonArray();
             foreach (var file in page)
             {
@@ -2199,7 +2189,7 @@ public partial class McpServer : IDisposable
                 ["resources"] = resources,
             };
             var nextOffset = offset + pageSize;
-            if (nextOffset <= MaxMcpPaginationOffset && nextOffset < files.Count)
+            if (nextOffset <= MaxMcpPaginationOffset && files.Count > pageSize)
                 result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
             return CreateSuccessResponse(true, id, result);
         });
