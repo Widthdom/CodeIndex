@@ -143,7 +143,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         _requestLogger = requestLogger;
         _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
             ? null
-            : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
+            : McpAuthenticationLimits.HashTokenToArray(bearerToken);
         _endpoint = $"http://{host}:{boundPort}/";
         _acceptLoop = BackgroundTaskObserver.Run(
             token => AcceptLoopAsync(token),
@@ -872,8 +872,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         // FixedTimeEquals で比較する。リクエスト毎に設定トークンをハッシュすると SHA-256 の
         // ブロック処理量で設定トークン長が漏れるため、設定側を事前計算しておく。
         // salt 無しは「同じ長さの 32 byte 配列の定数時間比較」が目的だから。
-        Span<byte> providedHash = stackalloc byte[32];
-        SHA256.HashData(Encoding.UTF8.GetBytes(provided), providedHash);
+        Span<byte> providedHash = stackalloc byte[McpAuthenticationLimits.Sha256HashBytes];
+        McpAuthenticationLimits.HashToken(provided, providedHash);
         return CryptographicOperations.FixedTimeEquals(providedHash, _bearerTokenHash);
     }
 

@@ -2667,6 +2667,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void TokenAuthenticator_MaxLengthToken_AcceptsMatchingToken_Issue3798()
+    {
+        var token = new string('t', McpAuthenticationLimits.MaxTokenCharacters);
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator(token));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"""
+            + JsonSerializer.Serialize(token)
+            + "}}}")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_TokenSet_ReturnsTokenAuthenticator()
     {
         // When CDIDX_MCP_AUTH_TOKEN holds a non-whitespace value, the factory must produce a

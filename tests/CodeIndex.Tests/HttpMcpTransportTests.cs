@@ -918,6 +918,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerToken_AcceptsMaxLengthHeader_Issue3798()
+    {
+        var token = new string('t', McpAuthenticationLimits.MaxTokenCharacters);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_RejectsWrongToken()
     {
         // Verifies the rejection path covers the actual constant-time compare, not just the

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -47,6 +48,8 @@ public sealed record McpAuthenticationResult(McpCallerIdentity? Identity, string
 internal static class McpAuthenticationLimits
 {
     internal const int MaxTokenCharacters = 4096;
+    internal const int Sha256HashBytes = 32;
+    private const int StackTokenUtf8ByteThreshold = 1024;
     internal const string OversizedTokenFailureReason = "auth token mismatch";
 
     internal static bool IsTokenOversized(string? token)
@@ -68,6 +71,50 @@ internal static class McpAuthenticationLimits
 
     internal static string FormatTokenShapeError(string source)
         => $"{source} must be 1 to {MaxTokenCharacters} characters and must not contain whitespace or control characters.";
+
+    internal static byte[] HashTokenToArray(ReadOnlySpan<char> token)
+    {
+        var hash = new byte[Sha256HashBytes];
+        HashToken(token, hash);
+        return hash;
+    }
+
+    internal static void HashToken(ReadOnlySpan<char> token, Span<byte> destination)
+    {
+        if (destination.Length < Sha256HashBytes)
+            throw new ArgumentException($"Token hash destination must be at least {Sha256HashBytes} bytes.", nameof(destination));
+
+        var byteCount = Encoding.UTF8.GetByteCount(token);
+        if (byteCount <= StackTokenUtf8ByteThreshold)
+        {
+            Span<byte> stackBuffer = stackalloc byte[byteCount];
+            HashTokenUtf8(token, stackBuffer, destination);
+            return;
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        try
+        {
+            HashTokenUtf8(token, rented.AsSpan(0, byteCount), destination);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
+    }
+
+    private static void HashTokenUtf8(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination)
+    {
+        var bytesWritten = Encoding.UTF8.GetBytes(token, utf8Buffer);
+        try
+        {
+            SHA256.HashData(utf8Buffer[..bytesWritten], destination);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(utf8Buffer[..bytesWritten]);
+        }
+    }
 }
 
 /// <summary>
@@ -153,7 +200,7 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
     {
         if (!McpAuthenticationLimits.IsTokenShapeValid(expectedToken))
             throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(expectedToken));
-        _expectedTokenHash = SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken));
+        _expectedTokenHash = McpAuthenticationLimits.HashTokenToArray(expectedToken);
     }
 
     public McpAuthenticationResult Authenticate(JsonNode request)
@@ -185,7 +232,8 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
         // uniform; the wire response is "Unauthorized" either way.
         // 上限内の入力では、トークン未提示でも必ずハッシュ＋定数時間比較を走らせる。Deny 理由の
         // 選択は比較後に行い、stderr 用文字列だけ分岐させる（ワイヤ応答は常に "Unauthorized"）。
-        var presentedHash = SHA256.HashData(Encoding.UTF8.GetBytes(presented ?? string.Empty));
+        Span<byte> presentedHash = stackalloc byte[McpAuthenticationLimits.Sha256HashBytes];
+        McpAuthenticationLimits.HashToken(presented ?? string.Empty, presentedHash);
         var matches = CryptographicOperations.FixedTimeEquals(presentedHash, _expectedTokenHash);
 
         if (string.IsNullOrEmpty(presented))
