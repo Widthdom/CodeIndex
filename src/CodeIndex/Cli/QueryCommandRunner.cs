@@ -95,6 +95,9 @@ public static partial class QueryCommandRunner
     private const int SearchOriginFilterOverFetchFactor = 50;
     private const int SearchOriginFilterMaxCandidates = 10_000;
     private const int SearchOriginFilterMaxPages = 50;
+    private const int SearchEnvelopeMinCandidates = 200;
+    private const int SearchEnvelopeOverFetchFactor = 50;
+    private const int SearchEnvelopeMaxCandidates = 10_000;
     private const string HotspotsGroupedByNameKind = "name_kind";
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
@@ -399,6 +402,14 @@ public static partial class QueryCommandRunner
                 "--audit-scope is only supported with `cdidx search --recipe <name>`.",
                 GetUsageLineOrThrow("search"),
                 "Use `--audit-scope source` for the production-code default or `--audit-scope all` when intentionally auditing docs, tests, and recipe definitions.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.ShowExcluded && options.RecipeName == null)
+        {
+            WriteUsageError(
+                "--show-excluded is only supported with `cdidx search --recipe <name>`.",
+                GetUsageLineOrThrow("search"),
+                "Use it with a recipe run to include the effective scope and exclusion diagnostics in JSON output.");
             return CommandExitCodes.UsageError;
         }
         if ((options.IssueTitle != null || options.IssueLabels.Count > 0) && options.OutputFormat != OutputFormatIssueDrafts)
@@ -1150,6 +1161,18 @@ public static partial class QueryCommandRunner
             if (scope.ExcludePaths.Count > 0)
                 Console.WriteLine($"Excludes: {string.Join(", ", scope.ExcludePaths)}");
             Console.WriteLine($"Exclude tests: {scope.ExcludeTests.ToString().ToLowerInvariant()}");
+            if (scope.ExcludedDiagnostics is { Count: > 0 })
+            {
+                Console.WriteLine("Excluded diagnostics:");
+                foreach (var diagnostic in scope.ExcludedDiagnostics)
+                {
+                    var patterns = diagnostic.Patterns.Count == 0
+                        ? string.Empty
+                        : $" ({string.Join(", ", diagnostic.Patterns)})";
+                    Console.WriteLine($"  - {diagnostic.Reason}: applied={diagnostic.Applied.ToString().ToLowerInvariant()}{patterns}");
+                    Console.WriteLine($"    {diagnostic.Description}");
+                }
+            }
             Console.WriteLine();
             foreach (var queryResult in queryResults)
             {
@@ -1255,6 +1278,8 @@ public static partial class QueryCommandRunner
                 "Review the evidence paths and surrounding code before filing.",
                 exact,
                 rows.Count,
+                BuildSearchRecipeTopFiles(rows),
+                false,
                 null,
                 rows.Select(row => row.Compact).ToList());
             var drafts = rows.Count == 0
@@ -1294,7 +1319,7 @@ public static partial class QueryCommandRunner
             var exact = userExact || recipeQuery.ExactSubstring;
             var results = reader.Search(
                 recipeQuery.Query,
-                options.Limit,
+                FetchLimitForSearchEnvelope(options.Limit),
                 options.Lang,
                 false,
                 scope.PathPatterns,
@@ -1309,6 +1334,7 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
+            var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1318,7 +1344,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.FalsePositiveGuidance,
                 exact,
                 rows.Count,
-                rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
+                BuildSearchRecipeTopFiles(rows),
+                truncated,
+                truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
                 rows.Select(row => row.Compact).ToList()));
         }
 
@@ -1340,7 +1368,7 @@ public static partial class QueryCommandRunner
             var exact = userExact || recipeQuery.ExactSubstring;
             var results = reader.Search(
                 recipeQuery.Query,
-                options.Limit,
+                FetchLimitForSearchEnvelope(options.Limit),
                 options.Lang,
                 false,
                 scope.PathPatterns,
@@ -1355,6 +1383,7 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             total += rows.Count;
             queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1362,7 +1391,8 @@ public static partial class QueryCommandRunner
                 recipeQuery.Description,
                 rows.Count,
                 BuildSearchRecipeTopFiles(rows),
-                rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
+                truncated,
+                truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
                 rows.Select(row => new SearchRecipeCompactResultJsonResult(
                     row.Result.Path,
                     row.Result.Lang,
@@ -1398,7 +1428,42 @@ public static partial class QueryCommandRunner
             excludePaths,
             excludeTests,
             [.. recipe.DefaultPathPatterns],
-            [.. recipe.DefaultExcludePaths]);
+            [.. recipe.DefaultExcludePaths],
+            options.ShowExcluded ? BuildSearchRecipeExcludedDiagnostics(recipe, options, scopeName, excludeTests) : null);
+    }
+
+    private static List<SearchRecipeExcludedDiagnosticJsonResult> BuildSearchRecipeExcludedDiagnostics(
+        SearchAuditRecipe recipe,
+        QueryCommandOptions options,
+        string scopeName,
+        bool excludeTests)
+    {
+        var diagnostics = new List<SearchRecipeExcludedDiagnosticJsonResult>();
+        var sourceScope = string.Equals(scopeName, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase);
+        diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(
+            "recipe_default_path_patterns",
+            sourceScope && options.PathPatterns.Count == 0 && recipe.DefaultPathPatterns.Count > 0,
+            [.. recipe.DefaultPathPatterns],
+            "Default source-scope include patterns applied when a recipe runs without user --path filters."));
+        diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(
+            "recipe_default_exclude_paths",
+            sourceScope && recipe.DefaultExcludePaths.Count > 0,
+            [.. recipe.DefaultExcludePaths],
+            "Default source-scope exclusions suppress recipe definitions, tests, docs, changelog text, and agent/workflow metadata."));
+        if (options.ExcludePaths.Count > 0)
+        {
+            diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(
+                "user_exclude_paths",
+                true,
+                [.. options.ExcludePaths],
+                "User-provided --exclude-path filters are applied after recipe defaults."));
+        }
+        diagnostics.Add(new SearchRecipeExcludedDiagnosticJsonResult(
+            "exclude_tests",
+            excludeTests,
+            [],
+            "The test-file classifier is enabled for this recipe scope; exact excluded paths depend on indexed file metadata."));
+        return diagnostics;
     }
 
     private static void AddDistinct(List<string> target, IEnumerable<string> values)
@@ -1419,6 +1484,27 @@ public static partial class QueryCommandRunner
             .Take(10)
             .ToList();
 
+    private static int FetchLimitForSearchEnvelope(int limit)
+    {
+        if (limit >= int.MaxValue)
+            return int.MaxValue;
+        if (limit <= 0)
+            return 1;
+
+        var requested = (long)limit + 1;
+        var overFetched = requested * SearchEnvelopeOverFetchFactor;
+        var candidateLimit = Math.Max(SearchEnvelopeMinCandidates, Math.Max(requested, overFetched));
+        return (int)Math.Min(SearchEnvelopeMaxCandidates, Math.Min(int.MaxValue, candidateLimit));
+    }
+
+    private static bool TrimSearchRowsToRequestedLimit(List<SearchDisplayRow> rows, int limit)
+    {
+        if (rows.Count <= limit)
+            return false;
+        rows.RemoveRange(limit, rows.Count - limit);
+        return true;
+    }
+
     private static List<SearchNamedBatchQueryResultJsonResult> CollectSearchNamedBatchQueryResults(
         DbReader reader,
         QueryCommandOptions options,
@@ -1431,7 +1517,7 @@ public static partial class QueryCommandRunner
         {
             var results = reader.Search(
                 namedQuery.Query,
-                options.Limit,
+                FetchLimitForSearchEnvelope(options.Limit),
                 options.Lang,
                 options.RawFts,
                 options.PathPatterns,
@@ -1445,6 +1531,7 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
             var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
+            var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             AttachExactSubstringHint(
                 rows.Select(row => row.Compact),
                 SearchQueryAdvisor.BuildExactSubstringHint(namedQuery.Query, options.RawFts, userExact, options.Prefix));
@@ -1454,6 +1541,9 @@ public static partial class QueryCommandRunner
                 namedQuery.Query,
                 userExact,
                 rows.Count,
+                BuildSearchRecipeTopFiles(rows),
+                truncated,
+                null,
                 rows.Select(row => row.Compact).ToList()));
         }
 
@@ -7467,6 +7557,7 @@ public static partial class QueryCommandRunner
         string? recipeName = null;
         var includeRecipeQueries = new List<string>();
         var excludeRecipeQueries = new List<string>();
+        bool showExcluded = false;
         bool listRecipes = false;
         string? openIssuesPath = null;
         string auditScope = SearchAuditRecipes.DefaultAuditScope;
@@ -7814,6 +7905,9 @@ public static partial class QueryCommandRunner
                         AddRecipeQuerySelectors("--exclude-query", excludeQueryValue!, excludeRecipeQueries);
                     else
                         AddParseError(excludeQueryError!);
+                    break;
+                case "--show-excluded":
+                    showExcluded = true;
                     break;
                 case "--list-recipes":
                     listRecipes = true;
@@ -8603,6 +8697,7 @@ public static partial class QueryCommandRunner
             RecipeName = recipeName,
             IncludeRecipeQueries = includeRecipeQueries,
             ExcludeRecipeQueries = excludeRecipeQueries,
+            ShowExcluded = showExcluded,
             ListRecipes = listRecipes,
             OpenIssuesPath = openIssuesPath,
             AuditScope = auditScope,
@@ -12057,6 +12152,7 @@ public sealed class QueryCommandOptions
     public string? RecipeName { get; init; }
     public List<string> IncludeRecipeQueries { get; init; } = [];
     public List<string> ExcludeRecipeQueries { get; init; } = [];
+    public bool ShowExcluded { get; init; }
     public bool ListRecipes { get; init; }
     public string? OpenIssuesPath { get; init; }
     public string AuditScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;

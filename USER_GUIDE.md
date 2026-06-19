@@ -948,6 +948,7 @@ cdidx search --list-recipes                             # show reusable audit re
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
+cdidx search --recipe risky-code --show-excluded --json      # include recipe scope/exclusion diagnostics
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON with next_cursor
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # named ad hoc batch with compact snippets
@@ -986,20 +987,30 @@ The MCP `search` tool exposes the same mode as camelCase arguments:
 Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
 recommended labels, query text, exact-match mode, and false-positive guidance.
+Built-in recipes include `risky-code`, `json-parse-apis`,
+`dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, and
+the opt-in broad `broad-token-audit` recipe.
 `--recipe <name>` applies normal search filters such as `--lang`, `--path`,
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
-Recipe runs support text output, `--json` / `--format json`, and
-`--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
-export formats and `--json=array` are rejected for recipe modes because recipe
-output is grouped by query or list metadata.
+Recipe and named-query JSON include per-query counts, `top_files`, and
+`truncated` metadata. Recipe JSON and compact output also return `next_cursor`
+when a single selected recipe query is truncated. Add `--show-excluded` to a
+recipe run when you need the effective path scope and exclusion diagnostics in
+JSON output.
+Recipe runs support text output, `--json` / `--format json`, `--format compact`,
+and `--format issue-drafts`; `--list-recipes` supports text or JSON. Other
+search export formats and `--json=array` are rejected for recipe modes because
+recipe output is grouped by query or list metadata.
 The MCP `search` tool exposes the same recipe surface with
 `{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
-execution. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files separated
-by the platform path separator to add configured recipe sources; each file may
-be a recipe array or `{ "recipes": [...] }`, and invalid sources are reported as
-bounded `recipe_source_diagnostics`.
+execution. MCP recipe runs apply the same default source scope as the CLI; pass
+`{"auditScope":"all"}` when intentionally auditing docs, tests, changelog, and
+recipe definitions. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files
+separated by the platform path separator to add configured recipe sources; each
+file may be a recipe array or `{ "recipes": [...] }`, and invalid sources are
+reported as bounded `recipe_source_diagnostics`.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
 metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -1351,10 +1362,11 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `xml-parser-security`, or `filesystem-traversal`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>` | Fetch the next page for one selected recipe child query. Use the `next_cursor` returned by recipe JSON or compact output. |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | Choose recipe path scope. `source` is the default and suppresses tests, docs, changelog text, and recipe definitions using recipe metadata; `all` intentionally searches every indexed path unless other filters exclude it. JSON recipe output reports the effective scope, path filters, and exclusions. |
+| `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
 | `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, supported formats, filter support, and limit semantics. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
@@ -3449,6 +3461,7 @@ cdidx search --list-recipes                             # 再利用可能な aud
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
+cdidx search --recipe risky-code --show-excluded --json      # recipe scope / exclusion diagnostics を含める
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON と next_cursor
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # 名前付き ad hoc batch と compact snippet
@@ -3481,21 +3494,30 @@ MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requi
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
-`--list-recipes` は利用可能な名前、説明、推奨 label、query text、exact-match mode、
-false-positive guidance を表示します。`--recipe <name>` は `--lang`、`--path`、
-`--exclude-path`、`--exclude-tests`、`--limit`、snippet control など通常の search filter
-を recipe 内の各 query に適用します。`--json` 併用時、recipe run は通常の
-newline-delimited search stream ではなく、recipe query ごとに grouped された 1 つの
-aggregate JSON payload を出力します。
-recipe run が対応する形式は text output、`--json` / `--format json`、
+組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
+`filesystem-traversal`、`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
+説明、推奨 label、query text、exact-match mode、false-positive guidance を表示します。
+`--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
+`--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
+`--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
+query ごとに grouped された 1 つの aggregate JSON payload を出力し、query ごとの count、
+`top_files`、`truncated` metadata を含みます。named-query JSON も count、`top_files`、
+`truncated` の per-query metadata を返します。recipe の JSON / compact output は、単一の
+recipe query が truncated された場合に `next_cursor` も返します。`--format compact` は
+summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
+を返します。
+`--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
+recipe run が対応する形式は text output、`--json` / `--format json`、`--format compact`、
 `--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
 MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
-`{"recipe":"risky-code"}` で実行できます。`CDIDX_SEARCH_RECIPE_PATHS` に
-platform path separator 区切りの JSON file を指定すると、設定済み recipe source を
-追加できます。各 file は recipe array または `{ "recipes": [...] }` を受け付け、
-不正な source は bounded な `recipe_source_diagnostics` として報告されます。
+`{"recipe":"risky-code"}` で実行できます。MCP の recipe run も CLI と同じ既定の source
+scope を適用します。docs、tests、changelog、recipe definitions を意図的に audit する場合は
+`{"auditScope":"all"}` を指定してください。`CDIDX_SEARCH_RECIPE_PATHS` に platform path
+separator 区切りの JSON file を指定すると、設定済み recipe source を追加できます。各 file は
+recipe array または `{ "recipes": [...] }` を受け付け、不正な source は bounded な
+`recipe_source_diagnostics` として報告されます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
@@ -3843,10 +3865,11 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、`filesystem-traversal` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>` | 選択した recipe child query の次ページを取得する。recipe JSON または compact output が返す `next_cursor` を指定する。 |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | recipe の path scope を選ぶ。既定の `source` は recipe metadata により tests、docs、changelog text、recipe 定義を抑制する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。Recipe の JSON 出力には有効な scope、path filter、exclusion が含まれる。 |
+| `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
 | `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、対応 format、filter support、limit semantics 付きで一覧表示する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |

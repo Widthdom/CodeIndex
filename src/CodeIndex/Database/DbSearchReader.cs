@@ -1218,13 +1218,21 @@ public partial class DbReader
         var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
         var deduped = new List<SearchResult>();
+        SearchResult? previousKept = null;
+        var lastRawNextOffset = 0;
         foreach (var r in results)
         {
+            lastRawNextOffset = r.NextOffset;
             if (!AddSearchResultDedupCoverage(r, matchContext, keptMatchLines, keptIntervals))
                 continue;
 
+            if (previousKept != null)
+                previousKept.NextOffset = Math.Max(previousKept.NextOffset, r.NextOffset - 1);
             deduped.Add(r);
+            previousKept = r;
         }
+        if (previousKept != null)
+            previousKept.NextOffset = Math.Max(previousKept.NextOffset, lastRawNextOffset);
         return deduped;
     }
 

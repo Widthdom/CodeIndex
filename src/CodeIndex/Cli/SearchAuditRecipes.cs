@@ -20,10 +20,26 @@ internal static class SearchAuditRecipes
     private const int MaxExternalLabelLength = 64;
     private const int MaxRecipeDiagnosticCount = 64;
     private const int MaxRecipeDiagnosticLength = 512;
+    private static readonly string[] DefaultSourcePathPatterns = ["src/**"];
+    private static readonly string[] DefaultSourceExcludePaths =
+    [
+        "src/CodeIndex/Cli/SearchAuditRecipes.cs",
+        "tests/**",
+        "docs/**",
+        "CHANGELOG.md",
+        "changelog.d/**",
+        "README.md",
+        "USER_GUIDE.md",
+        "DEVELOPER_GUIDE.md",
+        "TESTING_GUIDE.md",
+        "AGENT_GUIDE.md",
+        ".codex/**",
+        ".github/**"
+    ];
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
     [
-        new(
+        SourceScopedRecipe(
             "risky-code",
             "Reusable audit searches for risky code patterns that often need manual triage.",
             [
@@ -145,31 +161,152 @@ internal static class SearchAuditRecipes
                     ExactSubstring: false),
                 new(
                     "token-term",
-                    "token",
-                    "Find token-related code paths that may need lexical-token versus auth-token triage.",
+                    "auth token",
+                    "Find auth-token contexts without the broad parser, syntax, LSP, and cancellation-token noise from the bare token term.",
                     ["audit", "security"],
-                    "False positives include parser/tokenizer code, syntax tokens, and non-auth identifiers.",
+                    "False positives include documentation and tests; use the broad-token-audit recipe or an ad hoc `token` search when you intentionally need lexical-token coverage.",
+                    ExactSubstring: false)
+            ]),
+        SourceScopedRecipe(
+            "json-parse-apis",
+            "Audit JSON parse and deserialize API families that may need payload bounds, streaming, or serializer-option review.",
+            [
+                new(
+                    "json-document-parse",
+                    "JsonDocument.Parse",
+                    "Find DOM parsing via JsonDocument.Parse that may need input-size limits or streaming alternatives.",
+                    ["audit", "bug"],
+                    "False positives include deliberately bounded callers and parsing of already-small generated payloads."),
+                new(
+                    "json-node-parse",
+                    "JsonNode.Parse",
+                    "Find mutable DOM parsing via JsonNode.Parse that may need input-size limits, depth limits, or streaming alternatives.",
+                    ["audit", "bug"],
+                    "False positives include tests, bounded configuration files, and already-size-limited payloads."),
+                new(
+                    "json-serializer-deserialize",
+                    "JsonSerializer.Deserialize",
+                    "Find serializer materialization paths that may need payload bounds, streaming, or explicit JsonSerializerOptions review.",
+                    ["audit", "bug"],
+                    "False positives include bounded local files, test fixtures, and deserialization of tiny protocol envelopes."),
+                new(
+                    "json-async-deserialize",
+                    "DeserializeAsyncEnumerable",
+                    "Find streaming JSON deserialization paths that may need cancellation, item limits, or backpressure review.",
+                    ["audit", "performance"],
+                    "False positives include already-cancelable readers with explicit item budgets.")
+            ]),
+        SourceScopedRecipe(
+            "dotnet-risk-patterns",
+            "Audit common .NET reliability and security patterns that regularly need manual review.",
+            [
+                new(
+                    "sqlite-addwithvalue",
+                    "AddWithValue",
+                    "Find SQLite parameter binding that may need explicit DbType or size review instead of AddWithValue inference.",
+                    ["audit", "bug"],
+                    "False positives include test-only SQL snippets and values whose inferred SQLite type is intentionally unconstrained."),
+                new(
+                    "regex-construction",
+                    "new Regex",
+                    "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
+                    ["audit", "performance"],
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                new(
+                    "cancellation-token-none",
+                    "CancellationToken.None",
+                    "Find production paths that ignore caller cancellation and may need a propagated token.",
+                    ["audit", "bug"],
+                    "False positives include intentionally detached background work and APIs without a meaningful caller token."),
+                new(
+                    "sync-over-async",
+                    "GetAwaiter().GetResult",
+                    "Find sync-over-async waits that may deadlock or hide cancellation and timeout behavior.",
+                    ["audit", "bug"],
+                    "False positives include process-exit boundaries and test helpers that intentionally bridge sync APIs.")
+            ]),
+        SourceScopedRecipe(
+            "xml-parser-security",
+            "Audit XML parser APIs and DTD/entity settings for XXE and external-resolution regressions.",
+            [
+                new(
+                    "xml-reader-settings",
+                    "XmlReaderSettings",
+                    "Find XML reader settings that should keep DtdProcessing disabled or ignored and avoid external entity resolution.",
+                    ["audit", "security"],
+                    "Expected safe settings include `DtdProcessing.Ignore` or `Prohibit` and no external resolver; tests and safe fixture parsers may be false positives."),
+                new(
+                    "dtd-processing",
+                    "DtdProcessing",
+                    "Find DTD handling changes that may re-enable entity expansion or unsafe external document access.",
+                    ["audit", "security"],
+                    "Review for `Ignore` or `Prohibit`; `Parse` requires strong justification, bounded input, and resolver controls."),
+                new(
+                    "xml-resolver",
+                    "XmlResolver",
+                    "Find XML resolver configuration that may allow network or filesystem entity resolution.",
+                    ["audit", "security"],
+                    "Safe paths usually set the resolver to null or use a tightly bounded resolver.")
+            ]),
+        SourceScopedRecipe(
+            "filesystem-traversal",
+            "Audit directory traversal and enumeration APIs for cancellation, budget, long-path, and exception-taxonomy behavior.",
+            [
+                new(
+                    "enumerate-files",
+                    "Directory.EnumerateFiles",
+                    "Find lazy file enumeration paths that may need cancellation checks, traversal budgets, long-path handling, and permission error taxonomy.",
+                    ["audit", "performance", "security"],
+                    "False positives include tiny fixed directories and traversal already bounded by project-root containment."),
+                new(
+                    "enumerate-directories",
+                    "Directory.EnumerateDirectories",
+                    "Find directory enumeration paths that may need depth limits, cancellation, symlink/reparse handling, and permission recovery.",
+                    ["audit", "performance", "security"],
+                    "False positives include shallow temp fixture setup and already-budgeted traversal helpers."),
+                new(
+                    "enumerate-file-system-entries",
+                    "Directory.EnumerateFileSystemEntries",
+                    "Find broad filesystem entry traversal that may need explicit exception handling and pruning policy.",
+                    ["audit", "performance", "security"],
+                    "False positives include isolated test cleanup and known-small directories."),
+                new(
+                    "enumeration-options",
+                    "EnumerationOptions",
+                    "Find traversal option configuration for recurse behavior, inaccessible paths, attributes, and reparse-point policy.",
+                    ["audit", "performance", "security"],
+                    "Review option combinations against cancellation, budget, long-path, and permission behavior.")
+            ]),
+        AllScopedRecipe(
+            "broad-token-audit",
+            "Opt-in broad token search for audits that intentionally need lexical, parser, LSP, cancellation, and auth-token coverage.",
+            [
+                new(
+                    "token-term-broad",
+                    "token",
+                    "Find every token mention when a broad token audit is explicitly requested.",
+                    ["audit", "security"],
+                    "This intentionally includes parser/tokenizer code, syntax tokens, LSP tokens, cancellation tokens, docs, and tests.",
                     ExactSubstring: false)
             ])
-        {
-            DefaultPathPatterns = ["src/**"],
-            DefaultExcludePaths =
-            [
-                "src/CodeIndex/Cli/SearchAuditRecipes.cs",
-                "tests/**",
-                "docs/**",
-                "CHANGELOG.md",
-                "changelog.d/**",
-                "README.md",
-                "USER_GUIDE.md",
-                "DEVELOPER_GUIDE.md",
-                "TESTING_GUIDE.md",
-                "AGENT_GUIDE.md",
-                ".codex/**",
-                ".github/**"
-            ]
-        }
     ];
+
+    private static SearchAuditRecipe SourceScopedRecipe(
+        string name,
+        string description,
+        List<SearchAuditRecipeQuery> queries) => new(name, description, queries)
+        {
+            DefaultPathPatterns = [.. DefaultSourcePathPatterns],
+            DefaultExcludePaths = [.. DefaultSourceExcludePaths],
+        };
+
+    private static SearchAuditRecipe AllScopedRecipe(
+        string name,
+        string description,
+        List<SearchAuditRecipeQuery> queries) => new(name, description, queries)
+        {
+            DefaultScope = AllAuditScope,
+        };
 
     internal static IReadOnlyList<SearchAuditRecipe> All => Load().Recipes;
 
@@ -561,6 +698,9 @@ internal sealed record SearchNamedBatchQueryResultJsonResult(
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
 
 internal sealed record SearchRecipeQueryResultJsonResult(
@@ -571,6 +711,8 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
+    [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
 
@@ -588,6 +730,7 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
+    [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<SearchRecipeCompactResultJsonResult> Results);
 
@@ -639,4 +782,13 @@ internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
     [property: JsonPropertyName("recipe_default_path_patterns")] List<string> RecipeDefaultPathPatterns,
-    [property: JsonPropertyName("recipe_default_exclude_paths")] List<string> RecipeDefaultExcludePaths);
+    [property: JsonPropertyName("recipe_default_exclude_paths")] List<string> RecipeDefaultExcludePaths,
+    [property: JsonPropertyName("excluded_diagnostics")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<SearchRecipeExcludedDiagnosticJsonResult>? ExcludedDiagnostics);
+
+internal sealed record SearchRecipeExcludedDiagnosticJsonResult(
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("applied")] bool Applied,
+    [property: JsonPropertyName("patterns")] List<string> Patterns,
+    [property: JsonPropertyName("description")] string Description);

@@ -4884,6 +4884,9 @@ public class McpServerTests : IDisposable
         Assert.True(structured["count"]!.GetValue<int>() >= 1);
         var recipes = structured["recipes"]!.AsArray();
         var risky = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "risky-code")!;
+        Assert.Equal("source", risky["default_scope"]!.GetValue<string>());
+        Assert.Contains(risky["default_path_patterns"]!.AsArray(), path => path!.GetValue<string>() == "src/**");
+        Assert.Contains(risky["default_exclude_paths"]!.AsArray(), path => path!.GetValue<string>() == "tests/**");
         Assert.Contains(risky["queries"]!.AsArray(), query => query!["name"]!.GetValue<string>() == "unbounded-json-parse");
     }
 
@@ -4904,6 +4907,56 @@ public class McpServerTests : IDisposable
             .Single(query => query!["name"]!.GetValue<string>() == "unbounded-json-parse")!;
         Assert.Equal(1, jsonParseQuery["count"]!.GetValue<int>());
         Assert.Equal("src/json.cs", jsonParseQuery["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_RunRecipeAppliesDefaultSourceScopeAndAuditScopeAll_Issue3714()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        InsertIndexedFile("src/json.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
+        InsertIndexedFile("src/json-extra.cs", "csharp", "var doc = JsonDocument.Parse(otherPayload);\n");
+        InsertIndexedFile("docs/json.md", "markdown", "Document JsonDocument.Parse usage.\n");
+        InsertIndexedFile("tests/JsonTests.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
+
+        var sourceRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"json-parse-apis","limit":1}}}""")!;
+        var sourceResponse = _server.HandleMessage(sourceRequest)!;
+
+        Assert.Null(sourceResponse["error"]);
+        var sourceStructured = sourceResponse["result"]!["structuredContent"]!;
+        var sourceQuery = sourceStructured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "json-document-parse")!;
+        var sourcePaths = sourceQuery["results"]!.AsArray()
+            .Select(result => result!["path"]!.GetValue<string>())
+            .ToList();
+
+        Assert.Equal("source", sourceStructured["audit_scope"]!.GetValue<string>());
+        Assert.Equal("src/**", sourceStructured["path"]!.GetValue<string>());
+        Assert.Contains(sourceStructured["excludePaths"]!.AsArray(), path => path!.GetValue<string>() == "tests/**");
+        Assert.True(sourceStructured["excludeTests"]!.GetValue<bool>());
+        var sourcePath = Assert.Single(sourcePaths);
+        Assert.StartsWith("src/json", sourcePath, StringComparison.Ordinal);
+        Assert.Equal(1, sourceQuery["count"]!.GetValue<int>());
+        Assert.True(sourceQuery["truncated"]!.GetValue<bool>());
+        Assert.Equal(sourcePath, sourceQuery["top_files"]![0]!["path"]!.GetValue<string>());
+
+        var allRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"json-parse-apis","auditScope":"all","limit":10}}}""")!;
+        var allResponse = _server.HandleMessage(allRequest)!;
+
+        Assert.Null(allResponse["error"]);
+        var allStructured = allResponse["result"]!["structuredContent"]!;
+        var allQuery = allStructured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "json-document-parse")!;
+        var allPaths = allQuery["results"]!.AsArray()
+            .Select(result => result!["path"]!.GetValue<string>())
+            .ToList();
+
+        Assert.Equal("all", allStructured["audit_scope"]!.GetValue<string>());
+        Assert.Null(allStructured["path"]);
+        Assert.False(allStructured["excludeTests"]!.GetValue<bool>());
+        Assert.Contains("src/json.cs", allPaths);
+        Assert.Contains("docs/json.md", allPaths);
+        Assert.Contains("tests/JsonTests.cs", allPaths);
     }
 
     [Fact]

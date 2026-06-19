@@ -874,7 +874,7 @@ public partial class McpServer
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
-                "followSymlinks" or "recipe" => "string",
+                "followSymlinks" or "recipe" or "auditScope" => "string",
             "minEntrypointConfidence" => "number",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
@@ -1092,7 +1092,24 @@ public partial class McpServer
         return array;
     }
 
+    private const int SearchEnvelopeMinCandidates = 200;
+    private const int SearchEnvelopeOverFetchFactor = 50;
+    private const int SearchEnvelopeMaxCandidates = 10_000;
+
     private static int FetchLimitForEnvelope(int limit) => limit >= int.MaxValue ? int.MaxValue : limit + 1;
+
+    private static int FetchLimitForSearchRecipeEnvelope(int limit)
+    {
+        if (limit >= int.MaxValue)
+            return int.MaxValue;
+        if (limit <= 0)
+            return 1;
+
+        var requested = (long)limit + 1;
+        var overFetched = requested * SearchEnvelopeOverFetchFactor;
+        var candidateLimit = Math.Max(SearchEnvelopeMinCandidates, Math.Max(requested, overFetched));
+        return (int)Math.Min(SearchEnvelopeMaxCandidates, Math.Min(int.MaxValue, candidateLimit));
+    }
 
     private static bool TrimToRequestedLimit<T>(List<T> results, int limit)
     {
@@ -1674,6 +1691,9 @@ public partial class McpServer
             return ExecuteSearchRecipe(id, args, recipeName.Trim());
         }
 
+        if (args?["auditScope"] is not null)
+            return CreateToolErrorResponse(id, "'auditScope' is only supported with recipe execution.");
+
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > QueryLimits.MaxQueryLength)
@@ -1871,6 +1891,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        if (!TryResolveMcpRecipeAuditScope(args, recipe, ref pathPatterns, excludePaths, ref excludeTests, out var auditScope, out var auditScopeError))
+            return CreateToolErrorResponse(id, auditScopeError!);
         if (!TryReadSinceArgument(args, out var since, out var sinceError))
             return CreateToolErrorResponse(id, sinceError!);
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
@@ -1899,7 +1921,7 @@ public partial class McpServer
                 {
                     results = reader.Search(
                         recipeQuery.Query,
-                        limit,
+                        FetchLimitForSearchRecipeEnvelope(limit),
                         lang,
                         false,
                         pathPatterns,
@@ -1925,6 +1947,7 @@ public partial class McpServer
                 var compactResults = SearchSnippetFormatter
                     .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
                     .ToList();
+                var truncated = TrimToRequestedLimit(compactResults, limit);
                 foreach (var compact in compactResults)
                     SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawFts: false);
                 total += compactResults.Count;
@@ -1937,6 +1960,8 @@ public partial class McpServer
                     ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
                     ["exact_substring"] = exact,
                     ["count"] = compactResults.Count,
+                    ["top_files"] = BuildTopFileHistogram(compactResults, result => result.Path),
+                    ["truncated"] = truncated,
                     ["results"] = ToJsonArray(compactResults)
                 });
             }
@@ -1950,7 +1975,9 @@ public partial class McpServer
                 ["snippetLines"] = snippetLines,
                 ["maxLineWidth"] = maxLineWidth,
                 ["lang"] = lang,
+                ["audit_scope"] = auditScope,
                 ["path"] = PathEcho(pathPatterns),
+                ["excludePaths"] = PathEcho(excludePaths),
                 ["excludeTests"] = excludeTests,
                 ["queries"] = queryResults
             };
@@ -1964,6 +1991,48 @@ public partial class McpServer
         });
     }
 
+    private static bool TryResolveMcpRecipeAuditScope(
+        JsonNode? args,
+        SearchAuditRecipe recipe,
+        ref List<string>? pathPatterns,
+        List<string> excludePaths,
+        ref bool excludeTests,
+        out string auditScope,
+        out string? error)
+    {
+        var requestedScope = args?["auditScope"]?.GetValue<string>();
+        auditScope = string.IsNullOrWhiteSpace(requestedScope)
+            ? recipe.DefaultScope
+            : requestedScope.Trim();
+        error = null;
+
+        if (!string.Equals(auditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.Ordinal)
+            && !string.Equals(auditScope, SearchAuditRecipes.AllAuditScope, StringComparison.Ordinal))
+        {
+            error = "'auditScope' must be either 'source' or 'all'.";
+            return false;
+        }
+
+        if (string.Equals(auditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.Ordinal))
+        {
+            if ((pathPatterns is null || pathPatterns.Count == 0) && recipe.DefaultPathPatterns.Count > 0)
+                pathPatterns = [.. recipe.DefaultPathPatterns];
+            AddDistinct(excludePaths, recipe.DefaultExcludePaths);
+            excludeTests = true;
+        }
+
+        return true;
+    }
+
+    private static void AddDistinct(List<string> target, IEnumerable<string> values)
+    {
+        foreach (var value in values)
+        {
+            if (!target.Contains(value, StringComparer.Ordinal))
+                target.Add(value);
+        }
+    }
+
     private JsonArray ToSearchRecipeArray(IEnumerable<SearchAuditRecipe> recipes)
         => new(recipes.Select(recipe => ToSearchRecipeJson(recipe)).ToArray<JsonNode?>());
 
@@ -1973,6 +2042,9 @@ public partial class McpServer
             ["name"] = recipe.Name,
             ["description"] = recipe.Description,
             ["recommended_labels"] = ToJsonArray(recipe.RecommendedLabels),
+            ["default_scope"] = recipe.DefaultScope,
+            ["default_path_patterns"] = ToJsonArray(recipe.DefaultPathPatterns),
+            ["default_exclude_paths"] = ToJsonArray(recipe.DefaultExcludePaths),
             ["queries"] = new JsonArray(recipe.Queries.Select(query => new JsonObject
             {
                 ["name"] = query.Name,
