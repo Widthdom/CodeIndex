@@ -45,6 +45,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
     internal const string RequestQueueLimitRejection = "request_queue_limit";
     internal const string EventStreamLimitRejection = "event_stream_limit";
+    internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running on a loopback listener without bearer authentication; local processes can connect.";
     private const string BearerPrefix = "Bearer ";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
@@ -143,14 +144,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         });
         if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
             throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
+        IsLoopbackBind = IsLoopbackHost(host);
+        if (string.IsNullOrEmpty(bearerToken) && !IsLoopbackBind)
+            throw new ArgumentException("HTTP MCP requires bearer authentication when binding outside loopback.", nameof(bearerToken));
+        _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
+            ? null
+            : McpAuthenticationLimits.HashTokenToArray(bearerToken);
         _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
         _requestLogger = requestLogger;
-        _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
-            ? null
-            : McpAuthenticationLimits.HashTokenToArray(bearerToken);
         _endpoint = $"http://{host}:{boundPort}/";
         _acceptLoop = BackgroundTaskObserver.Run(
             token => AcceptLoopAsync(token),
@@ -164,6 +168,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     public string Endpoint => _endpoint;
 
     internal bool RequiresBearerToken => _bearerTokenHash is not null;
+
+    internal bool IsLoopbackBind { get; }
+
+    internal bool AuthDisabled => !RequiresBearerToken;
+
+    internal string? AuthDisabledWarning => AuthDisabled ? LoopbackAuthDisabledWarning : null;
 
     internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
@@ -223,14 +233,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var displayHost = host;
         var prefixHost = NormalizePrefixHost(host);
         var ipAddress = ResolveLoopbackIp(host);
+        var portWasEphemeral = port == 0;
 
         var isLoopback = ipAddress is not null && IPAddress.IsLoopback(ipAddress);
 
-        if (port == 0)
+        if (portWasEphemeral)
             port = FindFreePort(ipAddress ?? IPAddress.Loopback);
 
         var prefix = $"http://{prefixHost}:{port.ToString(CultureInfo.InvariantCulture)}/";
-        return new HttpListenSpec(prefix, displayHost, port, isLoopback);
+        return new HttpListenSpec(prefix, displayHost, port, isLoopback, portWasEphemeral);
     }
 
     private static (string host, int port) ParseHostPort(string spec)
@@ -279,6 +290,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
             return IPAddress.Loopback;
         return IPAddress.TryParse(host, out var ip) ? ip : null;
+    }
+
+    private static bool IsLoopbackHost(string host)
+    {
+        var ip = ResolveLoopbackIp(host);
+        return ip is not null && IPAddress.IsLoopback(ip);
+    }
+
+    internal static string FormatBindFailureDiagnostic(HttpListenSpec listenSpec, Exception exception)
+    {
+        var prefix = LimitRequestLogField(listenSpec.Prefix) ?? "<unknown>";
+        var message = LimitRequestLogField(exception.Message) ?? exception.GetType().Name;
+        var diagnostic = $"failed to bind HTTP listener on {prefix}: {message}";
+        if (listenSpec.PortWasEphemeral)
+        {
+            diagnostic += " The listener port came from a port-0 probe; another process may have claimed it before the final bind. Retry or choose an explicit --http-listen port.";
+        }
+        return diagnostic;
     }
 
     private static int FindFreePort(IPAddress address)
@@ -1021,7 +1050,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     }
 
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
-    internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback);
+    internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback, bool PortWasEphemeral);
 
     internal sealed record HttpRequestLogRecord(
         string CorrelationId,

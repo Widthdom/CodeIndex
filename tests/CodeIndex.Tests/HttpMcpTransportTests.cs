@@ -137,6 +137,11 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(0, root.GetProperty("http_concurrent_handler_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_request_queue_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_event_stream_rejection_count").GetInt64());
+        Assert.False(root.GetProperty("http_auth_required").GetBoolean());
+        Assert.True(root.GetProperty("http_auth_disabled").GetBoolean());
+        Assert.Equal(
+            HttpMcpTransport.LoopbackAuthDisabledWarning,
+            root.GetProperty("http_auth_disabled_warning").GetString());
         Assert.False(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
         Assert.Equal(0, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
@@ -447,6 +452,22 @@ public class HttpMcpTransportTests : IDisposable
         Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
         Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
         Assert.InRange(transport.MaxEventStreams, 1, HttpMcpTransport.MaxConfiguredEventStreams);
+        Assert.True(transport.IsLoopbackBind);
+        Assert.True(transport.AuthDisabled);
+        Assert.Equal(HttpMcpTransport.LoopbackAuthDisabledWarning, transport.AuthDisabledWarning);
+    }
+
+    [Fact]
+    public void HttpTransport_NonLoopbackWithoutBearerToken_ThrowsBeforeBinding_Issue3754()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(
+            "http://127.0.0.1:1/",
+            "0.0.0.0",
+            1,
+            bearerToken: null));
+
+        Assert.Contains("requires bearer authentication", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("bearerToken", ex.ParamName);
     }
 
     [Fact]
@@ -1072,7 +1093,35 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(spec.IsLoopback);
         Assert.Equal("127.0.0.1", spec.Host);
         Assert.True(spec.Port > 0);
+        Assert.True(spec.PortWasEphemeral);
         Assert.EndsWith("/", spec.Prefix);
+    }
+
+    [Fact]
+    public void ResolveListenSpec_ExplicitPort_IsNotEphemeral_Issue3754()
+    {
+        var spec = HttpMcpTransport.ResolveListenSpec("127.0.0.1:38080");
+
+        Assert.True(spec.IsLoopback);
+        Assert.Equal(38080, spec.Port);
+        Assert.False(spec.PortWasEphemeral);
+    }
+
+    [Fact]
+    public void FormatBindFailureDiagnostic_EphemeralPortMentionsRace_Issue3754()
+    {
+        var spec = new HttpMcpTransport.HttpListenSpec(
+            "http://127.0.0.1:45678/",
+            "127.0.0.1",
+            45678,
+            IsLoopback: true,
+            PortWasEphemeral: true);
+
+        var diagnostic = HttpMcpTransport.FormatBindFailureDiagnostic(spec, new IOException("Address already in use"));
+
+        Assert.Contains("port-0 probe", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("another process may have claimed it", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("--http-listen", diagnostic, StringComparison.Ordinal);
     }
 
     [Theory]

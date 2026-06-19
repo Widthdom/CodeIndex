@@ -1509,6 +1509,10 @@ public partial class McpServer : IDisposable
             result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
             result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
             result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;
+            result["http_auth_required"] = httpTransport.RequiresBearerToken;
+            result["http_auth_disabled"] = httpTransport.AuthDisabled;
+            if (!string.IsNullOrWhiteSpace(httpTransport.AuthDisabledWarning))
+                result["http_auth_disabled_warning"] = httpTransport.AuthDisabledWarning;
             result["http_response_cleanup_degraded"] = httpResponseCleanupDegraded;
             result["http_response_abort_cleanup_failure_count"] = httpTransport.ResponseAbortCleanupFailureCount;
             result["http_response_close_cleanup_failure_count"] = httpTransport.ResponseCloseCleanupFailureCount;

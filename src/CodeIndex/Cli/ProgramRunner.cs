@@ -2457,7 +2457,7 @@ internal static partial class ProgramRunner
         }
         catch (HttpListenerException ex)
         {
-            Console.Error.WriteLine($"Error: failed to bind HTTP listener on {resolved.Prefix}: {ex.Message}");
+            Console.Error.WriteLine($"Error: {HttpMcpTransport.FormatBindFailureDiagnostic(resolved, ex)}");
             return CommandExitCodes.UsageError;
         }
 
@@ -2471,10 +2471,16 @@ internal static partial class ProgramRunner
             // supervisord が socket を解放して再起動できるようにする（#1573）。
             using (McpServer.RegisterShutdownHandlers(cts))
             {
-                if (resolved.IsLoopback && bearerToken is null)
+                if (transport.AuthDisabledWarning is { } authWarning)
+                {
+                    Console.Error.WriteLine($"[cdidx-mcp] Warning: {authWarning} Set `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` to require bearer auth.");
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
+                    GlobalToolLog.Info("mcp_http_auth_disabled_warning loopback=true");
+                }
                 else
+                {
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
+                }
 
                 try
                 {
