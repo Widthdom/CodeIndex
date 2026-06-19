@@ -133,6 +133,10 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(root.GetProperty("http_event_stream_limit").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
+        Assert.True(root.GetProperty("http_request_queue_limit").GetInt32() >= 1);
+        Assert.Equal(0, root.GetProperty("http_concurrent_handler_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_request_queue_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_event_stream_rejection_count").GetInt64());
         Assert.False(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
         Assert.Equal(0, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
@@ -637,8 +641,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
-        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+        AssertTooManyRequests(second, HttpMcpTransport.RequestQueueLimitRejection);
+        Assert.Equal(1, transport.RequestQueueLimitRejectionCount);
 
         var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.NotNull(frame);
@@ -668,8 +672,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
-        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+        AssertTooManyRequests(second, HttpMcpTransport.ConcurrentHandlerLimitRejection);
+        Assert.Equal(1, transport.ConcurrentHandlerLimitRejectionCount);
     }
 
     [Fact]
@@ -712,8 +716,8 @@ public class HttpMcpTransportTests : IDisposable
 
         using var second = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
-        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+        AssertTooManyRequests(second, HttpMcpTransport.EventStreamLimitRejection);
+        Assert.Equal(1, transport.EventStreamLimitRejectionCount);
     }
 
     [Fact]
@@ -1116,6 +1120,15 @@ public class HttpMcpTransportTests : IDisposable
             snapshot.Select(record => $"{record.Method} {record.Path} {record.StatusCode} auth={record.AuthOutcome} id={record.RequestId ?? "<none>"}"));
         Assert.Fail($"Expected {expectedCount} request log records, but observed {snapshot.Length}: {observed}");
         return snapshot;
+    }
+
+    private static void AssertTooManyRequests(HttpResponseMessage response, string rejectionReason)
+    {
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("Retry-After", out var retryAfterValues));
+        Assert.Contains("1", retryAfterValues);
+        Assert.True(response.Headers.TryGetValues(HttpMcpTransport.RejectionReasonHeader, out var rejectionValues));
+        Assert.Contains(rejectionReason, rejectionValues);
     }
 
     private static async Task<string> ReadUntilAsync(StreamReader reader, string expected)

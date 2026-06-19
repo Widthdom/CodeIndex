@@ -2515,7 +2515,8 @@ internal static partial class ProgramRunner
             + $" path={FormatLogValue(record.Path)}"
             + $" status={record.StatusCode.ToString(CultureInfo.InvariantCulture)}"
             + $" duration_ms={record.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)}"
-            + $" auth={FormatLogValue(record.AuthOutcome)}");
+            + $" auth={FormatLogValue(record.AuthOutcome)}"
+            + $" rejection={FormatLogValue(record.RejectionReason)}");
     }
 
     private static string FormatLogValue(string? value)

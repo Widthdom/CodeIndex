@@ -41,6 +41,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
+    internal const string RejectionReasonHeader = "X-Cdidx-Mcp-Rejection";
+    internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
+    internal const string RequestQueueLimitRejection = "request_queue_limit";
+    internal const string EventStreamLimitRejection = "event_stream_limit";
     private const string BearerPrefix = "Bearer ";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
@@ -75,6 +79,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private int _eventStreamCount;
     private long _responseAbortCleanupFailureCount;
     private long _responseCloseCleanupFailureCount;
+    private long _concurrentHandlerLimitRejectionCount;
+    private long _requestQueueLimitRejectionCount;
+    private long _eventStreamLimitRejectionCount;
     private string? _lastResponseAbortCleanupFailure;
     private string? _lastResponseCloseCleanupFailure;
     private bool _disposed;
@@ -183,6 +190,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal long ResponseAbortCleanupFailureCount => Interlocked.Read(ref _responseAbortCleanupFailureCount);
 
     internal long ResponseCloseCleanupFailureCount => Interlocked.Read(ref _responseCloseCleanupFailureCount);
+
+    internal long ConcurrentHandlerLimitRejectionCount => Interlocked.Read(ref _concurrentHandlerLimitRejectionCount);
+
+    internal long RequestQueueLimitRejectionCount => Interlocked.Read(ref _requestQueueLimitRejectionCount);
+
+    internal long EventStreamLimitRejectionCount => Interlocked.Read(ref _eventStreamLimitRejectionCount);
 
     internal bool ResponseCleanupDegraded => ResponseAbortCleanupFailureCount > 0 || ResponseCloseCleanupFailureCount > 0;
 
@@ -389,7 +402,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         var request = BeginRequest(context);
         request.AuthOutcome = "not-checked";
+        MarkRejected(request, ConcurrentHandlerLimitRejection);
         context.Response.AddHeader("Retry-After", "1");
+        context.Response.AddHeader(RejectionReasonHeader, ConcurrentHandlerLimitRejection);
         await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP concurrent handler limit is full.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.TooManyRequests);
     }
@@ -458,7 +473,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         if (!TryQueueRequest(request))
         {
+            MarkRejected(request, RequestQueueLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
+            context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
             await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
         }
@@ -732,7 +749,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (Interlocked.Increment(ref _eventStreamCount) > _maxEventStreams)
         {
             Interlocked.Decrement(ref _eventStreamCount);
+            MarkRejected(request, EventStreamLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
+            context.Response.AddHeader(RejectionReasonHeader, EventStreamLimitRejection);
             await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
             return;
@@ -990,6 +1009,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             _acceptCts.Dispose();
     }
 
+    private void MarkRejected(PendingRequest request, string reason)
+    {
+        request.RejectionReason = reason;
+        if (string.Equals(reason, ConcurrentHandlerLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _concurrentHandlerLimitRejectionCount);
+        else if (string.Equals(reason, RequestQueueLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _requestQueueLimitRejectionCount);
+        else if (string.Equals(reason, EventStreamLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _eventStreamLimitRejectionCount);
+    }
+
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
     internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback);
 
@@ -1001,7 +1031,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         string Path,
         int StatusCode,
         double DurationMs,
-        string AuthOutcome);
+        string AuthOutcome,
+        string? RejectionReason);
 
     private PendingRequest BeginRequest(HttpListenerContext context)
     {
@@ -1041,7 +1072,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                     request.Path,
                     statusCode,
                     request.Elapsed.TotalMilliseconds,
-                    request.AuthOutcome);
+                    request.AuthOutcome,
+                    request.RejectionReason);
             lock (_requestLoggerGate)
             {
                 _requestLogger(record);
@@ -1103,6 +1135,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         internal string Path { get; }
 
         internal string AuthOutcome { get; set; } = "none";
+
+        internal string? RejectionReason { get; set; }
 
         internal bool Logged { get; set; }
 

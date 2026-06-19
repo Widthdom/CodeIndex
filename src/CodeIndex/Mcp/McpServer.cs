@@ -1505,6 +1505,10 @@ public partial class McpServer : IDisposable
             result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
             result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
+            result["http_request_queue_limit"] = httpTransport.MaxQueuedRequests;
+            result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
+            result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
+            result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;
             result["http_response_cleanup_degraded"] = httpResponseCleanupDegraded;
             result["http_response_abort_cleanup_failure_count"] = httpTransport.ResponseAbortCleanupFailureCount;
             result["http_response_close_cleanup_failure_count"] = httpTransport.ResponseCloseCleanupFailureCount;
