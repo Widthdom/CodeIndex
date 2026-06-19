@@ -1687,7 +1687,7 @@ public partial class QueryCommandRunnerTests
             var nextCursor = firstQuery.GetProperty("next_cursor").GetString();
 
             Assert.True(firstQuery.GetProperty("truncated").GetBoolean());
-            Assert.Equal(1, firstResult.GetProperty("start_line").GetInt32());
+            Assert.Equal(1, firstResult.GetProperty("chunk_start_line").GetInt32());
             Assert.False(string.IsNullOrWhiteSpace(nextCursor));
 
             var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -1699,7 +1699,7 @@ public partial class QueryCommandRunnerTests
             using var secondDocument = ParseJsonOutput(secondStdout);
             var secondResult = Assert.Single(Assert.Single(secondDocument.RootElement.GetProperty("queries").EnumerateArray()).GetProperty("results").EnumerateArray());
 
-            Assert.Equal(40, secondResult.GetProperty("start_line").GetInt32());
+            Assert.Equal(40, secondResult.GetProperty("chunk_start_line").GetInt32());
         }
         finally
         {
