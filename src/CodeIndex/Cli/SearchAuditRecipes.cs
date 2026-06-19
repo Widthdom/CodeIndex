@@ -295,18 +295,18 @@ internal static class SearchAuditRecipes
         string name,
         string description,
         List<SearchAuditRecipeQuery> queries) => new(name, description, queries)
-    {
-        DefaultPathPatterns = [.. DefaultSourcePathPatterns],
-        DefaultExcludePaths = [.. DefaultSourceExcludePaths],
-    };
+        {
+            DefaultPathPatterns = [.. DefaultSourcePathPatterns],
+            DefaultExcludePaths = [.. DefaultSourceExcludePaths],
+        };
 
     private static SearchAuditRecipe AllScopedRecipe(
         string name,
         string description,
         List<SearchAuditRecipeQuery> queries) => new(name, description, queries)
-    {
-        DefaultScope = AllAuditScope,
-    };
+        {
+            DefaultScope = AllAuditScope,
+        };
 
     internal static IReadOnlyList<SearchAuditRecipe> All => Load().Recipes;
 
