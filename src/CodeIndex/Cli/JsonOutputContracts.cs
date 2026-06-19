@@ -207,6 +207,33 @@ internal sealed record SearchGroupedCountItemJsonResult(
     [property: JsonPropertyName("symbol_end_line")] int? SymbolEndLine,
     [property: JsonPropertyName("container_name")] string? ContainerName);
 
+internal sealed record SearchAggregationJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("mode")] string Mode,
+    [property: JsonPropertyName("group_by")] string GroupBy,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("unique")] bool Unique,
+    [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
+
+internal sealed record SearchFileGroupedJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("total_matches")] int TotalMatches,
+    [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("per_file_limit")] int PerFileLimit,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("groups")] List<SearchFileGroupJsonResult> Groups);
+
+internal sealed record SearchFileGroupJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("results")] List<CompactSearchResult> Results,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount);
+
 internal sealed record QueryFindCountJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
@@ -530,6 +557,9 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(QueryPathErrorJsonResult))]
 [JsonSerializable(typeof(SearchGroupedCountJsonResult))]
 [JsonSerializable(typeof(SearchGroupedCountItemJsonResult))]
+[JsonSerializable(typeof(SearchAggregationJsonResult))]
+[JsonSerializable(typeof(SearchFileGroupedJsonResult))]
+[JsonSerializable(typeof(SearchFileGroupJsonResult))]
 [JsonSerializable(typeof(List<ReferenceResult>))]
 [JsonSerializable(typeof(List<List<string>>))]
 [JsonSerializable(typeof(List<string>))]
@@ -548,6 +578,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(RepoModuleResult))]
 [JsonSerializable(typeof(ReportBundleSummary))]
 [JsonSerializable(typeof(SearchHighlight))]
+[JsonSerializable(typeof(SearchCommandHint))]
 [JsonSerializable(typeof(SearchGuardCheck))]
 [JsonSerializable(typeof(List<SearchGuardCheck>))]
 [JsonSerializable(typeof(SearchGuardEvidence))]
