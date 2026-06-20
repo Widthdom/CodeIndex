@@ -31,7 +31,7 @@ cdidx mcp                        # Start MCP server for AI tools
 cdidx lsp --db .cdidx/codeindex.db  # Start read-only LSP server for editors
 ```
 
-80 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
+82 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -1856,6 +1856,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | yes |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
+| Solution | `.sln` | yes |
+| Application manifest | `.manifest` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
@@ -1894,6 +1896,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static. `tsconfig.json` / `jsconfig.json` `compilerOptions.baseUrl` and `paths` aliases are resolved to indexed project paths when the target file exists.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. These buckets are searchable text and do not claim symbol or graph extraction.
+- Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ### Language extraction matrix
@@ -1919,6 +1922,7 @@ commands and when to fall back to `search`.
 | GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | none yet | Shader entry points and resource declarations are searchable as symbols; use `search` for data-flow, binding compatibility, and call/reference questions. |
 | Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | none yet | HDL declarations are available to `symbols`, `definition`, `outline`, and symbol-aware `search`; use plain `search` for netlist/reference questions. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
+| Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / Sass / Stylus / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
@@ -4400,6 +4404,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | yes |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
+| ソリューション | `.sln` | yes |
+| アプリケーションマニフェスト | `.manifest` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
@@ -4438,6 +4444,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。`tsconfig.json` / `jsconfig.json` の `compilerOptions.baseUrl` と `paths` alias は、対象ファイルが存在する場合に indexed project path へ解決します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。この bucket は検索可能な text として扱われ、symbol / graph 抽出は主張しません。
+- ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
 ### 言語別 extraction matrix
@@ -4460,6 +4467,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | まだなし | Shader entry point と resource 宣言はシンボルとして検索できます。data-flow、binding compatibility、call/reference の調査には `search` を使ってください。 |
 | Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | まだなし | HDL 宣言は `symbols`、`definition`、`outline`、symbol-aware `search` で使えます。netlist / reference の調査には通常の `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
+| ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / Sass / Stylus / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
