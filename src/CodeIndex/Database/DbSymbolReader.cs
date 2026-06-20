@@ -1768,53 +1768,6 @@ public partial class DbReader
         return value == null || value == DBNull.Value ? null : (string?)value;
     }
 
-    private bool HasExactDefinitionMatch(
-        string query,
-        string? lang,
-        IReadOnlyList<string>? pathPatterns,
-        IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests,
-        string extraConditionSql,
-        SqliteCommand? command = null)
-    {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
-        using var ownedCommand = command == null ? _conn.CreateCommand() : null;
-        var cmd = command ?? ownedCommand!;
-        var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
-        var nameCondition = _foldReady
-            ? allowLeafFallback
-                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
-                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
-            : allowLeafFallback
-                ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
-                : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
-
-        var sql = @"
-            SELECT 1
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE " + nameCondition;
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        sql += " AND " + extraConditionSql;
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += " LIMIT 1";
-
-        cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@queryRaw", normalizedQuery);
-        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(normalizedQuery) ?? normalizedQuery);
-        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
-        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(normalizedQuery)) ?? SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
-        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(normalizedQuery));
-        cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(normalizedQuery)) ?? SqlNameResolver.GetLeafName(normalizedQuery));
-        cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(normalizedQuery));
-        if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-
-        return cmd.ExecuteScalar() != null;
-    }
-
     public bool HasFilteredCSharpEnumSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
@@ -3652,6 +3605,7 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
+            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility),
         };
     }
 
@@ -3805,6 +3759,7 @@ public partial class DbReader
                 UnusedBucket = classification.Bucket,
                 UnusedConfidence = classification.Confidence,
                 UnusedReason = classification.Reason,
+                UnusedReasonTags = BuildUnusedReasonTags(isPublicOrExported, isReflectionOrConfigSuspect, visibility),
             });
         }
 
@@ -5038,6 +4993,20 @@ public partial class DbReader
             UnusedBucketMaybeNonPublic,
             "low",
             "non-public symbol with no indexed references");
+    }
+
+    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    {
+        var tags = new List<string> { "no_indexed_references" };
+        if (isReflectionOrConfigSuspect)
+            tags.Add("reflection_or_config_suspect");
+        if (isPublicOrExported)
+            tags.Add("public_or_exported");
+        else if (IsPrivateLikeVisibility(visibility))
+            tags.Add("private_or_file_local");
+        else
+            tags.Add("non_public");
+        return tags;
     }
 
     private static bool IsPrivateLikeVisibility(string? visibility)
