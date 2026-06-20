@@ -167,28 +167,31 @@ public partial class DbReader
 
     private void AppendVisibilityFilters(ref string sql, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
-        if (visibilityFilters is { Count: > 0 })
-            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) IN ({string.Join(",", ExpandVisibilityFilterValues(visibilityFilters).Select((_, i) => $"@visibility{i}"))})";
-        if (excludeVisibilityFilters is { Count: > 0 })
-            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) NOT IN ({string.Join(",", ExpandVisibilityFilterValues(excludeVisibilityFilters).Select((_, i) => $"@excludeVisibility{i}"))})";
+        var expandedVisibilityFilters = visibilityFilters is { Count: > 0 } ? ExpandVisibilityFilterValues(visibilityFilters) : null;
+        var expandedExcludeVisibilityFilters = excludeVisibilityFilters is { Count: > 0 } ? ExpandVisibilityFilterValues(excludeVisibilityFilters) : null;
+        EnsureVisibilityFilterParameterBudget(expandedVisibilityFilters, expandedExcludeVisibilityFilters);
+
+        if (expandedVisibilityFilters is { Count: > 0 })
+            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) IN ({SqliteDynamicSql.BuildParameterList("visibility", expandedVisibilityFilters.Count)})";
+        if (expandedExcludeVisibilityFilters is { Count: > 0 })
+            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) NOT IN ({SqliteDynamicSql.BuildParameterList("excludeVisibility", expandedExcludeVisibilityFilters.Count)})";
     }
 
     private static void AddVisibilityFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
-        if (visibilityFilters is { Count: > 0 })
-        {
-            var expanded = ExpandVisibilityFilterValues(visibilityFilters);
-            for (int i = 0; i < expanded.Count; i++)
-                cmd.Parameters.AddWithValue($"@visibility{i}", expanded[i]);
-        }
+        var expandedVisibilityFilters = visibilityFilters is { Count: > 0 } ? ExpandVisibilityFilterValues(visibilityFilters) : null;
+        var expandedExcludeVisibilityFilters = excludeVisibilityFilters is { Count: > 0 } ? ExpandVisibilityFilterValues(excludeVisibilityFilters) : null;
+        EnsureVisibilityFilterParameterBudget(expandedVisibilityFilters, expandedExcludeVisibilityFilters);
 
-        if (excludeVisibilityFilters is { Count: > 0 })
-        {
-            var expanded = ExpandVisibilityFilterValues(excludeVisibilityFilters);
-            for (int i = 0; i < expanded.Count; i++)
-                cmd.Parameters.AddWithValue($"@excludeVisibility{i}", expanded[i]);
-        }
+        if (expandedVisibilityFilters is { Count: > 0 })
+            SqliteDynamicSql.AddParameters(cmd, "visibility", expandedVisibilityFilters, SqliteType.Text, "visibility filters");
+
+        if (expandedExcludeVisibilityFilters is { Count: > 0 })
+            SqliteDynamicSql.AddParameters(cmd, "excludeVisibility", expandedExcludeVisibilityFilters, SqliteType.Text, "visibility filters");
     }
+
+    private static void EnsureVisibilityFilterParameterBudget(IReadOnlyCollection<string>? visibilityFilters, IReadOnlyCollection<string>? excludeVisibilityFilters)
+        => SqliteDynamicSql.EnsureParameterBudget((visibilityFilters?.Count ?? 0) + (excludeVisibilityFilters?.Count ?? 0), "visibility filters");
 
     private static bool HasVisibilityFilters(IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
         => visibilityFilters is { Count: > 0 } || excludeVisibilityFilters is { Count: > 0 };

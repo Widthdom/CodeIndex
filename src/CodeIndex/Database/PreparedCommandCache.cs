@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace CodeIndex.Database;
 
@@ -20,11 +21,16 @@ namespace CodeIndex.Database;
 internal sealed class PreparedCommandCache : IDisposable
 {
     internal const int DefaultCapacity = 32;
+    internal const int MaxCapacity = 512;
+    internal const string CapacityEnvironmentVariable = "CDIDX_PREPARED_COMMAND_CACHE_CAPACITY";
 
     private readonly SqliteConnection _connection;
     private readonly int _capacity;
     private readonly LinkedList<Entry> _lru = new();
     private readonly Dictionary<string, LinkedListNode<Entry>> _map = new(StringComparer.Ordinal);
+    private long _hitCount;
+    private long _missCount;
+    private long _evictionCount;
     private bool _disposed;
 
     public PreparedCommandCache(SqliteConnection connection, int capacity = DefaultCapacity)
@@ -38,6 +44,22 @@ internal sealed class PreparedCommandCache : IDisposable
 
     public int Count => _lru.Count;
     public int Capacity => _capacity;
+    public long HitCount => _hitCount;
+    public long MissCount => _missCount;
+    public long EvictionCount => _evictionCount;
+
+    internal static int ReadCapacityFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable(CapacityEnvironmentVariable);
+        return int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0
+            && parsed <= MaxCapacity
+                ? parsed
+                : DefaultCapacity;
+    }
+
+    internal PreparedCommandCacheDiagnostics GetDiagnostics()
+        => new(Count, Capacity, HitCount, MissCount, EvictionCount);
 
     /// <summary>
     /// Return a prepared <see cref="SqliteCommand"/> for <paramref name="sql"/>. On a miss
@@ -61,9 +83,11 @@ internal sealed class PreparedCommandCache : IDisposable
             // LRU touch: move to front so least-recently-used falls out of the tail.
             _lru.Remove(existing);
             _lru.AddFirst(existing);
+            _hitCount++;
             return existing.Value.Command;
         }
 
+        _missCount++;
         var cmd = _connection.CreateCommand();
         try
         {
@@ -86,6 +110,7 @@ internal sealed class PreparedCommandCache : IDisposable
             var tail = _lru.Last!;
             _lru.RemoveLast();
             _map.Remove(tail.Value.Sql);
+            _evictionCount++;
             tail.Value.Command.Dispose();
         }
 
@@ -113,4 +138,11 @@ internal sealed class PreparedCommandCache : IDisposable
         public string Sql { get; }
         public SqliteCommand Command { get; }
     }
+
+    internal sealed record PreparedCommandCacheDiagnostics(
+        int Count,
+        int Capacity,
+        long HitCount,
+        long MissCount,
+        long EvictionCount);
 }

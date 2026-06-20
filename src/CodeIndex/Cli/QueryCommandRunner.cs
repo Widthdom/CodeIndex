@@ -7181,13 +7181,16 @@ public static partial class QueryCommandRunner
             .ToList();
     }
 
-    private static List<string> BuildWorkspaceDependencyDatabaseList(QueryCommandOptions options)
+    internal static List<string> BuildWorkspaceDependencyDatabaseList(QueryCommandOptions options)
     {
         var primaryDb = Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath));
+        var comparer = PathCasing.IsIgnoreCase(primaryDb)
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         return options.WorkspaceDbPaths
             .Select(path => Path.GetFullPath(DbPathResolver.NormalizeDbPath(path)))
             .Prepend(primaryDb)
-            .Distinct(StringComparer.Ordinal)
+            .Distinct(comparer)
             .ToList();
     }
 
@@ -7211,17 +7214,10 @@ public static partial class QueryCommandRunner
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
     {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = sourceDbPath,
-            Mode = SqliteOpenMode.ReadOnly,
-        };
-        using var connection = new SqliteConnection(builder.ConnectionString);
-        connection.Open();
-        using var attach = connection.CreateCommand();
-        attach.CommandText = "ATTACH DATABASE @targetDb AS targetdb";
-        attach.Parameters.AddWithValue("@targetDb", targetDbPath);
-        attach.ExecuteNonQuery();
+        using var sourceDb = new DbContext(sourceDbPath);
+        sourceDb.TryMigrateForRead();
+        var connection = sourceDb.Connection;
+        AttachCrossDatabaseTarget(connection, targetDbPath);
 
         using var cmd = connection.CreateCommand();
         var sourcePathExpr = reverse ? "dst.path" : "src.path";
@@ -7247,8 +7243,8 @@ public static partial class QueryCommandRunner
         AddCrossDatabaseExcludeFilters(cmd, "dst", options.ExcludePaths, include: reverse);
         if (options.ExcludeTests)
             cmd.CommandText += reverse
-                ? " AND dst.path NOT LIKE '%test%' COLLATE NOCASE"
-                : " AND src.path NOT LIKE '%test%' COLLATE NOCASE";
+                ? $" AND NOT {BuildCrossDatabaseTestPathCondition("dst")}"
+                : $" AND NOT {BuildCrossDatabaseTestPathCondition("src")}";
         cmd.CommandText += @"
             ),
             edge_totals AS (
@@ -7300,16 +7296,37 @@ public static partial class QueryCommandRunner
         return results;
     }
 
+    private static void AttachCrossDatabaseTarget(SqliteConnection connection, string targetDbPath)
+    {
+        try
+        {
+            AttachCrossDatabaseTargetCore(connection, targetDbPath);
+        }
+        catch (SqliteException) when (!SqliteFileUri.StartsWithFileScheme(targetDbPath) && File.Exists(LongPath.EnsureWindowsPrefix(targetDbPath)))
+        {
+            AttachCrossDatabaseTargetCore(connection, DbContext.ToReadOnlyUri(targetDbPath));
+        }
+    }
+
+    private static void AttachCrossDatabaseTargetCore(SqliteConnection connection, string targetDbPath)
+    {
+        using var attach = connection.CreateCommand();
+        attach.CommandText = "ATTACH DATABASE @targetDb AS targetdb";
+        attach.Parameters.Add("@targetDb", SqliteType.Text).Value = targetDbPath;
+        attach.ExecuteNonQuery();
+    }
+
     private static void AddCrossDatabasePathFilters(SqliteCommand cmd, string alias, IReadOnlyList<string> patterns, bool include)
     {
         if (!include || patterns.Count == 0)
             return;
+        SqliteDynamicSql.EnsureParameterBudget(patterns.Count, "cross-database path filters");
         var parts = new List<string>(patterns.Count);
         for (var i = 0; i < patterns.Count; i++)
         {
-            var name = $"@crossPath{alias}{i}";
+            var name = SqliteDynamicSql.BuildParameterName($"crossPath{alias}", i);
             parts.Add($"{alias}.path LIKE {name} ESCAPE '\\'");
-            cmd.Parameters.AddWithValue(name, CrossDatabaseGlobToLikePattern(patterns[i]));
+            cmd.Parameters.Add(name, SqliteType.Text).Value = CrossDatabaseGlobToLikePattern(patterns[i]);
         }
         cmd.CommandText += " AND (" + string.Join(" OR ", parts) + ")";
     }
@@ -7318,13 +7335,20 @@ public static partial class QueryCommandRunner
     {
         if (!include || patterns.Count == 0)
             return;
+        SqliteDynamicSql.EnsureParameterBudget(patterns.Count, "cross-database exclude path filters");
         for (var i = 0; i < patterns.Count; i++)
         {
-            var name = $"@crossExclude{alias}{i}";
+            var name = SqliteDynamicSql.BuildParameterName($"crossExclude{alias}", i);
             cmd.CommandText += $" AND {alias}.path NOT LIKE {name} ESCAPE '\\'";
-            cmd.Parameters.AddWithValue(name, CrossDatabaseGlobToLikePattern(patterns[i]));
+            cmd.Parameters.Add(name, SqliteType.Text).Value = CrossDatabaseGlobToLikePattern(patterns[i]);
         }
     }
+
+    internal static string BuildCrossDatabaseTestPathConditionForTesting(string alias)
+        => BuildCrossDatabaseTestPathCondition(alias);
+
+    private static string BuildCrossDatabaseTestPathCondition(string alias)
+        => DbReader.TestPathCondition.Replace("f.path", $"{alias}.path", StringComparison.Ordinal);
 
     private static string CrossDatabaseGlobToLikePattern(string pattern)
     {

@@ -818,6 +818,7 @@ public partial class DbReader
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
         var dbPragmaSettings = GetDbPragmaSettings();
+        var preparedCommandCache = GetPreparedCommandCacheStatus();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
         var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
@@ -874,6 +875,7 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            PreparedCommandCache = preparedCommandCache,
             MaintenanceGuidance = maintenanceGuidance,
             DbSizeBytes = dbSizeBytes,
             WalSizeBytes = walSizeBytes,
@@ -888,6 +890,22 @@ public partial class DbReader
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
         txn.Commit();
         return result;
+    }
+
+    private StatusPreparedCommandCache? GetPreparedCommandCacheStatus()
+    {
+        if (_commandCache == null)
+            return null;
+
+        var diagnostics = _commandCache.GetDiagnostics();
+        return new StatusPreparedCommandCache
+        {
+            Count = diagnostics.Count,
+            Capacity = diagnostics.Capacity,
+            HitCount = diagnostics.HitCount,
+            MissCount = diagnostics.MissCount,
+            EvictionCount = diagnostics.EvictionCount,
+        };
     }
 
     /// <summary>
@@ -912,6 +930,7 @@ public partial class DbReader
         JournalMode = ExecuteScalarString("PRAGMA journal_mode"),
         Synchronous = NormalizeSynchronousMode(ExecuteScalarString("PRAGMA synchronous")),
         WalAutocheckpoint = ExecuteNullableLong("PRAGMA wal_autocheckpoint"),
+        BusyTimeoutMs = ExecuteNullableLong("PRAGMA busy_timeout"),
         PageCount = ExecuteNullableLong("PRAGMA page_count"),
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),
