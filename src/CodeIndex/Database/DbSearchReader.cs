@@ -13,11 +13,14 @@ public partial class DbReader
     internal const string AllTokensFilteredByLengthReason = "all_tokens_filtered_by_length";
     internal const int MaxLiteralSearchQueryLength = 1000;
     internal const int MaxLiteralSearchTokenCount = 128;
+    internal const int MaxLiteralSearchTokenLength = 1000;
     internal const int MaxRawFtsQueryLength = 2000;
     internal const int MaxRawFtsBooleanOperators = 64;
     internal const int MaxRawFtsNearOperators = 16;
     internal const int MaxRawFtsParenthesisDepth = 16;
     internal const int MaxRawFtsNearDistance = 100;
+    internal const int MaxRawFtsColumnListCount = 16;
+    internal const int MaxRawFtsColumnTokenLength = 64;
     internal const int DefaultSearchGuardWindow = 8;
     internal const int MaxSearchGuardWindow = 200;
     internal const int MaxSearchGuardFilters = 8;
@@ -1047,7 +1050,9 @@ public partial class DbReader
                 var start = i;
                 while (i < query.Length && !char.IsWhiteSpace(query[i]))
                     i++;
-                tokens.Add(query[start..i]);
+                var token = query[start..i];
+                ValidateLiteralSearchTokenLength(token);
+                tokens.Add(token);
             }
             else
             {
@@ -1069,10 +1074,15 @@ public partial class DbReader
                     }
 
                     phrase.Append(query[i]);
+                    if (phrase.Length > MaxLiteralSearchTokenLength)
+                        throw new SearchQueryLimitException(
+                            $"literal search phrase is too long ({phrase.Length} characters); maximum is {MaxLiteralSearchTokenLength}. Split generated input into smaller queries.");
                     i++;
                 }
 
-                tokens.Add(phrase.Length == 0 ? "\"" : phrase.ToString());
+                var token = phrase.Length == 0 ? "\"" : phrase.ToString();
+                ValidateLiteralSearchTokenLength(token);
+                tokens.Add(token);
             }
 
             if (tokens.Count > MaxLiteralSearchTokenCount)
@@ -1081,6 +1091,15 @@ public partial class DbReader
         }
 
         return tokens.ToArray();
+    }
+
+    private static void ValidateLiteralSearchTokenLength(string token)
+    {
+        if (token.Length <= MaxLiteralSearchTokenLength)
+            return;
+
+        throw new SearchQueryLimitException(
+            $"literal search token is too long ({token.Length} characters); maximum is {MaxLiteralSearchTokenLength}. Split generated input into smaller queries.");
     }
 
     internal static string ValidateRawFtsQuery(string query)
@@ -1221,6 +1240,9 @@ public partial class DbReader
 
         var columns = query[(start + 1)..(colonIndex - 1)]
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (columns.Length > MaxRawFtsColumnListCount)
+            throw new FtsQuerySyntaxException(
+                $"raw FTS5 column list has too many columns ({columns.Length}); maximum is {MaxRawFtsColumnListCount}. The fts_chunks index only exposes the 'content' column.");
         foreach (var column in columns)
             ValidateRawFtsColumn(column);
     }
@@ -1228,6 +1250,9 @@ public partial class DbReader
     private static void ValidateRawFtsColumn(string column)
     {
         const string validColumn = "content";
+        if (column.Length > MaxRawFtsColumnTokenLength)
+            throw new FtsQuerySyntaxException(
+                $"raw FTS5 column qualifier is too long ({column.Length} characters); maximum is {MaxRawFtsColumnTokenLength}. The fts_chunks index only exposes the '{validColumn}' column.");
         if (string.Equals(column, validColumn, StringComparison.OrdinalIgnoreCase))
             return;
 

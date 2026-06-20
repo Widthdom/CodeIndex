@@ -1292,8 +1292,12 @@ public partial class DbReader : IDisposable
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    internal const int MaxPathLikePatternLength = 1024;
+    internal const int MaxPathLikePatternWildcards = 128;
+
     internal static string BuildPathLikePattern(string input)
     {
+        ValidatePathLikePattern(input);
         var hasWildcard = false;
         var builder = new StringBuilder(input.Length + 2);
         var escaped = false;
@@ -1344,6 +1348,37 @@ public partial class DbReader : IDisposable
 
         var pattern = builder.ToString();
         return hasWildcard ? pattern : $"%{pattern}%";
+    }
+
+    private static void ValidatePathLikePattern(string input)
+    {
+        if (input.Length > MaxPathLikePatternLength)
+            throw new SearchQueryLimitException(
+                $"path pattern is too long ({input.Length} characters); maximum is {MaxPathLikePatternLength}. Split path filters or narrow the query.");
+
+        var wildcardCount = 0;
+        var escaped = false;
+        foreach (var ch in input)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch is '*' or '?')
+                wildcardCount++;
+        }
+
+        if (wildcardCount > MaxPathLikePatternWildcards)
+            throw new SearchQueryLimitException(
+                $"path pattern has too many wildcards ({wildcardCount}); maximum is {MaxPathLikePatternWildcards}. Split path filters or use a narrower path prefix.");
     }
 
     private static void AppendLikeLiteral(StringBuilder builder, char ch)
