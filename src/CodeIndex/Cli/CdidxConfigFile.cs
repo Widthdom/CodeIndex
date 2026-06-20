@@ -61,7 +61,7 @@ internal static class CdidxConfigFile
         "mcp",
     };
 
-    private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds", "generatedCodePatterns" };
+    private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds", "generatedCodePatterns", "watchPendingPathLimit" };
     private static readonly IReadOnlyList<string> KnownSearchKeys = new[] { "limit", "snippet_lines", "max_line_width" };
     private static readonly IReadOnlyList<string> KnownOutputKeys = new[] { "format", "locale" };
     private static readonly IReadOnlyList<string> KnownGraphKeys = new[] { "max_hops" };
@@ -306,6 +306,20 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else if (value!.Length > 0)
                 pending.Add((IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, string.Join(",", value)));
+        }
+
+        if (indexing.TryGetProperty("watchPendingPathLimit", out var watchPendingPathLimit))
+        {
+            if (!TryReadPositiveIntegerAsString(watchPendingPathLimit, "indexing.watchPendingPathLimit", path, out var value, out var err))
+                errors.Add(err!);
+            else
+            {
+                var parsedLimit = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (parsedLimit > IndexWatchRunner.MaxWatchPendingPathLimit)
+                    errors.Add($"[cdidx] {path}: `indexing.watchPendingPathLimit` must be <= {IndexWatchRunner.MaxWatchPendingPathLimit}.");
+                else
+                    pending.Add((IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, value!));
+            }
         }
     }
 

@@ -1063,7 +1063,7 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 | Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
-| MCP-only session diagnostics | `mcp_session`, which is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, and bounded optional `client_capabilities`. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. |
+| MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, and `mcp.rate_limit.bucket_limit_rejection_count`. `mcp_session` is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, and bounded optional `client_capabilities`. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. `mcp.rate_limit.bucket_limit` is the configured process-local `(tool, caller)` bucket cap, and `mcp.rate_limit.bucket_limit_rejection_count` counts calls denied because creating a new bucket would exceed that cap. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
 
 Runtime diagnostic subcontracts:
@@ -1860,6 +1860,8 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   via `CryptographicOperations.FixedTimeEquals`. Unset or empty configured
   tokens keep the stdio gate disabled, while configured tokens must be 1-4096
   characters and cannot contain whitespace or control characters (#3505).
+  HTTP bearer tokens additionally reject commas at startup because commas
+  are reserved for rejecting ambiguous `Authorization` headers (#3756).
   HTTP does not also use this body-token gate: `ProgramRunner` resolves a
   bearer secret for the HTTP transport from `CDIDX_MCP_HTTP_TOKEN`, falling
   back to `CDIDX_MCP_AUTH_TOKEN` when the HTTP-specific variable is unset,
@@ -1962,7 +1964,7 @@ return `-32600`.
   either token to keep the MCP catalog off the LAN by default. Unset or empty
   configured bearer tokens disable the HTTP token gate where allowed by the
   listen host policy, while configured tokens must be 1-4096 characters and
-  cannot contain whitespace or control characters (#3505). Supplied HTTP
+  cannot contain whitespace, control characters, or commas (#3505, #3756). Supplied HTTP
   bearer values are compared exactly after the `Bearer ` prefix: they are not
   trimmed, and invalid-shape or oversized values are rejected before hashing.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`
@@ -3296,7 +3298,7 @@ AI エージェント向け検索ルールのテンプレートについては�
 | unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
-| MCP-only session diagnostics | `mcp_session`。これは persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。 |
+| MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。`mcp_session` は persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。`mcp.rate_limit.bucket_limit` は process-local な `(tool, caller)` bucket 上限、`mcp.rate_limit.bucket_limit_rejection_count` は新規 bucket 作成がその上限を超えるため拒否された呼び出し数です。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
 
 runtime diagnostic subcontract:

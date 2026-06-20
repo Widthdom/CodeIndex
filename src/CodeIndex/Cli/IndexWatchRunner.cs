@@ -17,6 +17,8 @@ internal static class IndexWatchRunner
 {
     internal const int DefaultDebounceMs = 500;
     internal const int MaxDebounceMs = 60_000;
+    internal const int DefaultWatchPendingPathLimit = 4096;
+    internal const int MaxWatchPendingPathLimit = 262_144;
     internal const int MaxHumanSummarySubRunJsonChars = 64 * 1024;
     internal const int MaxHumanSummaryJsonDepth = 16;
     internal const int BatchPathSampleLimit = 20;
@@ -61,8 +63,9 @@ internal static class IndexWatchRunner
         CancellationToken cancellationToken)
     {
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
+        var maxPendingPaths = baseOptions.WatchPendingPathLimit;
         var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
-        var batcher = new FileChangeBatcher(debounce, ignoreCase: ignoreCase);
+        var batcher = new FileChangeBatcher(debounce, ignoreCase: ignoreCase, maxPendingPaths: maxPendingPaths);
 
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
         var fileIndexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
@@ -127,7 +130,7 @@ internal static class IndexWatchRunner
 
             watcher.EnableRaisingEvents = true;
 
-            EmitWatchStarted(baseOptions, projectRoot, resolvedDbPath, debounce);
+            EmitWatchStarted(baseOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths);
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -469,7 +472,8 @@ internal static class IndexWatchRunner
         IndexCommandOptions baseOptions,
         string projectRoot,
         string resolvedDbPath,
-        TimeSpan debounce)
+        TimeSpan debounce,
+        int maxPendingPaths)
     {
         if (baseOptions.Json)
         {
@@ -484,12 +488,13 @@ internal static class IndexWatchRunner
                 ProjectRoot = projectRoot,
                 Db = resolvedDbPath,
                 DebounceMs = (int)debounce.TotalMilliseconds,
+                WatchPendingPathLimit = maxPendingPaths,
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
         }
         else
         {
             CommandErrorWriter.WriteStderr();
-            CommandErrorWriter.WriteStderr($"[watch] Watching {projectRoot} for changes (debounce {(int)debounce.TotalMilliseconds} ms). Press Ctrl+C to stop.");
+            CommandErrorWriter.WriteStderr($"[watch] Watching {projectRoot} for changes (debounce {(int)debounce.TotalMilliseconds} ms, pending path limit {maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)}). Press Ctrl+C to stop.");
         }
     }
 
@@ -508,6 +513,7 @@ internal static class IndexWatchRunner
                 Reason = safeReason,
                 Phase = "incremental",
                 OverflowReason = safeReason,
+                WatchPendingPathLimit = baseOptions.WatchPendingPathLimit,
                 RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions, resolvedDbPath, redactPaths: true),
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
         }
@@ -579,7 +585,7 @@ internal static class IndexWatchRunner
 /// </summary>
 internal sealed class FileChangeBatcher
 {
-    internal const int DefaultMaxPendingPaths = 4096;
+    internal const int DefaultMaxPendingPaths = IndexWatchRunner.DefaultWatchPendingPathLimit;
 
     private readonly object _gate = new();
     private readonly HashSet<string> _pending;

@@ -2536,20 +2536,36 @@ public partial class McpServer : IDisposable
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed)
             || !string.Equals(parsed.Scheme, "cdidx", StringComparison.OrdinalIgnoreCase)
             || !string.Equals(parsed.Host, "file", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(parsed.AbsolutePath))
+            || !TryExtractRawResourcePath(uri, out var rawPath))
         {
             return false;
         }
 
-        var decoded = Uri.UnescapeDataString(parsed.AbsolutePath.TrimStart('/'));
-        if (decoded.Length == 0
-            || Path.IsPathRooted(decoded)
-            || decoded.Split('/').Any(segment => segment.Length == 0 || segment is "." or ".."))
-        {
+        if (!PathUriNormalizer.TryDecodeRelativeUriPath(rawPath, allowBackslash: false, out var decoded))
             return false;
-        }
+
         path = decoded;
         return true;
+    }
+
+    private static bool TryExtractRawResourcePath(string uri, out string rawPath)
+    {
+        rawPath = string.Empty;
+        var schemeSeparator = uri.IndexOf("://", StringComparison.Ordinal);
+        if (schemeSeparator < 0)
+            return false;
+
+        var hostStart = schemeSeparator + 3;
+        var pathStart = uri.IndexOf('/', hostStart);
+        if (pathStart < 0 || pathStart == uri.Length - 1)
+            return false;
+
+        rawPath = uri[(pathStart + 1)..];
+        var terminator = rawPath.IndexOfAny(['?', '#']);
+        if (terminator >= 0)
+            rawPath = rawPath[..terminator];
+
+        return !string.IsNullOrWhiteSpace(rawPath);
     }
 
     private static string? TryReadStringValue(JsonNode? node)

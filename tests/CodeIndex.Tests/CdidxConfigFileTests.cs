@@ -69,7 +69,8 @@ public class CdidxConfigFileTests
                   "indexing": {
                     "includeKinds": ["class"],
                     "excludeKinds": ["test_method", "generated_parser"],
-                    "generatedCodePatterns": ["src/generated/**", "*.client.ts"]
+                    "generatedCodePatterns": ["src/generated/**", "*.client.ts"],
+                    "watchPendingPathLimit": 8192
                   },
                   "mcp": {
                     "tools": { "allow": ["search", "definition"], "deny": ["index"] },
@@ -94,6 +95,7 @@ public class CdidxConfigFileTests
             Assert.Equal("class", result.Settings["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("test_method,generated_parser", result.Settings["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("src/generated/**,*.client.ts", result.Settings[IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable]);
+            Assert.Equal("8192", result.Settings[IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable]);
             Assert.Equal("search,definition", result.Settings["CDIDX_MCP_TOOLS_ALLOW"]);
             Assert.Equal("index", result.Settings["CDIDX_MCP_TOOLS_DENY"]);
             Assert.Equal("5", result.Settings[RateLimiterOptions.RpsEnvVar]);
@@ -236,6 +238,27 @@ public class CdidxConfigFileTests
     [InlineData("""{ "search": { "limit": 1.5 } }""", "positive integer")]
     [InlineData("""{ "search": { "limit": 10001 } }""", "<= 10000")]
     public void LoadAndApply_ProjectConfigJsonRejectsInvalidSearchDefaults(string json, string expectedError)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".cdidx"));
+            File.WriteAllText(Path.Combine(dir, ".cdidx", "config.json"), json);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains(expectedError, result.Error);
+            Assert.Empty(result.Settings);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Theory]
+    [InlineData("""{ "indexing": { "watchPendingPathLimit": 0 } }""", "positive integer")]
+    [InlineData("""{ "indexing": { "watchPendingPathLimit": 262145 } }""", "<= 262144")]
+    public void LoadAndApply_ProjectConfigJsonRejectsInvalidWatchPendingPathLimit(string json, string expectedError)
     {
         var dir = CreateTempDir();
         try

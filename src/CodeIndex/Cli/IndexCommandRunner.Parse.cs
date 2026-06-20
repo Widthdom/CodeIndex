@@ -12,8 +12,8 @@ public static partial class IndexCommandRunner
     // easter egg や random-spinner は意図的に未公開なので除外する。
     private static readonly string[] AcceptedIndexFlags =
     [
-        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--force",
-        "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
+        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--dry-run-path-limit", "--force",
+        "--yes", "--watch", "--debounce", "--watch-pending-path-limit", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
         "--max-references-per-file", "--notify",
         "--parallelism", "--memory-trace", "--follow-symlinks", "--symbols-only",
         "--commits", "--changed-between", "--files", "--solution", "--project",
@@ -23,6 +23,7 @@ public static partial class IndexCommandRunner
 
     internal const string CompletionNotificationEnvironmentVariable = "CDIDX_NOTIFY";
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
+    internal const string WatchPendingPathLimitEnvironmentVariable = "CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT";
     internal const int MaxIndexParallelism = 16;
     internal const int MaxSymbolKindFilterCsvLength = 2048;
     internal const int MaxSymbolKindFilterCsvEntries = 128;
@@ -37,6 +38,7 @@ public static partial class IndexCommandRunner
         bool json = false;
         bool quiet = false;
         bool dryRun = false;
+        var dryRunPathLimit = DefaultDryRunPathLimit;
         bool force = false;
         bool readOnly = false;
         bool yes = false;
@@ -45,6 +47,7 @@ public static partial class IndexCommandRunner
         bool symbolsOnly = false;
         bool memoryTrace = false;
         int? watchDebounceMs = null;
+        var watchPendingPathLimit = ReadWatchPendingPathLimitFromEnvironment();
         var durationFormat = DurationOutputFormat.Auto;
         var notifyMode = ReadCompletionNotificationModeFromEnvironment();
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
@@ -110,6 +113,12 @@ public static partial class IndexCommandRunner
                 case "--dry-run":
                     dryRun = true;
                     break;
+                case "--dry-run-path-limit" when i + 1 < args.Length:
+                    dryRunPathLimit = ParseDryRunPathLimit(args[++i], dryRunPathLimit, "--dry-run-path-limit", ref parseError);
+                    break;
+                case var option when option.StartsWith("--dry-run-path-limit=", StringComparison.Ordinal):
+                    dryRunPathLimit = ParseDryRunPathLimit(option["--dry-run-path-limit=".Length..], dryRunPathLimit, "--dry-run-path-limit", ref parseError);
+                    break;
                 case "--force":
                     force = true;
                     break;
@@ -148,6 +157,12 @@ public static partial class IndexCommandRunner
                         CommandErrorWriter.WriteStderr($"Warning: invalid --debounce value '{displayValue}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{displayValue}'（無視。ミリ秒の0以上の整数を指定）");
                         i++;
                     }
+                    break;
+                case "--watch-pending-path-limit" when i + 1 < args.Length:
+                    watchPendingPathLimit = ParseWatchPendingPathLimit(args[++i], watchPendingPathLimit, "--watch-pending-path-limit", ref parseError);
+                    break;
+                case var option when option.StartsWith("--watch-pending-path-limit=", StringComparison.Ordinal):
+                    watchPendingPathLimit = ParseWatchPendingPathLimit(option["--watch-pending-path-limit=".Length..], watchPendingPathLimit, "--watch-pending-path-limit", ref parseError);
                     break;
                 case "--duration-format" when i + 1 < args.Length:
                     durationFormat = ParseDurationFormat(args[++i], durationFormat);
@@ -325,6 +340,7 @@ public static partial class IndexCommandRunner
             ParseError = parseError ?? generatedCodePatternError,
             EasterEgg = easterEgg,
             DryRun = dryRun,
+            DryRunPathLimit = dryRunPathLimit,
             Force = force,
             ReadOnly = readOnly,
             Yes = yes,
@@ -333,6 +349,7 @@ public static partial class IndexCommandRunner
             SymbolsOnly = symbolsOnly,
             MemoryTrace = memoryTrace,
             WatchDebounceMs = watchDebounceMs,
+            WatchPendingPathLimit = watchPendingPathLimit,
             DurationFormat = durationFormat,
             NotifyMode = notifyMode,
             MaxFileSizeBytes = maxFileSizeBytes,
@@ -507,6 +524,60 @@ public static partial class IndexCommandRunner
 
         var invalidDisplayValue = ConsoleUi.FormatBoundedValue(value);
         CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
+        return fallback;
+    }
+
+    private static int ReadWatchPendingPathLimitFromEnvironment()
+    {
+        var fallback = IndexWatchRunner.DefaultWatchPendingPathLimit;
+        var value = CdidxEnvironment.GetEnvironmentVariable(WatchPendingPathLimitEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed <= IndexWatchRunner.MaxWatchPendingPathLimit)
+                return parsed;
+
+            var displayValue = ConsoleUi.FormatBoundedValue(value);
+            CommandErrorWriter.WriteStderr($"Warning: {WatchPendingPathLimitEnvironmentVariable} value '{displayValue}' exceeds the maximum {IndexWatchRunner.MaxWatchPendingPathLimit}; using {IndexWatchRunner.MaxWatchPendingPathLimit} / {WatchPendingPathLimitEnvironmentVariable} 値 '{displayValue}' は最大 {IndexWatchRunner.MaxWatchPendingPathLimit} を超えています。{IndexWatchRunner.MaxWatchPendingPathLimit} を使用します");
+            return IndexWatchRunner.MaxWatchPendingPathLimit;
+        }
+
+        var invalidDisplayValue = ConsoleUi.FormatBoundedValue(value);
+        CommandErrorWriter.WriteStderr($"Warning: invalid {WatchPendingPathLimitEnvironmentVariable} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {WatchPendingPathLimitEnvironmentVariable} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
+        return fallback;
+    }
+
+    private static int ParseWatchPendingPathLimit(string value, int fallback, string source, ref string? parseError)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed <= IndexWatchRunner.MaxWatchPendingPathLimit)
+                return parsed;
+
+            parseError ??= $"{source} must be less than or equal to {IndexWatchRunner.MaxWatchPendingPathLimit}";
+            return fallback;
+        }
+
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
+        return fallback;
+    }
+
+    private static int ParseDryRunPathLimit(string value, int fallback, string source, ref string? parseError)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed <= MaxDryRunPathLimit)
+                return parsed;
+
+            parseError ??= $"{source} must be less than or equal to {MaxDryRunPathLimit}";
+            return fallback;
+        }
+
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
         return fallback;
     }
 

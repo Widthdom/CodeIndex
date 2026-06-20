@@ -202,6 +202,8 @@ public class FileIndexer
         [".toml"] = "toml",
         [".xaml"] = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
         [".axaml"] = "xml",    // Avalonia XAML / Avalonia XAML
+        [".sln"] = "solution", // Visual Studio solution / Visual Studio ソリューション
+        [".manifest"] = "app_manifest", // Windows application manifest / Windows アプリケーションマニフェスト
         [".csproj"] = "msbuild",// C# project file / C# プロジェクトファイル
         [".fsproj"] = "msbuild",// F# project file / F# プロジェクトファイル
         [".vbproj"] = "msbuild",// VB.NET project file / VB.NET プロジェクトファイル

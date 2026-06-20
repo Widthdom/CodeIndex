@@ -1626,6 +1626,7 @@ public sealed class IndexCommandOptions
     public string? ParseError { get; init; }
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
+    public int DryRunPathLimit { get; init; } = IndexCommandRunner.DefaultDryRunPathLimit;
     public bool Force { get; init; }
     public bool ReadOnly { get; init; }
     public bool Yes { get; init; }
@@ -1633,6 +1634,7 @@ public sealed class IndexCommandOptions
     public bool OptimizeOnly { get; init; }
     public bool SymbolsOnly { get; init; }
     public int? WatchDebounceMs { get; init; }
+    public int WatchPendingPathLimit { get; init; } = IndexWatchRunner.DefaultWatchPendingPathLimit;
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public CompletionNotificationMode NotifyMode { get; init; } = CompletionNotificationMode.Auto;
     public long? MaxFileSizeBytes { get; init; }
