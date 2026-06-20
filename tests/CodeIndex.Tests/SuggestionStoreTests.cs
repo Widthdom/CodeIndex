@@ -369,6 +369,19 @@ public class SuggestionStoreTests : IDisposable
         AssertPrivateFileMode(filePath);
     }
 
+    [Fact]
+    public void TryAdd_OnPosixCreatesPrivateStoreDirectory_Issue3686()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.True(_store.TryAdd(MakeRecord("other", null, "Private suggestion directory")));
+
+        Assert.Equal(
+            DataDirectorySecurity.PrivateDirectoryMode,
+            File.GetUnixFileMode(_tempDir) & DataDirectorySecurity.PermissionBits);
+    }
+
     // --- LoadAll tests / LoadAll テスト ---
 
     [Fact]

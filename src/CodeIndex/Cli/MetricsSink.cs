@@ -40,9 +40,7 @@ internal static class MetricsSink
         try
         {
             var fullPath = Path.GetFullPath(path);
-            var directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
+            DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(fullPath);
 
             long bytesWritten;
             using (var probe = PrivateLogFile.OpenAppend(fullPath, FileShare.ReadWrite))

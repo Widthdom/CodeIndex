@@ -125,6 +125,34 @@ public class MetricsSinkTests
     }
 
     [Fact]
+    public void Run_WithMetricsFlag_OnUnixCreatesPrivateParentDirectory_Issue3686()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_private_parent_{Guid.NewGuid():N}");
+        var metricsDirectory = Path.Combine(root, "metrics");
+        var metricsPath = Path.Combine(metricsDirectory, "events.jsonl");
+        try
+        {
+            var (exitCode, _, _) = CaptureConsole(() => ProgramRunner.Run(
+                ["--metrics", metricsPath, "definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(metricsDirectory) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(metricsPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Record_RotatesMetricsLogAtMaxBytes()
     {
         var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_rotate_{Guid.NewGuid():N}.jsonl");
