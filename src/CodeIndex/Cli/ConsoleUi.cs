@@ -1018,7 +1018,7 @@ public static class ConsoleUi
         WriteHelpLine("  --named-query <name>=<query>  search only: add a named ad hoc batch query; repeat to run related searches with grouped compact results");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
-        WriteHelpLine("  --audit-scope <source|all> search recipes/unused: source uses production-code cleanup defaults; all keeps the caller's explicit filters only");
+        WriteHelpLine("  --audit-scope <source|all> search recipes/unused: source uses production-code cleanup defaults; all disables source-scope defaults");
         Console.WriteLine("  --exclude-comments         search only: suppress comment-only matches");
         Console.WriteLine("  --exclude-strings          search only: suppress string, regex, and help-text matches");
         Console.WriteLine("  --exclude-fixtures         search only: suppress fixture-only matches in tests");
