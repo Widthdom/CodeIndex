@@ -10121,6 +10121,49 @@ public sealed class Caller
         Assert.True(results[2]!["ok"]!.GetValue<bool>());
     }
 
+    [Theory]
+    [InlineData("\"twenty\"", "string")]
+    [InlineData("{}", "object")]
+    [InlineData("[]", "array")]
+    public void ToolsCall_NumericArgumentsRejectWrongJsonShapes_Issue3791(string limitJson, string expectedActual)
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3791,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","limit":"""
+            + limitJson
+            + """}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("Invalid type for argument 'limit'", error["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        var data = error["data"]!;
+        Assert.Equal("limit", data["parameter"]!.GetValue<string>());
+        Assert.Equal("integer", data["expected"]!.GetValue<string>());
+        Assert.Equal(expectedActual, data["actual"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("\"not an array\"", "string")]
+    [InlineData("{}", "object")]
+    public void ToolsCall_BatchQueryRejectsNonArrayQueries_Issue3791(string queriesJson, string expectedActual)
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3791,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":"""
+            + queriesJson
+            + """}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("Invalid type for argument 'queries'", error["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        var data = error["data"]!;
+        Assert.Equal("queries", data["parameter"]!.GetValue<string>());
+        Assert.Equal("array", data["expected"]!.GetValue<string>());
+        Assert.Equal(expectedActual, data["actual"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_BatchQuery_ReportsMalformedSlotsAndActualExecutionCounts_Issue1838_1992_1994()
     {
