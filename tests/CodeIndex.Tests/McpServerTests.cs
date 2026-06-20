@@ -272,6 +272,22 @@ public class McpServerTests : IDisposable
         Assert.Equal("completed", drained["last"]!["state"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task DrainInFlightTasksAsync_CancelsShutdownAfterBoundedDrainWindow_Issue3774()
+    {
+        var stuck = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { stuck.Task };
+
+        await _server.DrainInFlightTasksAsync(
+            tasks,
+            TimeSpan.FromMilliseconds(10),
+            TimeSpan.FromMilliseconds(10));
+
+        Assert.True(_server.ShutdownRequestedForTests);
+        stuck.SetResult();
+        await stuck.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
     {
         var deadline = DateTimeOffset.UtcNow.AddSeconds(5);

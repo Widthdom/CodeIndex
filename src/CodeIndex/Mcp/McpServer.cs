@@ -347,6 +347,7 @@ public partial class McpServer : IDisposable
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
+    internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -678,6 +679,15 @@ public partial class McpServer : IDisposable
 
             await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
             var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Intentional bounded dispatch (#3774): normal request work can await SQLite,
+            // sampling, or transport callbacks while the read loop still needs to accept
+            // cancellation / response frames. `_concurrencyGate` caps thread-pool exposure;
+            // the scheduling token stays uncancelled because the gate slot is already owned
+            // and the task's finally block must release it even during shutdown.
+            // 意図的な bounded dispatch (#3774)。通常 request は SQLite / sampling /
+            // transport callback を await し得る一方、read loop は cancellation / response
+            // frame を受け続ける必要がある。`_concurrencyGate` で thread-pool 使用量を上限化し、
+            // gate slot 解放の finally を必ず走らせるため scheduling token は未キャンセルにする。
             var requestTask = Task.Run(async () =>
             {
                 try
@@ -779,6 +789,10 @@ public partial class McpServer : IDisposable
         if (postCancelDelay.IsCanceled)
             return;
 
+        // The shutdown token is already canceled in this path. Use an uncancelled observer so
+        // late task faults are still observed after the client-visible drain window (#3774).
+        // この経路では shutdown token はキャンセル済み。client-visible な drain window 後でも
+        // late fault を観測できるよう、未キャンセルの observer を使う (#3774)。
         _ = allTasks.ContinueWith(task =>
         {
             _ = task.Exception;
