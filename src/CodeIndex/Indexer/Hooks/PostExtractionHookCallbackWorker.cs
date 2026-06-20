@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
@@ -33,7 +32,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
     private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
-    private StringBuilder stderr = new();
+    private WorkerOutputBuffer stderr = new();
     private bool disposed;
 
     internal PostExtractionHookCallbackWorkerClient(PostExtractionHookInfo hook, int maxProtocolLineBytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
@@ -48,7 +47,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         FileContext context,
         IReadOnlyList<SymbolRecord>? symbols,
         IReadOnlyList<ReferenceRecord>? references,
-        TimeSpan callbackBudget)
+        TimeSpan callbackBudget,
+        CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
@@ -80,7 +80,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                     process!.StandardOutput,
                     maxProtocolLineBytes,
                     maxProtocolLineBytes,
-                    CancellationToken.None);
+                    cancellationToken);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
             catch (Exception ex)
@@ -90,7 +90,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                     stopwatch);
             }
 
-            if (!WaitForTask(sendTask, waitMilliseconds, out var sendException))
+            if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
             {
                 return TimedOutAfterKill(stopwatch);
             }
@@ -103,7 +103,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
-            if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, out var responseException))
+            if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, cancellationToken, out var responseException))
             {
                 return TimedOutAfterKill(stopwatch);
             }
@@ -124,7 +124,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             var responseJson = responseTask.GetAwaiter().GetResult();
             if (responseJson == null)
             {
-                var workerError = BuildWorkerExitError(process, stderr.ToString(), "worker exited before returning a response.");
+                var workerError = BuildWorkerExitError(process, stderr.GetCapturedText(), "worker exited before returning a response.");
                 ClearExitedWorker();
                 return Failure(workerError, stopwatch.ElapsedMilliseconds);
             }
@@ -205,7 +205,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         }
 
         ClearExitedWorker();
-        stderr = new StringBuilder();
+        stderr = new WorkerOutputBuffer();
         if (!PostExtractionHookCallbackWorker.TryCreateStartInfo(hook, maxProtocolLineBytes, out var startInfo, out error))
             return false;
 
@@ -299,11 +299,11 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         await input.FlushAsync().ConfigureAwait(false);
     }
 
-    private static bool WaitForTask(Task task, int milliseconds, out Exception? exception)
+    private bool WaitForTask(Task task, int milliseconds, CancellationToken cancellationToken, out Exception? exception)
     {
         try
         {
-            if (!task.Wait(milliseconds))
+            if (!task.Wait(milliseconds, cancellationToken))
             {
                 exception = null;
                 return false;
@@ -316,6 +316,11 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         {
             exception = ex.GetBaseException();
             return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = KillWorker();
+            throw;
         }
         catch (Exception ex)
         {
@@ -339,7 +344,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
         var exitCode = process == null ? (int?)null : process.ExitCode;
-        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
+        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback, stderr);
     }
 
     internal static WorkerProcessExitWaitResult WaitForWorkerExit(Process process, int milliseconds)
@@ -357,6 +362,7 @@ internal static class PostExtractionHookCallbackWorker
     internal const string CommandName = "__cdidx-post-extraction-hook-callback";
     internal const int WorkerKillWaitMilliseconds = 5000;
     private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
+    private const int CapturedConsoleMaxChars = 32 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackWorkerJsonContext.Default.Options;
 
     internal static bool TryRunCommand(
@@ -517,6 +523,14 @@ internal static class PostExtractionHookCallbackWorker
                 if (requestJson is null)
                     break;
 
+                if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
+                {
+                    response = new WorkerResponse(null, null, null, validationError);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
                 try
                 {
                     request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
@@ -570,8 +584,8 @@ internal static class PostExtractionHookCallbackWorker
     {
         var originalOut = Console.Out;
         var originalError = Console.Error;
-        using var capturedOut = new StringWriter();
-        using var capturedError = new StringWriter();
+        using var capturedOut = new BoundedTextWriter(CapturedConsoleMaxChars);
+        using var capturedError = new BoundedTextWriter(CapturedConsoleMaxChars);
         Exception? callbackFailure = null;
         try
         {
