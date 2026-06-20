@@ -9,9 +9,10 @@ internal static class SearchAuditRecipes
 {
     internal const string DefaultAuditScope = "source";
     internal const string AllAuditScope = "all";
+    internal const string DefaultQuerySeverity = "medium";
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
     private const int MaxRecipeSourceFiles = 8;
-    private const long MaxRecipeSourceBytes = 128 * 1024;
+    internal const int MaxRecipeSourceBytes = 128 * 1024;
     private const int MaxExternalRecipesPerFile = 32;
     private const int MaxExternalQueriesPerRecipe = 32;
     private const int MaxExternalNameLength = 80;
@@ -23,6 +24,7 @@ internal static class SearchAuditRecipes
     private const int MaxExternalPathPatternLength = 256;
     private const int MaxRecipeDiagnosticCount = 64;
     private const int MaxRecipeDiagnosticLength = 512;
+    private static readonly string[] SupportedQuerySeverities = ["info", "low", "medium", "high", "critical"];
     private static readonly string[] DefaultSourcePathPatterns = ["src/**"];
     private static readonly string[] DefaultSourceExcludePaths =
     [
@@ -58,6 +60,18 @@ internal static class SearchAuditRecipes
                     "Find full stream/string materialization that may need bounded reads or incremental processing.",
                     ["audit", "performance"],
                     "False positives include bounded in-memory test fixtures and tiny diagnostic payloads."),
+                new(
+                    "file-read-all-text",
+                    "File.ReadAllText",
+                    "Find whole-file text reads that may need size caps, sharing policy, or streaming alternatives.",
+                    ["audit", "performance"],
+                    "False positives include bounded test fixtures and small files guarded by explicit size checks."),
+                new(
+                    "file-read-all-bytes",
+                    "File.ReadAllBytes",
+                    "Find whole-file byte reads that may need size caps, sharing policy, or streaming alternatives.",
+                    ["audit", "performance"],
+                    "False positives include bounded test fixtures and small files guarded by explicit size checks."),
                 new(
                     "max-value-probe",
                     "int.MaxValue",
@@ -113,6 +127,12 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include deliberate sentinel values that are never passed to blocking waits."),
                 new(
+                    "thread-sleep",
+                    "Thread.Sleep",
+                    "Find blocking sleeps that may need cancellation-aware waits, bounded retry policy, or test-only isolation.",
+                    ["audit", "bug"],
+                    "False positives include tiny test synchronization probes and documented compatibility waits."),
+                new(
                     "path-case-heuristic",
                     "OrdinalIgnoreCase",
                     "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
@@ -142,6 +162,12 @@ internal static class SearchAuditRecipes
                     "Find authorization header or auth-boundary handling that may need redaction and egress review.",
                     ["audit", "security"],
                     "False positives include documentation, tests, and already-redacted header-name-only handling."),
+                new(
+                    "http-client-construction",
+                    "new HttpClient",
+                    "Find direct HTTP client construction that may need lifetime, timeout, and outbound-boundary review.",
+                    ["audit", "security"],
+                    "False positives include tests, short-lived CLI probes with explicit timeouts, and shared factory wrappers."),
                 new(
                     "bearer-token-handling",
                     "Bearer",
@@ -381,23 +407,20 @@ internal static class SearchAuditRecipes
             return false;
         }
 
-        if (!File.Exists(fullPath))
-        {
-            AddDiagnostic(diagnostics, $"{sourceLabel} does not exist.");
-            return false;
-        }
-
         try
         {
-            var info = new FileInfo(fullPath);
-            if (info.Length > MaxRecipeSourceBytes)
+            var text = DataDirectorySecurity.ReadTextWithinLimit(
+                fullPath,
+                MaxRecipeSourceBytes,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (text is null)
             {
-                AddDiagnostic(diagnostics, $"{sourceLabel} is too large ({info.Length} bytes; max {MaxRecipeSourceBytes}).");
+                AddDiagnostic(diagnostics, $"{sourceLabel} is too large (max {MaxRecipeSourceBytes} bytes).");
                 return false;
             }
 
             var root = JsonNode.Parse(
-                File.ReadAllText(fullPath),
+                text,
                 documentOptions: new JsonDocumentOptions { MaxDepth = 16 });
             var recipeArray = root as JsonArray ?? root?["recipes"] as JsonArray;
             if (recipeArray is null)
@@ -415,6 +438,11 @@ internal static class SearchAuditRecipes
             if (recipeArray.Count > MaxExternalRecipesPerFile)
                 AddDiagnostic(diagnostics, $"{sourceLabel} has more than {MaxExternalRecipesPerFile} recipes; extra entries are ignored.");
             return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            AddDiagnostic(diagnostics, $"{sourceLabel} does not exist.");
+            return false;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -493,7 +521,10 @@ internal static class SearchAuditRecipes
 
         if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourceLabel, queryIndex, diagnostics, out var name)
             || !TryReadRequiredString(obj, "query", QueryLimits.MaxQueryLength, sourceLabel, queryIndex, diagnostics, out var queryText)
-            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourceLabel, queryIndex, diagnostics, out var description))
+            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourceLabel, queryIndex, diagnostics, out var description)
+            || !TryReadOptionalSeverity(obj, sourceLabel, recipeName, queryIndex, name, diagnostics, out var severity)
+            || !TryReadPathPatterns(obj, "pathPatterns", "path_patterns", sourceLabel, queryIndex, name, diagnostics, out var pathPatterns)
+            || !TryReadPathPatterns(obj, "excludePaths", "exclude_paths", sourceLabel, queryIndex, name, diagnostics, out var excludePaths))
         {
             return false;
         }
@@ -509,7 +540,12 @@ internal static class SearchAuditRecipes
             ? exactValue
             : true;
 
-        query = new SearchAuditRecipeQuery(name, queryText, description, labels, falsePositiveGuidance, exactSubstring);
+        query = new SearchAuditRecipeQuery(name, queryText, description, labels, falsePositiveGuidance, exactSubstring)
+        {
+            Severity = severity,
+            PathPatterns = pathPatterns,
+            ExcludePaths = excludePaths
+        };
         return true;
     }
 
@@ -622,6 +658,37 @@ internal static class SearchAuditRecipes
         return true;
     }
 
+    private static bool TryReadOptionalSeverity(
+        JsonObject obj,
+        string sourceLabel,
+        string recipeName,
+        int queryIndex,
+        string queryName,
+        List<string> diagnostics,
+        out string severity)
+    {
+        severity = DefaultQuerySeverity;
+        var node = obj["severity"];
+        if (node is null)
+            return true;
+
+        if (!TryReadString(node, out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' item #{queryIndex + 1} has an invalid severity.");
+            return false;
+        }
+
+        var normalized = raw.Trim().ToLowerInvariant();
+        if (SupportedQuerySeverities.Contains(normalized, StringComparer.Ordinal))
+        {
+            severity = normalized;
+            return true;
+        }
+
+        AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' item #{queryIndex + 1} has unsupported severity '{normalized}'.");
+        return false;
+    }
+
     private static List<string> ReadLabels(
         JsonObject obj,
         string sourceLabel,
@@ -732,7 +799,12 @@ internal sealed record SearchAuditRecipeQuery(
     string Description,
     List<string> RecommendedLabels,
     string FalsePositiveGuidance,
-    bool ExactSubstring = true);
+    bool ExactSubstring = true)
+{
+    public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
+    public List<string> PathPatterns { get; init; } = [];
+    public List<string> ExcludePaths { get; init; } = [];
+}
 
 internal sealed record SearchRecipeListJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -774,6 +846,9 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
+    [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
 
 internal sealed record SearchRecipeRunJsonResult(
@@ -807,6 +882,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
+    [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
     [property: JsonPropertyName("truncated")] bool Truncated,
@@ -825,6 +903,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
+    [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
     [property: JsonPropertyName("truncated")] bool Truncated,

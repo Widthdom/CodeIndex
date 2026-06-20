@@ -1695,6 +1695,9 @@ public static partial class QueryCommandRunner
                 BuildAdHocIssueDraftLabels(options),
                 "Review the evidence paths and surrounding code before filing.",
                 exact,
+                SearchAuditRecipes.DefaultQuerySeverity,
+                [],
+                [],
                 rows.Count,
                 BuildSearchRecipeTopFiles(rows),
                 false,
@@ -1735,14 +1738,15 @@ public static partial class QueryCommandRunner
         foreach (var recipeQuery in recipeQueries)
         {
             var exact = userExact || recipeQuery.ExactSubstring;
+            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(options.Limit),
                 options.Lang,
                 false,
-                scope.PathPatterns,
-                scope.ExcludePaths,
-                scope.ExcludeTests,
+                queryScope.PathPatterns,
+                queryScope.ExcludePaths,
+                queryScope.ExcludeTests,
                 !options.NoDedup,
                 options.Since,
                 exact,
@@ -1761,6 +1765,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.RecommendedLabels,
                 recipeQuery.FalsePositiveGuidance,
                 exact,
+                recipeQuery.Severity,
+                [.. recipeQuery.PathPatterns],
+                [.. recipeQuery.ExcludePaths],
                 rows.Count,
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
@@ -1784,14 +1791,15 @@ public static partial class QueryCommandRunner
         foreach (var recipeQuery in recipeQueries)
         {
             var exact = userExact || recipeQuery.ExactSubstring;
+            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(options.Limit),
                 options.Lang,
                 false,
-                scope.PathPatterns,
-                scope.ExcludePaths,
-                scope.ExcludeTests,
+                queryScope.PathPatterns,
+                queryScope.ExcludePaths,
+                queryScope.ExcludeTests,
                 !options.NoDedup,
                 options.Since,
                 exact,
@@ -1807,6 +1815,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Name,
                 recipeQuery.Query,
                 recipeQuery.Description,
+                recipeQuery.Severity,
+                [.. recipeQuery.PathPatterns],
+                [.. recipeQuery.ExcludePaths],
                 rows.Count,
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
@@ -1848,6 +1859,23 @@ public static partial class QueryCommandRunner
             [.. recipe.DefaultPathPatterns],
             [.. recipe.DefaultExcludePaths],
             options.ShowExcluded ? BuildSearchRecipeExcludedDiagnostics(recipe, options, scopeName, excludeTests) : null);
+    }
+
+    private static SearchRecipeScopeJsonResult BuildSearchRecipeQueryScope(
+        SearchRecipeScopeJsonResult scope,
+        SearchAuditRecipeQuery query)
+    {
+        var pathPatterns = query.PathPatterns.Count > 0
+            ? [.. query.PathPatterns]
+            : new List<string>(scope.PathPatterns);
+        var excludePaths = new List<string>(scope.ExcludePaths);
+        AddDistinct(excludePaths, query.ExcludePaths);
+
+        return scope with
+        {
+            PathPatterns = pathPatterns,
+            ExcludePaths = excludePaths
+        };
     }
 
     private static List<SearchRecipeExcludedDiagnosticJsonResult> BuildSearchRecipeExcludedDiagnostics(
@@ -2256,6 +2284,9 @@ public static partial class QueryCommandRunner
             query.Description,
             query.RecommendedLabels,
             query.FalsePositiveGuidance,
+            query.Severity,
+            [.. query.PathPatterns],
+            [.. query.ExcludePaths],
             query.ExactSubstring)).ToList());
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(

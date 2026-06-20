@@ -1088,6 +1088,10 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
         Assert.Contains("broad-token-audit", tokenQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
+        Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-bytes");
+        Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "thread-sleep");
+        Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "http-client-construction");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-node-parse");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-serializer-deserialize");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-async-deserialize");
@@ -1216,6 +1220,107 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_ExternalRecipeQueryScopeAndSeverityApply_Issue3826()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_query_scope_3826");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var recipePath = Path.Combine(projectRoot, "query-scope-recipes.json");
+            File.WriteAllText(
+                recipePath,
+                """
+                {
+                  "recipes": [
+                    {
+                      "name": "query-scoped",
+                      "description": "Exercise query-local scope metadata.",
+                      "default_scope": "source",
+                      "default_path_patterns": ["src/**"],
+                      "queries": [
+                        {
+                          "name": "docs-only",
+                          "query": "BoundaryNeedle",
+                          "description": "Find the marker in docs only.",
+                          "severity": "high",
+                          "path_patterns": ["docs/**"],
+                          "exclude_paths": ["docs/private/**"]
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { string Value = \"BoundaryNeedle\"; }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/public.md", "markdown", "BoundaryNeedle in public docs.\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/private/secret.md", "markdown", "BoundaryNeedle in private docs.\n");
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var (listExitCode, listStdout, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes", "--json"],
+                _jsonOptions));
+            var (runExitCode, runStdout, runStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "query-scoped", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, listStderr);
+            using var listDocument = ParseJsonOutput(listStdout);
+            var listedQuery = listDocument.RootElement
+                .GetProperty("recipes")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "query-scoped")
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single();
+            Assert.Equal("high", listedQuery.GetProperty("severity").GetString());
+            Assert.Contains(listedQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "docs/**");
+            Assert.Contains(listedQuery.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "docs/private/**");
+
+            Assert.Equal(CommandExitCodes.Success, runExitCode);
+            Assert.Equal(string.Empty, runStderr);
+            using var runDocument = ParseJsonOutput(runStdout);
+            var query = Assert.Single(runDocument.RootElement.GetProperty("queries").EnumerateArray());
+            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+            Assert.Equal("high", query.GetProperty("severity").GetString());
+            Assert.Contains(query.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "docs/**");
+            Assert.Contains(query.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "docs/private/**");
+            Assert.Equal("docs/public.md", result.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExternalRecipeSourceReadIsBounded_Issues3826_3674()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_bounded_read_3826");
+        try
+        {
+            var recipePath = Path.Combine(projectRoot, "oversized-recipes.json");
+            File.WriteAllText(recipePath, new string(' ', SearchAuditRecipes.MaxRecipeSourceBytes + 1));
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var registry = SearchAuditRecipes.Load();
+
+            var diagnostic = Assert.Single(registry.Diagnostics);
+            Assert.Equal($"recipe source #1 is too large (max {SearchAuditRecipes.MaxRecipeSourceBytes} bytes).", diagnostic);
+            Assert.DoesNotContain(recipePath, diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("csv")]
@@ -1282,7 +1387,7 @@ public partial class QueryCommandRunnerTests
                 .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse");
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
-            Assert.Equal(20, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(24, root.GetProperty("query_count").GetInt32());
             Assert.Equal("source", root.GetProperty("scope").GetProperty("name").GetString());
             Assert.Contains(root.GetProperty("scope").GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
             Assert.Contains(root.GetProperty("scope").GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Cli/SearchAuditRecipes.cs");

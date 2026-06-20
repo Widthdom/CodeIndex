@@ -1016,7 +1016,10 @@ execution. MCP recipe runs apply the same default source scope as the CLI; pass
 recipe definitions. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files
 separated by the platform path separator to add configured recipe sources; each
 file may be a recipe array or `{ "recipes": [...] }`, and invalid sources are
-reported as bounded `recipe_source_diagnostics`.
+reported as bounded `recipe_source_diagnostics`. External recipes may declare
+recipe-level `default_scope`, `default_path_patterns`, and
+`default_exclude_paths`; each query may declare `severity`, `path_patterns`, and
+`exclude_paths` to narrow a query independently of the recipe default scope.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
 metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -1685,7 +1688,7 @@ Run `cdidx status --log-path` to print the active log directory without opening 
 
 ### Project-local configuration file (`.cdidx/config.json` / `.cdidxrc.json`)
 
-You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
+You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes. Discovery stops after checking a directory that contains `.git`, `.hg`, `.svn`, `cdidx.workspace.json`, or `.cdidx-workspace.json`, so a child workspace does not inherit a config file from an unrelated parent.
 
 Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and all detected offending fields; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
 
@@ -3540,7 +3543,10 @@ scope を適用します。docs、tests、changelog、recipe definitions を意�
 `{"auditScope":"all"}` を指定してください。`CDIDX_SEARCH_RECIPE_PATHS` に platform path
 separator 区切りの JSON file を指定すると、設定済み recipe source を追加できます。各 file は
 recipe array または `{ "recipes": [...] }` を受け付け、不正な source は bounded な
-`recipe_source_diagnostics` として報告されます。
+`recipe_source_diagnostics` として報告されます。外部 recipe は recipe-level の
+`default_scope`、`default_path_patterns`、`default_exclude_paths` を宣言できます。
+各 query は `severity`、`path_patterns`、`exclude_paths` を宣言でき、recipe の既定 scope
+とは独立して query ごとの対象を狭められます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
@@ -4203,7 +4209,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 ### プロジェクト固有の設定ファイル (`.cdidx/config.json` / `.cdidxrc.json`)
 
-シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
+シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。探索は `.git`、`.hg`、`.svn`、`cdidx.workspace.json`、`.cdidx-workspace.json` を含むディレクトリを確認した後で停止するため、子 workspace が無関係な親ディレクトリの設定ファイルを継承しません。
 
 優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと検出できた該当フィールドすべてを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
 
