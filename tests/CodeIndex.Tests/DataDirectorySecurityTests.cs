@@ -61,6 +61,44 @@ public class DataDirectorySecurityTests
     }
 
     [Fact]
+    public void CreateSensitiveParentDirectoryForFile_OnPosix_Forces0700Mode_Issue3775()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_parent_security_{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "audit", "events.jsonl");
+        try
+        {
+            var directory = DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(path);
+
+            Assert.NotNull(directory);
+            Assert.Equal(Path.GetDirectoryName(path), directory.FullName);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(directory.FullName) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CreateSensitiveParentDirectoryForFile_OnExistingTempRoot_DoesNotHardenSharedRoot_Issue3775()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_direct_parent_{Guid.NewGuid():N}.jsonl");
+
+        var directory = DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(path);
+
+        Assert.NotNull(directory);
+        Assert.Equal(
+            Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            directory.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    }
+
+    [Fact]
     public void CreateSensitiveTempDirectory_OnPosix_Forces0700Mode()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

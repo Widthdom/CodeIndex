@@ -21,17 +21,25 @@ internal static class DataDirectorySecurity
 
     public static DirectoryInfo CreatePrivateDirectory(string path)
     {
-        var directory = Directory.CreateDirectory(path);
-        if (IsCdidxDirectory(directory.FullName))
-            ApplyPrivateMode(directory.FullName);
-        return directory;
+        return IsCdidxDirectory(path)
+            ? CreateDirectoryWithPrivateMode(path)
+            : Directory.CreateDirectory(path);
     }
 
     public static DirectoryInfo CreateSensitiveDirectory(string path)
     {
-        var directory = Directory.CreateDirectory(path);
-        ApplyPrivateMode(directory.FullName);
-        return directory;
+        return CreateDirectoryWithPrivateMode(path);
+    }
+
+    public static DirectoryInfo? CreateSensitiveParentDirectoryForFile(string path)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (string.IsNullOrWhiteSpace(directory))
+            return null;
+
+        return Directory.Exists(directory) && IsSharedDirectoryRoot(directory)
+            ? new DirectoryInfo(directory)
+            : CreateSensitiveDirectory(directory);
     }
 
     public static DirectoryInfo CreateSensitiveTempDirectory(string prefix)
@@ -55,6 +63,51 @@ internal static class DataDirectorySecurity
 
         File.SetUnixFileMode(path, PrivateFileMode);
     }
+
+    private static DirectoryInfo CreateDirectoryWithPrivateMode(string path)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return Directory.CreateDirectory(path);
+
+        var directory = Directory.CreateDirectory(path, PrivateDirectoryMode);
+        ApplyPrivateMode(directory.FullName);
+        return directory;
+    }
+
+    private static bool IsSharedDirectoryRoot(string path)
+    {
+        if (IsSameDirectory(path, Path.GetTempPath()))
+            return true;
+
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile) && IsSameDirectory(path, userProfile))
+            return true;
+
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localAppData) && IsSameDirectory(path, localAppData))
+            return true;
+
+        var pathRoot = Path.GetPathRoot(Path.GetFullPath(path));
+        return !string.IsNullOrWhiteSpace(pathRoot) && IsSameDirectory(path, pathRoot);
+    }
+
+    private static bool IsSameDirectory(string left, string right)
+    {
+        try
+        {
+            var comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(NormalizeDirectory(left), NormalizeDirectory(right), comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizeDirectory(string path)
+        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     public static void WritePrivateText(string path, string contents, Encoding? encoding = null)
     {

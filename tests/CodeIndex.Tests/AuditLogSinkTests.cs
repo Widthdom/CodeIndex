@@ -402,6 +402,32 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void Constructor_OnUnixCreatesPrivateParentDirectory_Issue3775()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_audit_private_parent_{Guid.NewGuid():N}");
+        var directory = Path.Combine(root, "mcp-audit");
+        var path = Path.Combine(directory, "audit.jsonl");
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+
+            Assert.True(Directory.Exists(directory));
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(directory) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Record_OnUnixCreatesPrivateLogFileAfterRotation()
     {
         if (OperatingSystem.IsWindows())
