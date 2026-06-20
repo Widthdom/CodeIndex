@@ -8,8 +8,12 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class WorkspaceMetadataEnricher
 {
-    public static void Enrich(StatusResult status, string dbPath, bool dbPathExplicit = false) =>
-        Apply(dbPath, dbPathExplicit, (root, head, dirty, indexedHead, headChanged) =>
+    public static void Enrich(
+        StatusResult status,
+        string dbPath,
+        bool dbPathExplicit = false,
+        CancellationToken cancellationToken = default) =>
+        Apply(dbPath, dbPathExplicit, cancellationToken, (root, head, dirty, indexedHead, headChanged) =>
         {
             status.ProjectRoot = root;
             status.GitHead = head;
@@ -24,11 +28,15 @@ public static class WorkspaceMetadataEnricher
             // above which is #1508's full-scan-only `indexed_head_commit`).
             // #1509: index 時 HEAD と現 HEAD を比較し、両方判明している時のみ N を載せる。
             if (root != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
-                status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(root, status.IndexedHeadSha);
+                status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(root, status.IndexedHeadSha, cancellationToken);
         });
 
-    public static void Enrich(RepoMapResult map, string dbPath, bool dbPathExplicit = false) =>
-        Apply(dbPath, dbPathExplicit, (root, head, dirty, indexedHead, headChanged) =>
+    public static void Enrich(
+        RepoMapResult map,
+        string dbPath,
+        bool dbPathExplicit = false,
+        CancellationToken cancellationToken = default) =>
+        Apply(dbPath, dbPathExplicit, cancellationToken, (root, head, dirty, indexedHead, headChanged) =>
         {
             map.ProjectRoot = root;
             map.GitHead = head;
@@ -37,8 +45,12 @@ public static class WorkspaceMetadataEnricher
             map.WorktreeHeadChanged = headChanged;
         });
 
-    public static void Enrich(SymbolAnalysisResult analysis, string dbPath, bool dbPathExplicit = false) =>
-        Apply(dbPath, dbPathExplicit, (root, head, dirty, indexedHead, headChanged) =>
+    public static void Enrich(
+        SymbolAnalysisResult analysis,
+        string dbPath,
+        bool dbPathExplicit = false,
+        CancellationToken cancellationToken = default) =>
+        Apply(dbPath, dbPathExplicit, cancellationToken, (root, head, dirty, indexedHead, headChanged) =>
         {
             analysis.ProjectRoot = root;
             analysis.GitHead = head;
@@ -51,7 +63,11 @@ public static class WorkspaceMetadataEnricher
     /// Resolve workspace metadata once and apply it via callback.
     /// ワークスペースメタデータを一度解決し、コールバックで適用する。
     /// </summary>
-    private static void Apply(string dbPath, bool dbPathExplicit, Action<string?, string?, bool?, string?, bool?> setter)
+    private static void Apply(
+        string dbPath,
+        bool dbPathExplicit,
+        CancellationToken cancellationToken,
+        Action<string?, string?, bool?, string?, bool?> setter)
     {
         var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
         if (projectRoot == null)
@@ -60,9 +76,9 @@ public static class WorkspaceMetadataEnricher
             return;
         }
 
-        var runtimeHead = GitHelper.TryGetHeadCommit(projectRoot);
-        var runtimeBranch = GitHelper.TryGetHeadBranch(projectRoot);
-        var dirty = GitHelper.TryIsWorktreeDirty(projectRoot);
+        var runtimeHead = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
+        var runtimeBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
+        var dirty = GitHelper.TryIsWorktreeDirty(projectRoot, cancellationToken);
         var indexedHead = DbPathResolver.TryReadIndexedHeadCommit(dbPath);
         var indexedHeadSha = DbPathResolver.TryReadIndexedHeadSha(dbPath);
         var indexedHeadBranch = DbPathResolver.TryReadIndexedHeadBranch(dbPath);

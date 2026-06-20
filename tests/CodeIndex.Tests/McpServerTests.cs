@@ -14905,6 +14905,37 @@ public sealed class Caller
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("source code", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
+        Assert.Equal("description", rejection["field"]!.GetValue<string>());
+        Assert.Equal(SourceCodeDetector.ReasonStatementEnding, rejection["reason_code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_SourceCodeFenceRejectionIncludesBoundedReason_Issue3830()
+    {
+        const string leakedToken = "SHOULD_NOT_APPEAR_3830";
+        var desc = "The tool should explain this failure:\n"
+                 + "~~~csharp\n"
+                 + leakedToken + "\n"
+                 + "~~~";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject { ["category"] = "other", ["description"] = desc }
+            }
+        };
+        var response = _server.HandleMessage(json)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
+        Assert.Equal("description", rejection["field"]!.GetValue<string>());
+        Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, rejection["reason_code"]!.GetValue<string>());
+        Assert.DoesNotContain(leakedToken, response.ToJsonString());
     }
 
     [Fact]

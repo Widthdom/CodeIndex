@@ -5970,7 +5970,7 @@ public static partial class QueryCommandRunner
             }
 
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
+            WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit, cancellationToken);
             status.DataDir = options.DataDir;
             status.DataDirSource = options.DataDirSource;
             status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
@@ -5981,7 +5981,7 @@ public static partial class QueryCommandRunner
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (options.CheckWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, cancellationToken);
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
@@ -10897,6 +10897,10 @@ public static partial class QueryCommandRunner
                 WriteVerboseQueryDebug(options, profileEntries, jsonOptions);
             afterProfile?.Invoke(exitCode);
             return exitCode;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (FtsQuerySyntaxException ex)
         {

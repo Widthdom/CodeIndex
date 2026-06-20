@@ -208,7 +208,7 @@ public static class GitHelper
     /// In a worktree, .git is a file containing "gitdir: path/to/.git/worktrees/name".
     /// The common dir is resolved via the "commondir" file inside the worktree git dir.
     /// </summary>
-    public static string? ResolveGitCommonDir(string projectRoot)
+    public static string? ResolveGitCommonDir(string projectRoot, CancellationToken cancellationToken = default)
     {
         var dotGit = Path.Combine(projectRoot, ".git");
         var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
@@ -219,7 +219,7 @@ public static class GitHelper
         // Worktree: .git is a file containing "gitdir: <path>" / worktree: .gitがファイルで "gitdir: <path>" を含む
         if (!File.Exists(ioDotGit))
         {
-            return TryGetRepositoryType(projectRoot) == GitRepositoryType.Bare
+            return TryGetRepositoryType(projectRoot, cancellationToken) == GitRepositoryType.Bare
                 ? Path.GetFullPath(projectRoot)
                 : null;
         }
@@ -256,7 +256,7 @@ public static class GitHelper
     /// Try to classify the repository shape for <paramref name="projectRoot"/>.
     /// projectRoot の git リポジトリ形状を best-effort で判定する。
     /// </summary>
-    public static GitRepositoryType TryGetRepositoryType(string projectRoot)
+    public static GitRepositoryType TryGetRepositoryType(string projectRoot, CancellationToken cancellationToken = default)
     {
         var dotGit = Path.Combine(projectRoot, ".git");
         var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
@@ -265,7 +265,7 @@ public static class GitHelper
         if (File.Exists(ioDotGit))
             return GitRepositoryType.Worktree;
 
-        var isBare = TryRunGit(projectRoot, "rev-parse", "--is-bare-repository")?.Trim();
+        var isBare = TryRunGit(projectRoot, cancellationToken, "rev-parse", "--is-bare-repository")?.Trim();
         return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
             ? GitRepositoryType.Bare
             : GitRepositoryType.None;
@@ -433,12 +433,21 @@ public static class GitHelper
             : null;
     }
 
-    public static string? TryResolveCommit(string projectRoot, string refName)
+    /// <summary>
+    /// Try to resolve a git ref to a commit SHA. Pass a caller token for cancelable production paths;
+    /// the default token preserves legacy best-effort behavior for compatibility.
+    /// git ref を commit SHA に解決する。production 経路では caller token を渡す。
+    /// </summary>
+    public static string? TryResolveCommit(string projectRoot, string refName, CancellationToken cancellationToken = default)
     {
         try
         {
             ValidateGitRef(refName, nameof(refName));
-            return TryRunGit(projectRoot, "rev-parse", "--verify", $"{refName}^{{commit}}")?.Trim();
+            return TryRunGit(projectRoot, cancellationToken, "rev-parse", "--verify", $"{refName}^{{commit}}")?.Trim();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -525,14 +534,17 @@ public static class GitHelper
     /// 現在の HEAD が指定 commit より何コミット進んでいるかを安全に数える。git が無い、
     /// commit が解決できない、または線形な祖先関係に無い場合は null を返す。
     /// </summary>
-    public static int? TryCountCommitsAhead(string projectRoot, string baseCommit)
+    public static int? TryCountCommitsAhead(
+        string projectRoot,
+        string baseCommit,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(baseCommit))
             return null;
         if (baseCommit.StartsWith('-') || !Regex.IsMatch(baseCommit, @"^[a-zA-Z0-9_./^~\-]+$"))
             return null;
 
-        var headSha = TryGetHeadCommit(projectRoot);
+        var headSha = TryGetHeadCommit(projectRoot, cancellationToken);
         if (string.IsNullOrWhiteSpace(headSha))
             return null;
 
@@ -547,10 +559,10 @@ public static class GitHelper
         // branch tip, etc.). rev-list will succeed with exit=0 but a misleading count.
         // indexed commit が現在 HEAD の祖先である場合のみ「N コミット進んでいる」の解釈が
         // 成立するので、merge-base --is-ancestor で検証する。
-        if (!TryRunGitForExitCode(projectRoot, "merge-base", "--is-ancestor", baseCommit, "HEAD"))
+        if (!TryRunGitForExitCode(projectRoot, cancellationToken, "merge-base", "--is-ancestor", baseCommit, "HEAD"))
             return null;
 
-        var output = TryRunGit(projectRoot, "rev-list", "--count", $"{baseCommit}..HEAD");
+        var output = TryRunGit(projectRoot, cancellationToken, "rev-list", "--count", $"{baseCommit}..HEAD");
         if (output == null)
             return null;
         var trimmed = output.Trim();
@@ -559,7 +571,7 @@ public static class GitHelper
             : null;
     }
 
-    private static bool TryRunGitForExitCode(string projectRoot, params string[] args)
+    private static bool TryRunGitForExitCode(string projectRoot, CancellationToken cancellationToken, params string[] args)
     {
         try
         {
@@ -573,8 +585,12 @@ public static class GitHelper
             // Reuse the shared event-driven drainer (PR #1497) so we don't reintroduce
             // sync-over-async on git's stderr pipe. We only care about exit code here.
             // #1497 で導入した共有 drainer を使い、stderr の sync-over-async を再導入しない。
-            var result = RunProcessCapturingOutput(psi);
+            var result = RunProcessCapturingOutput(psi, cancellationToken);
             return result != null && result.Value.ExitCode == 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -591,7 +607,8 @@ public static class GitHelper
 
     internal static GitRepositoryType TryGetRepositoryType(
         string projectRoot,
-        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default)
     {
         var dotGit = Path.Combine(projectRoot, ".git");
         var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
@@ -600,7 +617,7 @@ public static class GitHelper
         if (File.Exists(ioDotGit))
             return GitRepositoryType.Worktree;
 
-        var isBare = TryRunGit(projectRoot, gitEnvironmentOverrides, "rev-parse", "--is-bare-repository")?.Trim();
+        var isBare = TryRunGit(projectRoot, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--is-bare-repository")?.Trim();
         return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
             ? GitRepositoryType.Bare
             : GitRepositoryType.None;
@@ -633,9 +650,9 @@ public static class GitHelper
     /// Try to determine whether the worktree has uncommitted changes.
     /// worktree に未コミット変更があるか安全に判定する。
     /// </summary>
-    public static bool? TryIsWorktreeDirty(string projectRoot)
+    public static bool? TryIsWorktreeDirty(string projectRoot, CancellationToken cancellationToken = default)
     {
-        var status = TryGetWorktreeStatus(projectRoot);
+        var status = TryGetWorktreeStatus(projectRoot, cancellationToken);
         return status?.IsDirty;
     }
 
@@ -643,9 +660,9 @@ public static class GitHelper
     /// Try to determine worktree dirtiness and unresolved merge paths from git porcelain status.
     /// git porcelain status から worktree の dirty 状態と未解決 merge path を取得する。
     /// </summary>
-    public static WorktreeStatus? TryGetWorktreeStatus(string projectRoot)
+    public static WorktreeStatus? TryGetWorktreeStatus(string projectRoot, CancellationToken cancellationToken = default)
     {
-        var output = TryRunGit(projectRoot, "-c", "core.quotePath=false", "status", "--porcelain");
+        var output = TryRunGit(projectRoot, cancellationToken, "-c", "core.quotePath=false", "status", "--porcelain");
         if (output == null)
             return null;
 
@@ -686,16 +703,18 @@ public static class GitHelper
     /// git が無い場合は null、該当無しは空集合を返す。sparse-checkout(cone/non-cone)・partial
     /// clone・手動 update-index --skip-worktree がいずれも同じビットを使うのを横断的に拾う。
     /// </summary>
-    public static HashSet<string>? TryGetSkipWorktreePaths(string projectRoot)
-        => TryGetSkipWorktreePaths(projectRoot, gitEnvironmentOverrides: null);
+    public static HashSet<string>? TryGetSkipWorktreePaths(string projectRoot, CancellationToken cancellationToken = default)
+        => TryGetSkipWorktreePaths(projectRoot, gitEnvironmentOverrides: null, cancellationToken);
 
     internal static HashSet<string>? TryGetSkipWorktreePaths(
         string projectRoot,
-        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default)
     {
         var output = TryRunGit(
             projectRoot,
             gitEnvironmentOverrides,
+            cancellationToken,
             "-c",
             "core.quotePath=false",
             "ls-files",
@@ -761,9 +780,6 @@ public static class GitHelper
         return Directory.Exists(ioDotGit) || File.Exists(ioDotGit);
     }
 
-    private static string? TryRunGit(string projectRoot, params string[] args)
-        => TryRunGit(projectRoot, gitEnvironmentOverrides: null, args);
-
     private static string? TryRunGit(string projectRoot, CancellationToken cancellationToken, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides: null, cancellationToken, args);
 
@@ -799,9 +815,6 @@ public static class GitHelper
         string Error,
         GitCommandFailureKind FailureKind,
         string? Diagnostic);
-
-    private static string? TryRunGit(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides, params string[] args)
-        => TryRunGit(projectRoot, gitEnvironmentOverrides, CancellationToken.None, args);
 
     private static string? TryRunGit(
         string projectRoot,

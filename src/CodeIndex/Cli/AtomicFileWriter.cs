@@ -9,6 +9,12 @@ internal static class AtomicFileWriter
 {
     internal static Action<string>? FlushParentDirectoryForTesting { get; set; }
 
+    public enum WriteProfile
+    {
+        Public,
+        Sensitive,
+    }
+
     public static void WriteText(string path, string contents, Encoding encoding, Action<string>? applyFileMode = null)
     {
         Write(
@@ -22,12 +28,45 @@ internal static class AtomicFileWriter
             applyFileMode);
     }
 
+    public static void WriteText(string path, string contents, Encoding encoding, WriteProfile profile)
+    {
+        Write(
+            path,
+            stream =>
+            {
+                using var writer = new StreamWriter(stream, encoding, bufferSize: 1024, leaveOpen: true);
+                writer.Write(contents);
+                writer.Flush();
+            },
+            profile);
+    }
+
     public static void WriteJson<T>(string path, T value, JsonSerializerOptions? options = null, Action<string>? applyFileMode = null)
     {
         Write(path, stream => JsonSerializer.Serialize(stream, value, options), applyFileMode);
     }
 
+    public static void WriteJson<T>(string path, T value, JsonSerializerOptions? options, WriteProfile profile)
+    {
+        Write(path, stream => JsonSerializer.Serialize(stream, value, options), profile);
+    }
+
+    public static void WriteJson<T>(string path, T value, WriteProfile profile)
+    {
+        WriteJson(path, value, options: null, profile);
+    }
+
     public static void Write(string path, Action<Stream> writeContents, Action<string>? applyFileMode = null)
+        => WriteCore(path, writeContents, applyFileMode, WriteProfile.Public);
+
+    public static void Write(string path, Action<Stream> writeContents, WriteProfile profile)
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile);
+
+    private static void WriteCore(
+        string path,
+        Action<Stream> writeContents,
+        Action<string>? applyFileMode,
+        WriteProfile profile)
     {
         ArgumentNullException.ThrowIfNull(writeContents);
 
@@ -38,7 +77,7 @@ internal static class AtomicFileWriter
 
         try
         {
-            using (var stream = new FileStream(ioTempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var stream = CreateTempFile(ioTempPath, profile))
             {
                 applyFileMode?.Invoke(ioTempPath);
                 writeContents(stream);
@@ -56,6 +95,25 @@ internal static class AtomicFileWriter
             throw;
         }
     }
+
+    private static FileStream CreateTempFile(string path, WriteProfile profile)
+    {
+        if (profile != WriteProfile.Sensitive || OperatingSystem.IsWindows())
+            return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+
+        return new FileStream(
+            path,
+            new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = DataDirectorySecurity.PrivateFileMode,
+            });
+    }
+
+    private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
+        => profile == WriteProfile.Sensitive ? DataDirectorySecurity.ApplyPrivateFileMode : null;
 
     private static void FlushParentDirectory(string path)
     {

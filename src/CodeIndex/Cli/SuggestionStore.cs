@@ -797,7 +797,7 @@ public class SuggestionStore
             Directory.CreateDirectory(dir);
 
         NormalizeRecordDefaults(records);
-        AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions, DataDirectorySecurity.ApplyPrivateFileMode);
+        AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions, AtomicFileWriter.WriteProfile.Sensitive);
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>
