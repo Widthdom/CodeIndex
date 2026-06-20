@@ -4169,6 +4169,53 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_WorkspaceDbValidationUsesReadOnlyFallbackPath_Issue3737()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_member");
+        var originalOpenReadOnly = DbConnectionFactory.OpenReadOnlyForTesting;
+        var validatedMemberThroughReadOnlyFactory = false;
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
+            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+
+            var memberFullPath = Path.GetFullPath(memberDb);
+            DbConnectionFactory.OpenReadOnlyForTesting = dbPath =>
+            {
+                validatedMemberThroughReadOnlyFactory |=
+                    string.Equals(Path.GetFullPath(dbPath), memberFullPath, StringComparison.Ordinal);
+                var builder = new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                };
+                var connection = new SqliteConnection(builder.ConnectionString);
+                connection.Open();
+                return connection;
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(validatedMemberThroughReadOnlyFactory);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            DbConnectionFactory.OpenReadOnlyForTesting = originalOpenReadOnly;
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_WorkspaceDbJson_CapsCrossDatabaseSymbolSample_Issue3155()
     {
         var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_primary");

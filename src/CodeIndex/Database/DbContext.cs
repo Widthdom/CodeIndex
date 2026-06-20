@@ -296,12 +296,14 @@ public class DbContext : IDisposable
 
         try
         {
-            using var connection = OpenSqliteConnectionWithRetry(
-                () => createConnection(openTarget),
-                openConnection,
-                sleep,
-                dbPath: dbPath,
-                cancellationToken: cancellationToken);
+            using var connection = requireWritable
+                ? OpenSqliteConnectionWithRetry(
+                    () => createConnection(openTarget),
+                    openConnection,
+                    sleep,
+                    dbPath: dbPath,
+                    cancellationToken: cancellationToken)
+                : OpenReadOnly(openTarget);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA application_id";

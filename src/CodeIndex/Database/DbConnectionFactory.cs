@@ -5,6 +5,14 @@ namespace CodeIndex.Database;
 
 internal static class DbConnectionFactory
 {
+    private static readonly AsyncLocal<Func<string, SqliteConnection>?> ScopedOpenReadOnlyForTesting = new();
+
+    internal static Func<string, SqliteConnection>? OpenReadOnlyForTesting
+    {
+        get => ScopedOpenReadOnlyForTesting.Value;
+        set => ScopedOpenReadOnlyForTesting.Value = value;
+    }
+
     // SQLITE_READONLY(8), SQLITE_CANTOPEN(14), SQLITE_IOERR(10). A read-only filesystem
     // typically surfaces as CANTOPEN because -journal/-shm cannot be created.
     // read-only FS では -journal / -shm を作れず CANTOPEN(14) を返すことが多い。
@@ -136,6 +144,12 @@ internal static class DbConnectionFactory
 
     internal static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
     {
+        if (OpenReadOnlyForTesting is { } openReadOnlyForTesting)
+        {
+            usedImmutableFallback = false;
+            return openReadOnlyForTesting(dbPath);
+        }
+
         usedImmutableFallback = false;
         // Attempt 1: Mode=ReadOnly. Works for most read-only FS scenarios and, crucially,
         // still reads hot -wal state so nothing committed but not yet checkpointed is lost.
