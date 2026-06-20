@@ -238,6 +238,54 @@ public class McpServerTests : IDisposable
             asyncDocument.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength());
     }
 
+    [Fact]
+    public async Task ProcessFrameAsync_TimedOutIsolatedActionReportsAndCleansUpDrain_Issue3722()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTests = _ => blocker.Task;
+
+        var response = await server.ProcessFrameAsync("""{"jsonrpc":"2.0","id":3722,"method":"ping"}""")
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(response);
+        using (var document = JsonDocument.Parse(response))
+        {
+            var error = document.RootElement.GetProperty("error");
+            Assert.Equal("Request timed out", error.GetProperty("message").GetString());
+            Assert.True(error.GetProperty("data").GetProperty("isolated_action_draining").GetBoolean());
+        }
+        var draining = server.BuildRequestTimeoutDiagnosticsStatus();
+        Assert.Equal(1, draining["isolated_action_draining_count"]!.GetValue<long>());
+        Assert.Equal("draining", draining["last"]!["state"]!.GetValue<string>());
+
+        blocker.SetResult();
+
+        await WaitUntilAsync(
+            () => server.BuildRequestTimeoutDiagnosticsStatus()["isolated_action_draining_count"]!.GetValue<long>() == 0,
+            "timed-out isolated action to drain and unregister");
+        var drained = server.BuildRequestTimeoutDiagnosticsStatus();
+        Assert.Equal(1, drained["isolated_action_drained_count"]!.GetValue<long>());
+        Assert.Equal("completed", drained["last"]!["state"]!.GetValue<string>());
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, string description)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+                return;
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail($"Timed out waiting for {description}.");
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
     {
         var normalized = content.Replace("\r\n", "\n");

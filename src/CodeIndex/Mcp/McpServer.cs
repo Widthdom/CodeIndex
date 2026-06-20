@@ -1673,6 +1673,11 @@ public partial class McpServer : IDisposable
                 var elapsed = stopwatch.Elapsed;
                 RecordTimedOutIsolatedActionDraining(requestKey, elapsed);
                 cleanupNow = false;
+                // This cleanup must run even after request timeout/shutdown cancellation;
+                // otherwise `_activeRequests` and the linked CTS would leak when an isolated
+                // action eventually observes cancellation and exits (#3722).
+                // request timeout / shutdown cancellation 後でも cleanup は必ず実行する。
+                // isolated action が後で終了した時に `_activeRequests` と linked CTS を漏らさないため (#3722)。
                 _ = actionTask.ContinueWith(task =>
                 {
                     _ = task.Exception;
