@@ -1610,6 +1610,7 @@ public sealed class IndexCommandOptions
     public bool OptimizeOnly { get; init; }
     public bool SymbolsOnly { get; init; }
     public int? WatchDebounceMs { get; init; }
+    public int WatchPendingPathLimit { get; init; } = IndexWatchRunner.DefaultWatchPendingPathLimit;
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public CompletionNotificationMode NotifyMode { get; init; } = CompletionNotificationMode.Auto;
     public long? MaxFileSizeBytes { get; init; }

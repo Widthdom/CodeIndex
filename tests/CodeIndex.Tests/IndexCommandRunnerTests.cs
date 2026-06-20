@@ -2880,6 +2880,7 @@ public sealed class Caller
         var options = IndexCommandRunner.ParseArgs([".", "--watch"]);
         Assert.True(options.Watch);
         Assert.Null(options.WatchDebounceMs);
+        Assert.Equal(IndexWatchRunner.DefaultWatchPendingPathLimit, options.WatchPendingPathLimit);
     }
 
     [Fact]
@@ -2928,6 +2929,38 @@ public sealed class Caller
         {
             Console.SetError(originalErr);
         }
+    }
+
+    [Fact]
+    public void ParseArgs_WatchPendingPathLimitFlag_ParsesValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--watch", "--watch-pending-path-limit", "8192"]);
+
+        Assert.True(options.Watch);
+        Assert.Equal(8192, options.WatchPendingPathLimit);
+    }
+
+    [Fact]
+    public void ParseArgs_WatchPendingPathLimitEnv_ParsesValue()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, "6144");
+
+        var options = IndexCommandRunner.ParseArgs([".", "--watch"]);
+
+        Assert.Equal(6144, options.WatchPendingPathLimit);
+    }
+
+    [Fact]
+    public void ParseArgs_WatchPendingPathLimitFlag_RejectsValueAboveMaximum()
+    {
+        var oversized = $"{IndexWatchRunner.MaxWatchPendingPathLimit + 1}";
+
+        var options = IndexCommandRunner.ParseArgs([".", "--watch", "--watch-pending-path-limit", oversized]);
+
+        Assert.Equal(IndexWatchRunner.DefaultWatchPendingPathLimit, options.WatchPendingPathLimit);
+        Assert.Contains("--watch-pending-path-limit", options.ParseError);
+        Assert.Contains($"{IndexWatchRunner.MaxWatchPendingPathLimit}", options.ParseError);
     }
 
     [Fact]

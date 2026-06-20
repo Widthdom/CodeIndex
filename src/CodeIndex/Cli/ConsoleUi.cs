@@ -80,7 +80,7 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--symbols-only] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--symbols-only] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>] [--watch-pending-path-limit <n>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
@@ -981,6 +981,7 @@ public static class ConsoleUi
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         WriteHelpLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --changed-between / --files / --dry-run");
         Console.WriteLine($"  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: {IndexWatchRunner.DefaultDebounceMs}, max {IndexWatchRunner.MaxDebounceMs})");
+        WriteHelpLine($"  --watch-pending-path-limit <n>  Watch only: pending changed-path queue limit before falling back to a full rescan (default: {IndexWatchRunner.DefaultWatchPendingPathLimit}, max: {IndexWatchRunner.MaxWatchPendingPathLimit}; also honors {IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable})");
         Console.WriteLine("  --optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files");
         WriteHelpLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         WriteHelpLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");

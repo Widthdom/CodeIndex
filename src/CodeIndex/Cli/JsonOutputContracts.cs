@@ -295,6 +295,7 @@ internal sealed class IndexWatchEventJsonResult
     public string? ProjectRoot { get; init; }
     public string? Db { get; init; }
     public int? DebounceMs { get; init; }
+    public int? WatchPendingPathLimit { get; init; }
     public int? BatchSize { get; init; }
     public List<string>? BatchPathSamples { get; init; }
     public int? BatchPathSampleLimit { get; init; }
