@@ -97,7 +97,6 @@ public static class SourceCodeDetector
     /// 検出を発動させるのに必要な、連続する import/using 行の数。
     /// </summary>
     private const int ConsecutiveImportThreshold = 3;
-    private const int MaxMarkdownFenceIndentSpaces = 3;
 
     public const string ReasonStatementEnding = "statement-ending";
     public const string ReasonIndentedCodeLines = "indented-code-lines";
@@ -596,10 +595,8 @@ public static class SourceCodeDetector
         marker = '\0';
         markerLength = 0;
         var index = 0;
-        while (index < line.Length && line[index] == ' ' && index < MaxMarkdownFenceIndentSpaces)
+        while (index < line.Length && line[index] is ' ' or '\t')
             index++;
-        if (index < line.Length && line[index] == ' ')
-            return false;
         if (index >= line.Length)
             return false;
 

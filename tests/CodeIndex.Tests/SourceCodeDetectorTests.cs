@@ -439,6 +439,19 @@ public class SourceCodeDetectorTests
         Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, result.ReasonCode);
     }
 
+    [Theory]
+    [InlineData("    ```csharp\nreturn token;\n    ```")]
+    [InlineData("\t```csharp\nreturn token;\n\t```")]
+    [InlineData("    ~~~csharp\nreturn token;\n    ~~~")]
+    [InlineData("\t~~~csharp\nreturn token;\n\t~~~")]
+    public void RejectsListIndentedFencedCodeBlocks_Issue3830(string text)
+    {
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.True(result.ContainsSourceCode);
+        Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, result.ReasonCode);
+    }
+
     [Fact]
     public void AllowsEmptyFencedBlock()
     {
