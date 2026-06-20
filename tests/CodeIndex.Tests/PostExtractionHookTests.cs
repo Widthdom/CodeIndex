@@ -163,7 +163,7 @@ public class PostExtractionHookTests
                     var diagnostic = Assert.Single(
                         runner.Diagnostics,
                         diagnostic => diagnostic.TypeName == typeof(ThrowingConstructorPostExtractionHook).FullName);
-                    Assert.Equal("hook_constructor_failed", diagnostic.Category);
+                    Assert.Equal("constructor_failed", diagnostic.Category);
                     Assert.Contains("isolated worker", diagnostic.Message, StringComparison.Ordinal);
                     Assert.DoesNotContain("ctor boom", diagnostic.Message, StringComparison.Ordinal);
                 }

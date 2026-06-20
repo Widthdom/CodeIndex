@@ -128,9 +128,10 @@ public sealed class PostExtractionHookRunner : IDisposable
                     dllPath);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                runner.EnqueueDiagnostic(dllPath, null, "Failed to load hook assembly.", category: "assembly_load_failed");
+                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Hook assembly load", ex);
+                runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
                 continue;
             }
 
@@ -139,9 +140,10 @@ public sealed class PostExtractionHookRunner : IDisposable
             {
                 types = assembly.GetTypes();
             }
-            catch (ReflectionTypeLoadException)
+            catch (ReflectionTypeLoadException ex)
             {
-                runner.EnqueueDiagnostic(dllPath, null, "Failed to inspect hook assembly.", category: "assembly_inspection_failed");
+                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Hook assembly type inspection", ex);
+                runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
                 continue;
             }
 
@@ -170,7 +172,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                 }
                 catch (Exception)
                 {
-                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "hook_registration_failed");
+                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "activation_failed");
                 }
             }
         }
@@ -434,7 +436,18 @@ public sealed class PostExtractionHookRunner : IDisposable
             return "callback_worker_failed";
 
         if (workerError.StartsWith("worker_execution_failed:", StringComparison.Ordinal))
-            return "hook_constructor_failed";
+        {
+            if (workerError.Contains(nameof(FileNotFoundException), StringComparison.Ordinal)
+                || workerError.Contains(nameof(FileLoadException), StringComparison.Ordinal))
+            {
+                return "dependency_resolution_failed";
+            }
+
+            if (workerError.Contains(nameof(TypeLoadException), StringComparison.Ordinal))
+                return "type_load_failed";
+
+            return "constructor_failed";
+        }
         if (workerError.StartsWith("worker_start_failed:", StringComparison.Ordinal))
             return "worker_start_failed";
         if (workerError.StartsWith("worker_protocol_error:", StringComparison.Ordinal))

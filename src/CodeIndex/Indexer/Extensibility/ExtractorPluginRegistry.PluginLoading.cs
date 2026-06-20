@@ -59,6 +59,25 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
+            Type[] types;
+            try
+            {
+                types = assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Plugin assembly type inspection", ex);
+                RecordDiagnostic(
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "error",
+                    diagnostic.Message,
+                    countsAsSkippedFile: true,
+                    category: diagnostic.Category);
+                return;
+            }
+
             lock (Gate)
             {
                 pluginAssemblyCount++;
@@ -66,22 +85,23 @@ public static partial class ExtractorPluginRegistry
                 loadContext = null;
             }
 
-            foreach (var type in assembly.GetTypes())
+            foreach (var type in types)
             {
                 if (type is { IsAbstract: false, IsInterface: false } && type.GetConstructor(Type.EmptyTypes) != null)
                     TryRegisterPluginType(type, fullPath);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Plugin assembly load", ex);
             RecordDiagnostic(
                 "plugin",
                 fullPath,
                 typeName: null,
                 severity: "error",
-                "Failed to load plugin assembly.",
+                diagnostic.Message,
                 countsAsSkippedFile: true,
-                category: "assembly_load_failed");
+                category: diagnostic.Category);
         }
         finally
         {
@@ -178,16 +198,17 @@ public static partial class ExtractorPluginRegistry
                 Register(referenceExtractor);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyConstructorFailure("Plugin type constructor", ex);
             RecordDiagnostic(
                 "plugin_type",
                 pluginPath,
                 type.FullName,
                 severity: "error",
-                "Failed to instantiate plugin type.",
+                diagnostic.Message,
                 countsAsSkippedFile: false,
-                category: "plugin_type_instantiation_failed");
+                category: diagnostic.Category);
         }
     }
 }
