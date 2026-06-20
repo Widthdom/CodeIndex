@@ -191,6 +191,20 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatIndexFileException_GenericExceptionSanitizesRawMessage_Issue3796()
+    {
+        var secretPath = Path.Combine(Path.GetTempPath(), "secret-project-token-ghp_1234567890abcdef-private", "Generated.cs");
+        var ex = new IOException($"failed to read {secretPath} with payload token=ghp_1234567890abcdef_private");
+
+        var message = IndexCommandRunner.FormatIndexFileException(ex);
+
+        Assert.Equal("IOException", message);
+        Assert.DoesNotContain(secretPath, message);
+        Assert.DoesNotContain("ghp_1234567890abcdef", message);
+        Assert.DoesNotContain("Generated.cs", message);
+    }
+
+    [Fact]
     public void FormatIndexPhasePath_AppendsPhaseSuffixForJsonLiveness()
     {
         var message = IndexCommandRunner.FormatIndexPhasePath("src/App.cs", "references");
