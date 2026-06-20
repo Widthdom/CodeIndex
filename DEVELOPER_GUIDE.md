@@ -1208,11 +1208,11 @@ The shared GitHub HTTP client uses an explicit 10-second submission timeout by d
 
 ### Heuristic source code guard (not a security boundary)
 
-The description, context, and optional tool invocation context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
+The description, context, and optional tool invocation context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, backtick or tilde fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. Rejections return a bounded `source_code_rejection` object with the rejected field name and stable `reason_code`; they do not echo the rejected text. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
 
 ### SourceCodeDetector design
 
-`SourceCodeDetector` uses five independent heuristics to reject text that looks like pasted source code. Each heuristic is implemented as a clearly named private method with detailed comments explaining what it detects and why. The class is designed for readability: anyone reviewing the open-source code can verify the detection logic and confirm that no source code passes through.
+`SourceCodeDetector` uses six independent heuristics to reject text that looks like pasted source code. Each heuristic is implemented as a clearly named private method with detailed comments explaining what it detects and why, and maps to a stable reason code such as `statement-ending`, `indented-code-lines`, `block-structure`, `repeated-imports`, `function-definition`, or `fenced-code-block`. The class is designed for readability: anyone reviewing the open-source code can verify the detection logic and confirm that no source code passes through.
 
 The detector intentionally allows short inline code examples (e.g. `` `const foo = () => {}` ``) and only rejects multi-line code blocks. False negatives (missing some code) are acceptable; false positives (rejecting valid descriptions) are not.
 
@@ -3441,11 +3441,11 @@ upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 �
 
 ### ヒューリスティックなソースコードガード（セキュリティ境界ではない）
 
-description、context、および任意の tool invocation context フィールドは、保存およびオプションの GitHub 送信前に `SourceCodeDetector` を通過する。このヒューリスティックは一般的なコードコピペパターン（複数行ブロック、フェンスドコード、import の連打、関数定義）を拒否するが、ギャップの説明として有用な短いインラインコード例は意図的に許容する。これは**セキュリティ境界ではない** — 意図的に回避しようとするエージェントは回避できる。このガードはコードの誤混入を防ぐベストエフォートのフィルタであり、コード的テキストが一切送信されないことの保証ではない。
+description、context、および任意の tool invocation context フィールドは、保存およびオプションの GitHub 送信前に `SourceCodeDetector` を通過する。このヒューリスティックは一般的なコードコピペパターン（複数行ブロック、バッククォートまたはチルダのフェンスドコード、import の連打、関数定義）を拒否するが、ギャップの説明として有用な短いインラインコード例は意図的に許容する。拒否時は、拒否対象フィールド名と安定した `reason_code` を持つ上限付きの `source_code_rejection` object を返し、拒否された本文は反映しない。これは**セキュリティ境界ではない** — 意図的に回避しようとするエージェントは回避できる。このガードはコードの誤混入を防ぐベストエフォートのフィルタであり、コード的テキストが一切送信されないことの保証ではない。
 
 ### SourceCodeDetector の設計
 
-`SourceCodeDetector` は5つの独立したヒューリスティックを使って、コピペされたソースコードに見えるテキストを拒否する。各ヒューリスティックは明確な名前の private メソッドとして実装され、何を検出し、なぜそれがソースコードの兆候なのかを詳細なコメントで説明している。可読性を重視して設計されており、オープンソースのコードをレビューする誰もが検出ロジックを検証し、ソースコードが通過しないことを確認できる。
+`SourceCodeDetector` は6つの独立したヒューリスティックを使って、コピペされたソースコードに見えるテキストを拒否する。各ヒューリスティックは明確な名前の private メソッドとして実装され、何を検出し、なぜそれがソースコードの兆候なのかを詳細なコメントで説明している。また、`statement-ending`、`indented-code-lines`、`block-structure`、`repeated-imports`、`function-definition`、`fenced-code-block` のような安定した理由コードに対応する。可読性を重視して設計されており、オープンソースのコードをレビューする誰もが検出ロジックを検証し、ソースコードが通過しないことを確認できる。
 
 短いインラインコード例（例: `` `const foo = () => {}` ``）は意図的に許容し、複数行のコードブロックのみを拒否する。偽陰性（一部のコードの見逃し）は許容する。偽陽性（有効な説明の拒否）は許容しない。
 
