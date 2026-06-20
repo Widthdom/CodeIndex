@@ -6340,9 +6340,15 @@ public static partial class QueryCommandRunner
 
         entry["source_kind"] = sourceKind;
         if (string.IsNullOrWhiteSpace(sourceDetail))
+        {
+            if (sourceKind == "config_file")
+                entry["source"] = sourceKind;
             return;
+        }
 
         var bounded = CdidxConfigFile.FormatConfigSourceDetail(sourceDetail);
+        if (sourceKind == "config_file")
+            entry["source"] = $"config:{bounded.Text}";
         entry["source_detail"] = bounded.Text;
         if (bounded.Truncated)
         {
