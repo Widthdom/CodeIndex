@@ -425,7 +425,11 @@ internal static class UpdateChecker
                 checked_at = cache.CheckedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                 latest_tag = cache.LatestTag,
             };
-            AtomicFileWriter.WriteJson(cachePath, payload, applyFileMode: DataDirectorySecurity.ApplyPrivateFileMode);
+            AtomicFileWriter.WriteJson(
+                cachePath,
+                payload,
+                options: null,
+                profile: AtomicFileWriter.WriteProfile.Sensitive);
         }
         catch (Exception ex)
         {
