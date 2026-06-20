@@ -7,6 +7,7 @@ namespace CodeIndex.Cli;
 internal static class UpdateChecker
 {
     internal const string DisableEnvVar = "CDIDX_DISABLE_UPDATE_CHECK";
+    internal const string DiagnosticsEnvVar = "CDIDX_UPDATE_CHECK_DIAGNOSTICS";
     private const string LatestReleaseUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest";
     private const string ReleasesUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases?per_page=20";
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
@@ -15,6 +16,7 @@ internal static class UpdateChecker
     internal const int MaxUpdateCheckCacheJsonDepth = 8;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(2);
+    internal static Action<string>? CacheDiagnosticSinkForTesting { get; set; }
 
     internal static string? GetNewerReleaseHint(string currentVersion, CancellationToken cancellationToken = default)
         => GetNewerReleaseHint(
@@ -325,8 +327,9 @@ internal static class UpdateChecker
                 : null;
             return new UpdateCheckCache(checkedAt, latestTag);
         }
-        catch
+        catch (Exception ex)
         {
+            ReportCacheDiagnostic("cache_read_failed", cachePath, ex);
             return null;
         }
     }
@@ -346,9 +349,35 @@ internal static class UpdateChecker
             };
             AtomicFileWriter.WriteJson(cachePath, payload, applyFileMode: DataDirectorySecurity.ApplyPrivateFileMode);
         }
-        catch
+        catch (Exception ex)
         {
+            ReportCacheDiagnostic("cache_write_failed", cachePath, ex);
         }
+    }
+
+    private static void ReportCacheDiagnostic(string code, string cachePath, Exception ex)
+    {
+        if (!ShouldEmitCacheDiagnostics())
+            return;
+
+        var message =
+            $"update_check_cache_diagnostic code={code} " +
+            $"path={ConsoleUi.FormatBoundedValue(cachePath)} " +
+            $"error={CommandErrorWriter.FormatSanitizedException(ex)}";
+        var sink = CacheDiagnosticSinkForTesting;
+        if (sink != null)
+            sink(message);
+        else
+            Console.Error.WriteLine(message);
+    }
+
+    private static bool ShouldEmitCacheDiagnostics()
+    {
+        var value = Environment.GetEnvironmentVariable(DiagnosticsEnvVar)?.Trim();
+        return value is not null
+            && (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryParseVersion(string value, out Version version)

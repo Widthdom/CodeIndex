@@ -972,6 +972,88 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void UpdateChecker_Check_MalformedCacheDiagnosticsAreGated_Issue3708()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var cachePathWithoutDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var cachePathWithDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
+            var diagnostics = new List<string>();
+            UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
+            try
+            {
+                File.WriteAllText(cachePathWithoutDiagnostics, "{");
+                env.Set(UpdateChecker.DiagnosticsEnvVar, null);
+
+                var quietResult = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePathWithoutDiagnostics,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    _ => Task.FromResult<string?>("v1.11.0"));
+
+                Assert.True(quietResult.UpdateAvailable);
+                Assert.Empty(diagnostics);
+
+                File.WriteAllText(cachePathWithDiagnostics, "{");
+                env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
+
+                var diagnosticResult = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePathWithDiagnostics,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    _ => Task.FromResult<string?>("v1.11.0"));
+
+                Assert.True(diagnosticResult.UpdateAvailable);
+                var diagnostic = Assert.Single(diagnostics, value => value.Contains("code=cache_read_failed", StringComparison.Ordinal));
+                Assert.Contains("update_check_cache_diagnostic", diagnostic);
+                Assert.Contains("Json", diagnostic, StringComparison.Ordinal);
+            }
+            finally
+            {
+                UpdateChecker.CacheDiagnosticSinkForTesting = null;
+                if (File.Exists(cachePathWithoutDiagnostics))
+                    File.Delete(cachePathWithoutDiagnostics);
+                if (File.Exists(cachePathWithDiagnostics))
+                    File.Delete(cachePathWithDiagnostics);
+            }
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_UnwritableCachePathReportsWriteDiagnostic_Issue3708()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_dir_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(cachePath);
+            using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
+            env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
+            var diagnostics = new List<string>();
+            UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
+            try
+            {
+                var result = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePath,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    _ => Task.FromResult<string?>("v1.11.0"));
+
+                Assert.True(result.UpdateAvailable);
+                var diagnostic = Assert.Single(diagnostics);
+                Assert.Contains("update_check_cache_diagnostic", diagnostic);
+                Assert.Contains("code=cache_write_failed", diagnostic);
+            }
+            finally
+            {
+                UpdateChecker.CacheDiagnosticSinkForTesting = null;
+                if (Directory.Exists(cachePath))
+                    Directory.Delete(cachePath);
+            }
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
     {
         var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
