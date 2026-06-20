@@ -2932,6 +2932,27 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ParseArgs_DryRunPathLimitFlag_ParsesValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--dry-run", "--dry-run-path-limit", "42"]);
+
+        Assert.True(options.DryRun);
+        Assert.Equal(42, options.DryRunPathLimit);
+    }
+
+    [Fact]
+    public void ParseArgs_DryRunPathLimitFlag_RejectsValueAboveMaximum()
+    {
+        var oversized = $"{IndexCommandRunner.MaxDryRunPathLimit + 1}";
+
+        var options = IndexCommandRunner.ParseArgs([".", "--dry-run", "--dry-run-path-limit", oversized]);
+
+        Assert.Equal(IndexCommandRunner.DefaultDryRunPathLimit, options.DryRunPathLimit);
+        Assert.Contains("--dry-run-path-limit", options.ParseError);
+        Assert.Contains($"{IndexCommandRunner.MaxDryRunPathLimit}", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_WatchPendingPathLimitFlag_ParsesValue()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--watch", "--watch-pending-path-limit", "8192"]);
@@ -9573,10 +9594,43 @@ public sealed class Caller
             Assert.Equal(fileCount, json.GetProperty("files_total").GetInt32());
             Assert.Equal(fileCount, json.GetProperty("languages").GetProperty("csharp").GetInt32());
             Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_sample_limit").GetInt32());
+            Assert.Equal(IndexCommandRunner.DefaultDryRunPathLimit, json.GetProperty("candidate_path_limit").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("candidate_paths_processed").GetInt32());
+            Assert.False(json.GetProperty("candidate_paths_truncated").GetBoolean());
+            Assert.False(json.GetProperty("totals_lower_bound").GetBoolean());
             Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
             Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_samples").GetArrayLength());
             Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
             Assert.False(json.GetProperty("errors_truncated").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_PathLimitTruncatesCandidateProcessing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "sample001.cs"), "public class Sample001 { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "sample002.cs"), "public class Sample002 { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "sample003.cs"), "public class Sample003 { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--dry-run-path-limit", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(2, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(2, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(2, json.GetProperty("candidate_path_limit").GetInt32());
+            Assert.Equal(2, json.GetProperty("candidate_paths_processed").GetInt32());
+            Assert.True(json.GetProperty("candidate_paths_truncated").GetBoolean());
+            Assert.True(json.GetProperty("totals_lower_bound").GetBoolean());
+            Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
+            Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
         }
         finally
         {

@@ -548,6 +548,7 @@ Use the smallest change that reduces the expensive part of your run.
 | `--files <path...>` | off | Editor/save hooks or known in-place edits | Does not purge old rename/delete paths unless listed |
 | `--commits <id...>` | off | After normal commits | Requires git history but sees rename/delete paths |
 | `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
+| `--dry-run-path-limit <n>` | `100000` | Previewing a very large scan without building unbounded dry-run estimates | Truncated output reports lower-bound totals |
 | `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
 | `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU count, capped at `16` | Full-scan extraction is CPU-bound | Higher values can increase memory and IO pressure |
 | `--watch --debounce <ms>` | `500` ms | Keep an active worktree fresh during editing | Long-running process; incompatible with commit/file scoped refresh flags |
@@ -1449,6 +1450,7 @@ same source location.
 | `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
+| `--dry-run-path-limit <n>` | `index` (`--dry-run` only) | Process at most `<n>` dry-run candidate paths before returning truncated estimates. Defaults to `100000`; values above `1000000` are rejected. When the limit is reached, dry-run JSON sets `candidate_paths_truncated: true` and `totals_lower_bound: true`, and reports `candidate_path_limit` plus `candidate_paths_processed`. |
 | `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 4MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
 | `--max-symbols-per-file <n>` | `index` | Skip file content, symbols, and references when one file emits too many symbols. Defaults to `5000`; values above `50000` are rejected. |
 | `--symbols-only` | `index` | Full-scan only. Build chunks, symbols, and issues while skipping reference extraction and graph finalization for a faster first pass. `search`, `definition`, `symbols`, and `map` are available; reference graph commands remain degraded until a normal `cdidx index <projectPath>` run. |
@@ -3082,6 +3084,7 @@ cdidx index . --duration-format seconds
 | `--files <path...>` | off | editor/save hook や既知の in-place edit | rename/delete 旧 path は明示しない限り purge されない |
 | `--commits <id...>` | off | 通常の commit 後 | git history が必要だが rename/delete paths も扱える |
 | `--changed-between <old> <new>` | off | branch switch 後に両 ref が分かる | 渡した ref の正確さに依存 |
+| `--dry-run-path-limit <n>` | `100000` | 非常に大きい scan を preview し、dry-run estimate を無制限に作らない | truncate された出力は lower-bound totals を報告する |
 | `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | 正当な大きい source file が skip される | DB が大きくなり snippet extraction も遅くなりうる |
 | `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU 数、最大 `16` | フルスキャンの抽出が CPU-bound | 大きくするとメモリと IO の圧力が増えうる |
 | `--watch --debounce <ms>` | `500` ms | 編集中の worktree を live に保つ | long-running process。commit/file scoped refresh flags とは併用不可 |
@@ -4001,6 +4004,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。 |
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
 | `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
+| `--dry-run-path-limit <n>` | `index`（`--dry-run` 専用） | truncate された estimate を返す前に処理する dry-run candidate path 数を指定する。既定は `100000` で、`1000000` を超える値は拒否される。上限に達した場合、dry-run JSON は `candidate_paths_truncated: true` と `totals_lower_bound: true` を設定し、`candidate_path_limit` と `candidate_paths_processed` も返す。 |
 | `--max-file-bytes <bytes>` | `index` | この実行で使うファイル単位の索引サイズ上限を上書きする。既定は 4MiB、または `CDIDX_MAX_FILE_BYTES` 設定値。値は raw byte 数、または `50M` のような `K` / `M` / `G` 接尾辞を受け付ける。 |
 | `--symbols-only` | `index` | フルスキャン専用。参照抽出と graph finalization を省き、chunks、symbols、issues だけを作ることで初回利用を速くする。`search`、`definition`、`symbols`、`map` は使えるが、reference graph 系コマンドは通常の `cdidx index <projectPath>` を実行するまで degraded のまま。 |
 | `--parallelism <n>` | `index` | フルスキャンの抽出 worker 数を指定する。既定は CPU 数を最大 16 に丸めた値、または `CDIDX_INDEX_PARALLELISM` 設定値。SQLite 書き込みは単一 consumer のまま。 |

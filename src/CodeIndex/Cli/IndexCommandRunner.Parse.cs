@@ -12,7 +12,7 @@ public static partial class IndexCommandRunner
     // easter egg や random-spinner は意図的に未公開なので除外する。
     private static readonly string[] AcceptedIndexFlags =
     [
-        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--force",
+        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--dry-run-path-limit", "--force",
         "--yes", "--watch", "--debounce", "--watch-pending-path-limit", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
         "--max-references-per-file", "--notify",
         "--parallelism", "--memory-trace", "--follow-symlinks", "--symbols-only",
@@ -38,6 +38,7 @@ public static partial class IndexCommandRunner
         bool json = false;
         bool quiet = false;
         bool dryRun = false;
+        var dryRunPathLimit = DefaultDryRunPathLimit;
         bool force = false;
         bool readOnly = false;
         bool yes = false;
@@ -111,6 +112,12 @@ public static partial class IndexCommandRunner
                     break;
                 case "--dry-run":
                     dryRun = true;
+                    break;
+                case "--dry-run-path-limit" when i + 1 < args.Length:
+                    dryRunPathLimit = ParseDryRunPathLimit(args[++i], dryRunPathLimit, "--dry-run-path-limit", ref parseError);
+                    break;
+                case var option when option.StartsWith("--dry-run-path-limit=", StringComparison.Ordinal):
+                    dryRunPathLimit = ParseDryRunPathLimit(option["--dry-run-path-limit=".Length..], dryRunPathLimit, "--dry-run-path-limit", ref parseError);
                     break;
                 case "--force":
                     force = true;
@@ -333,6 +340,7 @@ public static partial class IndexCommandRunner
             ParseError = parseError ?? generatedCodePatternError,
             EasterEgg = easterEgg,
             DryRun = dryRun,
+            DryRunPathLimit = dryRunPathLimit,
             Force = force,
             ReadOnly = readOnly,
             Yes = yes,
@@ -549,6 +557,22 @@ public static partial class IndexCommandRunner
                 return parsed;
 
             parseError ??= $"{source} must be less than or equal to {IndexWatchRunner.MaxWatchPendingPathLimit}";
+            return fallback;
+        }
+
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
+        return fallback;
+    }
+
+    private static int ParseDryRunPathLimit(string value, int fallback, string source, ref string? parseError)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed <= MaxDryRunPathLimit)
+                return parsed;
+
+            parseError ??= $"{source} must be less than or equal to {MaxDryRunPathLimit}";
             return fallback;
         }
 

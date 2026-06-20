@@ -9,6 +9,8 @@ public static partial class IndexCommandRunner
 {
     internal const int DryRunFileSampleLimit = 100;
     internal const int DryRunErrorSampleLimit = 100;
+    internal const int DefaultDryRunPathLimit = 100_000;
+    internal const int MaxDryRunPathLimit = 1_000_000;
     private const int DryRunScanErrorKeyLimit = 2048;
 
     private static int RunDryRun(
@@ -28,8 +30,8 @@ public static partial class IndexCommandRunner
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: options.SymlinkPolicy,
             generatedCodePatterns: options.GeneratedCodePatterns);
-        IReadOnlyList<string> dryCandidates;
-        IReadOnlyList<string> dryDeleteCandidates;
+        IEnumerable<string> dryCandidates;
+        IEnumerable<string> dryDeleteCandidates;
         bool authoritativeFullScan;
         var errorSamples = new List<CliJsonMessage>();
         var errorCount = 0;
@@ -91,6 +93,9 @@ public static partial class IndexCommandRunner
 
         var dryFileSamples = new List<string>();
         var dryFileCount = 0;
+        var candidatePathsProcessed = 0;
+        var candidatePathsTruncated = false;
+        var dryRunPathLimit = options.DryRunPathLimit;
         var langCounts = new Dictionary<string, int>();
         if (authoritativeFullScan)
         {
@@ -100,6 +105,13 @@ public static partial class IndexCommandRunner
 
         foreach (var f in dryCandidates)
         {
+            if (candidatePathsProcessed >= dryRunPathLimit)
+            {
+                candidatePathsTruncated = true;
+                break;
+            }
+
+            candidatePathsProcessed++;
             var displayRelativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f));
             var dbRelativePath = FileIndexer.NormalizeIndexPath(displayRelativePath);
             var pathFilter = dryIndexer.EvaluatePathFilter(f);
@@ -168,12 +180,19 @@ public static partial class IndexCommandRunner
 
         foreach (var relativePath in dryDeleteCandidates)
         {
+            if (candidatePathsProcessed >= dryRunPathLimit)
+            {
+                candidatePathsTruncated = true;
+                break;
+            }
+
+            candidatePathsProcessed++;
             var dbRelativePath = FileIndexer.NormalizeIndexPath(relativePath);
             if (dbSnapshot.Files.ContainsKey(dbRelativePath))
                 projectedDeletePaths.Add(dbRelativePath);
         }
 
-        if (authoritativeFullScan && dbSnapshot.Files.Count > 0)
+        if (authoritativeFullScan && dbSnapshot.Files.Count > 0 && !candidatePathsTruncated)
         {
             AddProjectedFullScanPurges(
                 projectedPurgePaths,
@@ -204,9 +223,13 @@ public static partial class IndexCommandRunner
                 ProjectedFilePurges = projectedPurges,
                 UnsupportedTotal = unsupportedTotal,
                 UnknownExtensionTotal = unknownExtensionTotal,
+                CandidatePathLimit = dryRunPathLimit,
+                CandidatePathsProcessed = candidatePathsProcessed,
+                CandidatePathsTruncated = candidatePathsTruncated,
+                TotalsLowerBound = candidatePathsTruncated,
                 EstimatedTableMutations = estimatedTableMutations,
                 FileSamples = dryFileSamples.Count > 0 ? dryFileSamples : null,
-                FileSamplesTruncated = dryFileCount > dryFileSamples.Count,
+                FileSamplesTruncated = candidatePathsTruncated || dryFileCount > dryFileSamples.Count,
                 FileSampleLimit = DryRunFileSampleLimit,
                 Languages = langCounts,
                 ErrorsTotal = errorCount,
@@ -217,7 +240,10 @@ public static partial class IndexCommandRunner
         }
         else
         {
-            Console.WriteLine($"Dry run: {dryFileCount} files would be indexed");
+            var lowerBound = candidatePathsTruncated ? " (truncated; totals are lower bounds)" : string.Empty;
+            Console.WriteLine($"Dry run: {dryFileCount} files would be indexed{lowerBound}");
+            if (candidatePathsTruncated)
+                Console.WriteLine($"  candidate paths processed {candidatePathsProcessed.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} of limit {dryRunPathLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}");
             Console.WriteLine($"  projected deletes {projectedDeletes,6}");
             Console.WriteLine($"  projected purges  {projectedPurges,6}");
             foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
@@ -233,8 +259,8 @@ public static partial class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken,
         Action<IEnumerable<FileIndexer.ScanError>> recordDryRunScanErrors,
-        out IReadOnlyList<string> dryCandidates,
-        out IReadOnlyList<string> dryDeleteCandidates,
+        out IEnumerable<string> dryCandidates,
+        out IEnumerable<string> dryDeleteCandidates,
         out bool authoritativeFullScan,
         out DryRunScanMetadata scanMetadata,
         out int exitCode)
@@ -270,19 +296,17 @@ public static partial class IndexCommandRunner
             else
             {
                 dryDeleteCandidates = updatePaths
-                    .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))))
-                    .ToList();
+                    .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
                 dryCandidates = updatePaths
                     .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
-                    .ToList();
+                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)));
             }
         }
         else if (options.Commits.Count > 0 || options.ChangedBetweenSpecified)
         {
             // Git update modes: files changed in commits or between refs.
             // Git更新モード: コミットまたはref間の変更ファイル。
-            var changedFiles = new HashSet<string>(StringComparer.Ordinal);
+            var changedFiles = new SortedSet<string>(StringComparer.Ordinal);
             var relevantIgnoreFileChanged = false;
             var repoRoot = GitHelper.TryGetRepositoryRoot(projectPath, cancellationToken) ?? Path.GetFullPath(projectPath);
             try
@@ -360,12 +384,10 @@ public static partial class IndexCommandRunner
             else
             {
                 dryDeleteCandidates = changedFiles
-                    .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))))
-                    .ToList();
+                    .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
                 dryCandidates = changedFiles
                     .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
-                    .ToList();
+                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)));
             }
         }
         else

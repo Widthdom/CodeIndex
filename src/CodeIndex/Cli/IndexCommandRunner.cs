@@ -1603,6 +1603,7 @@ public sealed class IndexCommandOptions
     public string? ParseError { get; init; }
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
+    public int DryRunPathLimit { get; init; } = IndexCommandRunner.DefaultDryRunPathLimit;
     public bool Force { get; init; }
     public bool ReadOnly { get; init; }
     public bool Yes { get; init; }

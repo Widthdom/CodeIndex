@@ -277,6 +277,10 @@ internal sealed class IndexDryRunJsonResult
     public int ProjectedFilePurges { get; init; }
     public int UnsupportedTotal { get; init; }
     public int UnknownExtensionTotal { get; init; }
+    public int CandidatePathLimit { get; init; }
+    public int CandidatePathsProcessed { get; init; }
+    public bool CandidatePathsTruncated { get; init; }
+    public bool TotalsLowerBound { get; init; }
     public Dictionary<string, long> EstimatedTableMutations { get; init; } = new();
     public List<string>? FileSamples { get; init; }
     public bool FileSamplesTruncated { get; init; }
