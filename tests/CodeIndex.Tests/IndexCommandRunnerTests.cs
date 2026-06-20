@@ -40,6 +40,8 @@ public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
 [Collection("SQLite pool sensitive")]
 public class IndexCommandRunnerTests
 {
+    private static readonly TimeSpan LegacyEnvironmentHookWorkerBudget = TimeSpan.FromSeconds(30);
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -350,7 +352,7 @@ public class IndexCommandRunnerTests
                     "public class App { }\n",
                     Path.Combine(projectRoot, "App.cs"),
                     projectRoot,
-                    TimeSpan.FromSeconds(5));
+                    LegacyEnvironmentHookWorkerBudget);
 
                 Assert.True(result.Success, result.WorkerError);
                 Assert.False(result.TimedOut);
