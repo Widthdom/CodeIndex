@@ -91,9 +91,7 @@ public static partial class ReferenceExtractor
         if (language == "python")
             referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
 
-        var preparedLines = new string[lines.Length];
-        for (var pi = 0; pi < lines.Length; pi++)
-            preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);
+        var preparedLines = PrepareReferenceLines(language, referenceStructuralLines);
         var goImportBlockLines = language == "go"
             ? GoReferenceExtractor.BuildImportBlockLineMap(lines)
             : null;
@@ -137,6 +135,28 @@ public static partial class ReferenceExtractor
             typeScriptNamespaceAliases,
             GroupJsTaggedTemplatesByLine(jsTaggedTemplateHits));
         return true;
+    }
+
+    private static string[] PrepareReferenceLines(string language, string[] referenceStructuralLines)
+    {
+        string[]? preparedLines = null;
+        for (var index = 0; index < referenceStructuralLines.Length; index++)
+        {
+            var structuralLine = referenceStructuralLines[index];
+            var preparedLine = PrepareLine(language, structuralLine);
+            if (preparedLines == null)
+            {
+                if (string.Equals(preparedLine, structuralLine, StringComparison.Ordinal))
+                    continue;
+
+                preparedLines = new string[referenceStructuralLines.Length];
+                Array.Copy(referenceStructuralLines, preparedLines, index);
+            }
+
+            preparedLines[index] = preparedLine;
+        }
+
+        return preparedLines ?? referenceStructuralLines;
     }
 
     private static IReadOnlyDictionary<int, List<JsTaggedTemplateHit>>? GroupJsTaggedTemplatesByLine(
