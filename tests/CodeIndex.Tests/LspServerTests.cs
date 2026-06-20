@@ -1011,7 +1011,7 @@ public class LspServerTests
     }
 
     [Fact]
-    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130()
+    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130_Issue3743()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_budget");
         try
@@ -1047,6 +1047,7 @@ public class LspServerTests
             Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
             Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString()) <= LspServer.MaxDocumentSymbolResponseBytes);
             var allSymbols = FlattenDocumentSymbols(symbols).ToArray();
+            Assert.True(allSymbols.Length < LspServer.MaxDocumentSymbols);
             Assert.Contains(allSymbols, symbol =>
             {
                 var detail = symbol?["detail"]?.GetValue<string>();

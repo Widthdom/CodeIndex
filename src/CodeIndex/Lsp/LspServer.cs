@@ -1004,15 +1004,21 @@ internal sealed class LspServer : IDisposable
 
     private void TrimDocumentSymbolsToBudget(JsonArray roots)
     {
-        while (roots.Count > 0
-            && Encoding.UTF8.GetByteCount(roots.ToJsonString(_jsonOptions)) > MaxDocumentSymbolResponseBytes
-            && RemoveLastDocumentSymbol(roots))
+        var responseBytes = MeasureJsonUtf8Bytes(roots);
+        while (roots.Count > 0 && responseBytes > MaxDocumentSymbolResponseBytes)
         {
+            if (!RemoveLastDocumentSymbol(roots, out var removedBytes))
+                break;
+
+            responseBytes = removedBytes > 0
+                ? Math.Max(0, responseBytes - removedBytes)
+                : MeasureJsonUtf8Bytes(roots);
         }
     }
 
-    private static bool RemoveLastDocumentSymbol(JsonArray symbols)
+    private bool RemoveLastDocumentSymbol(JsonArray symbols, out int removedBytes)
     {
+        removedBytes = 0;
         if (symbols.Count == 0)
             return false;
 
@@ -1020,17 +1026,60 @@ internal sealed class LspServer : IDisposable
             && last["children"] is JsonArray children
             && children.Count > 0)
         {
-            if (RemoveLastDocumentSymbol(children))
+            var beforeBytes = MeasureJsonUtf8Bytes(last);
+            if (RemoveLastDocumentSymbol(children, out _))
             {
                 if (children.Count == 0)
                     last.Remove("children");
+                removedBytes = Math.Max(0, beforeBytes - MeasureJsonUtf8Bytes(last));
                 return true;
             }
         }
 
+        removedBytes = MeasureJsonUtf8Bytes(symbols[symbols.Count - 1])
+            + (symbols.Count > 1 ? 1 : 0);
         symbols.RemoveAt(symbols.Count - 1);
         return true;
     }
+
+    private int MeasureJsonUtf8Bytes(JsonNode? node)
+    {
+        if (node == null)
+            return "null"u8.Length;
+
+        if (node is JsonArray array)
+        {
+            var bytes = "[]"u8.Length;
+            for (var i = 0; i < array.Count; i++)
+            {
+                if (i > 0)
+                    bytes++;
+                bytes += MeasureJsonUtf8Bytes(array[i]);
+            }
+            return bytes;
+        }
+
+        if (node is JsonObject obj)
+        {
+            var bytes = "{}"u8.Length;
+            var propertyIndex = 0;
+            foreach (var property in obj)
+            {
+                if (propertyIndex > 0)
+                    bytes++;
+                bytes += MeasureJsonStringUtf8Bytes(property.Key);
+                bytes++;
+                bytes += MeasureJsonUtf8Bytes(property.Value);
+                propertyIndex++;
+            }
+            return bytes;
+        }
+
+        return Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
+    }
+
+    private int MeasureJsonStringUtf8Bytes(string value) =>
+        Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(value, _jsonOptions));
 
     private List<DefinitionResult> ResolveLspDefinitions(PositionTokenContext context)
     {
