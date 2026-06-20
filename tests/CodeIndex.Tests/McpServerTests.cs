@@ -11386,6 +11386,54 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_NullByteFilePersistsNullByteIssue_Issue3835()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_null_byte_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_null_byte_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var prefix = Encoding.UTF8.GetBytes("public class Polluted { public void Run() { } }\n");
+            var bytes = new byte[prefix.Length + 1];
+            Array.Copy(prefix, bytes, prefix.Length);
+            bytes[^1] = 0;
+            File.WriteAllBytes(Path.Combine(fixtureDir, "binary.cs"), bytes);
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("null_byte"));
+            Assert.Equal("binary.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("byte offset", issue.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BackfillFold_StampsFoldReady()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
