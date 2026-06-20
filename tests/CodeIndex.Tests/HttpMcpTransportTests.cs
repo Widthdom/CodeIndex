@@ -1438,10 +1438,17 @@ public class HttpMcpTransportTests : IDisposable
             // background task may not have entered GetContextAsync yet by the time the test posts.
             // listener が GetContextAsync に入る前に POST が来ないよう、ごく短い待機を挟む。
             await Task.Yield();
-            for (var i = 0; i < 100 && transport.HealthJsonProvider is null && !loopTask.IsCompleted; i++)
+            var healthReadyDeadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (transport.HealthJsonProvider is null
+                && !loopTask.IsCompleted
+                && DateTimeOffset.UtcNow < healthReadyDeadline)
+            {
                 await Task.Delay(10);
+            }
             if (loopTask.IsCompleted)
                 await loopTask.ConfigureAwait(false);
+            if (transport.HealthJsonProvider is null)
+                throw new TimeoutException("Timed out waiting for the MCP HTTP health provider to become ready.");
             return new McpHttpHarness(server, transport, cts, loopTask, listen.Prefix);
         }
 
