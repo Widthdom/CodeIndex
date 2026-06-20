@@ -98,6 +98,17 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_RestoreBackupsPruneSetsKeep_Issue3833()
+    {
+        var options = DbCommandRunner.ParseArgs(["restore-backups", "--prune", "--keep", "3"]);
+
+        Assert.True(options.RestoreBackups);
+        Assert.True(options.RestoreBackupsPrune);
+        Assert.Equal(3, options.RestoreBackupsKeep);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void Run_WithoutModeFlag_ReturnsUsageError()
     {
         var (exitCode, _, stderr) = RunAndCaptureStreams([]);
@@ -531,6 +542,60 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointManifestOmitsAbsoluteDbPath_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_manifest_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "manifest", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            var manifest = File.ReadAllText(Path.Combine(dbPath + ".checkpoints", "manifest", "manifest.txt"));
+            Assert.Contains("db_file=codeindex.db", manifest);
+            Assert.DoesNotContain(dbPath, manifest);
+            Assert.DoesNotContain(root, manifest);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointJsonReportsRecoverableFileEnumerationFailure_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+            DbCommandRunner.EnumerateCheckpointFileNamesForTesting = _ => throw new IOException("secret local enumeration path");
+
+            var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "enum", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            Assert.True(json.GetProperty("files_truncated").GetBoolean());
+            var diagnostic = Assert.Single(json.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal("checkpoint_file_enumeration_failed", diagnostic.GetProperty("code").GetString());
+            Assert.DoesNotContain("secret local enumeration path", json.ToString());
+        }
+        finally
+        {
+            DbCommandRunner.EnumerateCheckpointFileNamesForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointTempCleanupFailurePreservesOriginalFailure_Issue3029()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_cleanup_{Guid.NewGuid():N}");
@@ -695,7 +760,8 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "bad", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("incomplete", stderr);
+            Assert.Contains("InvalidOperationException", stderr);
+            Assert.DoesNotContain("checkpoint is incomplete", stderr);
             Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
             Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
         }
@@ -729,7 +795,8 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("injected restore failure", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.DoesNotContain("injected restore failure", stderr);
             Assert.Equal("changed", File.ReadAllText(dbPath));
             Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
             Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
@@ -768,12 +835,203 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("primary restore failure", stderr);
-            Assert.Contains("failed to roll back database restore", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.Contains("restore_rollback_failed", stderr);
+            Assert.DoesNotContain("primary restore failure", stderr);
         }
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreRollbackFailureJsonIncludesStructuredMetadata_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_json_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                Directory.CreateDirectory(dbPath);
+                throw new IOException("primary restore failure token=secret");
+            };
+
+            var (restoreExit, stdout, _) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath, "--json"]);
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("rollback_failed").GetBoolean());
+            Assert.Equal("restore_rollback_failed", json.GetProperty("rollback_failure").GetProperty("code").GetString());
+            Assert.Contains("IOException", json.GetProperty("message").GetString());
+            Assert.DoesNotContain("primary restore failure", stdout);
+            Assert.DoesNotContain("token=secret", stdout);
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreBackupsListAndPruneOrdersByRecency_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(dbPath, "current");
+            var older = Path.Combine(root, "codeindex.db.restore-backup-20260101000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            var newer = Path.Combine(root, "codeindex.db.restore-backup-20260102000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+            Directory.CreateDirectory(older);
+            Directory.CreateDirectory(newer);
+            File.WriteAllText(Path.Combine(older, "codeindex.db"), "older");
+            File.WriteAllText(Path.Combine(newer, "codeindex.db"), "newer");
+            var sameCreationTime = new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc);
+            Directory.SetCreationTimeUtc(older, sameCreationTime);
+            Directory.SetCreationTimeUtc(newer, sameCreationTime);
+
+            var (listExit, listJson) = RunAndCaptureJson(["restore-backups", "--list", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, listExit);
+            var backups = listJson.GetProperty("backups");
+            Assert.Equal(2, backups.GetArrayLength());
+            Assert.Equal(Path.GetFileName(newer), backups[0].GetProperty("name").GetString());
+
+            var (pruneExit, pruneJson) = RunAndCaptureJson(["restore-backups", "--prune", "--keep", "1", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, pruneExit);
+            Assert.Equal(1, pruneJson.GetProperty("deleted").GetInt32());
+            Assert.Equal(1, pruneJson.GetProperty("retained").GetInt32());
+            Assert.False(Directory.Exists(older));
+            Assert.True(Directory.Exists(newer));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreBackupsRejectsDryRunWithoutDeleting_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_dry_run_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(dbPath, "current");
+            var backup = Path.Combine(root, "codeindex.db.restore-backup-20260101000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            Directory.CreateDirectory(backup);
+            File.WriteAllText(Path.Combine(backup, "codeindex.db"), "backup");
+
+            var (exitCode, _, stderr) = RunAndCaptureStreams(["restore-backups", "--prune", "--dry-run", "--keep", "0", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--dry-run and --apply are not supported", stderr);
+            Assert.True(Directory.Exists(backup));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreBackupsPruneSkipsDeletionWhenScanTruncated_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_truncated_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(dbPath, "current");
+            for (var i = 0; i < DbCommandRunner.RestoreBackupPruneScanLimit + 1; i++)
+            {
+                var backup = Path.Combine(root, $"codeindex.db.restore-backup-20260101000000000-{i:x32}");
+                Directory.CreateDirectory(backup);
+                File.WriteAllText(Path.Combine(backup, "codeindex.db"), "backup");
+            }
+
+            var (exitCode, json) = RunAndCaptureJson(["restore-backups", "--prune", "--keep", "0", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal(0, json.GetProperty("deleted").GetInt32());
+            Assert.Equal(DbCommandRunner.RestoreBackupPruneScanLimit, json.GetProperty("retained").GetInt32());
+            Assert.Contains(
+                json.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("code").GetString() == "restore_backup_prune_truncated");
+            Assert.Equal(
+                DbCommandRunner.RestoreBackupPruneScanLimit + 1,
+                Directory.GetDirectories(root, "codeindex.db.restore-backup-*").Length);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreBackupsPruneDeletesWhenOnlyFileInspectionTruncated_Issue3833()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_file_truncated_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(dbPath, "current");
+            var older = Path.Combine(root, "codeindex.db.restore-backup-20260101000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            var newer = Path.Combine(root, "codeindex.db.restore-backup-20260102000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+            Directory.CreateDirectory(older);
+            Directory.CreateDirectory(newer);
+            File.WriteAllText(Path.Combine(older, "codeindex.db"), "older");
+            File.WriteAllText(Path.Combine(newer, "codeindex.db"), "newer");
+            for (var i = 0; i < DbCommandRunner.CheckpointFileInspectLimit + 1; i++)
+                File.WriteAllText(Path.Combine(newer, $"extra-{i:D4}.txt"), "x");
+
+            var (exitCode, json) = RunAndCaptureJson(["restore-backups", "--prune", "--keep", "1", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, json.GetProperty("deleted").GetInt32());
+            Assert.Equal(1, json.GetProperty("retained").GetInt32());
+            Assert.False(Directory.Exists(older));
+            Assert.True(Directory.Exists(newer));
+            if (json.TryGetProperty("diagnostics", out var diagnostics))
+            {
+                Assert.DoesNotContain(
+                    diagnostics.EnumerateArray(),
+                    diagnostic => diagnostic.GetProperty("code").GetString() == "restore_backup_prune_truncated");
+            }
+        }
+        finally
+        {
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
@@ -807,7 +1065,9 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("not a regular file", stderr);
+            Assert.Contains("InvalidOperationException", stderr);
+            Assert.DoesNotContain("not a regular file", stderr);
+            Assert.DoesNotContain(checkpointDbPath, stderr);
             Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
         }
         finally

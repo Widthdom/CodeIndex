@@ -504,7 +504,11 @@ public static partial class IndexCommandRunner
             if (WriteScanCheckpointForTesting != null)
                 WriteScanCheckpointForTesting(path);
             else
-                AtomicFileWriter.WriteJson(path, checkpoint, new JsonSerializerOptions { WriteIndented = true });
+                AtomicFileWriter.WriteJson(
+                    path,
+                    checkpoint,
+                    new JsonSerializerOptions { WriteIndented = true },
+                    AtomicFileWriter.WriteProfile.Sensitive);
         }
         catch (Exception ex) when (IsScanCheckpointPersistenceException(ex))
         {
@@ -668,33 +672,12 @@ public static partial class IndexCommandRunner
         string phase,
         Func<string?>? detailProvider = null)
     {
-        if (!options.Json || options.Quiet)
-            return null;
-
-        var cts = new CancellationTokenSource();
-        var token = cts.Token;
-        var task = Task.Run(async () =>
-        {
-            while (!token.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-
-                if (token.IsCancellationRequested)
-                    break;
-
-                var detail = detailProvider?.Invoke();
-                var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
-                ConsoleUi.TryWriteErrorLine($"cdidx: still {phase}{suffix}...");
-            }
-        }, token);
-        return (cts, task);
+        return StartObservedJsonPhaseHeartbeat(
+            options.Json && !options.Quiet,
+            "cdidx-index",
+            phase,
+            ConsoleUi.TryWriteErrorLine,
+            detailProvider);
     }
 
     private static void StopFullScanJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)

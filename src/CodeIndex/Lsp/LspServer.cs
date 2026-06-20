@@ -27,6 +27,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxJsonDepth = 32;
     internal const int MaxRequestIdStringChars = 256;
     internal const int MaxDocumentSymbols = 1000;
+    internal const int MaxDocumentSymbolMaterialization = MaxDocumentSymbols;
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal const int MaxPositionLineChars = 16 * 1024;
@@ -133,6 +134,12 @@ internal sealed class LspServer : IDisposable
             _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
     }
 
+    /// <summary>
+    /// Compatibility wrapper that runs without caller cancellation. Prefer the overload that
+    /// accepts <see cref="CancellationToken"/> when the caller has a shutdown or disconnect token.
+    /// caller cancellation を持たない互換 wrapper。shutdown / disconnect token がある場合は
+    /// <see cref="Run(Stream, Stream, CancellationToken)"/> を使う。
+    /// </summary>
     public int Run(Stream input, Stream output) => Run(input, output, CancellationToken.None);
 
     public int Run(Stream input, Stream output, CancellationToken cancellationToken)
@@ -141,6 +148,7 @@ internal sealed class LspServer : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var response = HandleMessage(payload);
+            cancellationToken.ThrowIfCancellationRequested();
             if (response != null)
                 WriteMessage(output, response.ToJsonString(_jsonOptions));
             if (_exitRequested)
@@ -567,13 +575,22 @@ internal sealed class LspServer : IDisposable
         if (indexedPath == null)
             return [];
 
-        var symbols = _reader.SearchSymbols((string?)null, MaxDocumentSymbols, pathPatterns: [indexedPath])
+        var candidates = _reader.SearchSymbols((string?)null, MaxDocumentSymbolMaterialization + 1, pathPatterns: [indexedPath]);
+        var materializationTruncated = candidates.Count > MaxDocumentSymbolMaterialization;
+        var materializedCount = Math.Min(candidates.Count, MaxDocumentSymbolMaterialization);
+        Activity.Current?.SetTag("lsp.document_symbols.materialized_count", materializedCount);
+        Activity.Current?.SetTag("lsp.document_symbols.materialization_truncated", materializationTruncated);
+
+        var symbols = candidates
+            .Take(MaxDocumentSymbolMaterialization)
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
             .ThenBy(s => s.ContainerName == null ? 0 : 1)
             .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
-        return BuildDocumentSymbolTree(symbols);
+        var roots = BuildDocumentSymbolTree(symbols);
+        Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", roots.Count);
+        return roots;
     }
 
     private JsonArray BuildDocumentSymbolTree(IReadOnlyList<SymbolResult> symbols)
@@ -997,15 +1014,24 @@ internal sealed class LspServer : IDisposable
 
     private void TrimDocumentSymbolsToBudget(JsonArray roots)
     {
-        while (roots.Count > 0
-            && Encoding.UTF8.GetByteCount(roots.ToJsonString(_jsonOptions)) > MaxDocumentSymbolResponseBytes
-            && RemoveLastDocumentSymbol(roots))
+        var responseBytes = MeasureJsonUtf8Bytes(roots);
+        while (roots.Count > 0 && responseBytes > MaxDocumentSymbolResponseBytes)
         {
+            if (!RemoveLastDocumentSymbol(roots, out var removedBytes))
+                break;
+
+            if (_jsonOptions.WriteIndented)
+                responseBytes = MeasureJsonUtf8Bytes(roots);
+            else
+                responseBytes = removedBytes > 0
+                    ? Math.Max(0, responseBytes - removedBytes)
+                    : MeasureJsonUtf8Bytes(roots);
         }
     }
 
-    private static bool RemoveLastDocumentSymbol(JsonArray symbols)
+    private bool RemoveLastDocumentSymbol(JsonArray symbols, out int removedBytes)
     {
+        removedBytes = 0;
         if (symbols.Count == 0)
             return false;
 
@@ -1013,17 +1039,62 @@ internal sealed class LspServer : IDisposable
             && last["children"] is JsonArray children
             && children.Count > 0)
         {
-            if (RemoveLastDocumentSymbol(children))
+            var beforeBytes = MeasureJsonUtf8Bytes(last);
+            if (RemoveLastDocumentSymbol(children, out _))
             {
                 if (children.Count == 0)
                     last.Remove("children");
+                removedBytes = Math.Max(0, beforeBytes - MeasureJsonUtf8Bytes(last));
                 return true;
             }
         }
 
+        removedBytes = MeasureJsonUtf8Bytes(symbols[symbols.Count - 1])
+            + (symbols.Count > 1 ? 1 : 0);
         symbols.RemoveAt(symbols.Count - 1);
         return true;
     }
+
+    private int MeasureJsonUtf8Bytes(JsonNode? node)
+    {
+        if (node == null)
+            return "null"u8.Length;
+        if (_jsonOptions.WriteIndented)
+            return Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
+
+        if (node is JsonArray array)
+        {
+            var bytes = "[]"u8.Length;
+            for (var i = 0; i < array.Count; i++)
+            {
+                if (i > 0)
+                    bytes++;
+                bytes += MeasureJsonUtf8Bytes(array[i]);
+            }
+            return bytes;
+        }
+
+        if (node is JsonObject obj)
+        {
+            var bytes = "{}"u8.Length;
+            var propertyIndex = 0;
+            foreach (var property in obj)
+            {
+                if (propertyIndex > 0)
+                    bytes++;
+                bytes += MeasureJsonStringUtf8Bytes(property.Key);
+                bytes++;
+                bytes += MeasureJsonUtf8Bytes(property.Value);
+                propertyIndex++;
+            }
+            return bytes;
+        }
+
+        return Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
+    }
+
+    private int MeasureJsonStringUtf8Bytes(string value) =>
+        Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(value, _jsonOptions));
 
     private List<DefinitionResult> ResolveLspDefinitions(PositionTokenContext context)
     {
@@ -1704,6 +1775,12 @@ internal sealed class LspServer : IDisposable
         },
     };
 
+    /// <summary>
+    /// Compatibility wrapper that reads without caller cancellation. Prefer the overload that
+    /// accepts <see cref="CancellationToken"/> for cancellable transports.
+    /// caller cancellation を持たない互換 wrapper。キャンセル可能な transport では
+    /// token を受け取る overload を使う。
+    /// </summary>
     internal static bool TryReadMessage(Stream input, out string payload) =>
         TryReadMessage(input, out payload, CancellationToken.None);
 

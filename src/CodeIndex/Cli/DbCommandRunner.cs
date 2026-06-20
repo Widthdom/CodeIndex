@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -17,6 +18,10 @@ public static class DbCommandRunner
     private const int CheckpointNameDiagnosticTextLimit = 80;
     internal const int CheckpointListEntryLimit = 100;
     internal const int CheckpointFileInspectLimit = 32;
+    internal const int RestoreBackupListEntryLimit = 100;
+    internal const int RestoreBackupPruneScanLimit = 1_000;
+    internal const int DefaultRestoreBackupKeepCount = 10;
+    internal const int MaxRestoreBackupKeepCount = 1_000;
     internal const int IntegrityCheckRowLimit = 100;
     internal const int IntegrityCheckTextLimit = 4096;
     internal const int SchemaEntryLimit = 200;
@@ -25,6 +30,7 @@ public static class DbCommandRunner
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
     internal static Action<string>? DeleteTemporaryDirectoryForTesting { get; set; }
     internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
+    internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFileNamesForTesting { get; set; }
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -44,13 +50,13 @@ public static class DbCommandRunner
                 "Run `cdidx db --integrity-check --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
-        if (!options.IntegrityCheck && !options.Schema && !options.Prune && !options.Checkpoint && !options.ListCheckpoints && !options.Restore)
+        if (!options.IntegrityCheck && !options.Schema && !options.Prune && !options.Checkpoint && !options.ListCheckpoints && !options.Restore && !options.RestoreBackups)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
                 "db requires a mode flag",
                 CommandExitCodes.UsageError,
-                "Pass `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list`, or `restore <name>`.",
+                "Pass `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list`, `restore <name>`, or `restore-backups --list|--prune --keep <n>`.",
                 CommandErrorCodes.UsageError);
 
         if ((options.IntegrityCheck ? 1 : 0)
@@ -58,13 +64,14 @@ public static class DbCommandRunner
             + (options.Prune ? 1 : 0)
             + (options.Checkpoint ? 1 : 0)
             + (options.ListCheckpoints ? 1 : 0)
-            + (options.Restore ? 1 : 0) > 1)
+            + (options.Restore ? 1 : 0)
+            + (options.RestoreBackups ? 1 : 0) > 1)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
                 "db accepts exactly one mode",
                 CommandExitCodes.UsageError,
-                "Run one of `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list`, or `cdidx db restore <name>`.",
+                "Run one of `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list`, `cdidx db restore <name>`, or `cdidx db restore-backups --list|--prune --keep <n>`.",
                 CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
@@ -101,6 +108,9 @@ public static class DbCommandRunner
 
         if (options.Restore)
             return RunRestore(options, jsonOptions);
+
+        if (options.RestoreBackups)
+            return RunRestoreBackups(options, jsonOptions);
 
         return RunIntegrityCheck(options, jsonOptions, dbPath, isUri);
     }
@@ -330,7 +340,8 @@ public static class DbCommandRunner
                         result.CheckpointPath,
                         result.Files,
                         result.FilesTruncated,
-                        CheckpointFileInspectLimit),
+                        CheckpointFileInspectLimit,
+                        result.Diagnostics),
                     CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
             }
             else
@@ -340,19 +351,25 @@ public static class DbCommandRunner
                 Console.WriteLine($"  name      : {result.Name}");
                 Console.WriteLine($"  checkpoint: {result.CheckpointPath}");
                 Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}{(result.FilesTruncated ? " (truncated)" : string.Empty)}");
+                foreach (var diagnostic in result.Diagnostics)
+                    Console.Error.WriteLine($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
             }
 
             return CommandExitCodes.Success;
         }
         catch (Exception ex)
         {
+            var safeMessage = ex is ArgumentException
+                ? ex.Message
+                : $"failed to create database checkpoint: {CommandErrorWriter.FormatSanitizedException(ex)}";
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to create database checkpoint: {ex.Message}",
+                safeMessage,
                 CommandExitCodes.DatabaseError,
                 "Ensure the database and checkpoint directory are writable, then retry `cdidx db checkpoint`.",
-                CommandErrorCodes.DbError);
+                CommandErrorCodes.DbError,
+                category: ex is ArgumentException ? null : DiagnosticRedactor.ClassifyException(ex));
         }
     }
 
@@ -404,9 +421,10 @@ public static class DbCommandRunner
         if (!ValidateWritableFileDb(options, jsonOptions, "restore", out var fullDbPath, out var validationExitCode))
             return validationExitCode;
 
+        var checkpointPath = string.Empty;
         try
         {
-            var checkpointPath = GetCheckpointPath(fullDbPath, options.Name);
+            checkpointPath = GetCheckpointPath(fullDbPath, options.Name);
             if (!Directory.Exists(checkpointPath))
                 return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {FormatCheckpointNameForDiagnostic(options.Name)}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.DbNotFound);
 
@@ -427,16 +445,152 @@ public static class DbCommandRunner
 
             return CommandExitCodes.Success;
         }
+        catch (DbRestoreOperationException ex)
+        {
+            return WriteRestoreError(options, jsonOptions, fullDbPath, options.Name, checkpointPath, ex);
+        }
         catch (Exception ex)
         {
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to restore database checkpoint: {ex.Message}",
+                $"failed to restore database checkpoint: {CommandErrorWriter.FormatSanitizedException(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Ensure no cdidx writer is running, then retry `cdidx db restore <name>`.",
-                CommandErrorCodes.DbError);
+                CommandErrorCodes.DbError,
+                category: DiagnosticRedactor.ClassifyException(ex));
         }
+    }
+
+    private static int WriteRestoreError(
+        DbCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string fullDbPath,
+        string name,
+        string checkpointPath,
+        DbRestoreOperationException ex)
+    {
+        var primary = ex.InnerException ?? ex;
+        var message = $"failed to restore database checkpoint: {CommandErrorWriter.FormatSanitizedException(primary)}";
+        const string hint = "Ensure no cdidx writer is running, then retry `cdidx db restore <name>`.";
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new DbRestoreJsonResult(
+                    "error",
+                    fullDbPath,
+                    name,
+                    string.IsNullOrWhiteSpace(ex.CheckpointPath) ? checkpointPath : ex.CheckpointPath,
+                    ex.BackupPath,
+                    message,
+                    CommandErrorCodes.DbError,
+                    hint,
+                    ex.RollbackFailure is not null,
+                    ex.RollbackFailure),
+                CliJsonSerializerContextFactory.Create(jsonOptions).DbRestoreJsonResult));
+            return CommandExitCodes.DatabaseError;
+        }
+
+        return WriteCommandError(
+            false,
+            jsonOptions,
+            message,
+            CommandExitCodes.DatabaseError,
+            hint,
+            CommandErrorCodes.DbError,
+            category: DiagnosticRedactor.ClassifyException(primary));
+    }
+
+    private static int RunRestoreBackups(DbCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (!options.RestoreBackupsList && !options.RestoreBackupsPrune)
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "restore-backups requires --list or --prune",
+                CommandExitCodes.UsageError,
+                "Use `cdidx db restore-backups --list` or `cdidx db restore-backups --prune --keep <n>`.",
+                CommandErrorCodes.UsageError);
+
+        if (options.RestoreBackupsList && options.RestoreBackupsPrune)
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "restore-backups accepts only one of --list or --prune",
+                CommandExitCodes.UsageError,
+                "Choose `--list` or `--prune`.",
+                CommandErrorCodes.UsageError);
+
+        if (!TryResolveFileDb(options.DbPath, out var fullDbPath, out var error))
+            return WriteCommandError(options.Json, jsonOptions, error, CommandExitCodes.DatabaseError, "Use a filesystem database path, not a SQLite URI.", CommandErrorCodes.DbError);
+
+        if (options.RestoreBackupsList)
+        {
+            var result = ListRestoreBackups(fullDbPath, RestoreBackupListEntryLimit);
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new DbRestoreBackupListJsonResult(
+                        fullDbPath,
+                        result.Entries,
+                        result.Truncated,
+                        RestoreBackupListEntryLimit,
+                        CheckpointFileInspectLimit,
+                        result.Diagnostics),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).DbRestoreBackupListJsonResult));
+            }
+            else
+            {
+                Console.WriteLine("Database restore backups");
+                Console.WriteLine($"  database: {fullDbPath}");
+                if (result.Truncated)
+                    Console.WriteLine($"  truncated: yes (restore backup limit {RestoreBackupListEntryLimit:N0}, file limit {CheckpointFileInspectLimit:N0} per backup)");
+                if (result.Entries.Count == 0)
+                {
+                    Console.WriteLine("  backups: none");
+                }
+                else
+                {
+                    foreach (var entry in result.Entries)
+                        Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes{(entry.FilesTruncated ? " (files truncated)" : string.Empty)}");
+                }
+
+                foreach (var diagnostic in result.Diagnostics)
+                    Console.Error.WriteLine($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
+            }
+
+            return CommandExitCodes.Success;
+        }
+
+        var pruneResult = PruneRestoreBackups(fullDbPath, options.RestoreBackupsKeep);
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new DbRestoreBackupPruneJsonResult(
+                    "success",
+                    fullDbPath,
+                    options.RestoreBackupsKeep,
+                    pruneResult.Deleted,
+                    pruneResult.Retained,
+                    pruneResult.Truncated,
+                    RestoreBackupPruneScanLimit,
+                    pruneResult.Diagnostics),
+                CliJsonSerializerContextFactory.Create(jsonOptions).DbRestoreBackupPruneJsonResult));
+        }
+        else
+        {
+            Console.WriteLine("Pruned database restore backups.");
+            Console.WriteLine($"  database: {fullDbPath}");
+            Console.WriteLine($"  keep    : {options.RestoreBackupsKeep:N0}");
+            Console.WriteLine($"  deleted : {pruneResult.Deleted:N0}");
+            Console.WriteLine($"  retained: {pruneResult.Retained:N0}");
+            if (pruneResult.Truncated)
+                Console.WriteLine($"  truncated: yes (restore backup scan limit {RestoreBackupPruneScanLimit:N0})");
+            foreach (var diagnostic in pruneResult.Diagnostics)
+                Console.Error.WriteLine($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
+        }
+
+        return CommandExitCodes.Success;
     }
 
     // PRAGMA integrity_check returns a single row `"ok"` when the file passes every consistency
@@ -757,7 +911,7 @@ public static class DbCommandRunner
             CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
             CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
             CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
-            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
+            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}");
             Directory.Move(tempPath, checkpointPath);
         }
         catch
@@ -770,8 +924,9 @@ public static class DbCommandRunner
             throw;
         }
 
-        var files = EnumerateCheckpointFileNames(checkpointPath);
-        return new DbCheckpointOperationResult(name, checkpointPath, files.Items, files.Truncated);
+        var diagnostics = new List<DbDiagnosticJsonResult>();
+        var files = EnumerateCheckpointFileNames(checkpointPath, diagnostics);
+        return new DbCheckpointOperationResult(name, checkpointPath, files.Items, files.Truncated, diagnostics);
     }
 
     private static DbCheckpointListReadResult ListCheckpoints(string fullDbPath)
@@ -824,8 +979,157 @@ public static class DbCommandRunner
                 bytes.Truncated));
         }
 
-        entries.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.Ordinal));
+        entries.Sort((left, right) =>
+        {
+            var createdCompare = string.Compare(right.CreatedAtUtc, left.CreatedAtUtc, StringComparison.Ordinal);
+            return createdCompare != 0
+                ? createdCompare
+                : string.Compare(left.Name, right.Name, StringComparison.Ordinal);
+        });
         return new DbCheckpointListReadResult(entries, checkpointsTruncated || entries.Any(entry => entry.FilesTruncated), diagnostics);
+    }
+
+    private static DbRestoreBackupReadResult ListRestoreBackups(string fullDbPath, int limit)
+    {
+        var parent = Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath(".");
+        var diagnostics = new List<DbDiagnosticJsonResult>();
+        if (!Directory.Exists(parent))
+            return new DbRestoreBackupReadResult([], DirectoryEnumerationTruncated: false, FileInspectionTruncated: false, diagnostics);
+
+        var dbFileName = Path.GetFileName(fullDbPath);
+        var prefix = GetRestoreBackupDirectoryPrefix(fullDbPath);
+        var entries = new List<DbRestoreBackupEntryJsonResult>();
+        var backupsTruncated = false;
+        var directoriesInspected = 0;
+        var directories = EnumerateRestoreBackupDirectories(parent, prefix, diagnostics, limit + 1);
+        backupsTruncated |= directories.Truncated;
+        foreach (var path in directories.Items)
+        {
+            if (directoriesInspected >= limit)
+            {
+                backupsTruncated = true;
+                break;
+            }
+
+            directoriesInspected++;
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(path, dbFileName))))
+                continue;
+
+            DirectoryInfo info;
+            DateTime createdAtUtc;
+            try
+            {
+                info = new DirectoryInfo(path);
+                createdAtUtc = info.CreationTimeUtc;
+            }
+            catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+            {
+                diagnostics.Add(CreateCheckpointDiagnostic("restore_backup_directory_stat_failed", "Unable to inspect restore backup directory metadata.", path));
+                backupsTruncated = true;
+                continue;
+            }
+
+            var bytes = SumCheckpointBytes(path, diagnostics);
+            entries.Add(new DbRestoreBackupEntryJsonResult(
+                info.Name,
+                path,
+                createdAtUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                bytes.Bytes,
+                bytes.Truncated));
+        }
+
+        entries.Sort((left, right) =>
+        {
+            var createdCompare = string.Compare(right.CreatedAtUtc, left.CreatedAtUtc, StringComparison.Ordinal);
+            return createdCompare != 0
+                ? createdCompare
+                : string.Compare(right.Name, left.Name, StringComparison.Ordinal);
+        });
+        return new DbRestoreBackupReadResult(entries, backupsTruncated, entries.Any(entry => entry.FilesTruncated), diagnostics);
+    }
+
+    private static DbRestoreBackupPruneResult PruneRestoreBackups(string fullDbPath, int keep)
+    {
+        var result = ListRestoreBackups(fullDbPath, RestoreBackupPruneScanLimit);
+        var diagnostics = result.Diagnostics;
+        if (result.DirectoryEnumerationTruncated)
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "restore_backup_prune_truncated",
+                "Restore backup pruning was skipped because backup enumeration reached the scan limit.",
+                ConsoleUi.FormatBoundedValue(fullDbPath)));
+            return new DbRestoreBackupPruneResult(Deleted: 0, Retained: result.Entries.Count, Truncated: true, diagnostics);
+        }
+
+        var deleted = 0;
+        foreach (var entry in result.Entries.Skip(keep))
+        {
+            if (TryDeleteRestoreBackupDirectory(fullDbPath, entry.BackupPath, diagnostics))
+                deleted++;
+        }
+
+        var retained = result.Entries.Count - deleted;
+        return new DbRestoreBackupPruneResult(deleted, retained, result.Truncated, diagnostics);
+    }
+
+    private static (List<string> Items, bool Truncated) EnumerateRestoreBackupDirectories(
+        string parent,
+        string prefix,
+        List<DbDiagnosticJsonResult> diagnostics,
+        int limit)
+    {
+        var directories = new List<string>();
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories(parent, prefix + "*"))
+            {
+                if (directories.Count >= limit)
+                    return (directories, Truncated: true);
+                if (Path.GetFileName(directory).StartsWith(prefix, StringComparison.Ordinal))
+                    directories.Add(directory);
+            }
+
+            return (directories, Truncated: false);
+        }
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        {
+            diagnostics.Add(CreateCheckpointDiagnostic("restore_backup_directory_enumeration_failed", "Unable to enumerate every restore backup directory.", parent));
+            return (directories, Truncated: true);
+        }
+    }
+
+    private static bool TryDeleteRestoreBackupDirectory(
+        string fullDbPath,
+        string backupPath,
+        List<DbDiagnosticJsonResult> diagnostics)
+    {
+        var parent = Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath(".");
+        var prefix = GetRestoreBackupDirectoryPrefix(fullDbPath);
+        if (!TryValidateTemporaryDirectoryCleanupTarget(backupPath, parent, prefix, out var fullPath, out var validationFailure))
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "restore_backup_delete_skipped",
+                $"Skipped deleting restore backup directory: {validationFailure}.",
+                ConsoleUi.FormatBoundedValue(backupPath)));
+            return false;
+        }
+
+        try
+        {
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
+                return false;
+
+            Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
+            return true;
+        }
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "restore_backup_delete_failed",
+                $"Unable to delete restore backup directory ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                ConsoleUi.FormatBoundedValue(fullPath)));
+            return false;
+        }
     }
 
     private static (List<string> Items, bool Truncated) EnumerateCheckpointDirectories(
@@ -852,21 +1156,32 @@ public static class DbCommandRunner
         }
     }
 
-    private static (List<string> Items, bool Truncated) EnumerateCheckpointFileNames(string checkpointPath)
+    private static (List<string> Items, bool Truncated) EnumerateCheckpointFileNames(
+        string checkpointPath,
+        List<DbDiagnosticJsonResult> diagnostics)
     {
         var files = new List<string>();
         var truncated = false;
-        foreach (var file in Directory.EnumerateFiles(checkpointPath))
+        try
         {
-            if (files.Count >= CheckpointFileInspectLimit)
+            IEnumerable<string?> fileNames = EnumerateCheckpointFileNamesForTesting?.Invoke(checkpointPath)
+                ?? Directory.EnumerateFiles(checkpointPath).Select(Path.GetFileName);
+            foreach (var name in fileNames)
             {
-                truncated = true;
-                break;
-            }
+                if (files.Count >= CheckpointFileInspectLimit)
+                {
+                    truncated = true;
+                    break;
+                }
 
-            var name = Path.GetFileName(file);
-            if (name is not null)
-                files.Add(name);
+                if (name is not null)
+                    files.Add(name);
+            }
+        }
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        {
+            diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_file_enumeration_failed", "Unable to enumerate every checkpoint file after creation.", checkpointPath));
+            truncated = true;
         }
 
         files.Sort(StringComparer.Ordinal);
@@ -954,18 +1269,23 @@ public static class DbCommandRunner
             MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal", privateDestination: true);
             MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm", privateDestination: true);
         }
-        catch
+        catch (Exception primaryEx)
         {
+            DbDiagnosticJsonResult? rollbackFailure = null;
             try
             {
                 RestoreBackedUpFiles(fullDbPath, backupPath);
             }
             catch (Exception rollbackEx) when (IsRecoverableRestoreException(rollbackEx))
             {
-                CommandErrorWriter.WriteStderr($"Warning: failed to roll back database restore from backup {ConsoleUi.FormatBoundedValue(backupPath)} ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+                rollbackFailure = new DbDiagnosticJsonResult(
+                    "restore_rollback_failed",
+                    $"Failed to roll back database restore from backup ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).",
+                    ConsoleUi.FormatBoundedValue(backupPath));
+                CommandErrorWriter.WriteStderr($"Warning [{rollbackFailure.Code}]: {rollbackFailure.Message} Backup: {rollbackFailure.Path}");
             }
 
-            throw;
+            throw new DbRestoreOperationException(primaryEx, checkpointPath, backupPath, rollbackFailure);
         }
         finally
         {
@@ -1006,6 +1326,9 @@ public static class DbCommandRunner
     private static string GetCheckpointRoot(string fullDbPath)
         => fullDbPath + CheckpointsDirectorySuffix;
 
+    private static string GetRestoreBackupDirectoryPrefix(string fullDbPath)
+        => Path.GetFileName(fullDbPath) + ".restore-backup-";
+
     private static string GetCheckpointPath(string fullDbPath, string name)
     {
         ValidateCheckpointName(name);
@@ -1017,9 +1340,30 @@ public static class DbCommandRunner
         if (!TryGetRegularExistingFile(source, out var normalizedSource))
             return;
 
-        File.Copy(normalizedSource, LongPath.EnsureWindowsPrefix(destination), overwrite: false);
-        if (privateDestination)
-            DataDirectorySecurity.ApplyPrivateFileMode(destination);
+        if (!privateDestination || OperatingSystem.IsWindows())
+        {
+            File.Copy(normalizedSource, LongPath.EnsureWindowsPrefix(destination), overwrite: false);
+            if (privateDestination)
+                DataDirectorySecurity.ApplyPrivateFileMode(destination);
+            return;
+        }
+
+        using (var input = new FileStream(normalizedSource, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var output = new FileStream(
+            LongPath.EnsureWindowsPrefix(destination),
+            new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = DataDirectorySecurity.PrivateFileMode,
+            }))
+        {
+            input.CopyTo(output);
+            output.Flush(flushToDisk: true);
+        }
+
+        DataDirectorySecurity.ApplyPrivateFileMode(destination);
     }
 
     private static void MoveIfExists(string source, string destination, bool privateDestination = false)
@@ -1144,6 +1488,10 @@ public static class DbCommandRunner
         var checkpoint = false;
         var listCheckpoints = false;
         var restore = false;
+        var restoreBackups = false;
+        var restoreBackupsList = false;
+        var restoreBackupsPrune = false;
+        var restoreBackupsKeep = DefaultRestoreBackupKeepCount;
         string? name = null;
         string? parseError = null;
 
@@ -1184,15 +1532,47 @@ public static class DbCommandRunner
                     else
                         parseError = "restore requires a checkpoint name";
                     break;
+                case "restore-backups":
+                    restoreBackups = true;
+                    break;
                 case "--dry-run":
                     pruneDryRun = true;
                     break;
                 case "--apply":
                     pruneApply = true;
                     break;
+                case "--prune":
+                    if (restoreBackups)
+                        restoreBackupsPrune = true;
+                    else
+                        parseError = "--prune is only valid with `cdidx db restore-backups --prune`";
+                    break;
+                case "--keep" when i + 1 < args.Length:
+                    if (!restoreBackups)
+                    {
+                        parseError = "--keep is only valid with `cdidx db restore-backups --prune --keep <n>`";
+                        break;
+                    }
+
+                    if (!int.TryParse(args[++i], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out restoreBackupsKeep)
+                        || restoreBackupsKeep < 0
+                        || restoreBackupsKeep > MaxRestoreBackupKeepCount)
+                    {
+                        parseError = $"--keep must be an integer from 0 to {MaxRestoreBackupKeepCount}";
+                    }
+                    break;
+                case "--keep":
+                    parseError = "--keep requires a value";
+                    break;
                 case "--list":
                     if (listCheckpoints)
                         break;
+                    if (restoreBackups)
+                    {
+                        restoreBackupsList = true;
+                        break;
+                    }
+
                     parseError = "--list is only valid with `cdidx db checkpoints --list`";
                     break;
                 case "--help" or "-h":
@@ -1209,6 +1589,9 @@ public static class DbCommandRunner
                 break;
         }
 
+        if (parseError is null && restoreBackups && (pruneDryRun || pruneApply))
+            parseError = "--dry-run and --apply are not supported with `cdidx db restore-backups`; use `--prune --keep <n>` to delete retained backups.";
+
         return new DbCommandOptions
         {
             DbPath = dbPath,
@@ -1221,14 +1604,18 @@ public static class DbCommandRunner
             Checkpoint = checkpoint,
             ListCheckpoints = listCheckpoints,
             Restore = restore,
+            RestoreBackups = restoreBackups,
+            RestoreBackupsList = restoreBackupsList,
+            RestoreBackupsPrune = restoreBackupsPrune,
+            RestoreBackupsKeep = restoreBackupsKeep,
             Name = name,
             ParseError = parseError,
         };
     }
 
-    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null, string? category = null)
     {
-        return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode);
+        return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode, category: category);
     }
 }
 
@@ -1245,13 +1632,49 @@ internal sealed class DbCommandOptions
     public bool Checkpoint { get; init; }
     public bool ListCheckpoints { get; init; }
     public bool Restore { get; init; }
+    public bool RestoreBackups { get; init; }
+    public bool RestoreBackupsList { get; init; }
+    public bool RestoreBackupsPrune { get; init; }
+    public int RestoreBackupsKeep { get; init; } = DbCommandRunner.DefaultRestoreBackupKeepCount;
     public string? Name { get; init; }
     public string? ParseError { get; init; }
 }
 
-internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated);
+internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated, List<DbDiagnosticJsonResult> Diagnostics);
 
 internal sealed record DbCheckpointListReadResult(List<DbCheckpointListEntryJsonResult> Entries, bool Truncated, List<DbDiagnosticJsonResult> Diagnostics);
+
+internal sealed record DbRestoreBackupReadResult(
+    List<DbRestoreBackupEntryJsonResult> Entries,
+    bool DirectoryEnumerationTruncated,
+    bool FileInspectionTruncated,
+    List<DbDiagnosticJsonResult> Diagnostics)
+{
+    public bool Truncated => DirectoryEnumerationTruncated || FileInspectionTruncated;
+}
+
+internal sealed record DbRestoreBackupPruneResult(int Deleted, int Retained, bool Truncated, List<DbDiagnosticJsonResult> Diagnostics);
+
+internal sealed class DbRestoreOperationException : Exception
+{
+    public DbRestoreOperationException(
+        Exception innerException,
+        string checkpointPath,
+        string backupPath,
+        DbDiagnosticJsonResult? rollbackFailure)
+        : base("database restore failed", innerException)
+    {
+        CheckpointPath = checkpointPath;
+        BackupPath = backupPath;
+        RollbackFailure = rollbackFailure;
+    }
+
+    public string CheckpointPath { get; }
+
+    public string BackupPath { get; }
+
+    public DbDiagnosticJsonResult? RollbackFailure { get; }
+}
 
 internal sealed record DbIntegrityCheckReadResult(List<string> Rows, bool RowsTruncated, bool TextTruncated)
 {

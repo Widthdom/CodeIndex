@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using CodeIndex.Cli;
 
@@ -76,6 +77,38 @@ public class AtomicFileWriterTests
             Assert.Contains("Atomic replace completed", ex.Message, StringComparison.Ordinal);
             Assert.Contains("parent directory could not be flushed", ex.Message, StringComparison.Ordinal);
             Assert.Equal("new", File.ReadAllText(path, Utf8NoBom));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WriteJson_SensitiveProfile_WritesPrivateFileAndFlushesParentDirectory_Issue3688()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_sensitive");
+        try
+        {
+            var path = Path.Combine(projectRoot, "scan-checkpoint.json");
+            string? flushedDirectory = null;
+            AtomicFileWriter.FlushParentDirectoryForTesting = directory => flushedDirectory = directory;
+
+            AtomicFileWriter.WriteJson(
+                path,
+                new { current_head = "HEAD", directories = new[] { "src" } },
+                AtomicFileWriter.WriteProfile.Sensitive);
+
+            Assert.Equal(projectRoot, flushedDirectory);
+            Assert.Contains("\"current_head\"", File.ReadAllText(path, Utf8NoBom), StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFiles(projectRoot, ".scan-checkpoint.json.*.tmp"));
+
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
+                Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
+            }
         }
         finally
         {
