@@ -5884,14 +5884,20 @@ public partial class McpServer
                 {
                     writer.InsertChunks(chunks);
                     writer.InsertSymbols(symbols);
-                    var references = ReferenceExtractor.Extract(
-                        fileId,
-                        record.Lang,
-                        content,
-                        symbols,
-                        record.Path,
-                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                        requestToken);
+                    List<ReferenceRecord> references;
+                    FileIssue? regexTimeoutIssue;
+                    using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
+                    {
+                        references = ReferenceExtractor.Extract(
+                            fileId,
+                            record.Lang,
+                            content,
+                            symbols,
+                            record.Path,
+                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                            requestToken);
+                        regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                    }
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
                     FileIssue? referenceCapIssue = null;
                     if (references.Count > maxReferencesPerFile)
@@ -5903,6 +5909,8 @@ public partial class McpServer
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    if (regexTimeoutIssue != null)
+                        issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
                     if (referenceCapIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);

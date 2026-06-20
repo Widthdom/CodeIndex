@@ -56,6 +56,25 @@ public static partial class IndexCommandRunner
             Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the --max-references-per-file limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise --max-references-per-file if this is expected.",
         };
 
+    internal static FileIssue? BuildRegexTimeoutIssue(string path, BoundedRegex.RegexTimeoutCaptureScope capture)
+    {
+        if (!capture.HasTimeouts)
+            return null;
+
+        var samples = capture.Diagnostics.Count == 0
+            ? "none"
+            : string.Join(", ", capture.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Operation}:{diagnostic.PatternHash} len={diagnostic.PatternLength} timeout={diagnostic.TimeoutMs:0.###}ms"));
+        var truncationSuffix = capture.DiagnosticsTruncated ? "; additional timeout diagnostics omitted" : string.Empty;
+        return new FileIssue
+        {
+            Path = path,
+            Kind = "regex_timeout",
+            Line = 0,
+            Message = $"Regex timeout fallback occurred during {capture.PatternFamily} for language {capture.Language} ({capture.TimeoutCount:N0} timeout(s); samples {samples}{truncationSuffix}); extraction used a safe no-match fallback and may be incomplete for this file.",
+        };
+    }
+
     private static bool ExistingFileViolatesExtractionCaps(DbWriter writer, long fileId, int maxSymbolsPerFile, int maxReferencesPerFile) =>
         writer.CountSymbolsForFile(fileId) > maxSymbolsPerFile
         || writer.HasIssueForFile(fileId, "symbol_count_exceeded")
@@ -1061,6 +1080,7 @@ public static partial class IndexCommandRunner
                                     continue;
                                 }
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                                FileIssue? regexTimeoutIssue = null;
                                 if (options.SymbolsOnly)
                                 {
                                     references = [];
@@ -1068,6 +1088,7 @@ public static partial class IndexCommandRunner
                                 else
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
+                                    using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
                                     references = ReferenceExtractor.Extract(
                                         0,
                                         record.Lang,
@@ -1076,9 +1097,12 @@ public static partial class IndexCommandRunner
                                         record.Path,
                                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                         extractionCancellationToken);
+                                    regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                                if (regexTimeoutIssue != null)
+                                    issues = AppendIssue(issues, regexTimeoutIssue);
                                 if (references.Count > options.MaxReferencesPerFile)
                                 {
                                     var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
@@ -1343,17 +1367,30 @@ public static partial class IndexCommandRunner
                     }
                     else
                     {
-                        references = item.References == null
-                            ? ReferenceExtractor.Extract(
+                        FileIssue? regexTimeoutIssue = null;
+                        if (item.References == null)
+                        {
+                            using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
+                            references = ReferenceExtractor.Extract(
                                 fileId,
                                 record.Lang,
                                 item.Content!,
                                 symbols,
                                 record.Path,
                                 record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                cancellationToken)
-                            : ReassignReferenceFileIds(item.References, fileId);
+                                cancellationToken);
+                            regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                        }
+                        else
+                        {
+                            references = ReassignReferenceFileIds(item.References, fileId);
+                        }
                         postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
+                        if (regexTimeoutIssue != null)
+                        {
+                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
+                        }
                         if (references.Count > options.MaxReferencesPerFile)
                         {
                             var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);

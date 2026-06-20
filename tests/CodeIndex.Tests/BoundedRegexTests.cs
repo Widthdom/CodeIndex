@@ -45,6 +45,29 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void CaptureTimeouts_RecordsHashedDiagnosticsForFileIssue()
+    {
+        const string pattern = "(a+)+$";
+        var regex = new BoundedRegex(pattern, default, TimeSpan.FromMilliseconds(1));
+        var input = new string('a', 10_000) + "!";
+
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "reference_extraction");
+        var match = regex.Match(input);
+        var issue = IndexCommandRunner.BuildRegexTimeoutIssue("src/Pathological.cs", capture);
+
+        Assert.False(match.Success);
+        Assert.True(capture.HasTimeouts);
+        Assert.NotNull(issue);
+        Assert.Equal("regex_timeout", issue.Kind);
+        Assert.Equal("src/Pathological.cs", issue.Path);
+        Assert.Contains("reference_extraction", issue.Message);
+        Assert.Contains(capture.Diagnostics[0].PatternHash, issue.Message);
+        Assert.Contains("len=6", issue.Message);
+        Assert.DoesNotContain(pattern, issue.Message);
+        Assert.DoesNotContain(input, issue.Message);
+    }
+
+    [Fact]
     public void InstanceMatches_Timeout_ReturnsEmpty()
     {
         var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
