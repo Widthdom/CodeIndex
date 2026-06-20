@@ -1035,6 +1035,91 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifest_EscapingMemberDiagnosticDoesNotLeakMemberPath_Issue3805()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_escape");
+        const string SentinelMember = "../SECRET_MEMBER_SENTINEL_3805";
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(SentinelMember)}}] }""");
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path escapes the manifest root", ex.Message);
+            Assert.DoesNotContain(SentinelMember, ex.Message);
+            Assert.DoesNotContain("SECRET_MEMBER_SENTINEL_3805", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifest_LongMemberPathDiagnosticDoesNotLeakMemberValue_Issue3805()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_long_member");
+        try
+        {
+            var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1) + "TAIL_SENTINEL_3805";
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(longMember)}}] }""");
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"exceeds the {WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
+            Assert.DoesNotContain("TAIL_SENTINEL_3805", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUse_CaseSensitiveMemberSelectionDistinguishesCaseOnlyBasenames_Issue3805()
+    {
+        PathCasing.ResetCacheForTests();
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive_config");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "App"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "app"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "src/app"] }""");
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            PathCasing.SeedFromWorkspace(root, ignoreCase: false);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                var state = ActiveWorkspace.Load();
+                Assert.NotNull(state);
+                Assert.Equal("App", state.Name);
+                Assert.Equal(Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "src", "App")), state.Root);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            PathCasing.ResetCacheForTests();
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void WorkspaceUse_RejectsNamedWorkspaceWithoutManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_no_manifest");

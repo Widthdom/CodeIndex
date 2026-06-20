@@ -75,8 +75,9 @@ internal static class WorkspaceCommandRunner
         WorkspaceMember? member = null;
         if (manifest != null && !useDefault)
         {
+            var memberNameComparison = PathCasing.ComparisonFor(manifest.Root);
             var matches = manifest.Members
-                .Where(m => string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase))
+                .Where(m => string.Equals(Path.GetFileName(m.Path), name, memberNameComparison))
                 .Take(MaxAmbiguousMemberCandidates + 1)
                 .ToArray();
 
