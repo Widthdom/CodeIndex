@@ -12211,16 +12211,6 @@ public static partial class QueryCommandRunner
            && status.CSharpSymbolNameReady
            && status.CSharpMetadataTargetReady;
 
-    private static bool IsCSharpMetadataTargetOnlyReadinessDegraded(StatusResult status)
-        => !status.CSharpMetadataTargetReady
-           && status.GraphTableAvailable
-           && status.IssuesTableAvailable
-           && status.SqlGraphContractReady
-           && status.HotspotFamilyReady
-           && status.CSharpSymbolNameReady
-           && status.FoldReady
-           && !status.IndexNewerThanReader;
-
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
         => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
 
