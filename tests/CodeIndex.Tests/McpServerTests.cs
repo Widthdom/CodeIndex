@@ -2160,6 +2160,35 @@ public sealed class Caller
     }
 
     [Fact]
+    public void McpPathBoundary_ResolvesSymlinkTargetsBeforeContainment_Issue3753()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = TestProjectHelper.CreateTempProject("cdidx_mcp_boundary_root");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_mcp_boundary_outside");
+        try
+        {
+            var link = Path.Combine(root, "link-outside");
+            try
+            {
+                Directory.CreateSymbolicLink(link, outside);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            Assert.False(McpPathBoundary.IsPathWithinDirectory(root, link));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
+    }
+
+    [Fact]
     public void ToolsList_IndexPathSchemaReflectsProjectPathContract_Issue3186()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

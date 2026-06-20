@@ -1590,24 +1590,7 @@ public partial class McpServer
         if (!TryReadRequiredStringParameter(args, propertyName, out value, out error))
             return false;
 
-        if (value.Length > MaxMcpArrayFilterStringLength)
-        {
-            error = $"Parameter \"{propertyName}\" must be no longer than {MaxMcpArrayFilterStringLength} characters.";
-            return false;
-        }
-
-        var normalized = value.Replace("\\", "/", StringComparison.Ordinal);
-        if (value.IndexOf("\0", StringComparison.Ordinal) >= 0
-            || normalized.StartsWith("/", StringComparison.Ordinal)
-            || HasWindowsDrivePrefix(normalized)
-            || normalized.Split(new[] { '/' }, StringSplitOptions.None).Any(segment => segment == ".."))
-        {
-            error = $"Parameter \"{propertyName}\" must be workspace-relative and must not contain NUL bytes or `..` path traversal segments.";
-            return false;
-        }
-
-        error = null;
-        return true;
+        return McpPathBoundary.TryValidateWorkspaceRelativePath(value, MaxMcpArrayFilterStringLength, propertyName, out error);
     }
 
     private static bool TryReadRequiredIndexPathParameter(JsonNode? args, string propertyName, out string value, out string? error)
@@ -1630,11 +1613,6 @@ public partial class McpServer
         error = null;
         return true;
     }
-
-    private static bool HasWindowsDrivePrefix(string path)
-        => path.Length >= 2
-            && path[1] == ':'
-            && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'));
 
     private static bool HasBlankPathFilter(JsonNode? args)
     {
@@ -2966,63 +2944,6 @@ public partial class McpServer
     {
         var trimmed = value.Trim();
         return trimmed.Length > 0 && trimmed.All(ch => ch == '@');
-    }
-
-    private static bool IsPathWithinDirectory(string parentPath, string childPath)
-    {
-        var parent = NormalizeDirectoryBoundaryPath(ResolveExistingDirectoryPath(parentPath));
-        var child = NormalizeDirectoryBoundaryPath(ResolveExistingDirectoryPath(childPath));
-
-        return PathCasing.IsPathEqualOrParent(parent, child);
-    }
-
-    private static string ResolveExistingDirectoryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        if (!Directory.Exists(fullPath))
-            return fullPath;
-
-        var root = Path.GetPathRoot(fullPath);
-        if (string.IsNullOrEmpty(root))
-            return fullPath;
-
-        var current = root;
-        var relativePath = Path.GetRelativePath(root, fullPath);
-        if (relativePath == ".")
-            return fullPath;
-
-        foreach (var segment in relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-        {
-            if (string.IsNullOrEmpty(segment) || segment == ".")
-                continue;
-
-            current = Path.Combine(current, segment);
-            try
-            {
-                var target = new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true);
-                if (target != null)
-                    current = target.FullName;
-            }
-            catch (IOException)
-            {
-                return Path.GetFullPath(current);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return Path.GetFullPath(current);
-            }
-        }
-
-        return Path.GetFullPath(current);
-    }
-
-    private static string NormalizeDirectoryBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
@@ -5610,7 +5531,7 @@ public partial class McpServer
 
         var rootPaths = _clientRoots
             .Select(root => TryReadStringValue(root))
-            .Select(TryResolveRootPath)
+            .Select(McpPathBoundary.TryResolveRootPath)
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Cast<string>()
             .ToArray();
@@ -5618,27 +5539,7 @@ public partial class McpServer
             return false;
 
         var fullPath = Path.GetFullPath(path);
-        return rootPaths.Any(root => IsPathWithinDirectory(root, fullPath));
-    }
-
-    private static string? TryResolveRootPath(string? root)
-    {
-        if (string.IsNullOrWhiteSpace(root))
-            return null;
-        if (Uri.TryCreate(root, UriKind.Absolute, out var uri))
-        {
-            if (!string.Equals(uri.Scheme, Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
-                return null;
-            return Path.GetFullPath(Uri.UnescapeDataString(uri.LocalPath));
-        }
-        try
-        {
-            return Path.GetFullPath(root);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return null;
-        }
+        return rootPaths.Any(root => McpPathBoundary.IsPathWithinDirectory(root, fullPath));
     }
 
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
@@ -5702,7 +5603,7 @@ public partial class McpServer
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
         var cwd = Path.GetFullPath(".");
-        if (!IsPathWithinDirectory(cwd, projectPath))
+        if (!McpPathBoundary.IsPathWithinDirectory(cwd, projectPath))
             return CreateToolErrorResponse(id, "Path must be within the current working directory");
         await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
         if (!IsPathWithinClientRoots(projectPath))
