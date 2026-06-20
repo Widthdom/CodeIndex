@@ -258,6 +258,7 @@ public class CdidxConfigFileTests
     [Theory]
     [InlineData("""{ "indexing": { "watchPendingPathLimit": 0 } }""", "positive integer")]
     [InlineData("""{ "indexing": { "watchPendingPathLimit": 262145 } }""", "<= 262144")]
+    [InlineData("""{ "indexing": { "watchPendingPathLimit": 1.5 } }""", "positive integer")]
     public void LoadAndApply_ProjectConfigJsonRejectsInvalidWatchPendingPathLimit(string json, string expectedError)
     {
         var dir = CreateTempDir();
@@ -270,6 +271,28 @@ public class CdidxConfigFileTests
             var result = CdidxConfigFile.Load(dir, env.Read);
 
             Assert.True(result.Failed);
+            Assert.Contains(expectedError, result.Error);
+            Assert.Empty(result.Settings);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Theory]
+    [InlineData("""{ "suggestion_max_age_days": 1.5 }""", "suggestion_max_age_days", "positive integer")]
+    [InlineData("""{ "suggestion_max_age_days": 2147483648 }""", "suggestion_max_age_days", "positive integer")]
+    [InlineData("""{ "suggestion_max_count": 1.5 }""", "suggestion_max_count", "positive integer")]
+    public void LoadAndApply_InvalidSuggestionIntegerConfig_ReturnsError_Issue3697(string json, string expectedKey, string expectedError)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), json);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains(expectedKey, result.Error);
             Assert.Contains(expectedError, result.Error);
             Assert.Empty(result.Settings);
         }
