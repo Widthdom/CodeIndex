@@ -284,7 +284,7 @@ public static partial class IndexCommandRunner
 
                 db.InitializeSchema();
                 var indexRunDiagnostics = new List<string>();
-                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics);
+                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
                 var indexer = new FileIndexer(
@@ -949,16 +949,26 @@ public static partial class IndexCommandRunner
         StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
     }
 
-    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit, List<string>? diagnostics)
+    private static void StampCommitScopedFreshHeadMetadata(
+        DbWriter writer,
+        IndexCommandOptions options,
+        string projectRoot,
+        string? currentHeadCommit,
+        List<string>? diagnostics,
+        CancellationToken cancellationToken = default)
     {
         try
         {
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
-                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit))
-                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit))
+                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit, cancellationToken))
+                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit, cancellationToken))
                 ? currentHeadCommit
                 : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -968,21 +978,29 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static bool GitRefCoversCurrentHead(string projectRoot, string refName, string currentHeadCommit)
+    private static bool GitRefCoversCurrentHead(
+        string projectRoot,
+        string refName,
+        string currentHeadCommit,
+        CancellationToken cancellationToken)
     {
         if (currentHeadCommit.StartsWith(refName, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName);
+        var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName, cancellationToken);
         return string.Equals(resolvedRef, currentHeadCommit, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryChangedBetweenCoversCurrentHead(IndexCommandOptions options, string projectRoot, string currentHeadCommit)
+    private static bool TryChangedBetweenCoversCurrentHead(
+        IndexCommandOptions options,
+        string projectRoot,
+        string currentHeadCommit,
+        CancellationToken cancellationToken)
     {
         if (options.ChangedBetweenRefs.Count != 2)
             return false;
 
-        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit);
+        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit, cancellationToken);
     }
 
     // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so
@@ -1014,12 +1032,16 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static void AddToGitExclude(string projectPath, string dbPath, List<string>? diagnostics)
+    private static void AddToGitExclude(
+        string projectPath,
+        string dbPath,
+        List<string>? diagnostics,
+        CancellationToken cancellationToken)
     {
         try
         {
             var projectRoot = Path.GetFullPath(projectPath);
-            var gitDir = GitHelper.ResolveGitCommonDir(projectRoot);
+            var gitDir = GitHelper.ResolveGitCommonDir(projectRoot, cancellationToken);
             if (gitDir == null) return;
 
             var excludeFile = Path.Combine(gitDir, "info", "exclude");
@@ -1068,6 +1090,10 @@ public static partial class IndexCommandRunner
             sw.WriteLine("# cdidx (CodeIndex) — auto-generated");
             foreach (var pattern in missing)
                 sw.WriteLine(pattern);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

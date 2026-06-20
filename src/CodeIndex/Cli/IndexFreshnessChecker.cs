@@ -10,7 +10,10 @@ internal static class IndexFreshnessChecker
     private const int MaxScanErrorPathChars = 180;
     internal const int MaxScanErrorSampleChars = 240;
 
-    internal static IndexFreshnessCheckResult Check(DbReader reader, string? projectRoot)
+    internal static IndexFreshnessCheckResult Check(
+        DbReader reader,
+        string? projectRoot,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
         {
@@ -25,7 +28,7 @@ internal static class IndexFreshnessChecker
         var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
         var indexedHeadSha = reader.GetMetaString(DbContext.IndexedHeadShaMetaKey);
         var commitScopedFreshHeadSha = reader.GetMetaString(DbContext.CommitScopedFreshHeadShaMetaKey);
-        var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot);
+        var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
         var currentHeadCoveredByCommitRefresh = !string.IsNullOrWhiteSpace(indexedHeadSha)
             && !string.IsNullOrWhiteSpace(commitScopedFreshHeadSha)
             && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
@@ -48,10 +51,10 @@ internal static class IndexFreshnessChecker
             HeadChanged = headChanged,
         };
 
-        var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot);
-        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
+        var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
         var indexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
-        var scan = indexer.ScanFilesDetailed();
+        var scan = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
         foreach (var error in scan.Errors)
         {
             if (!error.IsFatal)
@@ -68,9 +71,10 @@ internal static class IndexFreshnessChecker
 
         foreach (var absolutePath in scan.Files.OrderBy(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, path)), StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
+                var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 result.WorkspaceFileCount++;
                 while (hasIndexed && string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) < 0)
                 {
@@ -148,7 +152,7 @@ internal static class IndexFreshnessChecker
             // 不要な rebuild トリガーを止める。
             if (!skipWorktreePathsLoaded)
             {
-                skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot);
+                skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken);
                 skipWorktreePathsLoaded = true;
             }
 
