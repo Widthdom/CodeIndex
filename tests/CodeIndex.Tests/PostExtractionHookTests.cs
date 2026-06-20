@@ -437,8 +437,8 @@ public class PostExtractionHookTests
                                   && diagnostic.Message.Contains("candidate limit", StringComparison.Ordinal));
                 Assert.Equal(
                     2,
-                    runner.Diagnostics.Count(diagnostic => diagnostic.Category == "assembly_load_failed"
-                                                           && diagnostic.Message.StartsWith("Failed to load hook assembly", StringComparison.Ordinal)));
+                    runner.Diagnostics.Count(diagnostic => diagnostic.Category is "assembly_load_failed" or "dependency_resolution_failed"
+                                                           && diagnostic.Message.StartsWith("Hook assembly load failed", StringComparison.Ordinal)));
             }
             finally
             {
