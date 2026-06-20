@@ -199,6 +199,71 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunImport_RejectsUnknownExtensionFileListTotalChars_Issue3766()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_unknown_extension_total_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var unknownPaths = Enumerable
+                .Range(0, 33)
+                .Select(index => $"{new string('u', 1000)}{index.ToString("D2", CultureInfo.InvariantCulture)}")
+                .ToArray();
+            var manifest = JsonSerializer.Serialize(new
+            {
+                format_version = "1",
+                cdidx_version = "test",
+                user_version = 0,
+                database_sha256 = new string('0', 64),
+                unknown_extension_files = unknownPaths
+            });
+            var archivePath = CreateArchiveWithManifestAndDatabase(workDir, manifest, [1, 2, 3, 4]);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var message = AssertExportImportErrorAndGetMessage(stdout, "import", "manifest", "import_manifest_incompatible");
+            Assert.Contains("unknown_extension_files total path text exceeds", message);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RunImport_CancelledTokenReturnsInterruptedJson_Issue3766()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = Path.Combine(workDir, "missing.cdidx.zip");
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions, cts.Token));
+
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "open_archive", "import_interrupted");
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RunImport_RejectsDeepManifestBeforeDatabaseEntry()
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_depth_{Guid.NewGuid():N}");
@@ -760,6 +825,32 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_CancelledTokenReturnsInterruptedJson_Issue3766()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_cancel");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var outputPath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([outputPath, "--db", dbPath, "--json"], jsonOptions, "test", cts.Token));
+
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "export", "write_archive", "export_interrupted");
+            Assert.False(File.Exists(outputPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExportArchive_ManifestReportsEmptyUnknownExtensionSampleList_Issue3715()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_empty");
@@ -1188,6 +1279,30 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void TryValidateDatabaseEntrySize_RejectsZeroCompressedNonEmptyEntry_Issue3766()
+    {
+        var ok = ExportImportCommandRunner.TryValidateDatabaseEntrySize(
+            uncompressedLength: 1,
+            compressedLength: 0,
+            message: out var message);
+
+        Assert.False(ok);
+        Assert.Contains("zero compressed bytes", message);
+    }
+
+    [Fact]
+    public void TryValidateDatabaseEntrySize_RejectsAbnormalCompressionRatio_Issue3766()
+    {
+        var ok = ExportImportCommandRunner.TryValidateDatabaseEntrySize(
+            uncompressedLength: ExportImportCommandRunner.MaxImportDatabaseCompressionRatio + 1,
+            compressedLength: 1,
+            message: out var message);
+
+        Assert.False(ok);
+        Assert.Contains("compression ratio exceeds", message);
+    }
+
+    [Fact]
     public void CopyToWithLimit_ThrowsBeforeWritingPastLimit()
     {
         using var source = new MemoryStream([1, 2, 3, 4]);
@@ -1209,6 +1324,29 @@ public class ExportImportCommandRunnerTests
 
         Assert.Equal(4, copied);
         Assert.Equal([1, 2, 3, 4], target.ToArray());
+    }
+
+    [Fact]
+    public void CopyToWithLimit_ReportsProgressAndHonorsCancellation_Issue3766()
+    {
+        using var source = new MemoryStream([1, 2, 3, 4]);
+        using var target = new MemoryStream();
+        var progress = new RecordingProgress();
+
+        var copied = ExportImportCommandRunner.CopyToWithLimit(source, target, 4, CancellationToken.None, progress);
+
+        Assert.Equal(4, copied);
+        Assert.Equal([1, 2, 3, 4], target.ToArray());
+        Assert.Equal([4L], progress.Values);
+
+        using var canceledSource = new MemoryStream([5]);
+        using var canceledTarget = new MemoryStream();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            ExportImportCommandRunner.CopyToWithLimit(canceledSource, canceledTarget, 1, cts.Token));
+        Assert.Equal(0, canceledTarget.Length);
     }
 
     private static string CreateArchiveWithManifest(string workDir, string manifest)
@@ -1322,5 +1460,12 @@ public class ExportImportCommandRunnerTests
         command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
         command.Parameters.AddWithValue("@key", key);
         return command.ExecuteScalar() as string;
+    }
+
+    private sealed class RecordingProgress : IProgress<long>
+    {
+        public List<long> Values { get; } = [];
+
+        public void Report(long value) => Values.Add(value);
     }
 }

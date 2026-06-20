@@ -248,8 +248,8 @@ internal static partial class ProgramRunner
         {
             "upgrade" => RunUpgrade(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "index" => IndexCommandRunner.Run(subArgs, context.JsonOptions),
-            "export" => ExportImportCommandRunner.RunExport(subArgs, context.JsonOptions, context.AppVersion),
-            "import" => ExportImportCommandRunner.RunImport(subArgs, context.JsonOptions),
+            "export" => ExportImportCommandRunner.RunExport(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
+            "import" => ExportImportCommandRunner.RunImport(subArgs, context.JsonOptions, context.CancellationToken),
             "diff" => DiffCommandRunner.Run(subArgs, context.JsonOptions),
             "hooks" => HookCommandRunner.Run(subArgs, context.JsonOptions),
             "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, context.JsonOptions),
