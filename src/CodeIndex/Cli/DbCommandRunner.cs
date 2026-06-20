@@ -833,11 +833,7 @@ public static class DbCommandRunner
         => new(code, message, ConsoleUi.FormatBoundedValue(path));
 
     private static bool IsRecoverableFilesystemException(Exception ex)
-        => ex is IOException
-            or UnauthorizedAccessException
-            or ArgumentException
-            or NotSupportedException
-            or PathTooLongException;
+        => FileSystemTraversalFailure.IsExpected(ex);
 
     private static bool IsRecoverableRestoreException(Exception ex)
         => IsRecoverableFilesystemException(ex) || ex is InvalidOperationException;

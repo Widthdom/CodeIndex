@@ -2636,6 +2636,48 @@ public sealed class Caller
         }
     }
 
+    public static IEnumerable<object[]> SolutionProjectTraversalFailures()
+    {
+        yield return [new IOException("blocked"), "an I/O error"];
+        yield return [new UnauthorizedAccessException("blocked"), "permissions"];
+        yield return [new NotSupportedException("blocked"), "an unsupported path"];
+        yield return [new PathTooLongException("blocked"), "a path that is too long"];
+        yield return [new ArgumentException("blocked"), "an invalid path"];
+    }
+
+    [Theory]
+    [MemberData(nameof(SolutionProjectTraversalFailures))]
+    public void ResolveProjects_FallbackTraversalReportsExpectedFilesystemDiagnostics_Issue3707(
+        Exception exception,
+        string expectedReason)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_exception");
+        var previousEnumerateDirectories = SolutionProjectResolver.EnumerateDirectoriesForTesting;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            SolutionProjectResolver.EnumerateDirectoriesForTesting = _ => throw exception;
+            var diagnostics = new List<string>();
+
+            var projects = SolutionProjectResolver.ResolveProjects(
+                projectRoot,
+                solutionPath: null,
+                SolutionProjectResolverLimits.Default,
+                diagnostics);
+
+            Assert.Empty(projects);
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Contains("Could not enumerate subdirectories in .", diagnostic, StringComparison.Ordinal);
+            Assert.Contains(expectedReason, diagnostic, StringComparison.Ordinal);
+            Assert.DoesNotContain("blocked", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SolutionProjectResolver.EnumerateDirectoriesForTesting = previousEnumerateDirectories;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ResolveProjects_RejectsFallbackDiscoveryDirectoryTraversalLimit()
     {

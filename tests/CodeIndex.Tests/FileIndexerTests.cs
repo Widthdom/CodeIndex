@@ -914,15 +914,25 @@ public class FileIndexerTests
         }
     }
 
-    [Fact]
-    public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473()
+    public static IEnumerable<object[]> ProjectMarkerTraversalFailures()
+    {
+        yield return [new IOException("blocked")];
+        yield return [new UnauthorizedAccessException("blocked")];
+        yield return [new NotSupportedException("blocked")];
+        yield return [new PathTooLongException("blocked")];
+        yield return [new ArgumentException("blocked")];
+    }
+
+    [Theory]
+    [MemberData(nameof(ProjectMarkerTraversalFailures))]
+    public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473(Exception exception)
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_warning_{Guid.NewGuid():N}");
         var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
         try
         {
             Directory.CreateDirectory(tempDir);
-            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw new IOException("blocked");
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw exception;
             var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
             var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 10, maxMarkerFiles: 100);
@@ -931,6 +941,7 @@ public class FileIndexerTests
             var warning = Assert.Single(result.Warnings);
             Assert.Equal(".", warning.Path);
             Assert.Contains("Project marker discovery skipped this subtree", warning.Message, StringComparison.Ordinal);
+            Assert.Contains(exception.GetType().Name, warning.Message, StringComparison.Ordinal);
         }
         finally
         {
