@@ -106,6 +106,96 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunImport_RejectsUnexpectedArchiveEntry_Issue3699()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_extra_entry_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithEntries(
+                workDir,
+                ("manifest.json", "{}"),
+                ("codeindex.db", "not a database"),
+                ("extra.txt", "unexpected"));
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var message = AssertExportImportErrorAndGetMessage(stdout, "import", "open_archive", "import_archive_unexpected_entry");
+            Assert.Contains("unexpected entry", message);
+            Assert.Contains("extra.txt", message);
+            Assert.Contains("manifest.json", message);
+            Assert.Contains("codeindex.db", message);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RunImport_RejectsDuplicateArchiveEntry_Issue3699()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_duplicate_entry_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithEntries(
+                workDir,
+                ("manifest.json", "{}"),
+                ("manifest.json", "{}"),
+                ("codeindex.db", "not a database"));
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var message = AssertExportImportErrorAndGetMessage(stdout, "import", "manifest", "import_archive_duplicate_entry");
+            Assert.Contains("duplicate entry", message);
+            Assert.Contains("manifest.json", message);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RunImport_RejectsMissingDatabaseEntryWithBoundedDiagnostic_Issue3699()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_missing_db_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithEntries(workDir, ("manifest.json", "{}"));
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var message = AssertExportImportErrorAndGetMessage(stdout, "import", "database_entry", "import_database_entry_missing");
+            Assert.Contains("codeindex.db", message);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RunImport_RejectsDeepManifestBeforeDatabaseEntry()
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_depth_{Guid.NewGuid():N}");
@@ -1128,6 +1218,20 @@ public class ExportImportCommandRunnerTests
         return archivePath;
     }
 
+    private static string CreateArchiveWithEntries(string workDir, params (string Name, string Content)[] entries)
+    {
+        var archivePath = Path.Combine(workDir, $"codeindex-entries-{Guid.NewGuid():N}.cdidx.zip");
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+        foreach (var (name, content) in entries)
+        {
+            var entry = archive.CreateEntry(name);
+            using var writer = new StreamWriter(entry.Open());
+            writer.Write(content);
+        }
+
+        return archivePath;
+    }
+
     private static string CreateArchiveWithManifestAndDatabase(string workDir, string manifest, byte[] databaseBytes)
     {
         var archivePath = Path.Combine(workDir, "codeindex-with-db.cdidx.zip");
@@ -1189,6 +1293,22 @@ public class ExportImportCommandRunnerTests
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
+    }
+
+    private static string AssertExportImportErrorAndGetMessage(string stdout, string command, string phase, string errorCode)
+    {
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(command, root.GetProperty("command").GetString());
+        Assert.Equal(phase, root.GetProperty("phase").GetString());
+        Assert.Equal(errorCode, root.GetProperty("error_code").GetString());
+        var message = root.GetProperty("message").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(message));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
+        return message!;
     }
 
     private static string? ReadMetaValue(string dbPath, string key)

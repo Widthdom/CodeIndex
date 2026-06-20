@@ -13,6 +13,7 @@ internal static class ExportImportCommandRunner
 {
     private const string ManifestEntryName = "manifest.json";
     private const string DatabaseEntryName = "codeindex.db";
+    private static readonly string[] ExpectedImportArchiveEntryNames = [ManifestEntryName, DatabaseEntryName];
     internal const int MaxImportManifestBytes = 64 * 1024;
     internal const int MaxImportManifestJsonDepth = 16;
     internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
@@ -117,10 +118,25 @@ internal static class ExportImportCommandRunner
             using (var archive = ZipFile.OpenRead(archivePath))
             {
                 AddImportValidationPhase(validationPhases, PhaseOpenArchive);
+                if (!TryValidateImportArchiveEntries(
+                        archive,
+                        out var manifestEntry,
+                        out var dbEntry,
+                        out var entryValidationPhase,
+                        out var entryValidationErrorCode,
+                        out var entryValidationMessage))
+                {
+                    return WriteImportError(
+                        wantsJson,
+                        jsonOptions,
+                        entryValidationPhase,
+                        entryValidationErrorCode,
+                        entryValidationMessage,
+                        "use an archive produced by `cdidx export <archive>`.",
+                        ImportUsage);
+                }
+
                 phase = PhaseManifest;
-                var manifestEntry = archive.GetEntry(ManifestEntryName);
-                if (manifestEntry == null)
-                    return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_missing", "archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_invalid", $"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
@@ -129,9 +145,6 @@ internal static class ExportImportCommandRunner
                 AddImportValidationPhase(validationPhases, PhaseManifest);
 
                 phase = PhaseDatabaseEntry;
-                var dbEntry = archive.GetEntry(DatabaseEntryName);
-                if (dbEntry == null)
-                    return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_missing", "archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
                     return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_too_large", sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", ImportUsage);
 
@@ -651,6 +664,75 @@ internal static class ExportImportCommandRunner
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
+
+    private static bool TryValidateImportArchiveEntries(
+        ZipArchive archive,
+        out ZipArchiveEntry manifestEntry,
+        out ZipArchiveEntry databaseEntry,
+        out string phase,
+        out string errorCode,
+        out string message)
+    {
+        manifestEntry = null!;
+        databaseEntry = null!;
+        phase = PhaseOpenArchive;
+        errorCode = string.Empty;
+        message = string.Empty;
+
+        var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
+        foreach (var entry in archive.Entries)
+        {
+            if (!IsExpectedImportArchiveEntryName(entry.FullName))
+            {
+                errorCode = "import_archive_unexpected_entry";
+                message = $"archive contains unexpected entry {ConsoleUi.FormatBoundedValue(entry.FullName)}; expected only {FormatExpectedImportArchiveEntryNames()}.";
+                return false;
+            }
+
+            if (entries.ContainsKey(entry.FullName))
+            {
+                phase = GetImportArchiveEntryPhase(entry.FullName);
+                errorCode = "import_archive_duplicate_entry";
+                message = $"archive contains duplicate entry {ConsoleUi.FormatBoundedValue(entry.FullName)}.";
+                return false;
+            }
+
+            entries.Add(entry.FullName, entry);
+        }
+
+        if (!entries.TryGetValue(ManifestEntryName, out var foundManifestEntry))
+        {
+            phase = PhaseManifest;
+            errorCode = "import_manifest_missing";
+            message = $"archive is missing {ManifestEntryName}.";
+            return false;
+        }
+
+        if (!entries.TryGetValue(DatabaseEntryName, out var foundDatabaseEntry))
+        {
+            phase = PhaseDatabaseEntry;
+            errorCode = "import_database_entry_missing";
+            message = $"archive is missing {DatabaseEntryName}.";
+            return false;
+        }
+
+        manifestEntry = foundManifestEntry;
+        databaseEntry = foundDatabaseEntry;
+        return true;
+    }
+
+    private static bool IsExpectedImportArchiveEntryName(string name)
+        => Array.Exists(ExpectedImportArchiveEntryNames, expected => string.Equals(expected, name, StringComparison.Ordinal));
+
+    private static string GetImportArchiveEntryPhase(string name)
+        => string.Equals(name, ManifestEntryName, StringComparison.Ordinal)
+            ? PhaseManifest
+            : string.Equals(name, DatabaseEntryName, StringComparison.Ordinal)
+                ? PhaseDatabaseEntry
+                : PhaseOpenArchive;
+
+    private static string FormatExpectedImportArchiveEntryNames()
+        => string.Join(", ", ExpectedImportArchiveEntryNames.Select(name => $"`{name}`"));
 
     private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message)
     {
