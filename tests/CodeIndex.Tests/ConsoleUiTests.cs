@@ -97,6 +97,21 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintUsageBrief_ListsImplementedCommands_Issue3663()
+    {
+        var output = CaptureBriefUsageOutput(showBanner: false);
+
+        foreach (var command in CliFlagSchema.AllCommands)
+            Assert.Contains($"  {command}", output);
+
+        Assert.Contains("  hooks", output);
+        Assert.Contains("  files [query]", output);
+        Assert.Contains("  find <query>", output);
+        Assert.Contains("  excerpt <path>", output);
+        Assert.Contains("  languages", output);
+    }
+
+    [Fact]
     public void PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
