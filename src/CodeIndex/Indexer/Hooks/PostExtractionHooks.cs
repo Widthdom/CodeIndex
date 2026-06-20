@@ -32,7 +32,8 @@ public sealed record PostExtractionHookDiagnostic(
 public sealed record PostExtractionHookDiscoverySnapshot(
     IReadOnlyList<PostExtractionHookInfo> Hooks,
     IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics,
-    TimeSpan CallbackBudget);
+    TimeSpan CallbackBudget,
+    IReadOnlyList<ExtensionTrustOverride> TrustOverrides);
 
 public sealed class PostExtractionHookRunner : IDisposable
 {
@@ -68,21 +69,22 @@ public sealed class PostExtractionHookRunner : IDisposable
     public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
     {
         var resolution = ResolveDefaultHooksDirectory(includeAcceptedOverrideDiagnostic: true);
-        return DiscoverMetadata(resolution.Directory, resolution.Diagnostics);
+        return DiscoverMetadata(resolution.Directory, resolution.Diagnostics, resolution.TrustOverrides);
     }
 
     public static PostExtractionHookDiscoverySnapshot DiscoverMetadata(string? hooksDirectory)
-        => DiscoverMetadata(hooksDirectory, []);
+        => DiscoverMetadata(hooksDirectory, [], []);
 
     private static PostExtractionHookDiscoverySnapshot DiscoverMetadata(
         string? hooksDirectory,
-        IReadOnlyList<PostExtractionHookDiagnostic> initialDiagnostics)
+        IReadOnlyList<PostExtractionHookDiagnostic> initialDiagnostics,
+        IReadOnlyList<ExtensionTrustOverride> initialTrustOverrides)
     {
         var loaded = new List<LoadedPostExtractionHook>();
         var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
         runner.EnqueueDiagnostics(initialDiagnostics);
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
-            return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget);
+            return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
         var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit())
             .Select(dllPath =>
@@ -95,7 +97,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             })
             .ToArray();
 
-        return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget);
+        return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
     }
 
     public static PostExtractionHookRunner Discover(string? hooksDirectory, long? maxFileSizeBytes = null)
@@ -128,9 +130,10 @@ public sealed class PostExtractionHookRunner : IDisposable
                     dllPath);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                runner.EnqueueDiagnostic(dllPath, null, "Failed to load hook assembly.", category: "assembly_load_failed");
+                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Hook assembly load", ex);
+                runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
                 continue;
             }
 
@@ -139,9 +142,10 @@ public sealed class PostExtractionHookRunner : IDisposable
             {
                 types = assembly.GetTypes();
             }
-            catch (ReflectionTypeLoadException)
+            catch (ReflectionTypeLoadException ex)
             {
-                runner.EnqueueDiagnostic(dllPath, null, "Failed to inspect hook assembly.", category: "assembly_inspection_failed");
+                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Hook assembly type inspection", ex);
+                runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
                 continue;
             }
 
@@ -170,7 +174,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                 }
                 catch (Exception)
                 {
-                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "hook_registration_failed");
+                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "activation_failed");
                 }
             }
         }
@@ -214,13 +218,17 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             return Directory.EnumerateFiles(hooksDirectory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "hook",
+                "Hook directory",
+                ex);
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                "Failed to enumerate hook directory.",
-                category: "hook_directory_enumeration_failed");
+                $"Hook directory skipped: {diagnostic.Message}.",
+                category: diagnostic.Category);
             return null;
         }
     }
@@ -293,13 +301,17 @@ public sealed class PostExtractionHookRunner : IDisposable
             dllPath = enumerator.Current;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "hook",
+                "Hook directory",
+                ex);
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                "Failed to enumerate hook directory.",
-                category: "hook_directory_enumeration_failed");
+                $"Hook directory skipped: {diagnostic.Message}.",
+                category: diagnostic.Category);
             return false;
         }
     }
@@ -426,7 +438,18 @@ public sealed class PostExtractionHookRunner : IDisposable
             return "callback_worker_failed";
 
         if (workerError.StartsWith("worker_execution_failed:", StringComparison.Ordinal))
-            return "hook_constructor_failed";
+        {
+            if (workerError.Contains(nameof(FileNotFoundException), StringComparison.Ordinal)
+                || workerError.Contains(nameof(FileLoadException), StringComparison.Ordinal))
+            {
+                return "dependency_resolution_failed";
+            }
+
+            if (workerError.Contains(nameof(TypeLoadException), StringComparison.Ordinal))
+                return "type_load_failed";
+
+            return "constructor_failed";
+        }
         if (workerError.StartsWith("worker_start_failed:", StringComparison.Ordinal))
             return "worker_start_failed";
         if (workerError.StartsWith("worker_protocol_error:", StringComparison.Ordinal))
@@ -561,6 +584,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             string.IsNullOrWhiteSpace(home)
                 ? null
                 : Path.Combine(home, ".config", "cdidx", "hooks"),
+            [],
             []);
     }
 
@@ -569,6 +593,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         bool includeAcceptedOverrideDiagnostic)
     {
         var diagnostics = new List<PostExtractionHookDiagnostic>();
+        var trustOverrides = new List<ExtensionTrustOverride>();
         string fullPath;
         try
         {
@@ -581,7 +606,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                 null,
                 "Hook directory override rejected: path could not be resolved.",
                 category: "hook_directory_override_invalid_path"));
-            return new HookDirectoryResolution(null, diagnostics);
+            return new HookDirectoryResolution(null, diagnostics, []);
         }
 
         try
@@ -594,7 +619,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     null,
                     "Hook directory override rejected: directory does not exist.",
                     category: "hook_directory_override_missing"));
-                return new HookDirectoryResolution(null, diagnostics);
+                return new HookDirectoryResolution(null, diagnostics, []);
             }
 
             if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0
@@ -605,7 +630,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     null,
                     "Hook directory override rejected: symbolic links and reparse points are not supported.",
                     category: "hook_directory_override_rejected"));
-                return new HookDirectoryResolution(null, diagnostics);
+                return new HookDirectoryResolution(null, diagnostics, []);
             }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
@@ -615,7 +640,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                 null,
                 "Hook directory override rejected: directory could not be inspected.",
                 category: "hook_directory_override_inspection_failed"));
-            return new HookDirectoryResolution(null, diagnostics);
+            return new HookDirectoryResolution(null, diagnostics, []);
         }
 
         AddUnixPermissionDiagnostic(fullPath, diagnostics);
@@ -626,9 +651,15 @@ public sealed class PostExtractionHookRunner : IDisposable
                 null,
                 "Hook directory override accepted: hook assemblies execute local extension code from this trusted directory.",
                 category: "hook_directory_override_accepted"));
+            trustOverrides.Add(new ExtensionTrustOverride(
+                "hook_directory_override",
+                HooksDirectoryEnvironmentVariable,
+                DiagnosticSanitizer.ForPath(overridePath),
+                DiagnosticSanitizer.ForPath(fullPath),
+                "Hook directory override accepted by environment; hook assemblies execute local extension code from this trusted directory."));
         }
 
-        return new HookDirectoryResolution(fullPath, diagnostics);
+        return new HookDirectoryResolution(fullPath, diagnostics, trustOverrides);
     }
 
     private static void AddUnixPermissionDiagnostic(string fullPath, List<PostExtractionHookDiagnostic> diagnostics)
@@ -704,5 +735,6 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     private sealed record HookDirectoryResolution(
         string? Directory,
-        IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics);
+        IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics,
+        IReadOnlyList<ExtensionTrustOverride> TrustOverrides);
 }

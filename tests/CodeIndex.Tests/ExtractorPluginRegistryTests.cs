@@ -9,6 +9,55 @@ namespace CodeIndex.Tests;
 
 public class ExtractorPluginRegistryTests
 {
+    internal const string ThrowingPluginConstructorEnvironmentVariable = "CDIDX_TEST_THROWING_PLUGIN_CTOR";
+
+    [Fact]
+    public void GetAcceptedTrustOverrides_ReportsWorkspacePluginTrust_3735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_trust_override_3735");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "yes");
+
+                var trustOverride = Assert.Single(ExtractorPluginRegistry.GetAcceptedTrustOverrides(projectRoot));
+
+                Assert.Equal("workspace_plugin_directory", trustOverride.Kind);
+                Assert.Equal(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, trustOverride.EnvironmentVariable);
+                Assert.Equal("yes", trustOverride.Value);
+                Assert.EndsWith(".cdidx/plugins", trustOverride.Path!, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, trustOverride.Path!, StringComparison.Ordinal);
+                Assert.Contains("workspace plugin", trustOverride.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void GetAcceptedTrustOverrides_IgnoresRejectedWorkspacePluginTrust_3735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_trust_override_rejected_3735");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "0");
+
+                Assert.Empty(ExtractorPluginRegistry.GetAcceptedTrustOverrides(projectRoot));
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
     [Fact]
     public void EnumeratePluginAssemblyPaths_CapsCandidatesPerDirectory()
     {
@@ -178,12 +227,42 @@ public class ExtractorPluginRegistryTests
                 Assert.Equal("assembly_load_failed", diagnostic.Category);
                 Assert.Equal("broken.dll", diagnostic.Path);
                 Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
-                Assert.Equal("Failed to load plugin assembly.", diagnostic.Message);
+                Assert.Contains("Plugin assembly load failed", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains(nameof(BadImageFormatException), diagnostic.Message, StringComparison.Ordinal);
             }
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_ReportsSanitizedConstructorFailure_3701()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ThrowingPluginConstructorEnvironmentVariable);
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ThrowingPluginConstructorEnvironmentVariable, "1");
+
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+
+                var diagnostic = Assert.Single(
+                    ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
+                    item => item.TypeName == typeof(ThrowingPluginSymbolExtractor).FullName);
+                Assert.Equal("plugin_type", diagnostic.Kind);
+                Assert.Equal("error", diagnostic.Severity);
+                Assert.Equal("constructor_failed", diagnostic.Category);
+                Assert.Contains(nameof(InvalidOperationException), diagnostic.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("plugin ctor boom", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
             }
         }
     }
@@ -414,6 +493,22 @@ public sealed class CollectiblePluginSymbolExtractor : ISymbolExtractor
     public string Language => "collectibledsl";
 
     public IReadOnlyCollection<string> FileExtensions => [".collectible"];
+
+    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        => [];
+}
+
+public sealed class ThrowingPluginSymbolExtractor : ISymbolExtractor
+{
+    public ThrowingPluginSymbolExtractor()
+    {
+        if (Environment.GetEnvironmentVariable(ExtractorPluginRegistryTests.ThrowingPluginConstructorEnvironmentVariable) == "1")
+            throw new InvalidOperationException("plugin ctor boom");
+    }
+
+    public string Language => "throwingplugindsl";
+
+    public IReadOnlyCollection<string> FileExtensions => [".throwingplugin"];
 
     public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
         => [];

@@ -3157,6 +3157,11 @@ public partial class McpServer
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
                 status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
+            var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
+                .Concat(postExtractionHookSnapshot.TrustOverrides)
+                .ToList();
+            if (trustOverrides.Count > 0)
+                status.TrustOverrides = trustOverrides;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -3437,6 +3442,8 @@ public partial class McpServer
         };
         if (status.WorkspaceCheck is not null)
             payload["workspace_check"] = JsonSerializer.SerializeToNode(status.WorkspaceCheck);
+        if (status.TrustOverrides is { Count: > 0 })
+            payload["trust_overrides"] = JsonSerializer.SerializeToNode(status.TrustOverrides);
         return payload;
     }
 

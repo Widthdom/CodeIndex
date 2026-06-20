@@ -10,6 +10,8 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -7949,6 +7951,38 @@ public sealed class Caller
 
         var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
         Assert.Equal(McpServer.MaxMcpPaginationOffset, limits["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_StatusCompact_ReportsAcceptedExtensionTrustOverrides_3735()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
+                ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            var hooksDir = Path.Combine(_projectRoot, "hooks");
+            Directory.CreateDirectory(hooksDir);
+            env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+            env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "on");
+
+            var response = _server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!)!;
+
+            var trustOverrides = response["result"]!["structuredContent"]!["trust_overrides"]!.AsArray();
+            Assert.Equal(2, trustOverrides.Count);
+            Assert.Contains(
+                trustOverrides,
+                item => item?["kind"]?.GetValue<string>() == "workspace_plugin_directory"
+                        && item["environment_variable"]!.GetValue<string>() == ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable
+                        && item["value"]!.GetValue<string>() == "on");
+            var hookOverride = Assert.Single(
+                trustOverrides,
+                item => item?["kind"]?.GetValue<string>() == "hook_directory_override");
+            Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hookOverride!["environment_variable"]!.GetValue<string>());
+            Assert.EndsWith("hooks", hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.DoesNotContain(_projectRoot, hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
+        }
     }
 
     [Fact]

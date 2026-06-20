@@ -33,6 +33,9 @@ public static partial class ExtractorPluginRegistry
     }
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
+        => ReportPatternDirectoryRejected(path, reason, "pattern_directory_rejected");
+
+    private static void ReportPatternDirectoryRejected(string path, string reason, string category)
     {
         CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
@@ -42,7 +45,7 @@ public static partial class ExtractorPluginRegistry
             severity: "error",
             $"Pattern directory skipped: {reason}",
             countsAsSkippedFile: false,
-            category: "pattern_directory_rejected");
+            category: category);
     }
 
     private static void ReportPatternDirectorySkipped(string path, string reason)
@@ -124,4 +127,13 @@ public sealed record ExtractorRegistryDiagnostic(
     [property: JsonPropertyName("type_name")] string? TypeName,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("message")] string Message);
+
+public sealed record ExtensionTrustOverride(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("environment_variable")] string EnvironmentVariable,
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("path")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Path,
     [property: JsonPropertyName("message")] string Message);
