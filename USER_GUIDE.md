@@ -745,9 +745,11 @@ hosts still leave traces. Local development runs from the repository's
 `src/CodeIndex/bin/...` or `tests/.../bin/...` outputs are excluded by default.
 Default locations are `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/Library/Logs/cdidx/` on macOS, and `$XDG_STATE_HOME/cdidx/logs/` (or
-`~/.local/state/cdidx/logs/`) on Linux. Logs use per-process filenames,
-rotate daily, rotate again when a file reaches 50 MiB by default, and keep the
-newest 30 files. Set `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` or
+`~/.local/state/cdidx/logs/`) on Linux. If none of those roots can be used,
+the final temp fallback is a hashed per-user `cdidx-u.../logs` directory under
+the OS temp root. Logs use per-process filenames, rotate daily, rotate again
+when a file reaches 50 MiB by default, and keep the newest 30 files. Set
+`CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` or
 `--log-max-size-mb` to tune the size cap up to 1024 MiB / 1 GiB. Set
 `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out. The opt-out toggle accepts `1`,
 `true`, `yes`, or `on` case-insensitively.
@@ -1713,7 +1715,7 @@ Persistent lifecycle logs are written to the first available directory in this o
 5. Windows: `%LOCALAPPDATA%\cdidx\logs`
 6. macOS: `~/Library/Logs/cdidx`
 7. Linux and other Unix-like systems without an XDG log directory: `~/.local/state/cdidx/logs`
-8. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
+8. fallback: the OS local-app-data directory, then a hashed per-user `cdidx-u.../logs` directory under the temp root
 
 Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
 
@@ -4270,7 +4272,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 5. Windows: `%LOCALAPPDATA%\cdidx\logs`
 6. macOS: `~/Library/Logs/cdidx`
 7. XDG のログディレクトリがない Linux などの Unix 系: `~/.local/state/cdidx/logs`
-8. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
+8. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下のユーザー別 hashed `cdidx-u.../logs` ディレクトリ
 
 有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
 

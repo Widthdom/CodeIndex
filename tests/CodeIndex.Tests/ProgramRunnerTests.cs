@@ -1149,6 +1149,22 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void UpdateChecker_ResolveDefaultCachePath_UsesPrivateTempFallback_Issue3675()
+    {
+        var path = UpdateChecker.ResolveDefaultCachePath(
+            xdgCacheHome: null,
+            home: null,
+            localAppData: null);
+
+        Assert.Equal(
+            Path.Combine(DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("cache"), "update-check.json"),
+            path);
+        Assert.NotEqual(
+            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "cache", "update-check.json")),
+            path);
+    }
+
+    [Fact]
     public void UpdateChecker_Check_RateLimitResponseReportsRetryMetadata_Issue3822()
     {
         lock (TestConsoleLock.Gate)

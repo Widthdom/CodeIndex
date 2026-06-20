@@ -447,6 +447,17 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void ResolveTempFallbackLogDirectory_UsesPrivateTempFallback_Issue3675()
+    {
+        var directory = GlobalToolLog.ResolveTempFallbackLogDirectoryForTesting();
+
+        Assert.Equal(DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("logs"), directory);
+        Assert.NotEqual(
+            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "logs")),
+            directory);
+    }
+
+    [Fact]
     public void TryNormalizeLogDirectoryCandidate_ReturnsFalseForInvalidPath()
     {
         var invalid = "bad" + '\0' + "path";

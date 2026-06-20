@@ -1435,9 +1435,11 @@ lifecycle breadcrumbs to a per-user daily log. The log path follows
 `XDG_CACHE_HOME/cdidx/logs/`, `XDG_RUNTIME_DIR/cdidx/logs/`, then the
 platform default: `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/Library/Logs/cdidx/` on macOS, or `~/.local/state/cdidx/logs/` on Linux.
-Each candidate is probed with a create/write/delete round trip before the
-logger commits to it, so read-only state/cache/runtime mounts fall through to
-the next candidate instead of losing the first log write. The file name is
+If every platform candidate is unavailable, the final temp fallback is a
+hashed per-user `cdidx-u.../logs` directory under the OS temp root. Each
+candidate is probed with a create/write/delete round trip before the logger
+commits to it, so read-only state/cache/runtime mounts fall through to the
+next candidate instead of losing the first log write. The file name is
 `stderr-YYYYMMDD.log`, timestamps inside the file are ISO-8601 UTC
 (`yyyy-MM-ddTHH:mm:ss.fffZ`) using invariant culture, and the logger keeps
 only the newest 30 daily files. `CDIDX_LOG_FORMAT` / `--log-format` switch
@@ -2121,7 +2123,7 @@ flowchart TD
 | `Error: --json is not available on this trimmed build.` | Manual/custom build reached a reflection-based `JsonSerializer` path that is not covered by source generation | Use the official `install.sh` release or NuGet/global-tool build, omit `--json`, use MCP, or add the missing DTO to `CliJsonSerializerContext` before publishing |
 | `cdidx status` shows `Files: 0` on a repo that clearly has files | Index DB never built, or pointing at the wrong `--db` | Run `cdidx <projectPath>` first; verify `.cdidx/codeindex.db` exists |
 | Every command shows `index fresh` but results are obviously stale | You indexed a different working copy | Re-run `cdidx . --commits HEAD` or `cdidx . --files <paths>` |
-| The host swallowed stderr and the user only knows "cdidx did not work" | The shell or launcher captured/discarded terminal stderr | Inspect the daily persistent stderr log in the per-user `cdidx/logs/` directory (`stderr-YYYYMMDD.log`); disable with `CDIDX_DISABLE_PERSISTENT_LOG=1` only when you intentionally do not want breadcrumbs |
+| The host swallowed stderr and the user only knows "cdidx did not work" | The shell or launcher captured/discarded terminal stderr | Run `cdidx status --log-path` and inspect the daily persistent stderr log (`stderr-YYYYMMDD.log`) in that resolved per-user directory; disable with `CDIDX_DISABLE_PERSISTENT_LOG=1` only when you intentionally do not want breadcrumbs |
 
 ### Why this matters
 
@@ -3596,9 +3598,11 @@ mock に頼らないリリース前検証として、`install.sh --reinstall-rea
 `XDG_RUNTIME_DIR/cdidx/logs/`、platform default の順に選ばれます。
 platform default は Windows では `%LOCALAPPDATA%\cdidx\logs\`、macOS では
 `~/Library/Logs/cdidx/`、Linux では `~/.local/state/cdidx/logs/` です。
-各 candidate は logger が採用する前に create/write/delete の往復で probe
-されるため、read-only な state/cache/runtime mount は最初の log write を
-失うのではなく次の candidate へ fall through します。ファイル名は
+platform candidate がすべて使えない場合、最後の temp fallback は OS temp root
+配下のユーザー別 hashed `cdidx-u.../logs` ディレクトリです。各 candidate は
+logger が採用する前に create/write/delete の往復で probe されるため、
+read-only な state/cache/runtime mount は最初の log write を失うのではなく
+次の candidate へ fall through します。ファイル名は
 `stderr-YYYYMMDD.log`、ファイル内 timestamp は invariant culture の
 ISO-8601 UTC（`yyyy-MM-ddTHH:mm:ss.fffZ`）で、logger は新しい 30 日次
 ファイルだけを保持します。`CDIDX_LOG_FORMAT` / `--log-format` は text と
@@ -3957,7 +3961,7 @@ flowchart TD
 | `Error: --json is not available on this trimmed build.` | 手動/custom build が source generation 未対応の reflection-based `JsonSerializer` 経路に到達した | 公式 `install.sh` release または NuGet グローバルツール版を使う、`--json` を外す、MCP を使う、または publish 前に不足 DTO を `CliJsonSerializerContext` へ追加する |
 | 明らかにファイルのあるリポジトリで `cdidx status` が `Files: 0` | インデックス DB を作っていない、あるいは別の `--db` を指している | 先に `cdidx <projectPath>` を実行。`.cdidx/codeindex.db` の存在を確認 |
 | 全コマンドが `index fresh` だが結果は明らかに古い | 別の作業コピーにインデックスを張っている | `cdidx . --commits HEAD` または `cdidx . --files <paths>` を再実行 |
-| ホストが stderr を握りつぶし、ユーザーには「cdidx がうまく動かない」だけが見える | シェルやランチャーが端末 stderr を回収または破棄している | ユーザーごとの `cdidx/logs/` 配下にある日次の永続 stderr ログ（`stderr-YYYYMMDD.log`）を確認する。意図的に痕跡を残したくないときだけ `CDIDX_DISABLE_PERSISTENT_LOG=1` で無効化する |
+| ホストが stderr を握りつぶし、ユーザーには「cdidx がうまく動かない」だけが見える | シェルやランチャーが端末 stderr を回収または破棄している | `cdidx status --log-path` を実行し、解決されたユーザー別ディレクトリの日次永続 stderr ログ（`stderr-YYYYMMDD.log`）を確認する。意図的に痕跡を残したくないときだけ `CDIDX_DISABLE_PERSISTENT_LOG=1` で無効化する |
 
 ### なぜこれが重要か
 
