@@ -4777,10 +4777,38 @@ public sealed class Caller
                 var tooMany = string.Join(',', Enumerable.Repeat("index", McpToolFilter.MaxToolFilterCsvEntries + 1));
                 var filter = McpToolFilter.Parse(null, tooMany);
 
-                Assert.True(filter.IsEnabled("index"));
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an invalid denylist is supplied");
                 Assert.Contains(McpToolFilter.DenyEnvVarName, stderr.ToString());
                 Assert.Contains("accepts at most", stderr.ToString());
                 Assert.Contains("was rejected", stderr.ToString());
+                Assert.Contains("failing closed", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_OverlongDenyListFailsClosed_Issue3829()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse(null, new string('d', McpToolFilter.MaxToolFilterCsvLength + 1));
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an overlong denylist is supplied");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.DenyEnvVarName, warning);
+                Assert.Contains("was rejected", warning);
+                Assert.Contains("failing closed", warning);
             }
             finally
             {
@@ -4969,6 +4997,23 @@ public sealed class Caller
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).OrderBy(n => n, StringComparer.Ordinal).ToArray();
 
         Assert.Equal(new[] { "references", "search" }, names);
+    }
+
+    [Fact]
+    public void ToolsList_KnownToolNamesMatchAdvertisedTools_Issue3829()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var advertised = response["result"]!["tools"]!.AsArray()
+            .Select(tool => tool!["name"]!.GetValue<string>())
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        var known = McpToolFilter.KnownToolNames
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(known, advertised);
     }
 
     [Fact]
