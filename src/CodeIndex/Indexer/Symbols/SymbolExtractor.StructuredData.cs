@@ -97,12 +97,16 @@ public static partial class SymbolExtractor
             var name = string.IsNullOrEmpty(parentPath)
                 ? property.Name
                 : parentPath + "." + property.Name;
-            if (name.Length > StructuredDataMaxPathLength)
-                continue;
-
             var line = TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
                 ? mappedLine
                 : FindLineNumberForOffset(lineStarts, FindJsonPropertyOffset(content, property.Name, ref searchOffset));
+
+            if (name.Length > StructuredDataMaxPathLength)
+            {
+                DrainJsonPropertyLines(property.Value, propertyLines);
+                continue;
+            }
+
             var kind = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
                 ? "namespace"
                 : "property";
@@ -125,6 +129,23 @@ public static partial class SymbolExtractor
                         ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, item, name, ref searchOffset, symbols, propertyLines);
                 }
             }
+        }
+    }
+
+    private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>> propertyLines)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                _ = TryDequeueJsonPropertyLine(propertyLines, property.Name, out _);
+                DrainJsonPropertyLines(property.Value, propertyLines);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                DrainJsonPropertyLines(item, propertyLines);
         }
     }
 

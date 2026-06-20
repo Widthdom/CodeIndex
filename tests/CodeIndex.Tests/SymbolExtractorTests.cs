@@ -625,6 +625,26 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_SkippedOverlongSubtreesDoNotStealDuplicateKeyLines_Issue3808()
+    {
+        var longName = new string('a', SymbolExtractor.StructuredDataMaxPathLength + 1);
+        var content = $$"""
+            {
+              "{{longName}}": {
+                "dup": "skipped"
+              },
+              "dup": "root"
+            }
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "dup");
+
+        Assert.Equal(5, symbol.Line);
+    }
+
+    [Fact]
     public void Extract_Json_CapsStructuredSignatureLength_Issue3808()
     {
         var content = "{\"key\":\"" + new string('x', SymbolExtractor.StructuredDataMaxSignatureLength + 80) + "\"}";
