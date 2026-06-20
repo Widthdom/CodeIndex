@@ -1506,23 +1506,24 @@ public class GitHubIssueReporterTests : IDisposable
             rateLimitResponse);
         using var mockClient = new HttpClient(handler);
         GitHubIssueReporter.s_httpClientOverride = mockClient;
+        var fixedNow = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
+        GitHubIssueReporter.TimeProvider = new ManualTimeProvider(fixedNow);
         try
         {
             var record = MakeRecordWithKnownHash();
-            var before = DateTime.UtcNow;
             var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
-            var after = DateTime.UtcNow;
 
             Assert.Null(result.IssueUrl);
             Assert.Contains("429", result.Error);
             Assert.Contains("next_retry_at=", result.Error);
             Assert.NotNull(result.NextRetryAt);
-            Assert.InRange(result.NextRetryAt.Value, before.AddSeconds(60), after.AddSeconds(61));
+            Assert.Equal(fixedNow.UtcDateTime.AddSeconds(60), result.NextRetryAt.Value);
             Assert.Equal(3, handler.RequestCount);
         }
         finally
         {
             GitHubIssueReporter.s_httpClientOverride = null;
+            GitHubIssueReporter.TimeProvider = TimeProvider.System;
         }
     }
 

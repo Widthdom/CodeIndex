@@ -46,6 +46,8 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class GitHubIssueReporter
 {
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
@@ -542,7 +544,7 @@ internal static class GitHubIssueReporter
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
-            var rateLimitRetryAt = GetRateLimitRetryAt(response, DateTime.UtcNow);
+            var rateLimitRetryAt = GetRateLimitRetryAt(response, TimeProvider.GetUtcNow().UtcDateTime);
             if (rateLimitRetryAt != null)
             {
                 Console.Error.WriteLine(BuildRateLimitFailureMessage((int)response.StatusCode, errorBody, rateLimitRetryAt.Value));

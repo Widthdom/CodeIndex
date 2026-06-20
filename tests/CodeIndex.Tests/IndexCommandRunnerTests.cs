@@ -3447,6 +3447,8 @@ public class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_{Guid.NewGuid():N}.db");
+        var fixedNow = new DateTimeOffset(2026, 6, 20, 12, 34, 56, TimeSpan.Zero);
+        IndexCommandRunner.TimeProvider = new ManualTimeProvider(fixedNow);
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
@@ -3466,7 +3468,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(expectedSha, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
             Assert.Equal("main", db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
             var stamp = db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey);
-            Assert.False(string.IsNullOrWhiteSpace(stamp));
+            Assert.Equal(fixedNow.UtcDateTime.ToString("o", System.Globalization.CultureInfo.InvariantCulture), stamp);
             Assert.True(
                 DateTime.TryParse(stamp, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.RoundtripKind, out _),
@@ -3474,6 +3476,7 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.TimeProvider = TimeProvider.System;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
