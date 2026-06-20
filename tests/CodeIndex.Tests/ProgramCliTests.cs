@@ -1076,7 +1076,15 @@ public class ProgramCliTests
         Assert.Equal(record.Hash, draft.GetProperty("suggestion_id").GetString());
         Assert.Equal("enhancement", draft.GetProperty("labels")[0].GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", draft.GetProperty("evidence_paths")[0].GetString());
-        Assert.Contains("## Evidence paths", draft.GetProperty("body").GetString());
+        var triage = draft.GetProperty("triage");
+        var body = draft.GetProperty("body").GetString();
+        Assert.Equal("medium", triage.GetProperty("severity").GetString());
+        Assert.Equal("medium", triage.GetProperty("confidence").GetString());
+        Assert.Equal(2, triage.GetProperty("evidence_count").GetInt32());
+        Assert.Contains("merge evidence", triage.GetProperty("duplicate_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Contains("## Evidence paths", body);
+        Assert.Contains("## Triage metadata", body);
+        Assert.Contains("evidence_count: `2`", body);
         var preflight = draft.GetProperty("duplicate_preflight");
         Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
         Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());

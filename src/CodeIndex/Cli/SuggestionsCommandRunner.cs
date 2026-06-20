@@ -353,13 +353,15 @@ internal static class SuggestionsCommandRunner
         var labels = GitHubIssueReporter.BuildIssueLabels(record).ToList();
         var evidencePaths = NormalizeEvidencePaths(record);
         var duplicateMatches = preflight.FindMatches(title, labels);
+        var triage = BuildSuggestionIssueDraftTriage(record, evidencePaths, preflight.Checked, duplicateMatches.Count);
         return new SuggestionIssueDraftJsonResult(
             record.Hash,
             ShortId(record.Hash),
             title,
             labels,
             evidencePaths,
-            BuildIssueDraftBody(record, evidencePaths),
+            triage,
+            BuildIssueDraftBody(record, evidencePaths, triage),
             new SuggestionIssueDraftSourceJsonResult(
                 record.Category,
                 record.Language,
@@ -370,6 +372,39 @@ internal static class SuggestionsCommandRunner
                 preflight.Checked,
                 duplicateMatches.Count,
                 duplicateMatches));
+    }
+
+    private static IssueDraftTriageMetadataJsonResult BuildSuggestionIssueDraftTriage(
+        SuggestionRecord record,
+        IReadOnlyList<string> evidencePaths,
+        bool duplicatePreflightChecked,
+        int duplicateMatchCount)
+    {
+        var severity = record.Category switch
+        {
+            "crash_report" or "unexpected_error" => "high",
+            "other" => "low",
+            _ => "medium",
+        };
+        var confidence = evidencePaths.Count > 0
+            ? "medium"
+            : !string.IsNullOrWhiteSpace(record.SampledTitle) || !string.IsNullOrWhiteSpace(record.Context)
+                ? "medium"
+                : "low";
+        return new IssueDraftTriageMetadataJsonResult(
+            severity,
+            confidence,
+            evidencePaths.Count,
+            BuildSuggestionIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
+    }
+
+    private static string BuildSuggestionIssueDraftDuplicateGuidance(bool duplicatePreflightChecked, int duplicateMatchCount)
+    {
+        if (!duplicatePreflightChecked)
+            return "Duplicate preflight was not checked; search open issues before filing.";
+        if (duplicateMatchCount > 0)
+            return "Review duplicate_preflight.matches before filing; merge evidence into an existing issue when the same root cause is already tracked.";
+        return "No duplicate candidates were found by preflight; still verify open issues before filing.";
     }
 
     private static string BuildIssueDraftTitle(SuggestionRecord record)
@@ -390,7 +425,10 @@ internal static class SuggestionsCommandRunner
             .Cast<string>()
             .ToList();
 
-    private static string BuildIssueDraftBody(SuggestionRecord record, IReadOnlyList<string> evidencePaths)
+    private static string BuildIssueDraftBody(
+        SuggestionRecord record,
+        IReadOnlyList<string> evidencePaths,
+        IssueDraftTriageMetadataJsonResult triage)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
@@ -413,6 +451,8 @@ internal static class SuggestionsCommandRunner
                 sb.AppendLine($"- {path}");
         }
         sb.AppendLine();
+        AppendSuggestionIssueDraftTriageMetadata(sb, triage);
+        sb.AppendLine();
         sb.AppendLine("## Context");
         sb.AppendLine(record.Context != null
             ? BoundSuggestionOutputValue(GitHubIssueReporter.ScrubInlineCode(record.Context), capTextFields: true)
@@ -434,6 +474,15 @@ internal static class SuggestionsCommandRunner
         if (!string.IsNullOrWhiteSpace(record.ClientVersion) && record.ClientVersion != "unknown")
             sb.AppendLine($"- cdidx_version: `{record.ClientVersion}`");
         return BoundSuggestionOutputValue(sb.ToString().TrimEnd(), MaxSuggestionIssueDraftBodyLength);
+    }
+
+    private static void AppendSuggestionIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
+    {
+        sb.AppendLine("## Triage metadata");
+        sb.AppendLine($"- severity: `{triage.Severity}`");
+        sb.AppendLine($"- confidence: `{triage.Confidence}`");
+        sb.AppendLine($"- evidence_count: `{triage.EvidenceCount}`");
+        sb.AppendLine($"- duplicate_guidance: {triage.DuplicateGuidance}");
     }
 
     private static List<string> NormalizeEvidencePaths(SuggestionRecord record)
@@ -843,12 +892,19 @@ internal sealed record SuggestionIssueDraftPreflightSummaryJsonResult(
     [property: JsonPropertyName("source")] string? Source,
     [property: JsonPropertyName("open_issue_count")] int OpenIssueCount);
 
+internal sealed record IssueDraftTriageMetadataJsonResult(
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("evidence_count")] int EvidenceCount,
+    [property: JsonPropertyName("duplicate_guidance")] string DuplicateGuidance);
+
 internal sealed record SuggestionIssueDraftJsonResult(
     [property: JsonPropertyName("suggestion_id")] string SuggestionId,
     [property: JsonPropertyName("short_id")] string ShortId,
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("labels")] List<string> Labels,
     [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
+    [property: JsonPropertyName("triage")] IssueDraftTriageMetadataJsonResult Triage,
     [property: JsonPropertyName("body")] string Body,
     [property: JsonPropertyName("source")] SuggestionIssueDraftSourceJsonResult Source,
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);

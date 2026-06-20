@@ -2047,6 +2047,7 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
             var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
+            var triage = draft.GetProperty("triage");
             var duplicatePreflight = draft.GetProperty("duplicate_preflight");
             var match = Assert.Single(duplicatePreflight.GetProperty("matches").EnumerateArray());
             var body = draft.GetProperty("body").GetString();
@@ -2058,7 +2059,14 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "audit");
             Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "bug");
             Assert.Equal("src/app.cs", draft.GetProperty("evidence_paths")[0].GetString());
+            Assert.Equal("medium", triage.GetProperty("severity").GetString());
+            Assert.Equal("low", triage.GetProperty("confidence").GetString());
+            Assert.Equal(1, triage.GetProperty("evidence_count").GetInt32());
+            Assert.Contains("merge evidence", triage.GetProperty("duplicate_guidance").GetString(), StringComparison.Ordinal);
             Assert.Contains("JsonDocument.Parse", body, StringComparison.Ordinal);
+            Assert.Contains("## Triage metadata", body, StringComparison.Ordinal);
+            Assert.Contains("severity: `medium`", body, StringComparison.Ordinal);
+            Assert.Contains("confidence: `low`", body, StringComparison.Ordinal);
             Assert.Contains("False-positive guidance", body, StringComparison.Ordinal);
             Assert.Contains("## Replay command", body, StringComparison.Ordinal);
             Assert.Contains("cdidx search --recipe risky-code/unbounded-json-parse --format issue-drafts --limit 5", body, StringComparison.Ordinal);
@@ -2129,6 +2137,7 @@ public partial class QueryCommandRunnerTests
             var root = document.RootElement;
             var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
             var labels = draft.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToList();
+            var triage = draft.GetProperty("triage");
             var duplicatePreflight = draft.GetProperty("duplicate_preflight");
             var match = Assert.Single(duplicatePreflight.GetProperty("matches").EnumerateArray());
             var body = draft.GetProperty("body").GetString();
@@ -2141,7 +2150,11 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("bug", labels);
             Assert.Contains("needs-triage", labels);
             Assert.Equal("src/scheduler.cs", draft.GetProperty("evidence_paths")[0].GetString());
+            Assert.Equal("medium", triage.GetProperty("severity").GetString());
+            Assert.Equal("low", triage.GetProperty("confidence").GetString());
+            Assert.Equal(1, triage.GetProperty("evidence_count").GetInt32());
             Assert.Contains("Thread.Yield", body, StringComparison.Ordinal);
+            Assert.Contains("## Triage metadata", body, StringComparison.Ordinal);
             Assert.DoesNotContain("public sealed class Scheduler", body, StringComparison.Ordinal);
             Assert.Equal(JsonValueKind.Null, draft.GetProperty("source").GetProperty("recipe").ValueKind);
             Assert.Equal(JsonValueKind.Null, draft.GetProperty("source").GetProperty("query_name").ValueKind);

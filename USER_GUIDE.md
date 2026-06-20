@@ -1025,11 +1025,12 @@ recipe-level `default_scope`, `default_path_patterns`, and
 `default_exclude_paths`; each query may declare `severity`, `path_patterns`, and
 `exclude_paths` to narrow a query independently of the recipe default scope.
 For triage automation, `--format issue-drafts` emits draft issue objects with
-titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
-metadata. `--open-issues <path>` accepts an open-issue JSON list such as
+titles, labels, evidence paths, severity/confidence/evidence-count triage
+metadata, Markdown bodies, and duplicate-preflight metadata. `--open-issues <path>` accepts an open-issue JSON list such as
 `gh issue list --state open --json number,title,labels,url`; when omitted,
 the payload still includes `duplicate_preflight.checked: false`. Draft bodies
-include evidence paths and recipe metadata but not source snippets.
+include evidence paths and recipe metadata but not source snippets. These drafts
+are triage aids; review duplicate guidance and current open issues before filing.
 
 ### Debugging queries
 
@@ -2431,7 +2432,7 @@ MCP security-sensitive environment variables share validation diagnostics. Token
 
 cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. GitHub submission runs outside the suggestion-store file lock and uses a 10-second timeout by default; set `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<seconds>` to tune that deadline up to 300 seconds. Non-positive, non-numeric, and larger values fall back to the 10-second default. GitHub HTTP calls use .NET's default proxy discovery, but they do not forward OS/default proxy credentials by default; set `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` only when an enterprise proxy explicitly requires those credentials. Local records include lifecycle metadata: `draft`, `submitted_pending_triage`, `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, or `superseded`, plus upstream issue URL/number fields when known. They also persist GitHub submission diagnostics (`last_submit_attempt`, `submit_attempt_count`, `last_submit_error`, and rate-limit `next_retry_at`) so operators can tell whether a suggestion was never attempted, failed transiently, is waiting for a rate-limit window, or was rejected by the API. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, optional natural-language `toolInvocationContext`, and optional repository-relative `evidencePaths` supplied by the caller. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
 
-Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. Use `cdidx suggestions export --format issue-drafts --open-issues open-issues.json` to emit issue-ready drafts with title, labels, evidence paths, body text, and duplicate matches from an open-issues JSON preflight. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts. By default, `suggestions list` and `suggestions export` emit every matching record in newest-first order; pass `--limit <n>` and `--offset <n>` to page or cap large stores. Exported JSON, markdown bundles, and issue-draft bodies cap long description/context/tool-invocation text with a `[truncated]` marker; use `cdidx suggestions show <id>` when you need the full local record body.
+Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. Use `cdidx suggestions export --format issue-drafts --open-issues open-issues.json` to emit issue-ready drafts with title, labels, evidence paths, severity/confidence/evidence-count triage metadata, body text, and duplicate matches from an open-issues JSON preflight. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts. By default, `suggestions list` and `suggestions export` emit every matching record in newest-first order; pass `--limit <n>` and `--offset <n>` to page or cap large stores. Exported JSON, markdown bundles, and issue-draft bodies cap long description/context/tool-invocation text with a `[truncated]` marker; use `cdidx suggestions show <id>` when you need the full local record body. Treat exported issue drafts as triage aids and review duplicate guidance plus current open issues before filing.
 
 Suggestion history readers can query the local store by lifecycle status, created-at threshold, category, language, or stored-order pages. These query APIs stream records from disk so tools that only need a narrow slice do not have to deserialize the whole suggestions file first.
 
@@ -3556,11 +3557,13 @@ recipe array または `{ "recipes": [...] }` を受け付け、不正な source
 各 query は `severity`、`path_patterns`、`exclude_paths` を宣言でき、recipe の既定 scope
 とは独立して query ごとの対象を狭められます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
-Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
+severity / confidence / evidence-count の triage metadata、Markdown body、
+duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
 のような open issue JSON list を受け取り、未指定の場合も payload には
 `duplicate_preflight.checked: false` が含まれます。draft body は evidence path と
-recipe metadata を含みますが、source snippet は含めません。
+recipe metadata を含みますが、source snippet は含めません。これらの draft は triage aid なので、
+起票前に duplicate guidance と現在の open issue を確認してください。
 
 ### クエリのデバッグ
 
@@ -4941,7 +4944,7 @@ MCP の security-sensitive な環境変数は共通の validation 診断を使�
 
 cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は選択した DB の隣（既定は `.cdidx/suggestions-codeindex.json`）にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。GitHub 送信は suggestion-store のファイルロック外で実行され、既定では 10 秒で timeout します。この deadline は `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<秒>` で最大 300 秒まで調整できます。0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻ります。GitHub HTTP 呼び出しは .NET の既定 proxy 検出を使いますが、既定では OS/default proxy 資格情報を転送しません。企業 proxy が明示的にその資格情報を必要とする場合だけ `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` を設定してください。ローカルレコードには lifecycle metadata として `draft`、`submitted_pending_triage`、`open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded` と、判明している upstream issue URL/番号が保存されます。さらに GitHub 送信診断として `last_submit_attempt`、`submit_attempt_count`、`last_submit_error`、rate-limit 時の `next_retry_at` も永続化されるため、提案が未試行なのか、一時的に失敗したのか、rate-limit window 待ちなのか、API に拒否されたのかを運用者が判断できます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext`、任意のリポジトリ相対 `evidencePaths` が含まれます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
 
-記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。`cdidx suggestions export --format issue-drafts --open-issues open-issues.json` は、title、labels、evidence paths、body text、open issue JSON との重複候補を含む Issue 作成用 draft を出力します。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。既定では `suggestions list` と `suggestions export` は一致した全レコードを新しい順に出力します。大きなストアでは `--limit <n>` と `--offset <n>` でページングまたは出力上限を指定できます。export JSON、markdown bundle、issue draft body は長い description / context / tool-invocation text を `[truncated]` marker 付きで制限します。ローカルレコード本文をすべて確認する場合は `cdidx suggestions show <id>` を使ってください。
+記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。`cdidx suggestions export --format issue-drafts --open-issues open-issues.json` は、title、labels、evidence paths、severity / confidence / evidence-count の triage metadata、body text、open issue JSON との重複候補を含む Issue 作成用 draft を出力します。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。既定では `suggestions list` と `suggestions export` は一致した全レコードを新しい順に出力します。大きなストアでは `--limit <n>` と `--offset <n>` でページングまたは出力上限を指定できます。export JSON、markdown bundle、issue draft body は長い description / context / tool-invocation text を `[truncated]` marker 付きで制限します。ローカルレコード本文をすべて確認する場合は `cdidx suggestions show <id>` を使ってください。出力された issue draft は triage aid として扱い、起票前に duplicate guidance と現在の open issue を確認してください。
 
 提案履歴を読む側は、ライフサイクル状態、作成日時のしきい値、カテゴリ、言語、保存順ページでローカルストアを絞り込めます。これらのクエリ API はディスクからレコードをストリーミングするため、必要な範囲が小さいツールでも suggestions ファイル全体を先にデシリアライズする必要がありません。
 

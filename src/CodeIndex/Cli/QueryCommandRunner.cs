@@ -2052,12 +2052,14 @@ public static partial class QueryCommandRunner
             .Take(10)
             .ToList();
         var duplicateMatches = preflight.FindMatches(title, labels);
+        var triage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, duplicateMatches.Count);
         return new SearchIssueDraftJsonResult(
             $"{recipe.Name}/{queryResult.Name}",
             title,
             labels,
             evidencePaths,
-            BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, options),
+            triage,
+            BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, triage, options),
             new SearchIssueDraftSourceJsonResult(
                 recipe.Name,
                 queryResult.Name,
@@ -2086,12 +2088,14 @@ public static partial class QueryCommandRunner
             .Take(10)
             .ToList();
         var duplicateMatches = preflight.FindMatches(title, labels);
+        var triage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, duplicateMatches.Count);
         return new SearchIssueDraftJsonResult(
             "search/ad-hoc",
             title,
             labels,
             evidencePaths,
-            BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths),
+            triage,
+            BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, triage),
             new SearchIssueDraftSourceJsonResult(
                 null,
                 null,
@@ -2108,6 +2112,25 @@ public static partial class QueryCommandRunner
 
     private static string BuildSearchIssueDraftTitle(SearchAuditRecipe recipe, SearchRecipeQueryResultJsonResult queryResult)
         => $"Search audit recipe {recipe.Name}: {queryResult.Name}";
+
+    private static IssueDraftTriageMetadataJsonResult BuildSearchIssueDraftTriage(
+        SearchRecipeQueryResultJsonResult queryResult,
+        bool duplicatePreflightChecked,
+        int duplicateMatchCount)
+        => new(
+            queryResult.Severity,
+            queryResult.Count >= 3 ? "high" : queryResult.Count >= 2 ? "medium" : "low",
+            queryResult.Count,
+            BuildSearchIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
+
+    private static string BuildSearchIssueDraftDuplicateGuidance(bool duplicatePreflightChecked, int duplicateMatchCount)
+    {
+        if (!duplicatePreflightChecked)
+            return "Duplicate preflight was not checked; search open issues before filing.";
+        if (duplicateMatchCount > 0)
+            return "Review duplicate_preflight.matches before filing; merge evidence into an existing issue when the same root cause is already tracked.";
+        return "No duplicate candidates were found by preflight; still verify open issues before filing.";
+    }
 
     private static string BuildAdHocSearchIssueDraftTitle(QueryCommandOptions options)
         => string.IsNullOrWhiteSpace(options.IssueTitle)
@@ -2126,6 +2149,7 @@ public static partial class QueryCommandRunner
         SearchAuditRecipe recipe,
         SearchRecipeQueryResultJsonResult queryResult,
         IReadOnlyList<string> evidencePaths,
+        IssueDraftTriageMetadataJsonResult triage,
         QueryCommandOptions options)
     {
         var sb = new StringBuilder();
@@ -2149,6 +2173,8 @@ public static partial class QueryCommandRunner
                 sb.AppendLine($"- {path}");
         }
         sb.AppendLine();
+        AppendSearchIssueDraftTriageMetadata(sb, triage);
+        sb.AppendLine();
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
@@ -2163,6 +2189,15 @@ public static partial class QueryCommandRunner
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
         sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
         return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendSearchIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
+    {
+        sb.AppendLine("## Triage metadata");
+        sb.AppendLine($"- severity: `{triage.Severity}`");
+        sb.AppendLine($"- confidence: `{triage.Confidence}`");
+        sb.AppendLine($"- evidence_count: `{triage.EvidenceCount}`");
+        sb.AppendLine($"- duplicate_guidance: {triage.DuplicateGuidance}");
     }
 
     private static string BuildSearchRecipeReplayCommand(SearchAuditRecipe recipe, QueryCommandOptions options, string? queryName = null)
@@ -2274,7 +2309,8 @@ public static partial class QueryCommandRunner
 
     private static string BuildAdHocSearchIssueDraftBody(
         SearchRecipeQueryResultJsonResult queryResult,
-        IReadOnlyList<string> evidencePaths)
+        IReadOnlyList<string> evidencePaths,
+        IssueDraftTriageMetadataJsonResult triage)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
@@ -2293,6 +2329,8 @@ public static partial class QueryCommandRunner
             foreach (var path in evidencePaths)
                 sb.AppendLine($"- {path}");
         }
+        sb.AppendLine();
+        AppendSearchIssueDraftTriageMetadata(sb, triage);
         sb.AppendLine();
         sb.AppendLine("## Review guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
