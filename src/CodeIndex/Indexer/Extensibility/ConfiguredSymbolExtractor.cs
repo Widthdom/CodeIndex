@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 using CodeIndex.Models;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -20,6 +21,8 @@ internal sealed class ConfiguredSymbolExtractor(
 
     public IReadOnlyCollection<string> FileExtensions { get; } = fileExtensions;
 
+    internal IReadOnlyList<PatternRule> PatternsForTests => patterns;
+
     public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
     {
         var symbols = new List<SymbolRecord>();
@@ -35,7 +38,13 @@ internal sealed class ConfiguredSymbolExtractor(
                 Match match;
                 try
                 {
+                    using var regexTimeouts = Regex.CaptureTimeouts(Language, "configured_symbol_extraction");
                     match = pattern.Regex.Match(line);
+                    if (regexTimeouts.HasTimeouts)
+                    {
+                        DisablePatternAfterTimeout(pattern);
+                        continue;
+                    }
                 }
                 catch (RegexMatchTimeoutException)
                 {

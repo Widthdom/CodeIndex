@@ -98,6 +98,7 @@ internal static class DataDirectorySecurity
     {
         using var stream = new MemoryStream(bytes);
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        // DecodeText is reached only from ReadTextWithinLimit after ReadBytesWithinLimit enforces maxBytes.
         return reader.ReadToEnd();
     }
 

@@ -5,6 +5,11 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    internal const int XmlExtractionMaxDepth = 64;
+    internal const int XmlExtractionMaxElements = 4096;
+
+    internal readonly record struct XmlStructureIssue(string Kind, int Line, string Message);
+
     private static readonly HashSet<string> MsBuildContainerElements = new(StringComparer.OrdinalIgnoreCase)
     {
         "Project",
@@ -33,22 +38,19 @@ public static partial class SymbolExtractor
         var symbols = new List<SymbolRecord>();
         var elementStack = new Stack<string>();
         var targetStack = new Stack<int>();
-
-        var settings = new XmlReaderSettings
-        {
-            DtdProcessing = DtdProcessing.Ignore,
-            IgnoreComments = true,
-            IgnoreProcessingInstructions = true,
-            XmlResolver = null,
-        };
+        var elementCount = 0;
 
         try
         {
-            using var reader = XmlReader.Create(new StringReader(content), settings);
+            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings());
             while (reader.Read())
             {
                 if (reader.NodeType == XmlNodeType.Element)
                 {
+                    elementCount++;
+                    if (elementCount > XmlExtractionMaxElements || reader.Depth + 1 > XmlExtractionMaxDepth)
+                        return symbols;
+
                     var elementName = reader.LocalName;
                     var lineNumber = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo()
                         ? lineInfo.LineNumber
@@ -101,6 +103,71 @@ public static partial class SymbolExtractor
 
         return symbols;
     }
+
+    internal static bool TryGetXmlStructureIssue(string content, out XmlStructureIssue issue)
+    {
+        issue = default;
+        var elementCount = 0;
+
+        try
+        {
+            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings());
+            while (reader.Read())
+            {
+                if (reader.NodeType != XmlNodeType.Element)
+                    continue;
+
+                elementCount++;
+                var lineNumber = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo()
+                    ? lineInfo.LineNumber
+                    : 1;
+
+                if (reader.Depth + 1 > XmlExtractionMaxDepth)
+                {
+                    issue = new XmlStructureIssue(
+                        "xml_structure_budget_exceeded",
+                        lineNumber,
+                        $"XML element depth exceeds the extraction limit of {XmlExtractionMaxDepth}; symbol extraction is capped.");
+                    return true;
+                }
+
+                if (elementCount > XmlExtractionMaxElements)
+                {
+                    issue = new XmlStructureIssue(
+                        "xml_structure_budget_exceeded",
+                        lineNumber,
+                        $"XML element count exceeds the extraction limit of {XmlExtractionMaxElements}; symbol extraction is capped.");
+                    return true;
+                }
+            }
+        }
+        catch (XmlException ex) when (IsDtdProhibitedException(ex))
+        {
+            issue = new XmlStructureIssue(
+                "xml_dtd_prohibited",
+                Math.Max(1, ex.LineNumber),
+                "XML DTD declarations are prohibited during extraction.");
+            return true;
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static XmlReaderSettings CreateExtractionXmlReaderSettings() => new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        IgnoreComments = true,
+        IgnoreProcessingInstructions = true,
+        XmlResolver = null,
+    };
+
+    private static bool IsDtdProhibitedException(XmlException ex) =>
+        ex.Message.Contains("DTD", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("DOCTYPE", StringComparison.OrdinalIgnoreCase);
 
     private static int? TryAddMsBuildElementSymbol(
         long fileId,

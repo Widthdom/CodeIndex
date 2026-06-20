@@ -391,6 +391,29 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_OverMaxPayload_ReturnsParseError_Issue3657()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_oversized_payload");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + new string('m', LspServer.MaxLspFrameBytes) + "\"}";
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32700, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(response["id"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_UnknownMethod_TruncatesMethodName_Issue3205()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method_3205");

@@ -529,15 +529,22 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
+            Assert.DoesNotContain(configPath, stdout, StringComparison.Ordinal);
             var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
             Assert.Equal(44, limit.GetProperty("value").GetInt32());
-            Assert.Equal($"config:{configPath}", limit.GetProperty("source").GetString());
+            Assert.Equal("config:config.json", limit.GetProperty("source").GetString());
+            Assert.Equal("config_file", limit.GetProperty("source_kind").GetString());
+            Assert.Equal("config.json", limit.GetProperty("source_detail").GetString());
             var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
             Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
-            Assert.Equal($"config:{configPath}", staleAfter.GetProperty("source").GetString());
+            Assert.Equal("config:config.json", staleAfter.GetProperty("source").GetString());
+            Assert.Equal("config_file", staleAfter.GetProperty("source_kind").GetString());
+            Assert.Equal("config.json", staleAfter.GetProperty("source_detail").GetString());
             var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
             Assert.Equal(logDir, logPath.GetProperty("value").GetString());
-            Assert.Equal($"config:{configPath}", logPath.GetProperty("source").GetString());
+            Assert.Equal("config:config.json", logPath.GetProperty("source").GetString());
+            Assert.Equal("config_file", logPath.GetProperty("source_kind").GetString());
+            Assert.Equal("config.json", logPath.GetProperty("source_detail").GetString());
         }
         finally
         {
