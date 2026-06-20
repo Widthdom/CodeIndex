@@ -1278,6 +1278,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("wal", pragmas.GetProperty("journal_mode").GetString());
             Assert.Equal(DbContext.DefaultSynchronousMode, pragmas.GetProperty("synchronous").GetString());
             Assert.Equal(DbContext.DefaultWalAutocheckpointPages, pragmas.GetProperty("wal_autocheckpoint").GetInt32());
+            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, pragmas.GetProperty("busy_timeout_ms").GetInt32());
+            var preparedCommandCache = json.GetProperty("prepared_command_cache");
+            Assert.Equal(PreparedCommandCache.DefaultCapacity, preparedCommandCache.GetProperty("capacity").GetInt32());
+            Assert.True(preparedCommandCache.GetProperty("count").GetInt32() >= 0);
+            Assert.True(preparedCommandCache.GetProperty("miss_count").GetInt64() >= 0);
+            Assert.True(preparedCommandCache.GetProperty("hit_count").GetInt64() >= 0);
+            Assert.True(preparedCommandCache.GetProperty("eviction_count").GetInt64() >= 0);
         }
         finally
         {

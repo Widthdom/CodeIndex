@@ -1108,6 +1108,9 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("db_pragma_settings")]
     public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+    [JsonPropertyName("prepared_command_cache")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusPreparedCommandCache? PreparedCommandCache { get; set; }
     [JsonPropertyName("maintenance_guidance")]
     public StatusMaintenanceGuidance MaintenanceGuidance { get; set; } = new();
     [JsonPropertyName("db_size_bytes")]
@@ -1154,6 +1157,18 @@ public sealed class StatusProcessMetrics
             WorkingSetBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
         };
     }
+}
+
+public sealed class StatusPreparedCommandCache
+{
+    public int Count { get; set; }
+    public int Capacity { get; set; }
+    [JsonPropertyName("hit_count")]
+    public long HitCount { get; set; }
+    [JsonPropertyName("miss_count")]
+    public long MissCount { get; set; }
+    [JsonPropertyName("eviction_count")]
+    public long EvictionCount { get; set; }
 }
 
 public sealed class StatusLastIndexRun
@@ -1246,6 +1261,8 @@ public class StatusDbPragmaSettings
     public string? JournalMode { get; set; }
     public string? Synchronous { get; set; }
     public long? WalAutocheckpoint { get; set; }
+    [JsonPropertyName("busy_timeout_ms")]
+    public long? BusyTimeoutMs { get; set; }
     public long? PageCount { get; set; }
     public long? FreelistCount { get; set; }
     public long? PageSize { get; set; }

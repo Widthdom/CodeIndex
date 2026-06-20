@@ -72,7 +72,7 @@ public class DbDebugTests
     }
 
     [Fact]
-    public void ExecuteTrackedReader_ProfileCapsQueryPlanRows()
+    public void ExecuteTrackedReader_ProfileCapsQueryPlanRows_Issue3739()
     {
         DbDebug.ResetForTesting();
         try
@@ -89,8 +89,10 @@ public class DbDebugTests
             }
 
             var entry = Assert.Single(DbDebug.EndProfile());
-            Assert.True(entry.QueryPlan.Count <= DbDebug.MaxQueryPlanRows + 1);
-            Assert.Contains(entry.QueryPlan, row => row.Detail.Contains("truncated after", StringComparison.Ordinal));
+            Assert.Equal(DbDebug.MaxQueryPlanRows + 1, entry.QueryPlan.Count);
+            Assert.Equal(
+                $"EXPLAIN QUERY PLAN rows truncated after {DbDebug.MaxQueryPlanRows} rows.",
+                entry.QueryPlan[^1].Detail);
         }
         finally
         {
@@ -99,7 +101,7 @@ public class DbDebugTests
     }
 
     [Fact]
-    public void ExecuteTrackedReader_ProfileTruncatesLongQueryPlanDetails()
+    public void ExecuteTrackedReader_ProfileTruncatesLongQueryPlanDetails_Issue3739()
     {
         DbDebug.ResetForTesting();
         try

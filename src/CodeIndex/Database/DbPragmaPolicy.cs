@@ -5,6 +5,9 @@ namespace CodeIndex.Database;
 
 internal static class DbPragmaPolicy
 {
+    internal const int DefaultBusyTimeoutMs = 5000;
+    internal const int MaxBusyTimeoutMs = 3_600_000;
+
     internal static DbConnectionPragmaSettings ReadConnectionPragmaSettings(
         string cacheSizeEnvironmentVariable,
         int defaultCacheSizeKb,
@@ -57,11 +60,27 @@ internal static class DbPragmaPolicy
         ex.SqliteErrorCode == 1 &&
         ex.Message.Contains("Safety level may not be changed inside a transaction", StringComparison.OrdinalIgnoreCase);
 
+    internal static int ReadBusyTimeoutMs(string environmentVariable)
+        => ReadNonNegativeIntEnvironment(
+            environmentVariable,
+            DefaultBusyTimeoutMs,
+            MaxBusyTimeoutMs);
+
     private static int ReadPositiveIntEnvironment(string name, int fallback, int maximum)
     {
         var value = Environment.GetEnvironmentVariable(name);
         return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             && parsed > 0
+            && parsed <= maximum
+                ? parsed
+                : fallback;
+    }
+
+    private static int ReadNonNegativeIntEnvironment(string name, int fallback, int maximum)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= 0
             && parsed <= maximum
                 ? parsed
                 : fallback;

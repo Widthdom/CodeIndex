@@ -569,6 +569,39 @@ public partial class QueryCommandRunnerTests
             Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
             Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
             Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, settings.GetProperty("busy_timeout_ms").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusJson_ReportsConfiguredBusyTimeout_Issue3767()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_busy_timeout_3767");
+        using var env = EnvironmentVariableScope.Capture(
+            DbContext.BusyTimeoutEnvironmentVariable);
+        env.Set(DbContext.BusyTimeoutEnvironmentVariable, "12345");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var settings = document.RootElement.GetProperty("db_pragma_settings");
+            Assert.Equal(12345, settings.GetProperty("busy_timeout_ms").GetInt64());
         }
         finally
         {
@@ -4111,6 +4144,70 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(primaryRoot);
             TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_WorkspaceDbExcludeTestsKeepsNonTestPathSegments_Issue3834()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_exclude_tests_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_exclude_tests_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            InsertFileWithReference(primaryDb, "contest/PrimaryCaller.cs", "SharedTarget");
+            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp", "--exclude-tests"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotNull(stderr);
+            Assert.Equal("contest/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+            Assert.DoesNotContain("LIKE '%test%'", QueryCommandRunner.BuildCrossDatabaseTestPathConditionForTesting("src"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
+    public void BuildWorkspaceDependencyDatabaseList_DeduplicatesUsingFilesystemCaseSensitivity_Issue3834()
+    {
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.ResetCacheForTests();
+        PathCasing.IgnoreCaseProbeForTesting = _ => true;
+        try
+        {
+            var tempDir = Path.GetTempPath();
+            var dbPath = Path.Combine(tempDir, "CodeIndexCaseProbe.db");
+            var options = new QueryCommandOptions
+            {
+                DbPath = dbPath,
+                WorkspaceDbPaths =
+                [
+                    Path.Combine(tempDir, "codeindexcaseprobe.db"),
+                    Path.Combine(tempDir, "OtherCodeIndexCaseProbe.db"),
+                ],
+            };
+
+            var dbs = QueryCommandRunner.BuildWorkspaceDependencyDatabaseList(options);
+
+            Assert.Equal(2, dbs.Count);
+            Assert.Equal(Path.GetFullPath(dbPath), dbs[0]);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
         }
     }
 

@@ -81,6 +81,33 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void GetOrAdd_TracksHitMissAndEvictionDiagnostics_Issue3795()
+    {
+        using var cache = new PreparedCommandCache(_db.Connection, capacity: 2);
+
+        var first = cache.GetOrAdd(
+            "SELECT 1 FROM files WHERE path = @path",
+            c => c.Parameters.Add("@path", SqliteType.Text));
+        var firstAgain = cache.GetOrAdd(
+            "SELECT 1 FROM files WHERE path = @path",
+            c => throw new InvalidOperationException("cache hit should not re-configure"));
+        cache.GetOrAdd(
+            "SELECT 1 FROM files WHERE lang = @lang",
+            c => c.Parameters.Add("@lang", SqliteType.Text));
+        cache.GetOrAdd(
+            "SELECT 1 FROM files WHERE size = @size",
+            c => c.Parameters.Add("@size", SqliteType.Integer));
+
+        Assert.Same(first, firstAgain);
+        var diagnostics = cache.GetDiagnostics();
+        Assert.Equal(2, diagnostics.Count);
+        Assert.Equal(2, diagnostics.Capacity);
+        Assert.Equal(1, diagnostics.HitCount);
+        Assert.Equal(3, diagnostics.MissCount);
+        Assert.Equal(1, diagnostics.EvictionCount);
+    }
+
+    [Fact]
     public void GetOrAdd_TouchOnHitDelaysEviction()
     {
         using var cache = new PreparedCommandCache(_db.Connection, capacity: 2);
@@ -149,6 +176,43 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void ReadCapacityFromEnvironment_UsesBoundedConfiguredCapacity_Issue3795()
+    {
+        using var env = EnvironmentVariableScope.Capture(PreparedCommandCache.CapacityEnvironmentVariable);
+
+        env.Set(PreparedCommandCache.CapacityEnvironmentVariable, "4");
+        Assert.Equal(4, PreparedCommandCache.ReadCapacityFromEnvironment());
+
+        env.Set(PreparedCommandCache.CapacityEnvironmentVariable, (PreparedCommandCache.MaxCapacity + 1).ToString());
+        Assert.Equal(PreparedCommandCache.DefaultCapacity, PreparedCommandCache.ReadCapacityFromEnvironment());
+
+        env.Set(PreparedCommandCache.CapacityEnvironmentVariable, "not-a-number");
+        Assert.Equal(PreparedCommandCache.DefaultCapacity, PreparedCommandCache.ReadCapacityFromEnvironment());
+    }
+
+    [Fact]
+    public void DbContext_UsesConfiguredPreparedCommandCacheCapacity_Issue3795()
+    {
+        using var env = EnvironmentVariableScope.Capture(PreparedCommandCache.CapacityEnvironmentVariable);
+        env.Set(PreparedCommandCache.CapacityEnvironmentVariable, "4");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"prepcache_capacity_{Guid.NewGuid():N}.db");
+        DbContext? db = null;
+        try
+        {
+            db = new DbContext(dbPath);
+            db.InitializeSchema();
+
+            Assert.Equal(4, db.PreparedCommands.Capacity);
+        }
+        finally
+        {
+            db?.Dispose();
+            SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
+
+    [Fact]
     public void DbWriter_WithCache_ReusesCommandsAcrossUpsertCalls()
     {
         // The cache-aware constructor must lease the same SqliteCommand across
@@ -185,6 +249,7 @@ public class PreparedCommandCacheTests : IDisposable
         // The cache should hold prepared commands for the hot per-file SQLs.
         // ホットパス SQL に対応する prepared command が cache に積まれている。
         Assert.True(_db.PreparedCommands.Count > 0);
+        Assert.True(_db.PreparedCommands.MissCount > 0);
     }
 
     [Fact]
