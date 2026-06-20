@@ -2549,6 +2549,28 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResolveProjects_RejectsTooManySolutionLines_Issue3706()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_line_count_limit");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Repo.sln"),
+                string.Concat(Enumerable.Repeat("# comment\n", SolutionProjectResolver.MaxSolutionFileLines + 1)));
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln"));
+
+            Assert.Contains("solution file contains too many lines", ex.Message);
+            Assert.Contains(SolutionProjectResolver.MaxSolutionFileLines.ToString(CultureInfo.InvariantCulture), ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjects_RejectsTooManySolutionProjectReferences_Issue3064()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_project_limit");

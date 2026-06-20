@@ -47,6 +47,7 @@ internal readonly record struct SolutionProjectResolverLimits(
 internal static class SolutionProjectResolver
 {
     internal const long MaxSolutionFileBytes = 8L * 1024 * 1024;
+    internal const int MaxSolutionFileLines = 65536;
     internal const int MaxSolutionLineChars = 16 * 1024;
     internal const int MaxSolutionProjectReferences = 4096;
 
@@ -287,20 +288,26 @@ internal static class SolutionProjectResolver
         string workspaceRoot,
         FileIndexer indexer)
     {
-        RejectOversizedSolutionFile(solutionPath);
+        var prefixedSolutionPath = LongPath.EnsureWindowsPrefix(solutionPath);
+        if (!BoundedLineReader.TryReadUtf8File(
+                prefixedSolutionPath,
+                checked((int)MaxSolutionFileBytes),
+                MaxSolutionFileLines,
+                MaxSolutionLineChars,
+                out var solutionLines,
+                out var readFailure))
+        {
+            ThrowSolutionReadFailure(solutionPath, readFailure);
+        }
+
         var root = Path.GetFullPath(workspaceRoot);
         var solutionDir = Path.GetDirectoryName(solutionPath) ?? workspaceRoot;
         var projects = new List<DotNetProjectInfo>();
         var lineNumber = 0;
         var projectReferenceCount = 0;
-        foreach (var line in File.ReadLines(LongPath.EnsureWindowsPrefix(solutionPath)))
+        foreach (var line in solutionLines)
         {
             lineNumber++;
-            if (line.Length > MaxSolutionLineChars)
-            {
-                throw new InvalidOperationException(
-                    $"solution line is too long at {solutionPath}:{lineNumber}: {line.Length} characters exceeds limit {MaxSolutionLineChars}.");
-            }
 
             if (!TryParseSolutionProjectLine(line, out var name, out var projectPath))
                 continue;
@@ -328,6 +335,30 @@ internal static class SolutionProjectResolver
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(project => project.ProjectPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static void ThrowSolutionReadFailure(string solutionPath, BoundedTextFileReadFailure failure)
+    {
+        if (failure.Kind == BoundedTextFileReadFailureKind.BytesExceeded)
+        {
+            throw new InvalidOperationException(
+                $"solution file is too large: {solutionPath} exceeds limit {MaxSolutionFileBytes} bytes.");
+        }
+
+        if (failure.Kind == BoundedTextFileReadFailureKind.LinesExceeded)
+        {
+            throw new InvalidOperationException(
+                $"solution file contains too many lines at {solutionPath}: limit {MaxSolutionFileLines} exceeded.");
+        }
+
+        if (failure.Kind == BoundedTextFileReadFailureKind.LineLengthExceeded)
+        {
+            throw new InvalidOperationException(
+                $"solution line is too long at {solutionPath}:{failure.LineNumber}: {failure.CharactersRead} characters exceeds limit {MaxSolutionLineChars}.");
+        }
+
+        throw new InvalidOperationException(
+            $"solution file could not be read at {solutionPath}: {failure.Reason}.");
     }
 
     private static DotNetProjectInfo BuildProjectInfo(string fullProjectPath, string workspaceRoot, string? solutionName = null)
@@ -630,16 +661,6 @@ internal static class SolutionProjectResolver
         return extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void RejectOversizedSolutionFile(string solutionPath)
-    {
-        var length = new FileInfo(LongPath.EnsureWindowsPrefix(solutionPath)).Length;
-        if (length > MaxSolutionFileBytes)
-        {
-            throw new InvalidOperationException(
-                $"solution file is too large: {solutionPath} is {length} bytes; limit is {MaxSolutionFileBytes} bytes.");
-        }
     }
 
     private static bool TryParseSolutionProjectLine(string line, out string name, out string projectPath)

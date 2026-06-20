@@ -112,6 +112,7 @@ public class FileIndexer
     private const int GitLfsPointerMaxBytes = 1024;
     private const int MaxGitmodulesBytes = 256 * 1024;
     private const int MaxGitmodulesLines = 4096;
+    private const int MaxGitmodulesLineChars = 16 * 1024;
     private const int MaxProjectMarkerTraversalWarnings = 32;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private static readonly JsonDocumentOptions DockerfileJsonFormIssueDocumentOptions = new()
@@ -3087,8 +3088,12 @@ public class FileIndexer
                     MaxIgnoreFileBytes,
                     MaxIgnoreFileLines,
                     out var lines,
-                    out var skippedReason))
+                    out var skippedReason,
+                    out var readFailure))
             {
+                if (readFailure.ExceptionType is nameof(FileNotFoundException) or nameof(DirectoryNotFoundException))
+                    return true;
+
                 errors.Add(new ScanError(
                     ToRelativePath(ignorePath),
                     $"Could not safely read {ignoreFileName} because {skippedReason}."));
@@ -3241,7 +3246,8 @@ public class FileIndexer
                         MaxGitmodulesBytes,
                         MaxGitmodulesLines,
                         out lines,
-                        out var skippedReason))
+                        out var skippedReason,
+                        out _))
                 {
                     warnings.Add(new ScanError(
                         NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
@@ -3306,61 +3312,18 @@ public class FileIndexer
         int maxBytes,
         int maxLines,
         out IReadOnlyList<string> lines,
-        out string skippedReason)
+        out string skippedReason,
+        out BoundedTextFileReadFailure failure)
     {
-        lines = [];
-        skippedReason = string.Empty;
-
-        using var stream = new FileStream(
+        var success = BoundedLineReader.TryReadUtf8File(
             path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            bufferSize: 8192,
-            useAsync: false);
-
-        if (stream.Length > maxBytes)
-        {
-            skippedReason = $"it exceeds {maxBytes} bytes";
-            return false;
-        }
-
-        using var accumulator = new MemoryStream((int)Math.Min(stream.Length, maxBytes));
-        var buffer = new byte[8192];
-        long total = 0;
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-        {
-            total += read;
-            if (total > maxBytes)
-            {
-                skippedReason = $"it exceeds {maxBytes} bytes";
-                return false;
-            }
-
-            accumulator.Write(buffer, 0, read);
-        }
-
-        var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
-        var result = new List<string>();
-        using var reader = new StringReader(text);
-        string? line;
-        while ((line = reader.ReadLine()) != null)
-        {
-            if (result.Count == 0 && line.Length > 0 && line[0] == '\uFEFF')
-                line = line[1..];
-
-            if (result.Count >= maxLines)
-            {
-                skippedReason = $"it exceeds {maxLines} lines";
-                return false;
-            }
-
-            result.Add(line);
-        }
-
-        lines = result;
-        return true;
+            maxBytes,
+            maxLines,
+            MaxGitmodulesLineChars,
+            out lines,
+            out failure);
+        skippedReason = success ? string.Empty : failure.Reason;
+        return success;
     }
 
     // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.

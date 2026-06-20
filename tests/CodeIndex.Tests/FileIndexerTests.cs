@@ -731,6 +731,32 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void LanguageMapOverrides_OverlongLineSkipsOverridesWithWarning_Issue3706()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_line_length_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var overlongLinePath = Path.Combine(tempDir, "long-line-langmap.yaml");
+            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+            File.WriteAllText(overlongLinePath, new string('x', 16 * 1024 + 1));
+            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { overlongLinePath, fallbackPath },
+                warnings.Add);
+
+            Assert.Equal("ruby", map[".ok"]);
+            Assert.Contains(warnings, warning => warning.Contains("line 1 exceeds", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_EntryCountCapTruncatesRemainingOverridesWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_entries_{Guid.NewGuid():N}");

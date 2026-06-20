@@ -22,6 +22,23 @@ internal sealed class BoundedLineLengthException : IOException
     internal int MaxUtf8Bytes { get; }
 }
 
+internal enum BoundedTextFileReadFailureKind
+{
+    None,
+    BytesExceeded,
+    LinesExceeded,
+    LineLengthExceeded,
+    ReadFailed,
+}
+
+internal readonly record struct BoundedTextFileReadFailure(
+    BoundedTextFileReadFailureKind Kind,
+    string Reason,
+    int? LineNumber = null,
+    int? CharactersRead = null,
+    int? Limit = null,
+    string? ExceptionType = null);
+
 internal static class WorkerProtocolLineLimits
 {
     // Worker requests carry source content as JSON. Keep this above the default 4 MiB source
@@ -48,6 +65,119 @@ internal static class WorkerProtocolLineLimits
 
 internal static class BoundedLineReader
 {
+    internal static bool TryReadUtf8File(
+        string path,
+        int maxBytes,
+        int maxLines,
+        int maxLineCharacters,
+        out IReadOnlyList<string> lines,
+        out BoundedTextFileReadFailure failure,
+        Func<string, Stream>? openFile = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (maxBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum file bytes must be positive.");
+        if (maxLines <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxLines), maxLines, "Maximum line count must be positive.");
+        if (maxLineCharacters <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxLineCharacters), maxLineCharacters, "Maximum line characters must be positive.");
+
+        lines = [];
+        failure = default;
+
+        try
+        {
+            using var stream = openFile?.Invoke(path)
+                ?? new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 8192,
+                    useAsync: false);
+
+            if (stream.CanSeek && stream.Length > maxBytes)
+            {
+                failure = new(
+                    BoundedTextFileReadFailureKind.BytesExceeded,
+                    $"it exceeds {maxBytes} bytes",
+                    Limit: maxBytes);
+                return false;
+            }
+
+            using var accumulator = new MemoryStream(stream.CanSeek ? (int)Math.Min(stream.Length, maxBytes) : 0);
+            var buffer = new byte[8192];
+            long total = 0;
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                total += read;
+                if (total > maxBytes)
+                {
+                    failure = new(
+                        BoundedTextFileReadFailureKind.BytesExceeded,
+                        $"it exceeds {maxBytes} bytes",
+                        Limit: maxBytes);
+                    return false;
+                }
+
+                accumulator.Write(buffer, 0, read);
+            }
+
+            var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
+            if (text.Length > 0 && text[0] == '\uFEFF')
+                text = text[1..];
+
+            var result = new List<string>();
+            using var reader = new StringReader(text);
+            while (true)
+            {
+                string? line;
+                try
+                {
+                    line = ReadLine(reader, maxLineCharacters, maxBytes);
+                }
+                catch (BoundedLineLengthException ex)
+                {
+                    var lineNumber = result.Count + 1;
+                    failure = new(
+                        BoundedTextFileReadFailureKind.LineLengthExceeded,
+                        $"line {lineNumber} exceeds {maxLineCharacters} characters",
+                        lineNumber,
+                        ex.CharactersRead,
+                        maxLineCharacters);
+                    return false;
+                }
+
+                if (line == null)
+                    break;
+
+                if (result.Count >= maxLines)
+                {
+                    failure = new(
+                        BoundedTextFileReadFailureKind.LinesExceeded,
+                        $"it exceeds {maxLines} lines",
+                        Limit: maxLines);
+                    return false;
+                }
+
+                result.Add(line);
+            }
+
+            lines = result;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            var reason = $"it could not be read ({ex.GetType().Name}: {CollapseLineBreaks(ex.Message)})";
+            failure = new(
+                BoundedTextFileReadFailureKind.ReadFailed,
+                reason,
+                ExceptionType: ex.GetType().Name);
+            return false;
+        }
+    }
+
     internal static string? ReadLine(TextReader reader, int maxCharacters, int maxUtf8Bytes)
     {
         ArgumentNullException.ThrowIfNull(reader);
@@ -184,4 +314,7 @@ internal static class BoundedLineReader
                 throw new BoundedLineLengthException(_charactersRead, _utf8BytesRead, _maxCharacters, _maxUtf8Bytes);
         }
     }
+
+    private static string CollapseLineBreaks(string value)
+        => value.Replace('\r', ' ').Replace('\n', ' ');
 }
