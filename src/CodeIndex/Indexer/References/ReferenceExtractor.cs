@@ -893,7 +893,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols,
         string? path = null,
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? maxReferenceCount = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
@@ -916,6 +917,7 @@ public static partial class ReferenceExtractor
                     fileId,
                     content,
                     new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
+                .Take(maxReferenceCount ?? int.MaxValue)
                 .ToList();
         }
 
@@ -929,8 +931,33 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             requestedLanguage,
-            cancellationToken));
+            cancellationToken,
+            maxReferenceCount));
     }
+
+    private sealed class BoundedReferenceList(int maxReferenceCount) : List<ReferenceRecord>
+    {
+        internal int MaxReferenceCount { get; } = maxReferenceCount;
+    }
+
+    internal static List<ReferenceRecord> CreateReferenceList(int? maxReferenceCount)
+        => maxReferenceCount is > 0
+            ? new BoundedReferenceList(maxReferenceCount.Value)
+            : [];
+
+    internal static bool ReferenceLimitReached(List<ReferenceRecord> references)
+        => references is BoundedReferenceList bounded
+            && bounded.Count >= bounded.MaxReferenceCount;
+
+    internal static bool TryAddReference(List<ReferenceRecord> references, ReferenceRecord reference)
+    {
+        if (ReferenceLimitReached(references))
+            return false;
+
+        references.Add(reference);
+        return true;
+    }
+
     private static Dictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
@@ -1256,7 +1283,7 @@ public static partial class ReferenceExtractor
         if (!seen.Add(dedupeKey))
             return;
 
-        references.Add(new ReferenceRecord
+        TryAddReference(references, new ReferenceRecord
         {
             FileId = fileId,
             SymbolName = name,
@@ -1819,17 +1846,22 @@ public static partial class ReferenceExtractor
                 var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment, container);
                 if (seen.Add(dedupeKey))
                 {
-                    references.Add(new ReferenceRecord
+                    if (!TryAddReference(
+                            references,
+                            new ReferenceRecord
+                            {
+                                FileId = fileId,
+                                SymbolName = normalizedSegment,
+                                ReferenceKind = "type_reference",
+                                Line = lineNumber,
+                                Column = column,
+                                Context = context,
+                                ContainerKind = container?.Kind,
+                                ContainerName = container?.Name,
+                            }))
                     {
-                        FileId = fileId,
-                        SymbolName = normalizedSegment,
-                        ReferenceKind = "type_reference",
-                        Line = lineNumber,
-                        Column = column,
-                        Context = context,
-                        ContainerKind = container?.Kind,
-                        ContainerName = container?.Name,
-                    });
+                        return;
+                    }
                 }
             }
 

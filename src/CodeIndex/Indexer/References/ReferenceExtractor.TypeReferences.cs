@@ -579,7 +579,7 @@ public static partial class ReferenceExtractor
         if (!seen.Add(dedupeKey))
             return;
 
-        references.Add(new ReferenceRecord
+        TryAddReference(references, new ReferenceRecord
         {
             FileId = fileId,
             SymbolName = segment,
@@ -1664,7 +1664,7 @@ public static partial class ReferenceExtractor
         if (!seen.Add(dedupeKey))
             return;
 
-        references.Add(new ReferenceRecord
+        TryAddReference(references, new ReferenceRecord
         {
             FileId = fileId,
             SymbolName = name,

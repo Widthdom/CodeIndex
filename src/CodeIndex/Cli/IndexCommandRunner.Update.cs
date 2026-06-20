@@ -748,7 +748,8 @@ public static partial class IndexCommandRunner
                             symbols,
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                            cancellationToken);
+                            cancellationToken,
+                            maxReferenceCount: options.MaxReferencesPerFile + 1);
                         regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
