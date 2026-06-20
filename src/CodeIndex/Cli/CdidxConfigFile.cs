@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 
@@ -36,6 +37,10 @@ internal static class CdidxConfigFile
     internal const int MaxConfigScalarStringChars = 1024;
     internal const int MaxConfigPathStringChars = 4096;
     internal const int MaxConfigDurationStringChars = 256;
+    internal const int MaxConfigDiagnosticChars = 256;
+    internal const int MaxConfigSourceDetailChars = 160;
+    internal const int MaxUnknownKeyDiagnostics = 8;
+    internal const int MaxUnknownConfigKeyChars = 128;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -81,6 +86,15 @@ internal static class CdidxConfigFile
         internal bool Failed => Error is not null;
     }
 
+    internal readonly record struct ConfigDiagnosticText(string Text, int OriginalLength, bool Truncated);
+
+    private sealed class UnknownKeyDiagnosticState
+    {
+        internal int Count { get; set; }
+        internal int Reported { get; set; }
+        internal bool Truncated => Count > Reported;
+    }
+
     /// <summary>
     /// Walk upward from <paramref name="startingDirectory"/> looking for `.cdidxrc.json`.
     /// When found, parse it and return recognized settings (only when the matching env var is
@@ -109,7 +123,7 @@ internal static class CdidxConfigFile
         }
         catch (Exception ex)
         {
-            return new LoadResult(Path: path, Error: $"[cdidx] Failed to read {FileName} at {path}: {ex.Message}");
+            return new LoadResult(Path: path, Error: $"[cdidx] Failed to read {FileName} at {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }
 
         JsonDocument document;
@@ -124,7 +138,7 @@ internal static class CdidxConfigFile
         }
         catch (JsonException ex)
         {
-            return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {path}: {ex.Message}");
+            return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }
 
         using (document)
@@ -135,16 +149,18 @@ internal static class CdidxConfigFile
 
             var pending = new List<(string EnvName, string Value)>();
             var errors = new List<string>();
+            var unknownKeys = new UnknownKeyDiagnosticState();
 
-            AddUnknownKeyDiagnostics(root, KnownTopLevelKeys, null, path, string.Join(", ", KnownTopLevelKeys.Where(k => k != "$schema")), errors);
+            AddUnknownKeyDiagnostics(root, KnownTopLevelKeys, null, path, string.Join(", ", KnownTopLevelKeys.Where(k => k != "$schema")), unknownKeys, errors);
             AddTopLevelEnvironmentSettings(root, path, pending, errors);
             AddSuggestionEnvironmentSettings(root, path, pending, errors);
-            AddIndexingEnvironmentSettings(root, path, pending, errors);
-            AddSearchEnvironmentSettings(root, path, pending, errors);
-            ValidateOptionalObject(root, "output", KnownOutputKeys, path, errors);
-            ValidateOptionalObject(root, "graph", KnownGraphKeys, path, errors);
-            ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, errors);
-            AddMcpEnvironmentSettings(root, path, pending, errors);
+            AddIndexingEnvironmentSettings(root, path, pending, unknownKeys, errors);
+            AddSearchEnvironmentSettings(root, path, pending, unknownKeys, errors);
+            ValidateOptionalObject(root, "output", KnownOutputKeys, path, unknownKeys, errors);
+            ValidateOptionalObject(root, "graph", KnownGraphKeys, path, unknownKeys, errors);
+            ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, unknownKeys, errors);
+            AddMcpEnvironmentSettings(root, path, pending, unknownKeys, errors);
+            AddUnknownKeyTruncationDiagnostic(path, unknownKeys, errors);
 
             if (errors.Count > 0)
                 return new LoadResult(Path: path, Error: string.Join(Environment.NewLine, errors));
@@ -255,7 +271,7 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void AddIndexingEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddIndexingEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty("indexing", out var indexing))
             return;
@@ -266,7 +282,7 @@ internal static class CdidxConfigFile
             return;
         }
 
-        AddUnknownKeyDiagnostics(indexing, KnownIndexingKeys, "indexing", path, string.Join(", ", KnownIndexingKeys), errors);
+        AddUnknownKeyDiagnostics(indexing, KnownIndexingKeys, "indexing", path, string.Join(", ", KnownIndexingKeys), unknownKeys, errors);
 
         if (indexing.TryGetProperty("includeKinds", out var includeKinds))
         {
@@ -293,7 +309,7 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void AddSearchEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddSearchEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty("search", out var search))
             return;
@@ -304,7 +320,7 @@ internal static class CdidxConfigFile
             return;
         }
 
-        AddUnknownKeyDiagnostics(search, KnownSearchKeys, "search", path, string.Join(", ", KnownSearchKeys), errors);
+        AddUnknownKeyDiagnostics(search, KnownSearchKeys, "search", path, string.Join(", ", KnownSearchKeys), unknownKeys, errors);
 
         if (search.TryGetProperty("limit", out var limit))
         {
@@ -331,7 +347,7 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void AddMcpEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddMcpEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty("mcp", out var mcp))
             return;
@@ -342,13 +358,13 @@ internal static class CdidxConfigFile
             return;
         }
 
-        AddUnknownKeyDiagnostics(mcp, KnownMcpKeys, "mcp", path, string.Join(", ", KnownMcpKeys), errors);
+        AddUnknownKeyDiagnostics(mcp, KnownMcpKeys, "mcp", path, string.Join(", ", KnownMcpKeys), unknownKeys, errors);
 
-        AddMcpToolEnvironmentSettings(mcp, path, pending, errors);
-        AddMcpRateLimitEnvironmentSettings(mcp, path, pending, errors);
+        AddMcpToolEnvironmentSettings(mcp, path, pending, unknownKeys, errors);
+        AddMcpRateLimitEnvironmentSettings(mcp, path, pending, unknownKeys, errors);
     }
 
-    private static void AddMcpToolEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddMcpToolEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!mcp.TryGetProperty("tools", out var tools))
             return;
@@ -359,7 +375,7 @@ internal static class CdidxConfigFile
             return;
         }
 
-        AddUnknownKeyDiagnostics(tools, KnownMcpToolsKeys, "mcp.tools", path, string.Join(", ", KnownMcpToolsKeys), errors);
+        AddUnknownKeyDiagnostics(tools, KnownMcpToolsKeys, "mcp.tools", path, string.Join(", ", KnownMcpToolsKeys), unknownKeys, errors);
 
         if (tools.TryGetProperty("allow", out var allow))
         {
@@ -378,7 +394,7 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void AddMcpRateLimitEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddMcpRateLimitEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!mcp.TryGetProperty("rate_limit", out var rateLimit))
             return;
@@ -389,7 +405,7 @@ internal static class CdidxConfigFile
             return;
         }
 
-        AddUnknownKeyDiagnostics(rateLimit, KnownMcpRateLimitKeys, "mcp.rate_limit", path, string.Join(", ", KnownMcpRateLimitKeys), errors);
+        AddUnknownKeyDiagnostics(rateLimit, KnownMcpRateLimitKeys, "mcp.rate_limit", path, string.Join(", ", KnownMcpRateLimitKeys), unknownKeys, errors);
 
         if (rateLimit.TryGetProperty("rps", out var rps))
         {
@@ -568,7 +584,7 @@ internal static class CdidxConfigFile
         return CommandExitCodes.Success;
     }
 
-    private static void ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, List<string> errors)
+    private static void ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty(key, out var value))
             return;
@@ -578,7 +594,7 @@ internal static class CdidxConfigFile
             return;
         }
 
-        AddUnknownKeyDiagnostics(value, knownKeys, key, path, string.Join(", ", knownKeys), errors);
+        AddUnknownKeyDiagnostics(value, knownKeys, key, path, string.Join(", ", knownKeys), unknownKeys, errors);
     }
 
     private static void AddUnknownKeyDiagnostics(
@@ -587,6 +603,7 @@ internal static class CdidxConfigFile
         string? prefix,
         string path,
         string supportedKeys,
+        UnknownKeyDiagnosticState state,
         List<string> errors)
     {
         foreach (var property in obj.EnumerateObject())
@@ -603,10 +620,43 @@ internal static class CdidxConfigFile
 
             if (!matched)
             {
+                state.Count++;
+                if (state.Reported >= MaxUnknownKeyDiagnostics)
+                    continue;
+
+                state.Reported++;
                 var qualifiedName = prefix is null ? property.Name : $"{prefix}.{property.Name}";
-                errors.Add($"[cdidx] {path}: unknown key `{qualifiedName}`. Supported keys: {supportedKeys}.");
+                errors.Add($"[cdidx] {FormatConfigDiagnosticPath(path)}: unknown key `{FormatConfigKeyForDiagnostic(qualifiedName)}`. Supported keys: {supportedKeys}.");
             }
         }
+    }
+
+    private static void AddUnknownKeyTruncationDiagnostic(string path, UnknownKeyDiagnosticState state, List<string> errors)
+    {
+        if (!state.Truncated)
+            return;
+
+        errors.Add($"[cdidx] {FormatConfigDiagnosticPath(path)}: unknown key diagnostics truncated. unknown_key_count={state.Count}; unknown_key_reported={state.Reported}; unknown_key_limit={MaxUnknownKeyDiagnostics}.");
+    }
+
+    internal static ConfigDiagnosticText FormatConfigSourceDetail(string sourceDetail)
+        => FormatConfigDiagnosticText(sourceDetail, MaxConfigSourceDetailChars, redactPaths: true);
+
+    internal static string FormatConfigDiagnosticPath(string path)
+        => FormatConfigDiagnosticText(path, MaxConfigDiagnosticChars, redactPaths: true).Text;
+
+    internal static string FormatConfigExceptionMessage(Exception ex)
+        => FormatConfigDiagnosticText(ex.Message, MaxConfigDiagnosticChars, redactPaths: true).Text;
+
+    private static string FormatConfigKeyForDiagnostic(string key)
+        => FormatConfigDiagnosticText(key, MaxUnknownConfigKeyChars, redactPaths: false).Text;
+
+    private static ConfigDiagnosticText FormatConfigDiagnosticText(string? value, int maxChars, bool redactPaths)
+    {
+        var raw = value ?? "<null>";
+        var redacted = DiagnosticRedactor.RedactSensitiveText(raw, "[redacted]", redactPaths);
+        var text = DiagnosticRedactor.BoundDiagnosticText(redacted, maxChars);
+        return new ConfigDiagnosticText(text, redacted.Length, redacted.Length > maxChars);
     }
 
     private static bool TryReadString(JsonElement element, string key, string path, int maxChars, out string? value, out string? error)

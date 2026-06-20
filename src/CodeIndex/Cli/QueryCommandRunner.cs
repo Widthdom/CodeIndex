@@ -6291,11 +6291,17 @@ public static partial class QueryCommandRunner
 
     private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)
     {
-        JsonObject Entry<T>(T? value, string source) => new()
+        JsonObject Entry<T>(T? value, string source)
         {
-            ["value"] = JsonSerializer.SerializeToNode(value),
-            ["source"] = source,
-        };
+            var entry = new JsonObject
+            {
+                ["value"] = JsonSerializer.SerializeToNode(value),
+                ["source"] = source,
+            };
+            AddEffectiveConfigSourceSummary(entry, source);
+            return entry;
+        }
+
         var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
         var payload = new JsonObject
@@ -6315,6 +6321,34 @@ public static partial class QueryCommandRunner
             },
         };
         return payload;
+    }
+
+    private static void AddEffectiveConfigSourceSummary(JsonObject entry, string source)
+    {
+        var sourceKind = source;
+        string? sourceDetail = null;
+        if (source.StartsWith("config:", StringComparison.Ordinal))
+        {
+            sourceKind = "config_file";
+            sourceDetail = Path.GetFileName(source["config:".Length..]);
+        }
+        else if (source.StartsWith("env:", StringComparison.Ordinal))
+        {
+            sourceKind = "environment";
+            sourceDetail = source["env:".Length..];
+        }
+
+        entry["source_kind"] = sourceKind;
+        if (string.IsNullOrWhiteSpace(sourceDetail))
+            return;
+
+        var bounded = CdidxConfigFile.FormatConfigSourceDetail(sourceDetail);
+        entry["source_detail"] = bounded.Text;
+        if (bounded.Truncated)
+        {
+            entry["source_detail_length"] = bounded.OriginalLength;
+            entry["source_detail_truncated"] = true;
+        }
     }
 
     private static string ResolveDbPathConfigSource(QueryCommandOptions options)

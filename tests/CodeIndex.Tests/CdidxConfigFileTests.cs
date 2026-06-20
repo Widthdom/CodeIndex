@@ -817,6 +817,57 @@ public class CdidxConfigFileTests
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
 
+    [Fact]
+    public void LoadAndApply_ManyUnknownKeysCapsDiagnostics_Issue3793()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var unknownKeys = Enumerable
+                .Range(0, CdidxConfigFile.MaxUnknownKeyDiagnostics + 4)
+                .Select(index => $"\"unknown_key_{index}\": true");
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                "{" + string.Join(",", unknownKeys) + "}");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            for (var i = 0; i < CdidxConfigFile.MaxUnknownKeyDiagnostics; i++)
+                Assert.Contains($"unknown_key_{i}", result.Error);
+            Assert.DoesNotContain($"unknown_key_{CdidxConfigFile.MaxUnknownKeyDiagnostics}", result.Error);
+            Assert.Contains($"unknown_key_count={CdidxConfigFile.MaxUnknownKeyDiagnostics + 4}", result.Error);
+            Assert.Contains($"unknown_key_reported={CdidxConfigFile.MaxUnknownKeyDiagnostics}", result.Error);
+            Assert.Contains($"unknown_key_limit={CdidxConfigFile.MaxUnknownKeyDiagnostics}", result.Error);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_InvalidJsonSanitizesLongConfigPath_Issue3793()
+    {
+        var root = CreateTempDir();
+        var sensitiveSegment = "secret-config-token-ghp_1234567890abcdef-private";
+        var dir = Path.Combine(root, sensitiveSegment, new string('a', 80));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), "{ invalid");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains("Invalid JSON", result.Error);
+            Assert.DoesNotContain(dir, result.Error);
+            Assert.DoesNotContain(sensitiveSegment, result.Error);
+            Assert.DoesNotContain("ghp_1234567890abcdef", result.Error);
+            Assert.True(result.Error!.Length < 600);
+        }
+        finally { TestProjectHelper.DeleteDirectory(root); }
+    }
+
     private static string CreateTempDir()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx_config_{Guid.NewGuid():N}");
