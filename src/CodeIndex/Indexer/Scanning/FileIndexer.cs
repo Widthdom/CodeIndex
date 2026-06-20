@@ -114,10 +114,6 @@ public class FileIndexer
     private const int MaxGitmodulesLines = 4096;
     private const int MaxProjectMarkerTraversalWarnings = 32;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
-    private static readonly JsonDocumentOptions DockerfileJsonFormIssueDocumentOptions = new()
-    {
-        MaxDepth = SymbolExtractor.DockerfileJsonFormMaxDepth,
-    };
     private const int MaxIgnoreFileBytes = 256 * 1024;
     private const int MaxIgnoreFileLines = 8192;
     private const int MaxIgnoreRulesPerFile = 4096;
@@ -3834,7 +3830,7 @@ public class FileIndexer
     {
         try
         {
-            using var document = JsonDocument.Parse(payload, DockerfileJsonFormIssueDocumentOptions);
+            using var document = SymbolExtractor.ParseDockerfileJsonFormPayload(payload);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return true;
 

@@ -5719,6 +5719,21 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_DockerfileJsonFormsBeyondParserDepthLimit_EmitValidationIssue_Issue3713()
+    {
+        var depth = SymbolExtractor.DockerfileJsonFormMaxDepth + 1;
+        var content = "VOLUME " + new string('[', depth) + "\"/too-deep\"" + new string(']', depth) + "\n";
+        var rawBytes = Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("Dockerfile", rawBytes, content, "dockerfile");
+
+        var issue = Assert.Single(issues, i => i.Kind == "dockerfile_json_form_invalid");
+        Assert.Equal(1, issue.Line);
+        Assert.Equal(FileIssue.SeverityWarning, issue.Severity);
+        Assert.Contains("VOLUME", issue.Message);
+    }
+
+    [Fact]
     public void ValidateContent_MsBuildXmlBudgetExceeded_EmitsValidationIssue_Issue3801()
     {
         var depth = SymbolExtractor.XmlExtractionMaxDepth + 2;
