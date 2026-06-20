@@ -54,7 +54,7 @@ public static partial class SymbolExtractor
         try
         {
             using var document = JsonDocument.Parse(content, StructuredJsonDocumentOptions);
-            var propertyLines = BuildJsonPropertyLineQueues(content, lineStarts);
+            var propertyLines = BuildJsonPropertyLineQueues(content);
 
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
@@ -259,10 +259,11 @@ public static partial class SymbolExtractor
             ? signature
             : signature[..StructuredDataMaxSignatureLength];
 
-    private static Dictionary<string, Queue<int>> BuildJsonPropertyLineQueues(string content, int[] lineStarts)
+    private static Dictionary<string, Queue<int>> BuildJsonPropertyLineQueues(string content)
     {
         var propertyLines = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
         var bytes = Encoding.UTF8.GetBytes(content);
+        var byteLineStarts = BuildUtf8LineStarts(bytes);
         var reader = new Utf8JsonReader(bytes, StructuredJsonReaderOptions);
         while (reader.Read())
         {
@@ -273,18 +274,29 @@ public static partial class SymbolExtractor
             if (string.IsNullOrEmpty(name))
                 continue;
 
-            var byteOffset = (int)Math.Min(reader.TokenStartIndex, bytes.Length);
-            var charOffset = Encoding.UTF8.GetCharCount(bytes.AsSpan(0, byteOffset));
+            var byteOffset = (int)Math.Min(reader.TokenStartIndex, (long)bytes.Length);
             if (!propertyLines.TryGetValue(name, out var lines))
             {
                 lines = new Queue<int>();
                 propertyLines.Add(name, lines);
             }
 
-            lines.Enqueue(FindLineNumberForOffset(lineStarts, charOffset));
+            lines.Enqueue(FindLineNumberForOffset(byteLineStarts, byteOffset));
         }
 
         return propertyLines;
+    }
+
+    private static int[] BuildUtf8LineStarts(byte[] bytes)
+    {
+        var starts = new List<int> { 0 };
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'\n')
+                starts.Add(i + 1);
+        }
+
+        return starts.ToArray();
     }
 
     private static bool TryDequeueJsonPropertyLine(

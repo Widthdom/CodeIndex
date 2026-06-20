@@ -599,6 +599,32 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_CapsDeepObjects_Issue3808()
+    {
+        var depth = SymbolExtractor.StructuredDataMaxJsonDepth + 4;
+        var builder = new StringBuilder();
+        builder.AppendLine("{");
+        for (var i = 0; i < depth; i++)
+        {
+            builder.Append(' ', (i + 1) * 2)
+                .Append('"')
+                .Append('n')
+                .Append(i)
+                .AppendLine("\": {");
+        }
+
+        builder.Append(' ', (depth + 1) * 2).AppendLine("\"leaf\": 0");
+        for (var i = depth; i >= 0; i--)
+            builder.Append(' ', i * 2).AppendLine("}");
+
+        var symbols = SymbolExtractor.Extract(1, "json", builder.ToString());
+
+        Assert.Contains(symbols, symbol => symbol.Name == "n0");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "n0.n1");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols);
+    }
+
+    [Fact]
     public void Extract_Json_CapsStructuredSignatureLength_Issue3808()
     {
         var content = "{\"key\":\"" + new string('x', SymbolExtractor.StructuredDataMaxSignatureLength + 80) + "\"}";
