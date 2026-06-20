@@ -81,6 +81,7 @@ public static class GitHelper
 
     internal const int MaxCapturedGitOutputChars = 1024 * 1024;
     internal const int MaxGitFailureDiagnosticChars = 512;
+    private const int MaxGitDiagnosticRedactionInputChars = 4096;
     private const int GitCaptureReadBufferChars = 8192;
     private static readonly TimeSpan DefaultGitCommandTimeout = TimeSpan.FromSeconds(60);
     private static readonly AsyncLocal<TimeSpan?> GitCommandTimeoutOverride = new();
@@ -1165,14 +1166,19 @@ public static class GitHelper
         => $"git command captured {streamName} exceeded {MaxCapturedGitOutputChars.ToString(CultureInfo.InvariantCulture)} characters.";
 
     private static string FormatGitDiagnostic(string diagnostic)
-        => DiagnosticRedactor.BoundDiagnosticText(
-            DiagnosticRedactor.RedactSensitiveText(diagnostic, "[redacted]", redactPaths: true),
+    {
+        var boundedBeforeRedaction = DiagnosticRedactor.BoundDiagnosticText(
+            diagnostic,
+            MaxGitDiagnosticRedactionInputChars);
+        return DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(boundedBeforeRedaction, "[redacted]", redactPaths: true),
             MaxGitFailureDiagnosticChars);
+    }
 
     private static string CombineCapturedError(string stderr, string diagnostic)
         => FormatGitDiagnostic(string.IsNullOrWhiteSpace(stderr)
             ? diagnostic
-            : stderr.TrimEnd('\r', '\n') + "\n" + diagnostic);
+            : diagnostic + "\n" + stderr.TrimEnd('\r', '\n'));
 
     private static int ToWaitMilliseconds(TimeSpan timeout)
     {
