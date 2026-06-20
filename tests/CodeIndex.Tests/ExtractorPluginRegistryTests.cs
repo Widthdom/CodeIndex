@@ -27,7 +27,7 @@ public class ExtractorPluginRegistryTests
                 Assert.Equal("workspace_plugin_directory", trustOverride.Kind);
                 Assert.Equal(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, trustOverride.EnvironmentVariable);
                 Assert.Equal("yes", trustOverride.Value);
-                Assert.EndsWith(Path.Combine(".cdidx", "plugins"), trustOverride.Path!, StringComparison.Ordinal);
+                Assert.EndsWith(".cdidx/plugins", trustOverride.Path!, StringComparison.Ordinal);
                 Assert.DoesNotContain(projectRoot, trustOverride.Path!, StringComparison.Ordinal);
                 Assert.Contains("workspace plugin", trustOverride.Message, StringComparison.Ordinal);
             }

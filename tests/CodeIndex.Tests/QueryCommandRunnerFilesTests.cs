@@ -253,7 +253,7 @@ public partial class QueryCommandRunnerTests
                     item => item.GetProperty("kind").GetString() == "workspace_plugin_directory");
                 Assert.Equal(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, pluginOverride.GetProperty("environment_variable").GetString());
                 Assert.Equal("true", pluginOverride.GetProperty("value").GetString());
-                Assert.EndsWith(Path.Combine(".cdidx", "plugins"), pluginOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                Assert.EndsWith(".cdidx/plugins", pluginOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
                 Assert.DoesNotContain(projectRoot, pluginOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
                 Assert.Contains("workspace plugin", pluginOverride.GetProperty("message").GetString(), StringComparison.Ordinal);
 
