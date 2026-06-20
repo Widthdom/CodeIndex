@@ -27,6 +27,7 @@ internal static partial class ProgramRunner
     private const string ReleaseAssetUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/download/{0}/{1}";
     private const string ReleasePageUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/tag/{0}";
     private const string InstallerScriptAssetName = "install.sh";
+    private const string UpgradeInstallerTempDirectoryPrefix = "cdidx-install-";
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
@@ -55,6 +56,7 @@ internal static partial class ProgramRunner
     private static readonly AsyncLocal<Action<string>?> ScopedTestExtractorFileLengthCheckedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedDeleteInstallDirectoryWriteProbeForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedDeleteUpgradeInstallerScriptForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedDeleteUpgradeInstallerDirectoryForTesting = new();
 
     internal static TimeProvider TimeProvider
     {
@@ -84,6 +86,12 @@ internal static partial class ProgramRunner
     {
         get => ScopedDeleteUpgradeInstallerScriptForTesting.Value;
         set => ScopedDeleteUpgradeInstallerScriptForTesting.Value = value;
+    }
+
+    internal static Action<string>? DeleteUpgradeInstallerDirectoryForTesting
+    {
+        get => ScopedDeleteUpgradeInstallerDirectoryForTesting.Value;
+        set => ScopedDeleteUpgradeInstallerDirectoryForTesting.Value = value;
     }
 
     private sealed record CommandRunContext(
@@ -3063,7 +3071,7 @@ internal static partial class ProgramRunner
         string? scriptPath = null;
         try
         {
-            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("cdidx-install-").FullName;
+            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory(UpgradeInstallerTempDirectoryPrefix).FullName;
             scriptPath = Path.Combine(scriptDirectory, "install.sh");
             using (var client = UpgradeHttpClientFactory())
             {
@@ -3145,7 +3153,7 @@ internal static partial class ProgramRunner
             if (scriptPath != null)
                 TryDeleteUpgradeInstallerScript(scriptPath);
             if (scriptDirectory != null)
-                try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
+                TryDeleteUpgradeInstallerDirectory(scriptDirectory);
         }
     }
 
@@ -3544,6 +3552,87 @@ internal static partial class ProgramRunner
             CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
+
+    private static void TryDeleteUpgradeInstallerDirectory(string scriptDirectory)
+    {
+        try
+        {
+            if (!TryValidateUpgradeInstallerDirectoryCleanupTarget(scriptDirectory, out var fullDirectory, out var failureReason))
+            {
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({failureReason}).");
+                return;
+            }
+
+            var directoryInfo = new DirectoryInfo(fullDirectory);
+            directoryInfo.Refresh();
+            if (!directoryInfo.Exists)
+                return;
+
+            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
+            {
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} (target is a symbolic link or reparse point).");
+                return;
+            }
+
+            if (DeleteUpgradeInstallerDirectoryForTesting != null)
+                DeleteUpgradeInstallerDirectoryForTesting(fullDirectory);
+            else
+                Directory.Delete(LongPath.EnsureWindowsPrefix(fullDirectory), recursive: true);
+        }
+        catch (Exception ex) when (IsUpgradeInstallerCleanupException(ex))
+        {
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+        }
+    }
+
+    internal static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
+        string scriptDirectory,
+        out string fullDirectory,
+        out string failureReason)
+    {
+        fullDirectory = string.Empty;
+        failureReason = string.Empty;
+        try
+        {
+            fullDirectory = NormalizeDirectoryBoundaryPath(Path.GetFullPath(scriptDirectory));
+            var tempRoot = NormalizeDirectoryBoundaryPath(Path.GetFullPath(Path.GetTempPath()));
+            if (string.Equals(fullDirectory, tempRoot, InstallDirectoryPathComparison)
+                || !IsPathEqualOrChildNoProbe(tempRoot, fullDirectory))
+            {
+                failureReason = "target is outside the expected temporary root";
+                return false;
+            }
+
+            if (!Path.GetFileName(fullDirectory).StartsWith(UpgradeInstallerTempDirectoryPrefix, StringComparison.Ordinal))
+            {
+                failureReason = "target name does not match the expected upgrade installer temporary-directory prefix";
+                return false;
+            }
+
+            var directoryInfo = new DirectoryInfo(fullDirectory);
+            directoryInfo.Refresh();
+            if (directoryInfo.Exists
+                && ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(directoryInfo.LinkTarget)))
+            {
+                failureReason = "target is a symbolic link or reparse point";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (IsUpgradeInstallerCleanupException(ex))
+        {
+            failureReason = "target path is invalid";
+            return false;
+        }
+    }
+
+    private static bool IsUpgradeInstallerCleanupException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(
         UpdateCheckResult result,

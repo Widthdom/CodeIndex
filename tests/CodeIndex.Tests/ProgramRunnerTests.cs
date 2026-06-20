@@ -613,6 +613,7 @@ public class ProgramRunnerTests
             ProgramRunner.TestExtractorFileLengthCheckedForTesting = _ => { };
             ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = _ => { };
             ProgramRunner.DeleteUpgradeInstallerScriptForTesting = _ => { };
+            ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = _ => { };
             DbWriter.BatchRowSkipWarningForTesting = _ => { };
             DbContext.OptimizePragmaExecutedForTesting = _ => { };
 
@@ -621,6 +622,7 @@ public class ProgramRunnerTests
                 bool TestExtractorHookVisible,
                 bool DeleteInstallHookVisible,
                 bool DeleteUpgradeHookVisible,
+                bool DeleteUpgradeDirectoryHookVisible,
                 bool WriterHookVisible,
                 bool ContextHookVisible)> task;
             using (ExecutionContext.SuppressFlow())
@@ -630,6 +632,7 @@ public class ProgramRunnerTests
                     ProgramRunner.TestExtractorFileLengthCheckedForTesting is not null,
                     ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting is not null,
                     ProgramRunner.DeleteUpgradeInstallerScriptForTesting is not null,
+                    ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting is not null,
                     DbWriter.BatchRowSkipWarningForTesting is not null,
                     DbContext.OptimizePragmaExecutedForTesting is not null));
             }
@@ -639,6 +642,7 @@ public class ProgramRunnerTests
             Assert.False(observed.TestExtractorHookVisible);
             Assert.False(observed.DeleteInstallHookVisible);
             Assert.False(observed.DeleteUpgradeHookVisible);
+            Assert.False(observed.DeleteUpgradeDirectoryHookVisible);
             Assert.False(observed.WriterHookVisible);
             Assert.False(observed.ContextHookVisible);
         }
@@ -648,6 +652,7 @@ public class ProgramRunnerTests
             ProgramRunner.TestExtractorFileLengthCheckedForTesting = null;
             ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = null;
             ProgramRunner.DeleteUpgradeInstallerScriptForTesting = null;
+            ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = null;
             DbWriter.BatchRowSkipWarningForTesting = null;
             DbContext.OptimizePragmaExecutedForTesting = null;
         }
@@ -1909,6 +1914,65 @@ exit 7
     }
 
     [Fact]
+    public void RunUpgrade_InstallerDirectoryCleanupFailure_EmitsWarning_Issue3659()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousDelete = ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting;
+            string? cleanupDirectory = null;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = path =>
+            {
+                cleanupDirectory = path;
+                throw new IOException("directory delete denied");
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                using var doc = JsonDocument.Parse(stdout);
+                Assert.True(doc.RootElement.GetProperty("install_succeeded").GetBoolean());
+                Assert.Contains("Warning: failed to delete upgrade installer directory", stderr);
+                Assert.Contains("IOException", stderr);
+                Assert.NotNull(cleanupDirectory);
+                Assert.True(Directory.Exists(cleanupDirectory));
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = previousDelete;
+                if (cleanupDirectory != null)
+                    TestProjectHelper.DeleteDirectory(cleanupDirectory);
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_WritesCacheWithPrivateModes_Issue3411()
     {
         using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
@@ -2075,6 +2139,75 @@ exit 7
             if (Directory.Exists(path))
                 File.SetUnixFileMode(path, DataDirectorySecurity.PrivateDirectoryMode);
             TestProjectHelper.DeleteDirectory(path);
+        }
+    }
+
+    [Fact]
+    public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsOutsideTempRoot_Issue3659()
+    {
+        var tempRoot = Path.GetFullPath(Path.GetTempPath());
+        var outside = Path.GetPathRoot(tempRoot);
+        Assert.False(string.IsNullOrEmpty(outside));
+        if (string.Equals(
+                Path.TrimEndingDirectorySeparator(tempRoot),
+                Path.TrimEndingDirectorySeparator(outside!),
+                OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
+            outside!,
+            out _,
+            out var failureReason);
+
+        Assert.False(valid);
+        Assert.Contains("outside the expected temporary root", failureReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsUnexpectedPrefix_Issue3659()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-other-{Guid.NewGuid():N}");
+
+        var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
+            path,
+            out _,
+            out var failureReason);
+
+        Assert.False(valid);
+        Assert.Contains("expected upgrade installer temporary-directory prefix", failureReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsSymlink_Issue3659()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_link_{Guid.NewGuid():N}");
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(Path.GetTempPath(), $"cdidx-install-link-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(target);
+            Directory.CreateSymbolicLink(link, target);
+
+            var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
+                link,
+                out _,
+                out var failureReason);
+
+            Assert.False(valid);
+            Assert.Contains("symbolic link", failureReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+                Directory.Delete(link);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
