@@ -1020,9 +1020,12 @@ internal sealed class LspServer : IDisposable
             if (!RemoveLastDocumentSymbol(roots, out var removedBytes))
                 break;
 
-            responseBytes = removedBytes > 0
-                ? Math.Max(0, responseBytes - removedBytes)
-                : MeasureJsonUtf8Bytes(roots);
+            if (_jsonOptions.WriteIndented)
+                responseBytes = MeasureJsonUtf8Bytes(roots);
+            else
+                responseBytes = removedBytes > 0
+                    ? Math.Max(0, responseBytes - removedBytes)
+                    : MeasureJsonUtf8Bytes(roots);
         }
     }
 
@@ -1056,6 +1059,8 @@ internal sealed class LspServer : IDisposable
     {
         if (node == null)
             return "null"u8.Length;
+        if (_jsonOptions.WriteIndented)
+            return Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
 
         if (node is JsonArray array)
         {

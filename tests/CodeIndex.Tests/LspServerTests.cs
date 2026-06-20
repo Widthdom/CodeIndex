@@ -1010,8 +1010,10 @@ public class LspServerTests
         }
     }
 
-    [Fact]
-    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130_Issue3743()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130_Issue3743(bool writeIndented)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_budget");
         try
@@ -1027,7 +1029,11 @@ public class LspServerTests
             File.WriteAllText(sourcePath, source.ToString());
             TestProjectHelper.InsertIndexedFile(dbPath, "large.cs", "csharp", source.ToString());
             using var db = new DbContext(dbPath);
-            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var jsonOptions = new JsonSerializerOptions(ProgramRunner.CreateDefaultJsonOptions())
+            {
+                WriteIndented = writeIndented,
+            };
+            using var server = new LspServer(new DbReader(db), "1.2.3", jsonOptions, projectRoot);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -1045,7 +1051,7 @@ public class LspServerTests
             var symbols = response!["result"]!.AsArray();
             Assert.NotEmpty(symbols);
             Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
-            Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString()) <= LspServer.MaxDocumentSymbolResponseBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString(jsonOptions)) <= LspServer.MaxDocumentSymbolResponseBytes);
             var allSymbols = FlattenDocumentSymbols(symbols).ToArray();
             Assert.True(allSymbols.Length < LspServer.MaxDocumentSymbols);
             Assert.Contains(allSymbols, symbol =>
