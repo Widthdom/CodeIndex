@@ -399,9 +399,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 }
 
                 _ = BackgroundTaskObserver.Run(
-                    () => RunHandlerAsync(context, cancellationToken),
+                    token => RunHandlerAsync(context, token),
                     "cdidx-mcp-http",
-                    "request handler");
+                    "request handler",
+                    cancellationToken);
             }
         }
         finally
