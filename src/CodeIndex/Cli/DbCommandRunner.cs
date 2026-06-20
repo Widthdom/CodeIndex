@@ -1282,7 +1282,7 @@ public static class DbCommandRunner
                     "restore_rollback_failed",
                     $"Failed to roll back database restore from backup ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).",
                     ConsoleUi.FormatBoundedValue(backupPath));
-                CommandErrorWriter.WriteStderr($"Warning [{rollbackFailure.Code}]: {rollbackFailure.Message}");
+                CommandErrorWriter.WriteStderr($"Warning [{rollbackFailure.Code}]: {rollbackFailure.Message} Backup: {rollbackFailure.Path}");
             }
 
             throw new DbRestoreOperationException(primaryEx, checkpointPath, backupPath, rollbackFailure);
