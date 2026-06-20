@@ -285,14 +285,14 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
     {
         try
         {
-            if (!task.Wait(milliseconds, cancellationToken))
-            {
-                exception = null;
-                return false;
-            }
-
+            task.WaitAsync(TimeSpan.FromMilliseconds(milliseconds), cancellationToken).GetAwaiter().GetResult();
             exception = null;
             return true;
+        }
+        catch (TimeoutException)
+        {
+            exception = null;
+            return false;
         }
         catch (AggregateException ex)
         {

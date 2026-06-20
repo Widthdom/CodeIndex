@@ -325,12 +325,14 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     public TimeSpan CallbackBudget => callbackBudget;
 
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
+    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
 
         foreach (var hook in hooks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var workingSymbols = CloneSymbols(symbols);
             if (InvokeHookWithBudget(
                     hook,
@@ -338,19 +340,22 @@ public sealed class PostExtractionHookRunner : IDisposable
                     nameof(IPostExtractionHook.OnSymbolsExtracted),
                     context,
                     workingSymbols,
-                    null))
+                    null,
+                    cancellationToken))
             {
                 ReplaceList(symbols, workingSymbols);
             }
         }
     }
 
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
+    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
 
         foreach (var hook in hooks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var workingReferences = CloneReferences(references);
             if (InvokeHookWithBudget(
                     hook,
@@ -358,7 +363,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                     nameof(IPostExtractionHook.OnReferencesExtracted),
                     context,
                     null,
-                    workingReferences))
+                    workingReferences,
+                    cancellationToken))
             {
                 ReplaceList(references, workingReferences);
             }
@@ -371,18 +377,21 @@ public sealed class PostExtractionHookRunner : IDisposable
         string callback,
         FileContext context,
         List<SymbolRecord>? symbols,
-        List<ReferenceRecord>? references)
+        List<ReferenceRecord>? references,
+        CancellationToken cancellationToken)
     {
         if (disabledHooks.ContainsKey(hook.Info.TypeName))
             return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = hook.Worker.Invoke(
             kind,
             callback,
             context,
             symbols,
             references,
-            callbackBudget);
+            callbackBudget,
+            cancellationToken);
         if (result.TimedOut)
         {
             disabledHooks.TryAdd(hook.Info.TypeName, 0);

@@ -48,11 +48,13 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         FileContext context,
         IReadOnlyList<SymbolRecord>? symbols,
         IReadOnlyList<ReferenceRecord>? references,
-        TimeSpan callbackBudget)
+        TimeSpan callbackBudget,
+        CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
             var stopwatch = Stopwatch.StartNew();
             if (!EnsureStarted(out var startError))
             {
@@ -80,7 +82,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                     process!.StandardOutput,
                     maxProtocolLineBytes,
                     maxProtocolLineBytes,
-                    CancellationToken.None);
+                    cancellationToken);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
             catch (Exception ex)
@@ -90,7 +92,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                     stopwatch);
             }
 
-            if (!WaitForTask(sendTask, waitMilliseconds, out var sendException))
+            if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
             {
                 return TimedOutAfterKill(stopwatch);
             }
@@ -103,7 +105,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
-            if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, out var responseException))
+            if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, cancellationToken, out var responseException))
             {
                 return TimedOutAfterKill(stopwatch);
             }
@@ -299,23 +301,28 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         await input.FlushAsync().ConfigureAwait(false);
     }
 
-    private static bool WaitForTask(Task task, int milliseconds, out Exception? exception)
+    private bool WaitForTask(Task task, int milliseconds, CancellationToken cancellationToken, out Exception? exception)
     {
         try
         {
-            if (!task.Wait(milliseconds))
-            {
-                exception = null;
-                return false;
-            }
-
+            task.WaitAsync(TimeSpan.FromMilliseconds(milliseconds), cancellationToken).GetAwaiter().GetResult();
             exception = null;
             return true;
+        }
+        catch (TimeoutException)
+        {
+            exception = null;
+            return false;
         }
         catch (AggregateException ex)
         {
             exception = ex.GetBaseException();
             return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = KillWorker();
+            throw;
         }
         catch (Exception ex)
         {
