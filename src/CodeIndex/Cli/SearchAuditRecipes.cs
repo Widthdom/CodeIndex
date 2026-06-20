@@ -95,13 +95,19 @@ internal static class SearchAuditRecipes
                     "catch",
                     "Find catch blocks that may be empty, overly broad, or swallowing diagnostic context.",
                     ["audit", "bug"],
-                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures."),
+                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures.")
+                {
+                    MatchOrigins = ["code"],
+                },
                 new(
                     "broad-exception-catch",
                     "catch (Exception",
                     "Find broad C# exception catches that may need narrower exception types or explicit recovery boundaries.",
                     ["audit", "bug"],
-                    "False positives include top-level command boundaries that intentionally normalize all recoverable failures."),
+                    "False positives include top-level command boundaries that intentionally normalize all recoverable failures.")
+                {
+                    MatchOrigins = ["code"],
+                },
                 new(
                     "process-start-info",
                     "ProcessStartInfo",
@@ -852,6 +858,9 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
+    [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
+    [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
+    [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
 
 internal sealed record SearchRecipeRunJsonResult(
@@ -897,6 +906,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
+    [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
+    [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
+    [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
@@ -921,6 +933,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
+    [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
+    [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
+    [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,

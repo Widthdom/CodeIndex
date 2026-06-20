@@ -1725,6 +1725,9 @@ public static partial class QueryCommandRunner
                 SearchAuditRecipes.DefaultQuerySeverity,
                 [],
                 [],
+                [],
+                [],
+                [],
                 rows.Count,
                 options.Limit,
                 0,
@@ -1787,7 +1790,7 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
@@ -1802,6 +1805,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
+                [.. recipeQuery.MatchOrigins],
+                [.. recipeQuery.ExcludeOrigins],
+                [.. recipeQuery.ResultKinds],
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -1845,7 +1851,7 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
@@ -1857,6 +1863,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
+                [.. recipeQuery.MatchOrigins],
+                [.. recipeQuery.ExcludeOrigins],
+                [.. recipeQuery.ResultKinds],
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -2402,6 +2411,9 @@ public static partial class QueryCommandRunner
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
+            [.. query.MatchOrigins],
+            [.. query.ExcludeOrigins],
+            [.. query.ResultKinds],
             query.ExactSubstring)).ToList());
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(

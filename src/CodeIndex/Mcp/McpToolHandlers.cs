@@ -1165,6 +1165,25 @@ public partial class McpServer
         return histogram;
     }
 
+    private static bool MatchesRecipeFacetMetadata(CompactSearchResult result, SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.MatchOrigins.Count > 0 &&
+            !result.MatchOrigins.Any(origin => recipeQuery.MatchOrigins.Contains(origin, StringComparer.Ordinal)))
+        {
+            return false;
+        }
+
+        if (recipeQuery.ExcludeOrigins.Count > 0 &&
+            result.MatchOrigins.Count > 0 &&
+            result.MatchOrigins.All(origin => recipeQuery.ExcludeOrigins.Contains(origin, StringComparer.Ordinal)))
+        {
+            return false;
+        }
+
+        return recipeQuery.ResultKinds.Count == 0 ||
+               result.ResultKinds.Any(kind => recipeQuery.ResultKinds.Contains(kind, StringComparer.Ordinal));
+    }
+
     private JsonObject BuildCountOnlyPayload<T>(int count, int? total, bool truncated, IEnumerable<T> histogramSource, Func<T, string?> pathSelector)
     {
         var payload = new JsonObject
@@ -1945,6 +1964,7 @@ public partial class McpServer
                 var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
                 var compactResults = SearchSnippetFormatter
                     .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
+                    .Where(result => MatchesRecipeFacetMetadata(result, recipeQuery))
                     .ToList();
                 var truncated = TrimToRequestedLimit(compactResults, limit);
                 foreach (var compact in compactResults)
@@ -1958,6 +1978,9 @@ public partial class McpServer
                     ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
                     ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
                     ["exact_substring"] = exact,
+                    ["match_origins"] = ToJsonArray(recipeQuery.MatchOrigins),
+                    ["exclude_origins"] = ToJsonArray(recipeQuery.ExcludeOrigins),
+                    ["result_kinds"] = ToJsonArray(recipeQuery.ResultKinds),
                     ["count"] = compactResults.Count,
                     ["top_files"] = BuildTopFileHistogram(compactResults, result => result.Path),
                     ["truncated"] = truncated,

@@ -1089,6 +1089,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "token-term");
+        var emptyCatchQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "empty-catch-review");
 
         Assert.True(root.GetProperty("count").GetInt32() >= 6);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
@@ -1104,6 +1108,9 @@ public partial class QueryCommandRunnerTests
         Assert.True(query.GetProperty("exact_substring").GetBoolean());
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+        Assert.Equal(0, emptyCatchQuery.GetProperty("exclude_origins").GetArrayLength());
+        Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
         Assert.Contains("broad-token-audit", tokenQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
@@ -1121,6 +1128,78 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-term-broad");
+    }
+
+    [Fact]
+    public void RunSearch_CatchRecipeFiltersCommentOnlyCatchMatches_Issue3709()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_catch_origin_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/code.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public void Run()
+                    {
+                        try
+                        {
+                            Work();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/comment.cs",
+                "csharp",
+                """
+                public sealed class Notes
+                {
+                    // catch appears only in a comment and should not satisfy the recipe.
+                    public void Run() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/empty-catch-review", "--db", dbPath, "--lang", "csharp", "--limit", "10", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal("empty-catch-review", query.GetProperty("name").GetString());
+            Assert.Contains(query.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+            Assert.Equal(1, query.GetProperty("count").GetInt32());
+            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+            Assert.Equal("src/code.cs", result.GetProperty("path").GetString());
+            Assert.Contains(result.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), file => file.GetProperty("path").GetString() == "src/comment.cs");
+
+            var (commentExitCode, commentStdout, commentStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/empty-catch-review", "--db", dbPath, "--lang", "csharp", "--limit", "10", "--origin", "comment", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, commentExitCode);
+            Assert.Equal(string.Empty, commentStderr);
+            using var commentDocument = ParseJsonOutput(commentStdout);
+            Assert.Equal(0, commentDocument.RootElement.GetProperty("result_count").GetInt32());
+            var commentQuery = Assert.Single(commentDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(0, commentQuery.GetProperty("count").GetInt32());
+            Assert.Empty(commentQuery.GetProperty("results").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
