@@ -5906,6 +5906,11 @@ public static partial class QueryCommandRunner
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
                 status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
+            var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
+                .Concat(postExtractionHookSnapshot.TrustOverrides)
+                .ToList();
+            if (trustOverrides.Count > 0)
+                status.TrustOverrides = trustOverrides;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -6030,6 +6035,16 @@ public static partial class QueryCommandRunner
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", $"{status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})"));
+                if (status.TrustOverrides is { Count: > 0 })
+                {
+                    foreach (var trustOverride in status.TrustOverrides)
+                    {
+                        var pathSuffix = string.IsNullOrWhiteSpace(trustOverride.Path)
+                            ? string.Empty
+                            : $" ({trustOverride.Path})";
+                        Console.WriteLine(ConsoleUi.FormatSummaryLine("Trust", $"{trustOverride.Kind} via {trustOverride.EnvironmentVariable}{pathSuffix}"));
+                    }
+                }
                 // #1546: surface the persisted filesystem case-sensitivity so operators can
                 // diagnose phantom path collapses on case-sensitive APFS / WSL / ReFS volumes.
                 // #1546: case-sensitivity を診断用に明示する。

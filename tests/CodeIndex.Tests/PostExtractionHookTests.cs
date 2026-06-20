@@ -361,6 +361,14 @@ public class PostExtractionHookTests
                     diagnostic => diagnostic.AssemblyPath.EndsWith("hooks", StringComparison.Ordinal)
                                   && diagnostic.Category == "hook_directory_override_accepted"
                                   && diagnostic.Message.Contains("override accepted", StringComparison.Ordinal));
+                var trustOverride = Assert.Single(snapshot.TrustOverrides);
+                Assert.Equal("hook_directory_override", trustOverride.Kind);
+                Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, trustOverride.EnvironmentVariable);
+                Assert.EndsWith("hooks", trustOverride.Value, StringComparison.Ordinal);
+                Assert.EndsWith("hooks", trustOverride.Path!, StringComparison.Ordinal);
+                Assert.Contains("hook assemblies execute", trustOverride.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, trustOverride.Value, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, trustOverride.Path!, StringComparison.Ordinal);
                 Assert.All(
                     snapshot.Diagnostics,
                     diagnostic => Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal));

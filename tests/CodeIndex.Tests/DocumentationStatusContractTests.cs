@@ -32,6 +32,7 @@ public class DocumentationStatusContractTests
         "unknown_extension_category_counts",
         "unknown_extension_groups",
         "extractors",
+        "trust_overrides",
         "path_case_sensitive",
         "mac_profile",
         "stale_after_seconds",

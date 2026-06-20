@@ -909,6 +909,9 @@ public class StatusResult
     [JsonPropertyName("hook_diagnostics")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookDiagnostic>? HookDiagnostics { get; set; }
+    [JsonPropertyName("trust_overrides")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExtensionTrustOverride>? TrustOverrides { get; set; }
     [JsonPropertyName("extractors")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExtractorRegistryStatus? Extractors { get; set; }

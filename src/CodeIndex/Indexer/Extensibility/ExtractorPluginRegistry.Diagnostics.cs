@@ -127,3 +127,12 @@ public sealed record ExtractorRegistryDiagnostic(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("message")] string Message);
+
+public sealed record ExtensionTrustOverride(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("environment_variable")] string EnvironmentVariable,
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("path")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Path,
+    [property: JsonPropertyName("message")] string Message);

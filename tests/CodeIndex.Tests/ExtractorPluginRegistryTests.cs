@@ -12,6 +12,53 @@ public class ExtractorPluginRegistryTests
     internal const string ThrowingPluginConstructorEnvironmentVariable = "CDIDX_TEST_THROWING_PLUGIN_CTOR";
 
     [Fact]
+    public void GetAcceptedTrustOverrides_ReportsWorkspacePluginTrust_3735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_trust_override_3735");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "yes");
+
+                var trustOverride = Assert.Single(ExtractorPluginRegistry.GetAcceptedTrustOverrides(projectRoot));
+
+                Assert.Equal("workspace_plugin_directory", trustOverride.Kind);
+                Assert.Equal(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, trustOverride.EnvironmentVariable);
+                Assert.Equal("yes", trustOverride.Value);
+                Assert.EndsWith(Path.Combine(".cdidx", "plugins"), trustOverride.Path!, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, trustOverride.Path!, StringComparison.Ordinal);
+                Assert.Contains("workspace plugin", trustOverride.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void GetAcceptedTrustOverrides_IgnoresRejectedWorkspacePluginTrust_3735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_trust_override_rejected_3735");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "0");
+
+                Assert.Empty(ExtractorPluginRegistry.GetAcceptedTrustOverrides(projectRoot));
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void EnumeratePluginAssemblyPaths_CapsCandidatesPerDirectory()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_cap");
