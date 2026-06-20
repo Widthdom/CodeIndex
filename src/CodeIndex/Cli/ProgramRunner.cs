@@ -3082,7 +3082,11 @@ internal static partial class ProgramRunner
                         cancellationToken)
                     .GetAwaiter()
                     .GetResult();
-                VerifyFileSha256(scriptPath, expectedInstallerSha256, InstallerScriptAssetName);
+                if (!wantsJson)
+                    CommandErrorWriter.WriteStderr($"Verifying {InstallerScriptAssetName} checksum...");
+                VerifyFileSha256(scriptPath, expectedInstallerSha256, InstallerScriptAssetName, cancellationToken);
+                if (!wantsJson)
+                    CommandErrorWriter.WriteStderr($"Verified {InstallerScriptAssetName} checksum.");
             }
 
             var startInfo = CreateInstallerProcessStartInfo(scriptPath, selectedReleaseTag, installDir);
@@ -3609,13 +3613,17 @@ internal static partial class ProgramRunner
         throw new InvalidDataException($"Release checksum manifest does not contain {assetName}.");
     }
 
-    internal static void VerifyFileSha256(string path, string expectedSha256Hex, string assetName)
+    internal static void VerifyFileSha256(
+        string path,
+        string expectedSha256Hex,
+        string assetName,
+        CancellationToken cancellationToken = default)
     {
         if (!IsSha256Hex(expectedSha256Hex))
             throw new InvalidDataException($"Release checksum for {assetName} is not a valid SHA-256 digest.");
 
         using var stream = File.OpenRead(path);
-        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        var actual = Sha256StreamHasher.ComputeHex(stream, cancellationToken);
         if (!string.Equals(actual, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(
                 $"Downloaded {assetName} checksum mismatch: expected {expectedSha256Hex}, got {actual}.");

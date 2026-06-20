@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -35,15 +34,22 @@ internal static class ExportImportCommandRunner
     private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]";
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]";
 
-    public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
+    public static int RunExport(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken = default)
     {
         if (args.Length > 0 && args[0] == "ctags")
             return RunExportCtags(args[1..], jsonOptions);
 
-        return RunExportArchive(args, jsonOptions, appVersion);
+        return RunExportArchive(args, jsonOptions, appVersion, cancellationToken);
     }
 
-    public static int RunImport(string[] args, JsonSerializerOptions jsonOptions)
+    public static int RunImport(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
         string? archivePath = null;
         string? dbPath = null;
@@ -135,11 +141,11 @@ internal static class ExportImportCommandRunner
                 if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
                     return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_too_large", sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", ImportUsage);
 
-                ExtractDatabaseEntryToFile(dbEntry, tempPath);
+                ExtractDatabaseEntryToFile(dbEntry, tempPath, cancellationToken);
                 AddImportValidationPhase(validationPhases, PhaseDatabaseEntry);
 
                 phase = PhaseSha256;
-                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase))
+                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase, cancellationToken))
                     return WriteImportError(wantsJson, jsonOptions, manifestValidationPhase, "import_manifest_mismatch", $"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
                 AddImportValidationPhase(validationPhases, PhaseSha256);
             }
@@ -240,7 +246,11 @@ internal static class ExportImportCommandRunner
         }
     }
 
-    private static int RunExportArchive(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
+    private static int RunExportArchive(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken)
     {
         string? outputPath = null;
         string? dbPath = null;
@@ -307,7 +317,7 @@ internal static class ExportImportCommandRunner
             }
             SqliteConnection.ClearAllPools();
             phase = PhaseSha256;
-            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
+            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath, cancellationToken) };
             phase = PhaseWriteArchive;
             WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions);
 
@@ -316,6 +326,10 @@ internal static class ExportImportCommandRunner
             else
                 Console.WriteLine($"Exported CodeIndex archive to {fullOutputPath}");
             return CommandExitCodes.Success;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -646,10 +660,10 @@ internal static class ExportImportCommandRunner
             });
     }
 
-    private static string ComputeSha256(string path)
+    private static string ComputeSha256(string path, CancellationToken cancellationToken = default)
     {
         using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        return Sha256StreamHasher.ComputeHex(stream, cancellationToken);
     }
 
     private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message)
@@ -810,10 +824,15 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message, out string phase)
+    private static bool TryValidateImportedManifest(
+        ExportManifest manifest,
+        string dbPath,
+        out string message,
+        out string phase,
+        CancellationToken cancellationToken = default)
     {
         phase = PhaseSha256;
-        var actualSha256 = ComputeSha256(dbPath);
+        var actualSha256 = ComputeSha256(dbPath, cancellationToken);
         if (!string.Equals(manifest.DatabaseSha256, actualSha256, StringComparison.OrdinalIgnoreCase))
         {
             message = "database_sha256 does not match codeindex.db";
@@ -1017,23 +1036,40 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath)
+    private static void ExtractDatabaseEntryToFile(
+        ZipArchiveEntry dbEntry,
+        string destinationPath,
+        CancellationToken cancellationToken = default)
     {
         using var source = dbEntry.Open();
         using var target = File.Open(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        CopyToWithLimit(source, target, MaxImportDatabaseBytes);
+        CopyToWithLimit(source, target, MaxImportDatabaseBytes, cancellationToken);
     }
 
-    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
-        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName);
+    internal static long CopyToWithLimit(
+        Stream source,
+        Stream target,
+        long maxBytes,
+        CancellationToken cancellationToken = default)
+        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
 
-    private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName)
+    private static long CopyToWithLimit(
+        Stream source,
+        Stream target,
+        long maxBytes,
+        string entryName,
+        CancellationToken cancellationToken = default)
     {
         var buffer = new byte[ImportCopyBufferSize];
         long totalBytes = 0;
         int bytesRead;
-        while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+        while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            bytesRead = source.Read(buffer, 0, buffer.Length);
+            if (bytesRead == 0)
+                break;
+
             if (totalBytes > maxBytes - bytesRead)
                 throw new InvalidDataException($"archive {entryName} exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
 
