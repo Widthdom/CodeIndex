@@ -39,6 +39,10 @@ public static partial class IndexCommandRunner
         string? GitHead,
         IReadOnlyList<string> Directories);
 
+    internal sealed record ScanCheckpointLoadResult(
+        IReadOnlySet<string> Directories,
+        string? WarningMessage);
+
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }

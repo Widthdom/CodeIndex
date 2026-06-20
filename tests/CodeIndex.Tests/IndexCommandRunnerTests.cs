@@ -988,6 +988,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void LoadScanCheckpointDetailed_InvalidPayloads_ReturnsReasonedWarning()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            File.WriteAllText(checkpointPath, """{"Version":999,"GitHead":"abc123","Directories":["src"]}""");
+            var futureVersion = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(futureVersion.Directories);
+            Assert.Contains("future checkpoint version", futureVersion.WarningMessage);
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"old","Directories":["src"]}""");
+            var stale = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(stale.Directories);
+            Assert.Contains("checkpoint GitHead does not match current HEAD", stale.WarningMessage);
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"abc123","Directories":["src"]""");
+            var malformed = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(malformed.Directories);
+            Assert.Contains("malformed checkpoint JSON", malformed.WarningMessage);
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"abc123","Directories":[null]}""");
+            var invalidDirectories = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(invalidDirectories.Directories);
+            Assert.Contains("Directories contains a null entry", invalidDirectories.WarningMessage);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void LoadScanCheckpoint_JsonDepthOutsideBounds_ReturnsEmpty()
     {
         var projectRoot = CreateTempProject();
@@ -7919,9 +7952,14 @@ public sealed class Caller
                 padding.Append(' ', 1024).Append('\n');
             File.WriteAllText(checkpointPath, checkpoint + padding);
 
-            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains(
+                json.GetProperty("warnings").EnumerateArray(),
+                warning =>
+                    warning.GetProperty("file").GetString() == "<scan_checkpoint>"
+                    && warning.GetProperty("message").GetString()!.Contains("file exceeds the scan checkpoint size limit", StringComparison.Ordinal));
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("src/a.cs", indexedPaths);
