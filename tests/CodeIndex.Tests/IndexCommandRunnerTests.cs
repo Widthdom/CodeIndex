@@ -1043,7 +1043,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
+    public void Run_NullByteFile_PersistsNullByteIssueWithoutPartialRows()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1059,13 +1059,17 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("warnings").GetInt32());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            Assert.Equal(0, CountRows(dbPath, "files"));
+            Assert.Equal(1, CountRows(dbPath, "files"));
             Assert.Equal(0, CountRows(dbPath, "chunks"));
             Assert.Equal(0, CountRows(dbPath, "symbols"));
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+            var issue = Assert.Single(ReadFileIssues(dbPath, "null_byte"));
+            Assert.Equal("binary.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("byte offset", issue.Message);
         }
         finally
         {

@@ -4379,7 +4379,8 @@ public class FileIndexerTests
 
             File.WriteAllBytes(Path.Combine(tempDir, nfdPath), [0, 1, 2, 3]);
             Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
-            Assert.False(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
+            Assert.True(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
+            Assert.True(HasFileIssue(dbPath, "Caf\u00e9.cs", "null_byte"));
         }
         finally
         {
@@ -5948,6 +5949,22 @@ public class FileIndexerTests
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", filePath);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private static bool HasFileIssue(string dbPath, string filePath, string kind)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT 1
+            FROM file_issues i
+            JOIN files f ON f.id = i.file_id
+            WHERE f.path = @path
+              AND i.kind = @kind
+            """;
+        cmd.Parameters.AddWithValue("@path", filePath);
+        cmd.Parameters.AddWithValue("@kind", kind);
         return cmd.ExecuteScalar() != null;
     }
 }
