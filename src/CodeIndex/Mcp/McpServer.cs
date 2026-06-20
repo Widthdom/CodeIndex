@@ -66,6 +66,7 @@ public partial class McpServer : IDisposable
     // 処理されることがある。短命の tombstone を置き、登録時に cancel を消費する (#1418)。
     private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingRequestCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
+    private readonly object _requestTimeoutDiagnosticsGate = new();
     // Token observed by the currently executing tool call. Set just before
     // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
     // cancellation token to `DbReader` for SQLite work (#1567).
@@ -79,6 +80,9 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
+    private long _timedOutIsolatedActionDrainingCount;
+    private long _timedOutIsolatedActionDrainedCount;
+    private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
     private bool _initializedNotificationPending;
     private bool _initializedNotificationSent;
     private bool _clientRootsStale = true;
@@ -1659,14 +1663,17 @@ public partial class McpServer : IDisposable
             {
                 try { requestCts.Cancel(); }
                 catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                var elapsed = stopwatch.Elapsed;
+                RecordTimedOutIsolatedActionDraining(requestKey, elapsed);
                 cleanupNow = false;
                 _ = actionTask.ContinueWith(task =>
                 {
                     _ = task.Exception;
                     _activeRequests.TryRemove(requestKey, out _);
+                    RecordTimedOutIsolatedActionDrained(requestKey, task);
                     requestCts.Dispose();
                 }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
+                return CreateRequestTimeoutResponse(id, elapsed, isolatedActionDraining: true);
             }
 
             timeoutDelayCts.Cancel();
@@ -1689,7 +1696,7 @@ public partial class McpServer : IDisposable
         }
     }
 
-    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed)
+    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed, bool isolatedActionDraining = false)
         => CreateErrorResponse(hasId: true, id: id, code: -32603, message: "Request timed out",
             category: McpErrorEnvelope.CategoryInternalError,
             suggestion: "Retry with a narrower query, refresh the index if it is degraded, or increase the MCP request timeout before retrying.",
@@ -1698,7 +1705,65 @@ public partial class McpServer : IDisposable
             {
                 ["reason"] = "timeout",
                 ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
+                ["isolated_action_draining"] = isolatedActionDraining,
             });
+
+    private void RecordTimedOutIsolatedActionDraining(string requestKey, TimeSpan elapsed)
+    {
+        var elapsedMs = (long)Math.Ceiling(elapsed.TotalMilliseconds);
+        Interlocked.Increment(ref _timedOutIsolatedActionDrainingCount);
+        lock (_requestTimeoutDiagnosticsGate)
+        {
+            _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
+                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                elapsedMs,
+                "draining");
+        }
+        Console.Error.WriteLine(BuildTimedOutIsolatedActionDrainingLog(requestKey, elapsedMs));
+    }
+
+    private void RecordTimedOutIsolatedActionDrained(string requestKey, Task task)
+    {
+        Interlocked.Decrement(ref _timedOutIsolatedActionDrainingCount);
+        Interlocked.Increment(ref _timedOutIsolatedActionDrainedCount);
+        var state = task.IsCanceled ? "canceled" : task.IsFaulted ? "faulted" : "completed";
+        lock (_requestTimeoutDiagnosticsGate)
+        {
+            _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
+                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                null,
+                state);
+        }
+    }
+
+    internal JsonObject BuildRequestTimeoutDiagnosticsStatus()
+    {
+        RequestTimeoutDrainDiagnostic? last;
+        lock (_requestTimeoutDiagnosticsGate)
+        {
+            last = _lastRequestTimeoutDrainDiagnostic;
+        }
+
+        var payload = new JsonObject
+        {
+            ["isolated_action_draining_count"] = Interlocked.Read(ref _timedOutIsolatedActionDrainingCount),
+            ["isolated_action_drained_count"] = Interlocked.Read(ref _timedOutIsolatedActionDrainedCount),
+            ["timeout_ms"] = (long)Math.Ceiling(_requestTimeout.TotalMilliseconds),
+        };
+        if (last is not null)
+        {
+            payload["last"] = new JsonObject
+            {
+                ["request_id"] = last.RequestId,
+                ["elapsed_ms"] = last.ElapsedMs.HasValue ? JsonValue.Create(last.ElapsedMs.Value) : null,
+                ["state"] = last.State,
+            };
+        }
+        return payload;
+    }
+
+    internal static string BuildTimedOutIsolatedActionDrainingLog(string requestKey, long elapsedMs)
+        => $"[cdidx-mcp] Request timed out while isolated action is still draining: request_id={McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text} elapsed_ms={elapsedMs}. The response has been sent; cleanup will continue in the background.";
 
     private static IDisposable BeginRequestCorrelation(JsonNode? id)
     {
@@ -1721,6 +1786,7 @@ public partial class McpServer : IDisposable
     }
 
     private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
+    private sealed record RequestTimeoutDrainDiagnostic(string? RequestId, long? ElapsedMs, string State);
 
     private sealed class CorrelationScope : IDisposable
     {

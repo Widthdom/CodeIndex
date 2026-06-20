@@ -1098,6 +1098,12 @@ public class McpServerTests : IDisposable
         var session = response["result"]!["structuredContent"]!["mcp_session"]!;
 
         Assert.True(session["client_capabilities"]!["experimental"]!["progress"]!.GetValue<bool>());
+        var capabilitiesSummary = session["client_capabilities_summary"]!;
+        Assert.False(capabilitiesSummary["roots"]!.GetValue<bool>());
+        Assert.False(capabilitiesSummary["sampling"]!.GetValue<bool>());
+        Assert.False(capabilitiesSummary["truncated"]!.GetValue<bool>());
+        Assert.Contains(capabilitiesSummary["top_level_keys"]!.AsArray(), key => key!.GetValue<string>() == "experimental");
+        Assert.Contains(capabilitiesSummary["experimental_keys"]!.AsArray(), key => key!.GetValue<string>() == "progress");
         Assert.Equal("codex", session["client_info"]!["name"]!.GetValue<string>());
         Assert.Equal("5.0", session["client_info"]!["version"]!.GetValue<string>());
         Assert.Equal("file:///workspace", session["roots"]!.AsArray()[0]!.GetValue<string>());
@@ -1274,6 +1280,11 @@ public class McpServerTests : IDisposable
         Assert.Equal(McpServer.MaxClientCapabilitiesJsonBytes, session["client_capabilities_byte_limit"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxClientCapabilitiesDepth, session["client_capabilities_depth_limit"]!.GetValue<int>());
         Assert.Empty(session["client_capabilities"]!.AsObject());
+        var capabilitiesSummary = session["client_capabilities_summary"]!;
+        Assert.True(capabilitiesSummary["roots"]!.GetValue<bool>());
+        Assert.True(capabilitiesSummary["sampling"]!.GetValue<bool>());
+        Assert.True(capabilitiesSummary["truncated"]!.GetValue<bool>());
+        Assert.Equal("byte_limit", capabilitiesSummary["truncation_reason"]!.GetValue<string>());
         Assert.DoesNotContain(largeValue, response.ToJsonString(), StringComparison.Ordinal);
     }
 
@@ -1316,6 +1327,11 @@ public class McpServerTests : IDisposable
         Assert.Equal(McpServer.MaxClientCapabilitiesJsonBytes, session["client_capabilities_byte_limit"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxClientCapabilitiesDepth, session["client_capabilities_depth_limit"]!.GetValue<int>());
         Assert.Empty(session["client_capabilities"]!.AsObject());
+        var capabilitiesSummary = session["client_capabilities_summary"]!;
+        Assert.True(capabilitiesSummary["roots"]!.GetValue<bool>());
+        Assert.True(capabilitiesSummary["sampling"]!.GetValue<bool>());
+        Assert.True(capabilitiesSummary["truncated"]!.GetValue<bool>());
+        Assert.Equal("depth_limit", capabilitiesSummary["truncation_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -7957,6 +7973,16 @@ public class McpServerTests : IDisposable
         Assert.True(rateLimit["enabled"]!.GetValue<bool>());
         Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, rateLimit["rps"]!.GetValue<double>());
         Assert.Equal(RateLimiterOptions.MaxBurstCapacity, rateLimit["burst"]!.GetValue<double>());
+        Assert.Equal(1, rateLimit["bucket_count"]!.GetValue<int>());
+        Assert.True(rateLimit["bucket_idle_ttl_seconds"]!.GetValue<double>() > 0);
+        Assert.True(rateLimit["next_prune_in_ms"]!.GetValue<long>() >= 0);
+        Assert.True(rateLimit["last_prune_age_ms"]!.GetValue<long>() >= 0);
+        Assert.Equal(0, rateLimit["last_pruned_bucket_count"]!.GetValue<int>());
+
+        var requestTimeouts = mcp["request_timeouts"]!;
+        Assert.Equal(0L, requestTimeouts["isolated_action_draining_count"]!.GetValue<long>());
+        Assert.Equal(0L, requestTimeouts["isolated_action_drained_count"]!.GetValue<long>());
+        Assert.True(requestTimeouts["timeout_ms"]!.GetValue<long>() > 0);
     }
 
     [Fact]
@@ -10186,6 +10212,20 @@ public class McpServerTests : IDisposable
         Assert.Contains("query=", summary);
         Assert.Contains("App", summary);
         Assert.Contains("lang=", summary);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ArgsSummaryBoundsHugeScalarNumbers_Issue3816()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"status","arguments":{"huge":1e9999,"flag":true,"missing":null}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var slot = response["result"]!["structuredContent"]!["results"]!.AsArray()[0]!;
+        var summary = slot["args_summary"]!.GetValue<string>();
+        Assert.Contains("huge=<number>", summary, StringComparison.Ordinal);
+        Assert.Contains("flag=true", summary, StringComparison.Ordinal);
+        Assert.Contains("missing=null", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("999999", summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -13959,12 +13999,109 @@ public class McpServerTests : IDisposable
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
-        Assert.Equal("enabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Equal("sampling_rejected", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("text length", structured["sampling_diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Null(structured["sampled_title"]);
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Null(stored.SampledTitle);
         Assert.Null(stored.SampledTags);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingResponseJsonIsMalformed_ReportsBoundedDiagnostic_Issue3816()
+    {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        const string secret = "SECRET_SAMPLING_JSON_3816";
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = $$"""{"title":"broken {{secret}}","tags":["security"]"""
+                }
+            };
+        };
+        var uniqueDesc = $"Malformed sampling response regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("sampling_rejected", structured["sampling_status"]!.GetValue<string>());
+        var diagnostic = structured["sampling_diagnostic"]!.GetValue<string>();
+        Assert.Contains("JSON rejected", diagnostic, StringComparison.Ordinal);
+        Assert.True(diagnostic.Length <= 240);
+        Assert.DoesNotContain(secret, diagnostic, StringComparison.Ordinal);
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingResponseSchemaIsInvalid_ReportsDiagnostic_Issue3816()
+    {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = """{"title":{},"tags":"security"}"""
+                }
+            };
+        };
+        var uniqueDesc = $"Invalid sampling schema regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("sampling_rejected", structured["sampling_status"]!.GetValue<string>());
+        var diagnostic = structured["sampling_diagnostic"]!.GetValue<string>();
+        Assert.Contains("schema rejected", diagnostic, StringComparison.Ordinal);
+        Assert.True(diagnostic.Length <= 240);
+        Assert.Null(structured["sampled_title"]);
     }
 
     [Fact]
@@ -14637,24 +14774,46 @@ public class McpServerTests : IDisposable
         {
             RequestTimeout = TimeSpan.FromMilliseconds(20),
         };
+        using var delayStarted = new ManualResetEventSlim(false);
+        using var releaseDelay = new ManualResetEventSlim(false);
         server.RequestDelayForTests = _ =>
         {
-            Thread.Sleep(TimeSpan.FromMilliseconds(200));
+            delayStarted.Set();
+            Assert.True(releaseDelay.Wait(TimeSpan.FromSeconds(5)));
             return Task.CompletedTask;
         };
 
-        var responseText = await server.ProcessFrameAsync(
-            """{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}""");
+        try
+        {
+            var responseText = await server.ProcessFrameAsync(
+                """{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}""");
+            Assert.True(delayStarted.Wait(TimeSpan.FromSeconds(1)));
+            server.RequestDelayForTests = null;
 
-        var response = JsonNode.Parse(responseText!)!;
-        var error = response["error"]!;
-        Assert.Equal(-32603, error["code"]!.GetValue<int>());
-        Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
-        Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
-        Assert.True(error["data"]!["elapsed_ms"]!.GetValue<long>() >= 1);
-        Assert.Equal("internal_error", error["data"]!["category"]!.GetValue<string>());
-        Assert.True(error["data"]!["retry_safe"]!.GetValue<bool>());
-        Assert.Equal(123, response["id"]!.GetValue<int>());
+            var response = JsonNode.Parse(responseText!)!;
+            var error = response["error"]!;
+            Assert.Equal(-32603, error["code"]!.GetValue<int>());
+            Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
+            Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+            Assert.True(error["data"]!["elapsed_ms"]!.GetValue<long>() >= 1);
+            Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
+            Assert.Equal("internal_error", error["data"]!["category"]!.GetValue<string>());
+            Assert.True(error["data"]!["retry_safe"]!.GetValue<bool>());
+            Assert.Equal(123, response["id"]!.GetValue<int>());
+
+            var status = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"status"}}""")!)!;
+            var requestTimeouts = status["result"]!["structuredContent"]!["mcp"]!["request_timeouts"]!;
+            Assert.Equal(1L, requestTimeouts["isolated_action_draining_count"]!.GetValue<long>());
+            Assert.Equal(0L, requestTimeouts["isolated_action_drained_count"]!.GetValue<long>());
+            Assert.Equal("123", requestTimeouts["last"]!["request_id"]!.GetValue<string>());
+            Assert.Equal("draining", requestTimeouts["last"]!["state"]!.GetValue<string>());
+            Assert.True(requestTimeouts["last"]!["elapsed_ms"]!.GetValue<long>() >= 1);
+        }
+        finally
+        {
+            releaseDelay.Set();
+        }
     }
 
     [Fact]
@@ -14678,6 +14837,7 @@ public class McpServerTests : IDisposable
         Assert.Equal(-32603, error["code"]!.GetValue<int>());
         Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
         Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+        Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
         Assert.Equal(123, response["id"]!.GetValue<int>());
     }
 
