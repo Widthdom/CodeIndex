@@ -945,6 +945,7 @@ cdidx search "Run();" --exact-substring                 # case-sensitive exact s
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
+cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # require a guard earlier on the same line
 cdidx search --list-recipes                             # show reusable audit recipes
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
@@ -978,10 +979,13 @@ into smaller searches or use narrower text.
 Guard-aware search filters primary `search` matches by nearby literal guards:
 `--require-before` / `--require-after` keep matches only when the guard query
 appears in the selected line window, while `--reject-before` / `--reject-after`
-drop matches when the guard query appears. JSON search results include
+drop matches when the guard query appears. Add `--guard-scope same-line` to
+limit before/after checks to the same source line and the primary match column
+ordering instead of nearby lines. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, 1-based span, origin category, and source line.
+before/after relationship, scope (`window` or `same_line`), 1-based span,
+origin category, and source line.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
@@ -989,7 +993,7 @@ return a validation error. Narrow with more specific query text, `--lang`,
 `--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
-`guardWindow`.
+`guardWindow` / `guardScope`.
 
 Machine-readable search exports include enough context for downstream tools to
 triage results without reparsing human text. `--format csv` and `--format tsv`
@@ -3498,6 +3502,7 @@ cdidx search "Run();" --exact-substring                 # 大文字小文字区�
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
+cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # 同じ行の前方 guard を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
@@ -3530,10 +3535,12 @@ literal-safe な `search` query は 1000 文字、128 whitespace term までで�
 より狭い text にしてください。
 guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
-`--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
+`--reject-before` / `--reject-after` は guard query がある一致を落とします。
+`--guard-scope same-line` を追加すると、近傍行ではなく同じソース行内で primary match の列位置を基準に
+before / after を評価します。JSON の検索結果には
 一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
 `guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
-1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
+scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。

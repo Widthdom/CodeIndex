@@ -312,6 +312,7 @@ internal static class CliFlagSchema
             new() { Name = "--reject-before", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query before them", Commands = Set("search") },
             new() { Name = "--reject-after", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query after them", Commands = Set("search") },
             new() { Name = "--guard-window", ValuePlaceholder = "<n>", Description = "Search: line window for require/reject guard queries", Commands = Set("search") },
+            new() { Name = "--guard-scope", ValuePlaceholder = "<window|same-line>", Description = "Search: evaluate guard queries in the line window or on the same line as the primary match", Commands = Set("search") },
             new() { Name = "--unique", ValuePlaceholder = "<path|symbol|origin>", Description = "Search: emit unique aggregation rows", Commands = Set("search") },
             new() { Name = "--count-by", ValuePlaceholder = "<path|symbol|origin>", Description = "Search: count matches grouped by path, symbol, or origin", Commands = Set("search") },
             new() { Name = "--origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: alias for --match-origin; keep only matches from selected origins", Commands = Set("search") },

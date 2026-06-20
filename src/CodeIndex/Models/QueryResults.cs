@@ -84,12 +84,19 @@ public enum SearchGuardDirection
     After,
 }
 
+public enum SearchGuardScope
+{
+    Window,
+    SameLine,
+}
+
 public sealed record SearchGuardFilter(SearchGuardRole Role, SearchGuardDirection Direction, string Query);
 
 public sealed class SearchGuardEvidence
 {
     public string Role { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Pattern { get; set; } = string.Empty;
@@ -106,6 +113,7 @@ public sealed class SearchGuardCheck
 {
     public string Role { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Pattern { get; set; } = string.Empty;

@@ -963,6 +963,7 @@ internal static partial class ProgramRunner
         "--reject-before",
         "--reject-after",
         "--guard-window",
+        "--guard-scope",
         "--project",
         "--solution",
         "--exclude-path",

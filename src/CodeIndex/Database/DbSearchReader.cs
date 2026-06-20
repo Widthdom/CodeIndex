@@ -109,7 +109,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -229,7 +229,7 @@ public partial class DbReader
             raw.RemoveRange(guardedCandidateLimit, raw.Count - guardedCandidateLimit);
 
         if (hasGuardFilters)
-            raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow);
+            raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow, guardScope);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
@@ -410,7 +410,7 @@ public partial class DbReader
 
     private sealed record SearchEnclosingSymbol(string Name, string Kind, int StartLine, int EndLine, string? ContainerName);
 
-    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)
+    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window)
     {
         if (string.IsNullOrWhiteSpace(query))
             return new QueryCountResult(0, 0);
@@ -420,7 +420,7 @@ public partial class DbReader
 
         if (guardFilters is { Count: > 0 })
         {
-            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow);
+            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
             return new QueryCountResult(guardedResults.Count, guardedResults.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
         }
 
@@ -522,79 +522,123 @@ public partial class DbReader
         List<SearchResult> results,
         SearchPrimaryMatchContext primaryMatchContext,
         IReadOnlyList<SearchGuardFilter> guardFilters,
-        int guardWindow)
+        int guardWindow,
+        SearchGuardScope guardScope)
     {
         guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
         var filtered = new List<SearchResult>(results.Count);
         var lineWindowCache = new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>();
         foreach (var result in results)
+            filtered.AddRange(FilterSearchResultByGuards(result, primaryMatchContext, guardFilters, guardWindow, guardScope, lineWindowCache));
+
+        return filtered;
+    }
+
+    private List<SearchResult> FilterSearchResultByGuards(
+        SearchResult result,
+        SearchPrimaryMatchContext primaryMatchContext,
+        IReadOnlyList<SearchGuardFilter> guardFilters,
+        int guardWindow,
+        SearchGuardScope guardScope,
+        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
+    {
+        guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
+        var filtered = new List<SearchResult>();
+        foreach (var primaryMatch in FindPrimarySearchMatchLines(result, primaryMatchContext))
         {
-            foreach (var (focusLine, focusText) in FindPrimarySearchMatchLines(result, primaryMatchContext))
+            var guardEvidence = new List<SearchGuardEvidence>();
+            var guardChecks = new List<SearchGuardCheck>(guardFilters.Count);
+            var keep = true;
+            foreach (var filter in guardFilters)
             {
-                var guardEvidence = new List<SearchGuardEvidence>();
-                var guardChecks = new List<SearchGuardCheck>(guardFilters.Count);
-                var keep = true;
-                foreach (var filter in guardFilters)
+                var evaluation = FindGuardEvidence(result.Path, primaryMatch, filter, guardWindow, guardScope, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
+                var matched = evaluation.Evidence != null;
+                var passed = filter.Role == SearchGuardRole.Require ? matched : !matched;
+                guardChecks.Add(CreateSearchGuardCheck(filter, guardScope, evaluation, matched, passed));
+                if (!passed)
                 {
-                    var evaluation = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
-                    var matched = evaluation.Evidence != null;
-                    var passed = filter.Role == SearchGuardRole.Require ? matched : !matched;
-                    guardChecks.Add(CreateSearchGuardCheck(filter, evaluation, matched, passed));
-                    if (!passed)
-                    {
-                        keep = false;
-                        break;
-                    }
-                    if (evaluation.Evidence != null)
-                        guardEvidence.Add(evaluation.Evidence);
+                    keep = false;
+                    break;
                 }
-
-                if (!keep)
-                    continue;
-
-                filtered.Add(new SearchResult
-                {
-                    Path = result.Path,
-                    Lang = result.Lang,
-                    StartLine = focusLine,
-                    EndLine = focusLine,
-                    Content = focusText,
-                    Score = result.Score,
-                    Visibility = result.Visibility,
-                    GuardEvidence = guardEvidence.Count == 0 ? null : guardEvidence,
-                    GuardChecks = guardChecks.Count == 0 ? null : guardChecks,
-                    ChunkId = result.ChunkId,
-                    NextOffset = result.NextOffset,
-                });
+                if (evaluation.Evidence != null)
+                    guardEvidence.Add(evaluation.Evidence);
             }
+
+            if (!keep)
+                continue;
+
+            filtered.Add(new SearchResult
+            {
+                Path = result.Path,
+                Lang = result.Lang,
+                StartLine = primaryMatch.LineNumber,
+                EndLine = primaryMatch.LineNumber,
+                Content = primaryMatch.Text,
+                Score = result.Score,
+                Visibility = result.Visibility,
+                GuardEvidence = guardEvidence.Count == 0 ? null : guardEvidence,
+                GuardChecks = guardChecks.Count == 0 ? null : guardChecks,
+                ChunkId = result.ChunkId,
+                NextOffset = result.NextOffset,
+            });
         }
 
         return filtered;
     }
 
-    private static List<(int LineNumber, string Text)> FindPrimarySearchMatchLines(SearchResult result, SearchPrimaryMatchContext context)
+    private static List<SearchPrimaryMatch> FindPrimarySearchMatchLines(SearchResult result, SearchPrimaryMatchContext context)
     {
         if (context.Terms.Length == 0)
         {
             foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
-                return [(result.StartLine + lineIndex, text)];
+                return [new SearchPrimaryMatch(result.StartLine + lineIndex, text, 1, 1)];
 
-            return [(result.StartLine, string.Empty)];
+            return [new SearchPrimaryMatch(result.StartLine, string.Empty, 1, 1)];
         }
 
         var normalizeCSharp = context.ShouldNormalizeCSharp(result);
-        var matches = new List<(int LineNumber, string Text)>();
+        var matches = new List<SearchPrimaryMatch>();
         foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
         {
             var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(text) : text;
             var lineMatches = context.RequireAllTermsOnLine
                 ? context.Terms.All(term => line.Contains(term, context.Comparison))
                 : context.Terms.Any(term => line.Contains(term, context.Comparison));
-            if (lineMatches)
-                matches.Add((result.StartLine + lineIndex, text));
+            if (lineMatches && TryFindPrimaryMatchSpan(text, line, context, out var column, out var length))
+                matches.Add(new SearchPrimaryMatch(result.StartLine + lineIndex, text, column, length));
         }
 
         return matches;
+    }
+
+    private sealed record SearchPrimaryMatch(int LineNumber, string Text, int Column, int Length);
+
+    private static bool TryFindPrimaryMatchSpan(string text, string normalizedLine, SearchPrimaryMatchContext context, out int column, out int length)
+    {
+        var bestIndex = int.MaxValue;
+        var bestLength = 0;
+        foreach (var term in context.Terms)
+        {
+            var index = text.IndexOf(term, context.Comparison);
+            if (index < 0)
+                index = normalizedLine.IndexOf(term, context.Comparison);
+            if (index < 0 || index >= bestIndex)
+                continue;
+
+            bestIndex = index;
+            bestLength = term.Length;
+        }
+
+        if (bestIndex == int.MaxValue)
+        {
+            column = 1;
+            length = 1;
+            return false;
+        }
+
+        column = bestIndex + 1;
+        length = Math.Max(1, Math.Min(bestLength, Math.Max(1, text.Length - bestIndex)));
+        return true;
     }
 
     private sealed record SearchPrimaryMatchContext(
@@ -636,12 +680,17 @@ public partial class DbReader
 
     private SearchGuardEvaluation FindGuardEvidence(
         string path,
-        int focusLine,
+        SearchPrimaryMatch primaryMatch,
         SearchGuardFilter filter,
         int guardWindow,
+        SearchGuardScope guardScope,
         string? lang,
         Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
     {
+        if (guardScope == SearchGuardScope.SameLine)
+            return FindSameLineGuardEvidence(path, primaryMatch, filter, lang);
+
+        var focusLine = primaryMatch.LineNumber;
         var windowStart = filter.Direction == SearchGuardDirection.Before
             ? Math.Max(1, focusLine - guardWindow)
             : focusLine + 1;
@@ -678,6 +727,7 @@ public partial class DbReader
             {
                 Role = role,
                 Direction = direction,
+                Scope = FormatSearchGuardScope(guardScope),
                 Query = filter.Query,
                 Name = FormatSearchGuardName(filter),
                 Pattern = filter.Query,
@@ -699,7 +749,89 @@ public partial class DbReader
         return new SearchGuardEvaluation(windowStart, windowEnd, Evidence: null);
     }
 
-    private static SearchGuardCheck CreateSearchGuardCheck(SearchGuardFilter filter, SearchGuardEvaluation evaluation, bool matched, bool passed)
+    private SearchGuardEvaluation FindSameLineGuardEvidence(
+        string path,
+        SearchPrimaryMatch primaryMatch,
+        SearchGuardFilter filter,
+        string? lang)
+    {
+        var guardQuery = NormalizeGuardQuery(filter.Query, lang);
+        if (guardQuery.Length == 0)
+            return new SearchGuardEvaluation(primaryMatch.LineNumber, primaryMatch.LineNumber, Evidence: null);
+
+        var candidate = string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
+            ? CSharpVerbatimNameNormalizer.Normalize(primaryMatch.Text)
+            : primaryMatch.Text;
+        if (TryFindSameLineGuardMatch(primaryMatch, filter, guardQuery, candidate, out var matchIndex, out var matchLength))
+        {
+            var column = matchIndex + 1;
+            var length = Math.Max(1, Math.Min(matchLength, primaryMatch.Text.Length - matchIndex));
+            var facet = SearchMatchClassifier.Classify(path, lang, primaryMatch.LineNumber, primaryMatch.Text, column, length);
+            var role = FormatSearchGuardRole(filter.Role);
+            var direction = FormatSearchGuardDirection(filter.Direction);
+            return new SearchGuardEvaluation(primaryMatch.LineNumber, primaryMatch.LineNumber, new SearchGuardEvidence
+            {
+                Role = role,
+                Direction = direction,
+                Scope = FormatSearchGuardScope(SearchGuardScope.SameLine),
+                Query = filter.Query,
+                Name = FormatSearchGuardName(filter),
+                Pattern = filter.Query,
+                Relationship = direction,
+                Span = new SearchGuardSpan
+                {
+                    Line = primaryMatch.LineNumber,
+                    Column = column,
+                    Length = length,
+                },
+                Line = primaryMatch.LineNumber,
+                Column = column,
+                Length = length,
+                Origin = facet.Origin,
+                Text = primaryMatch.Text,
+            });
+        }
+
+        return new SearchGuardEvaluation(primaryMatch.LineNumber, primaryMatch.LineNumber, Evidence: null);
+    }
+
+    private static bool TryFindSameLineGuardMatch(
+        SearchPrimaryMatch primaryMatch,
+        SearchGuardFilter filter,
+        string guardQuery,
+        string candidate,
+        out int matchIndex,
+        out int matchLength)
+    {
+        var primaryStartIndex = Math.Max(0, primaryMatch.Column - 1);
+        var primaryEndExclusive = primaryStartIndex + Math.Max(1, primaryMatch.Length);
+        var searchIndex = 0;
+        while (searchIndex < candidate.Length)
+        {
+            var index = candidate.IndexOf(guardQuery, searchIndex, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+                break;
+
+            var length = Math.Max(1, guardQuery.Length);
+            var before = index + length <= primaryStartIndex;
+            var after = index >= primaryEndExclusive;
+            if ((filter.Direction == SearchGuardDirection.Before && before) ||
+                (filter.Direction == SearchGuardDirection.After && after))
+            {
+                matchIndex = Math.Min(index, Math.Max(0, primaryMatch.Text.Length - 1));
+                matchLength = length;
+                return true;
+            }
+
+            searchIndex = index + 1;
+        }
+
+        matchIndex = 0;
+        matchLength = 0;
+        return false;
+    }
+
+    private static SearchGuardCheck CreateSearchGuardCheck(SearchGuardFilter filter, SearchGuardScope guardScope, SearchGuardEvaluation evaluation, bool matched, bool passed)
     {
         var role = FormatSearchGuardRole(filter.Role);
         var direction = FormatSearchGuardDirection(filter.Direction);
@@ -708,6 +840,7 @@ public partial class DbReader
         {
             Role = role,
             Direction = direction,
+            Scope = FormatSearchGuardScope(guardScope),
             Query = filter.Query,
             Name = name,
             Pattern = filter.Query,
@@ -742,6 +875,9 @@ public partial class DbReader
             ? $"{name} {outcome}: no match for {pattern}"
             : $"{name} {outcome}: matched {evidence.Origin} at line {evidence.Line}, column {evidence.Column}";
     }
+
+    private static string FormatSearchGuardScope(SearchGuardScope scope)
+        => scope == SearchGuardScope.SameLine ? "same_line" : "window";
 
     private SortedDictionary<int, string> ReadLineWindow(
         string path,
