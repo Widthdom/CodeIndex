@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -390,6 +391,57 @@ public sealed class Caller
         Assert.True(structured["count"]!.GetValue<int>() > 0);
         Assert.NotNull(structured["result_stable_at"]);
         Assert.Empty(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQueryNearResponseLimit_TruncatesDeterministically_Issue3792()
+    {
+        var queries = new JsonArray();
+        for (var i = 0; i < McpServer.MaxBatchQuerySize; i++)
+        {
+            queries.Add(new JsonObject
+            {
+                ["slotId"] = $"slot-{i.ToString(CultureInfo.InvariantCulture)}",
+                ["tool"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["limit"] = 1,
+                    ["format"] = "compact",
+                },
+            });
+        }
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 3792,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["maxResponseBytes"] = 5000,
+                    ["queries"] = queries,
+                },
+            },
+        };
+
+        var stopwatch = Stopwatch.StartNew();
+        var response = _server.HandleMessage(request)!;
+        stopwatch.Stop();
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 5000);
+        Assert.True(structured["results"]!.AsArray().Count > 0);
+        var truncatedQueries = structured["truncated_queries"]!.AsArray();
+        Assert.NotEmpty(truncatedQueries);
+        var firstTruncatedIndex = truncatedQueries[0]!["request_index"]!.GetValue<int>();
+        Assert.Equal(firstTruncatedIndex, structured["cascade_started_at_index"]!.GetValue<int>());
+        Assert.True(firstTruncatedIndex > 0);
+        Assert.Equal("slot-" + firstTruncatedIndex.ToString(CultureInfo.InvariantCulture), truncatedQueries[0]!["slot_id"]!.GetValue<string>());
     }
 
     [Fact]
