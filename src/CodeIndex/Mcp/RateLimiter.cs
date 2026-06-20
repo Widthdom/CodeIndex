@@ -19,10 +19,13 @@ internal sealed class RateLimiter
     private DateTimeOffset _nextPruneAt = DateTimeOffset.MinValue;
     private DateTimeOffset? _lastPruneAt;
     private int _lastPrunedBucketCount;
+    private int _bucketLimitRejectionCount;
 
     public RateLimiter(RateLimiterOptions options, Func<DateTimeOffset>? clock = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        if (_options.MaxBucketCount < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), _options.MaxBucketCount, "Rate limiter bucket cap must be at least 1.");
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -61,6 +64,12 @@ internal sealed class RateLimiter
             PruneIdleBuckets(now);
             if (!_buckets.TryGetValue(key, out var bucket))
             {
+                if (_buckets.Count >= _options.MaxBucketCount)
+                {
+                    _bucketLimitRejectionCount++;
+                    return RateLimiterDecision.Deny(RateLimiterOptions.BucketLimitRetryAfterMs);
+                }
+
                 bucket = new TokenBucket(_options.BurstCapacity, now);
                 _buckets[key] = bucket;
             }
@@ -76,6 +85,8 @@ internal sealed class RateLimiter
             return new RateLimiterDiagnostics(
                 BucketCount: _buckets.Count,
                 BucketIdleTtlSeconds: Math.Ceiling(_options.BucketIdleTtl.TotalSeconds),
+                MaxBucketCount: _options.MaxBucketCount,
+                BucketLimitRejectionCount: _bucketLimitRejectionCount,
                 NextPruneInMs: ComputeNextPruneInMilliseconds(now, _nextPruneAt),
                 LastPruneAgeMs: _lastPruneAt.HasValue ? ComputeElapsedMilliseconds(now, _lastPruneAt.Value) : null,
                 LastPrunedBucketCount: _lastPrunedBucketCount);
@@ -232,6 +243,8 @@ internal readonly record struct RateLimiterBucketKey(string Tool, string Caller)
 internal readonly record struct RateLimiterDiagnostics(
     int BucketCount,
     double BucketIdleTtlSeconds,
+    int MaxBucketCount,
+    int BucketLimitRejectionCount,
     long NextPruneInMs,
     long? LastPruneAgeMs,
     int LastPrunedBucketCount);
@@ -254,6 +267,8 @@ internal readonly record struct RateLimiterDecision(bool Allowed, long RetryAfte
 internal sealed class RateLimiterOptions
 {
     internal static readonly TimeSpan DefaultBucketIdleTtl = TimeSpan.FromMinutes(15);
+    internal const int DefaultMaxBucketCount = 4096;
+    internal const long BucketLimitRetryAfterMs = 1000;
     internal const string RpsEnvVar = "CDIDX_MCP_RATE_LIMIT_RPS";
     internal const string BurstEnvVar = "CDIDX_MCP_RATE_LIMIT_BURST";
     internal const string BucketIdleSecondsEnvVar = "CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS";
@@ -263,9 +278,10 @@ internal sealed class RateLimiterOptions
     public double RefillTokensPerSecond { get; init; }
     public double BurstCapacity { get; init; }
     public TimeSpan BucketIdleTtl { get; init; } = DefaultBucketIdleTtl;
+    public int MaxBucketCount { get; init; } = DefaultMaxBucketCount;
     public bool IsEnabled => RefillTokensPerSecond > 0 && BurstCapacity > 0;
 
-    public static RateLimiterOptions Disabled { get; } = new() { RefillTokensPerSecond = 0, BurstCapacity = 0, BucketIdleTtl = DefaultBucketIdleTtl };
+    public static RateLimiterOptions Disabled { get; } = new() { RefillTokensPerSecond = 0, BurstCapacity = 0, BucketIdleTtl = DefaultBucketIdleTtl, MaxBucketCount = DefaultMaxBucketCount };
 
     public static RateLimiterOptions FromEnvironment(Func<string, string?>? envReader = null, Action<string>? warningSink = null)
     {
@@ -313,7 +329,7 @@ internal sealed class RateLimiterOptions
         if (!string.IsNullOrWhiteSpace(bucketIdleRaw) && !TryParsePositiveTimeSpanSeconds(bucketIdleRaw, out bucketIdleTtl))
             warningSink($"[cdidx-mcp] Ignoring invalid {BucketIdleSecondsEnvVar}='{FormatEnvironmentValue(bucketIdleRaw)}'. Expected a positive finite number of seconds. Falling back to the default bucket idle TTL.");
 
-        return new RateLimiterOptions { RefillTokensPerSecond = rps, BurstCapacity = burst, BucketIdleTtl = bucketIdleTtl };
+        return new RateLimiterOptions { RefillTokensPerSecond = rps, BurstCapacity = burst, BucketIdleTtl = bucketIdleTtl, MaxBucketCount = DefaultMaxBucketCount };
     }
 
     private static string FormatEnvironmentValue(string value) => ConsoleUi.FormatBoundedValue(value);

@@ -3150,6 +3150,7 @@ public partial class McpServer
                     ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
                     ["rate_limit_max_rps"] = RateLimiterOptions.MaxRefillTokensPerSecond,
                     ["rate_limit_max_burst"] = RateLimiterOptions.MaxBurstCapacity,
+                    ["rate_limit_max_buckets"] = RateLimiterOptions.DefaultMaxBucketCount,
                 },
                 ["rate_limit"] = new JsonObject
                 {
@@ -3157,6 +3158,8 @@ public partial class McpServer
                     ["rps"] = RateLimiter.Options.RefillTokensPerSecond,
                     ["burst"] = RateLimiter.Options.BurstCapacity,
                     ["bucket_count"] = rateLimitDiagnostics.BucketCount,
+                    ["bucket_limit"] = rateLimitDiagnostics.MaxBucketCount,
+                    ["bucket_limit_rejection_count"] = rateLimitDiagnostics.BucketLimitRejectionCount,
                     ["bucket_idle_ttl_seconds"] = rateLimitDiagnostics.BucketIdleTtlSeconds,
                     ["next_prune_in_ms"] = rateLimitDiagnostics.NextPruneInMs,
                     ["last_prune_age_ms"] = rateLimitDiagnostics.LastPruneAgeMs.HasValue ? JsonValue.Create(rateLimitDiagnostics.LastPruneAgeMs.Value) : null,
