@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -326,15 +327,15 @@ internal static class GlobalToolLog
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
             yield return ExpandUserLogDirectory(overrideDirectory);
 
-        var xdgStateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+        var xdgStateHome = CdidxEnvironment.GetEnvironmentVariable("XDG_STATE_HOME");
         if (!string.IsNullOrWhiteSpace(xdgStateHome))
             yield return Path.Combine(xdgStateHome, "cdidx", "logs");
 
-        var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        var xdgCacheHome = CdidxEnvironment.GetEnvironmentVariable("XDG_CACHE_HOME");
         if (!string.IsNullOrWhiteSpace(xdgCacheHome))
             yield return Path.Combine(xdgCacheHome, "cdidx", "logs");
 
-        var xdgRuntimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        var xdgRuntimeDir = CdidxEnvironment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrWhiteSpace(xdgRuntimeDir))
             yield return Path.Combine(xdgRuntimeDir, "cdidx", "logs");
 
@@ -365,9 +366,7 @@ internal static class GlobalToolLog
         {
             DataDirectorySecurity.CreateSensitiveDirectory(directory);
             var probePath = Path.Combine(directory, $".cdidx-write-probe-{Guid.NewGuid():N}.tmp");
-            File.WriteAllText(probePath, string.Empty, Encoding.UTF8);
-            File.Delete(probePath);
-            return true;
+            return FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -513,7 +512,7 @@ internal static class GlobalToolLog
 
     private static IEnumerable<string> RedactArgs(string[] args)
     {
-        var mode = Environment.GetEnvironmentVariable("CDIDX_LOG_REDACT");
+        var mode = CdidxEnvironment.GetEnvironmentVariable("CDIDX_LOG_REDACT");
         if (string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
             return args;
 

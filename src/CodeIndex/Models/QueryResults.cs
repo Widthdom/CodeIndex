@@ -34,10 +34,22 @@ public class SearchResult
     public List<SearchGuardEvidence>? GuardEvidence { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardCheck>? GuardChecks { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchDiagnostic>? Diagnostics { get; set; }
     [JsonIgnore]
     public long ChunkId { get; set; }
     [JsonIgnore]
     public int NextOffset { get; set; }
+}
+
+public sealed class SearchDiagnostic
+{
+    public string Code { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Path { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Limit { get; set; }
 }
 
 public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
@@ -84,12 +96,19 @@ public enum SearchGuardDirection
     After,
 }
 
+public enum SearchGuardScope
+{
+    Window,
+    SameLine,
+}
+
 public sealed record SearchGuardFilter(SearchGuardRole Role, SearchGuardDirection Direction, string Query);
 
 public sealed class SearchGuardEvidence
 {
     public string Role { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Pattern { get; set; } = string.Empty;
@@ -106,6 +125,7 @@ public sealed class SearchGuardCheck
 {
     public string Role { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Pattern { get; set; } = string.Empty;
@@ -909,6 +929,9 @@ public class StatusResult
     [JsonPropertyName("hook_diagnostics")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookDiagnostic>? HookDiagnostics { get; set; }
+    [JsonPropertyName("trust_overrides")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExtensionTrustOverride>? TrustOverrides { get; set; }
     [JsonPropertyName("extractors")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExtractorRegistryStatus? Extractors { get; set; }
@@ -1085,6 +1108,9 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("db_pragma_settings")]
     public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+    [JsonPropertyName("prepared_command_cache")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusPreparedCommandCache? PreparedCommandCache { get; set; }
     [JsonPropertyName("maintenance_guidance")]
     public StatusMaintenanceGuidance MaintenanceGuidance { get; set; } = new();
     [JsonPropertyName("db_size_bytes")]
@@ -1131,6 +1157,18 @@ public sealed class StatusProcessMetrics
             WorkingSetBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
         };
     }
+}
+
+public sealed class StatusPreparedCommandCache
+{
+    public int Count { get; set; }
+    public int Capacity { get; set; }
+    [JsonPropertyName("hit_count")]
+    public long HitCount { get; set; }
+    [JsonPropertyName("miss_count")]
+    public long MissCount { get; set; }
+    [JsonPropertyName("eviction_count")]
+    public long EvictionCount { get; set; }
 }
 
 public sealed class StatusLastIndexRun
@@ -1223,6 +1261,8 @@ public class StatusDbPragmaSettings
     public string? JournalMode { get; set; }
     public string? Synchronous { get; set; }
     public long? WalAutocheckpoint { get; set; }
+    [JsonPropertyName("busy_timeout_ms")]
+    public long? BusyTimeoutMs { get; set; }
     public long? PageCount { get; set; }
     public long? FreelistCount { get; set; }
     public long? PageSize { get; set; }

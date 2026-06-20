@@ -88,7 +88,7 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--group-by <file|symbol>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--group-by <file|symbol>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
@@ -247,9 +247,9 @@ public static class ConsoleUi
         try
         {
             if (value == null)
-                Console.Error.WriteLine();
+                CommandErrorWriter.WriteStderr();
             else
-                Console.Error.WriteLine(value);
+                CommandErrorWriter.WriteStderr(value);
         }
         catch (ObjectDisposedException)
         {
@@ -390,7 +390,7 @@ public static class ConsoleUi
         if (IsTruthyEnvironmentVariable(DisableProgressEnvironmentVariable))
             return false;
 
-        var reducedMotion = Environment.GetEnvironmentVariable(PrefersReducedMotionEnvironmentVariable);
+        var reducedMotion = CdidxEnvironment.GetEnvironmentVariable(PrefersReducedMotionEnvironmentVariable);
         return string.IsNullOrWhiteSpace(reducedMotion) || !IsTruthyEnvironmentValue(reducedMotion);
     }
 
@@ -592,7 +592,7 @@ public static class ConsoleUi
         lock (TerminalLock)
         {
             ClearProgressLineCore();
-            Console.Error.WriteLine($"  [WARN] {message}");
+            CommandErrorWriter.WriteStderr($"  [WARN] {message}");
             Console.Error.Flush();
             Console.Out.Flush();
         }
@@ -1022,6 +1022,8 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-comments         search only: suppress comment-only matches");
         Console.WriteLine("  --exclude-strings          search only: suppress string, regex, and help-text matches");
         Console.WriteLine("  --exclude-fixtures         search only: suppress fixture-only matches in tests");
+        WriteHelpLine("  --origin/--match-origin <origin> search only: keep only matches from selected origins (code, comment, string_literal, regex_literal, help_text, unknown; repeatable or comma-separated)");
+        WriteHelpLine("  --exclude-origin <origin>  search only: drop matches from selected origins while keeping other origins in the same result");
         Console.WriteLine("  --include-generated        Include generated files in query results");
         Console.WriteLine("  --snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
@@ -1051,6 +1053,7 @@ public static class ConsoleUi
         Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
         WriteHelpLine($"  --require-before/--require-after <query>  search only: keep primary matches only when the guard query appears within --guard-window lines before/after the match (default {DbReader.DefaultSearchGuardWindow}, max {DbReader.MaxSearchGuardWindow})");
         WriteHelpLine("  --reject-before/--reject-after <query>    search only: drop primary matches when the guard query appears within the same before/after window; useful for finding API calls missing nearby checks");
+        WriteHelpLine("  --guard-scope <window|same-line> search only: evaluate guards in the line window (default) or only on the same line before/after the primary match");
         WriteHelpLine("  --bytes                    files: sort by size and show raw byte counts in human output; map: show raw byte counts; JSON always keeps raw integer bytes");
         Console.WriteLine("  --min-entrypoint-confidence <n>  map only: omit entrypoint candidates below this 0.0..1.0 confidence");
         WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
@@ -1401,7 +1404,7 @@ public static class ConsoleUi
         }
         catch (ArgumentOutOfRangeException)
         {
-            Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
+            CommandErrorWriter.WriteStderr($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
             return false;
         }
     }
@@ -1941,7 +1944,7 @@ public static class ConsoleUi
         if (_explicitPalette is { } explicitPalette)
             return explicitPalette;
 
-        var envPalette = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
+        var envPalette = CdidxEnvironment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
         if (!string.IsNullOrWhiteSpace(envPalette) && TryParseColorPalette(envPalette, out var parsed))
             return parsed;
 
@@ -1957,7 +1960,7 @@ public static class ConsoleUi
     /// </summary>
     internal static ColorPalette DetectColorPalette()
     {
-        var colorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+        var colorTerm = CdidxEnvironment.GetEnvironmentVariable("COLORTERM");
         if (!string.IsNullOrEmpty(colorTerm))
         {
             var ct = colorTerm.Trim().ToLowerInvariant();
@@ -1965,7 +1968,7 @@ public static class ConsoleUi
                 return ColorPalette.Truecolor;
         }
 
-        var term = Environment.GetEnvironmentVariable("TERM");
+        var term = CdidxEnvironment.GetEnvironmentVariable("TERM");
         if (!string.IsNullOrEmpty(term))
         {
             var t = term.ToLowerInvariant();
@@ -2159,14 +2162,14 @@ public static class ConsoleUi
 
     private static bool HasTerminalEnvironmentHint()
     {
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_SESSION")))
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_SESSION")))
             return true;
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_PROFILE_ID")))
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_PROFILE_ID")))
             return true;
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TERM_PROGRAM")))
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("TERM_PROGRAM")))
             return true;
 
-        var term = Environment.GetEnvironmentVariable("TERM");
+        var term = CdidxEnvironment.GetEnvironmentVariable("TERM");
         return !string.IsNullOrWhiteSpace(term)
             && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
     }
@@ -2176,7 +2179,7 @@ public static class ConsoleUi
 
     private static bool IsCiEnvironment()
     {
-        var ci = Environment.GetEnvironmentVariable("CI");
+        var ci = CdidxEnvironment.GetEnvironmentVariable("CI");
         return !string.IsNullOrEmpty(ci)
             && !ci.Equals("0", StringComparison.OrdinalIgnoreCase)
             && !ci.Equals("false", StringComparison.OrdinalIgnoreCase)
@@ -2227,17 +2230,17 @@ public static class ConsoleUi
 
     private static bool IsForceColorRequested()
     {
-        var force = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+        var force = CdidxEnvironment.GetEnvironmentVariable("CLICOLOR_FORCE");
         return !string.IsNullOrEmpty(force) && force != "0";
     }
 
     private static bool IsNoColorRequested()
     {
-        var noColor = Environment.GetEnvironmentVariable("NO_COLOR");
+        var noColor = CdidxEnvironment.GetEnvironmentVariable("NO_COLOR");
         if (!string.IsNullOrEmpty(noColor))
             return true;
 
-        var cliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+        var cliColor = CdidxEnvironment.GetEnvironmentVariable("CLICOLOR");
         return cliColor == "0";
     }
 
@@ -2262,29 +2265,29 @@ public static class ConsoleUi
         if (_asciiOutputForced)
             return true;
 
-        var ascii = Environment.GetEnvironmentVariable("CDIDX_ASCII");
+        var ascii = CdidxEnvironment.GetEnvironmentVariable("CDIDX_ASCII");
         if (!string.IsNullOrEmpty(ascii) && ascii != "0")
             return true;
 
-        var noUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
+        var noUnicode = CdidxEnvironment.GetEnvironmentVariable("NO_UNICODE");
         if (!string.IsNullOrEmpty(noUnicode) && noUnicode != "0")
             return true;
 
-        var atBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
+        var atBridgeType = CdidxEnvironment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
         if (!string.IsNullOrEmpty(atBridgeType))
             return true;
 
-        var accessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+        var accessibilityEnabled = CdidxEnvironment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
         if (!string.IsNullOrEmpty(accessibilityEnabled) && accessibilityEnabled != "0")
             return true;
 
-        return IsPosixLocale(Environment.GetEnvironmentVariable("LC_ALL"))
-            || IsPosixLocale(Environment.GetEnvironmentVariable("LC_CTYPE"))
-            || IsPosixLocale(Environment.GetEnvironmentVariable("LANG"));
+        return IsPosixLocale(CdidxEnvironment.GetEnvironmentVariable("LC_ALL"))
+            || IsPosixLocale(CdidxEnvironment.GetEnvironmentVariable("LC_CTYPE"))
+            || IsPosixLocale(CdidxEnvironment.GetEnvironmentVariable("LANG"));
     }
 
     private static bool IsTruthyEnvironmentVariable(string name)
-        => IsTruthyEnvironmentValue(Environment.GetEnvironmentVariable(name));
+        => IsTruthyEnvironmentValue(CdidxEnvironment.GetEnvironmentVariable(name));
 
     private static bool IsTruthyEnvironmentValue(string? value)
     {
@@ -2295,7 +2298,7 @@ public static class ConsoleUi
     }
 
     private static bool IsDumbTerminal()
-        => string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(CdidxEnvironment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPosixLocale(string? locale)
         => locale != null
@@ -2310,7 +2313,7 @@ public static class ConsoleUi
     {
         foreach (var name in names)
         {
-            var value = Environment.GetEnvironmentVariable(name);
+            var value = CdidxEnvironment.GetEnvironmentVariable(name);
             if (!string.IsNullOrEmpty(value))
                 return value;
         }
@@ -2359,7 +2362,7 @@ public static class ConsoleUi
         if (_traceWidthDetectionFailures && !_widthDetectionTraceWritten)
         {
             var suffix = exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})";
-            Console.Error.WriteLine($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
+            CommandErrorWriter.WriteStderr($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
             _widthDetectionTraceWritten = true;
         }
 
@@ -2368,7 +2371,7 @@ public static class ConsoleUi
 
     private static bool TryGetColumnsEnvironmentWidth(out int width)
     {
-        var columns = Environment.GetEnvironmentVariable("COLUMNS");
+        var columns = CdidxEnvironment.GetEnvironmentVariable("COLUMNS");
         if (int.TryParse(columns, NumberStyles.Integer, CultureInfo.InvariantCulture, out width) && width > 0)
             return true;
 

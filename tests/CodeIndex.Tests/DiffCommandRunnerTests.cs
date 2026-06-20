@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -179,6 +180,54 @@ public class DiffCommandRunnerTests
             TestProjectHelper.DeleteDirectory(leftRoot);
             TestProjectHelper.DeleteDirectory(rightRoot);
         }
+    }
+
+    [Fact]
+    public void Run_StopsWhenDiffRowBudgetIsExceeded_Issue3834()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_row_budget_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_row_budget_right");
+        var originalRowBudget = DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting;
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/A.cs", "csharp", "public class A { }");
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/B.cs", "csharp", "public class B { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/A.cs", "csharp", "public class A { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/B.cs", "csharp", "public class B { }");
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 1;
+
+            var (exitCode, stdout, stderr) = RunWithCapturedStreams([leftDb, rightDb]);
+
+            Assert.Equal(3, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("diff left row comparison exceeded the safety budget of 1 rows", stderr);
+        }
+        finally
+        {
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = originalRowBudget;
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void ColumnExists_QuotesTableIdentifiersForPragmaInfo_Issue3834()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "CREATE TABLE \"odd \"\" table\" (\"odd col\" INTEGER)";
+            command.ExecuteNonQuery();
+        }
+        var method = typeof(DiffCommandRunner).GetMethod("ColumnExists", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException(nameof(DiffCommandRunner), "ColumnExists");
+
+        var exists = Assert.IsType<bool>(method.Invoke(null, new object?[] { connection, "odd \" table", "odd col" }));
+
+        Assert.True(exists);
     }
 
     [Fact]

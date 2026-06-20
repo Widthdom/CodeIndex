@@ -163,7 +163,7 @@ public class PostExtractionHookTests
                     var diagnostic = Assert.Single(
                         runner.Diagnostics,
                         diagnostic => diagnostic.TypeName == typeof(ThrowingConstructorPostExtractionHook).FullName);
-                    Assert.Equal("hook_constructor_failed", diagnostic.Category);
+                    Assert.Equal("constructor_failed", diagnostic.Category);
                     Assert.Contains("isolated worker", diagnostic.Message, StringComparison.Ordinal);
                     Assert.DoesNotContain("ctor boom", diagnostic.Message, StringComparison.Ordinal);
                 }
@@ -361,6 +361,14 @@ public class PostExtractionHookTests
                     diagnostic => diagnostic.AssemblyPath.EndsWith("hooks", StringComparison.Ordinal)
                                   && diagnostic.Category == "hook_directory_override_accepted"
                                   && diagnostic.Message.Contains("override accepted", StringComparison.Ordinal));
+                var trustOverride = Assert.Single(snapshot.TrustOverrides);
+                Assert.Equal("hook_directory_override", trustOverride.Kind);
+                Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, trustOverride.EnvironmentVariable);
+                Assert.EndsWith("hooks", trustOverride.Value, StringComparison.Ordinal);
+                Assert.EndsWith("hooks", trustOverride.Path!, StringComparison.Ordinal);
+                Assert.Contains("hook assemblies execute", trustOverride.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, trustOverride.Value, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, trustOverride.Path!, StringComparison.Ordinal);
                 Assert.All(
                     snapshot.Diagnostics,
                     diagnostic => Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal));
@@ -429,8 +437,8 @@ public class PostExtractionHookTests
                                   && diagnostic.Message.Contains("candidate limit", StringComparison.Ordinal));
                 Assert.Equal(
                     2,
-                    runner.Diagnostics.Count(diagnostic => diagnostic.Category == "assembly_load_failed"
-                                                           && diagnostic.Message.StartsWith("Failed to load hook assembly", StringComparison.Ordinal)));
+                    runner.Diagnostics.Count(diagnostic => diagnostic.Category is "assembly_load_failed" or "dependency_resolution_failed"
+                                                           && diagnostic.Message.StartsWith("Hook assembly load failed", StringComparison.Ordinal)));
             }
             finally
             {

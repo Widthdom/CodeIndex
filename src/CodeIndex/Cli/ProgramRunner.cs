@@ -211,7 +211,7 @@ internal static partial class ProgramRunner
         catch (OperationCanceledException ex)
         {
             GlobalToolLog.Error($"command_complete exit_code={CommandExitCodes.CancelledBySignal} operation_cancelled", ex, includeStacks: false);
-            Console.Error.WriteLine("Error: command cancelled before it could complete.");
+            CommandErrorWriter.WriteStderr("Error: command cancelled before it could complete.");
             EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, CommandExitCodes.CancelledBySignal, ex.GetType().Name);
             return CommandExitCodes.CancelledBySignal;
         }
@@ -226,7 +226,7 @@ internal static partial class ProgramRunner
 
             var unhandledExitCode = MapUnhandledExceptionExitCode(ex);
             GlobalToolLog.Error($"command_complete exit_code={unhandledExitCode} unhandled_exception", ex);
-            Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
+            CommandErrorWriter.WriteStderr("Error: command failed before it could complete. Run `cdidx report` for details.");
             EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, unhandledExitCode, ex.GetType().Name);
             return unhandledExitCode;
         }
@@ -274,8 +274,8 @@ internal static partial class ProgramRunner
                         "Use a shallower expected-symbols JSON fixture.");
                 }
 
-                Console.Error.WriteLine("Expected symbols did not match extracted symbols.");
-                Console.Error.WriteLine(actual);
+                CommandErrorWriter.WriteStderr("Expected symbols did not match extracted symbols.");
+                CommandErrorWriter.WriteStderr(actual);
                 return CommandExitCodes.InvalidArgument;
             }
         }
@@ -966,6 +966,7 @@ internal static partial class ProgramRunner
         "--reject-before",
         "--reject-after",
         "--guard-window",
+        "--guard-scope",
         "--project",
         "--solution",
         "--exclude-path",
@@ -1007,7 +1008,7 @@ internal static partial class ProgramRunner
 
     private static bool IsTruthyEnvironmentVariable(string name)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = CdidxEnvironment.GetEnvironmentVariable(name);
         return value != null
                && !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
                && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)
@@ -1459,7 +1460,7 @@ internal static partial class ProgramRunner
 
         if (!TryReadWorkspaceVersionPin(pinPath, out var required, out var warning))
         {
-            Console.Error.WriteLine(warning);
+            CommandErrorWriter.WriteStderr(warning);
             return CommandExitCodes.Success;
         }
 
@@ -1469,12 +1470,12 @@ internal static partial class ProgramRunner
         var message = $"workspace requires cdidx v{NormalizeVersion(required)}, but this binary is v{NormalizeVersion(appVersion)} ({pinPath}).";
         if (!strictVersion)
         {
-            Console.Error.WriteLine($"Warning: {message}");
+            CommandErrorWriter.WriteStderr($"Warning: {message}");
             return CommandExitCodes.Success;
         }
 
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine("Hint: rerun without --strict-version to warn only, or install the pinned cdidx version for this workspace.");
+        CommandErrorWriter.WriteStderr($"Error: {message}");
+        CommandErrorWriter.WriteStderr("Hint: rerun without --strict-version to warn only, or install the pinned cdidx version for this workspace.");
         return CommandExitCodes.ExUsage;
     }
 
@@ -1769,7 +1770,7 @@ internal static partial class ProgramRunner
             var payload = BuildQueryTraceJson(commandName, subArgs, startTimestamp, elapsedMs, exitCode, resultCount);
             if (mode == "stderr")
             {
-                Console.Error.WriteLine(payload);
+                CommandErrorWriter.WriteStderr(payload);
                 return;
             }
 
@@ -2078,7 +2079,7 @@ internal static partial class ProgramRunner
         var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
         if (options.ParseError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            CommandErrorWriter.WriteStderr(options.ParseError);
             PrintLspUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2093,8 +2094,8 @@ internal static partial class ProgramRunner
                 continue;
             }
 
-            Console.Error.WriteLine($"Error: {cmdArgs[i]} is not supported for lsp.");
-            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index.");
+            CommandErrorWriter.WriteStderr($"Error: {cmdArgs[i]} is not supported for lsp.");
+            CommandErrorWriter.WriteStderr("Hint: use `--db <path>` to point at a specific index.");
             PrintLspUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2103,7 +2104,7 @@ internal static partial class ProgramRunner
         {
             if (string.IsNullOrWhiteSpace(options.DbPath))
             {
-                Console.Error.WriteLine("Error: database path could not be resolved.");
+                CommandErrorWriter.WriteStderr("Error: database path could not be resolved.");
                 PrintLspUsage();
                 return CommandExitCodes.UsageError;
             }
@@ -2112,15 +2113,15 @@ internal static partial class ProgramRunner
                 && !File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
             {
                 var resolvedPath = Path.GetFullPath(options.DbPath);
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {resolvedPath}");
-                Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun `cdidx lsp`.");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {resolvedPath}");
+                CommandErrorWriter.WriteStderr("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun `cdidx lsp`.");
                 return CommandExitCodes.DatabaseError;
             }
 
             using var db = new DbContext(options.DbPath);
             if (!db.TryValidateIsCodeIndexDb(out var validationReason))
             {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid CodeIndex database: {validationReason}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: invalid CodeIndex database: {validationReason}");
                 return CommandExitCodes.DatabaseError;
             }
 
@@ -2144,7 +2145,7 @@ internal static partial class ProgramRunner
         catch (Exception ex)
         {
             GlobalToolLog.Error("lsp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            Console.Error.WriteLine($"Error: LSP server failed ({ex.GetType().Name}: {ex.Message}).");
+            CommandErrorWriter.WriteStderr($"Error: LSP server failed ({ex.GetType().Name}: {ex.Message}).");
             Console.Out.Flush();
             Console.Error.Flush();
             return CommandExitCodes.DatabaseError;
@@ -2153,8 +2154,8 @@ internal static partial class ProgramRunner
 
     private static void PrintLspUsage()
     {
-        Console.Error.WriteLine("Usage: cdidx lsp [--db <path>]");
-        Console.Error.WriteLine("Runs a read-only Language Server Protocol server over stdio using an existing CodeIndex database.");
+        CommandErrorWriter.WriteStderr("Usage: cdidx lsp [--db <path>]");
+        CommandErrorWriter.WriteStderr("Runs a read-only Language Server Protocol server over stdio using an existing CodeIndex database.");
     }
 
     private sealed record McpRunOptions(
@@ -2196,7 +2197,7 @@ internal static partial class ProgramRunner
             }
             catch (FormatException ex)
             {
-                Console.Error.WriteLine($"Error: {ex.Message}");
+                CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
                 PrintMcpUsage();
                 return CommandExitCodes.UsageError;
             }
@@ -2219,7 +2220,7 @@ internal static partial class ProgramRunner
         exitCode = CommandExitCodes.Success;
         if (!TryConsumeAuditLogFlags(ref cmdArgs, out var auditOptions, out var auditError))
         {
-            Console.Error.WriteLine(auditError);
+            CommandErrorWriter.WriteStderr(auditError);
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2227,7 +2228,7 @@ internal static partial class ProgramRunner
 
         if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var suggestionDedupThreshold, out var thresholdError))
         {
-            Console.Error.WriteLine(thresholdError);
+            CommandErrorWriter.WriteStderr(thresholdError);
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2235,7 +2236,7 @@ internal static partial class ProgramRunner
 
         if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
         {
-            Console.Error.WriteLine(transportError);
+            CommandErrorWriter.WriteStderr(transportError);
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2249,7 +2250,7 @@ internal static partial class ProgramRunner
         var options = QueryCommandRunner.ParseArgs(residualArgs, jsonDefault: true);
         if (options.ParseError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            CommandErrorWriter.WriteStderr(options.ParseError);
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2283,10 +2284,10 @@ internal static partial class ProgramRunner
             }
 
             if (residualArgs[i] == "--json")
-                Console.Error.WriteLine("Error: --json is not supported for mcp; MCP already speaks JSON-RPC over the selected transport.");
+                CommandErrorWriter.WriteStderr("Error: --json is not supported for mcp; MCP already speaks JSON-RPC over the selected transport.");
             else
-                Console.Error.WriteLine($"Error: {residualArgs[i]} is not supported for mcp.");
-            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, or `--audit-log <path>` to enable per-call auditing.");
+                CommandErrorWriter.WriteStderr($"Error: {residualArgs[i]} is not supported for mcp.");
+            CommandErrorWriter.WriteStderr("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, or `--audit-log <path>` to enable per-call auditing.");
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2302,7 +2303,7 @@ internal static partial class ProgramRunner
         if (!string.Equals(transport, "stdio", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine($"Error: --transport '{transport}' is not supported. Use `stdio` (default) or `http`.");
+            CommandErrorWriter.WriteStderr($"Error: --transport '{transport}' is not supported. Use `stdio` (default) or `http`.");
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2310,7 +2311,7 @@ internal static partial class ProgramRunner
 
         if (listenSpec != null && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine("Error: --http-listen requires `--transport http`.");
+            CommandErrorWriter.WriteStderr("Error: --http-listen requires `--transport http`.");
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2337,8 +2338,8 @@ internal static partial class ProgramRunner
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error: failed to open audit log '{auditOptions.Path}' ({ex.GetType().Name}: {ex.Message}).");
-            Console.Error.WriteLine("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
+            CommandErrorWriter.WriteStderr($"Error: failed to open audit log '{auditOptions.Path}' ({ex.GetType().Name}: {ex.Message}).");
+            CommandErrorWriter.WriteStderr("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
             exitCode = CommandExitCodes.UsageError;
             return false;
         }
@@ -2363,7 +2364,7 @@ internal static partial class ProgramRunner
         catch (Exception ex)
         {
             GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            Console.Error.WriteLine($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
+            CommandErrorWriter.WriteStderr($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
             Console.Out.Flush();
             Console.Error.Flush();
             return CommandExitCodes.DatabaseError;
@@ -2393,7 +2394,7 @@ internal static partial class ProgramRunner
         }
         catch (FormatException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2418,14 +2419,14 @@ internal static partial class ProgramRunner
         }
         catch (FormatException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
 
         if (!resolved.IsLoopback && bearerToken is null)
         {
-            Console.Error.WriteLine($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` environment variable, or bind to a loopback address.");
+            CommandErrorWriter.WriteStderr($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` environment variable, or bind to a loopback address.");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2437,19 +2438,19 @@ internal static partial class ProgramRunner
         }
         catch (FormatException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
         catch (ArgumentOutOfRangeException ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
         catch (HttpListenerException ex)
         {
-            Console.Error.WriteLine($"Error: {HttpMcpTransport.FormatBindFailureDiagnostic(resolved, ex)}");
+            CommandErrorWriter.WriteStderr($"Error: {HttpMcpTransport.FormatBindFailureDiagnostic(resolved, ex)}");
             return CommandExitCodes.UsageError;
         }
 
@@ -2465,13 +2466,13 @@ internal static partial class ProgramRunner
             {
                 if (transport.AuthDisabledWarning is { } authWarning)
                 {
-                    Console.Error.WriteLine($"[cdidx-mcp] Warning: {authWarning} Set `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` to require bearer auth.");
-                    Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
+                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] Warning: {authWarning} Set `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` to require bearer auth.");
+                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
                     GlobalToolLog.Info("mcp_http_auth_disabled_warning loopback=true");
                 }
                 else
                 {
-                    Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
+                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
                 }
 
                 try
@@ -2487,7 +2488,7 @@ internal static partial class ProgramRunner
                 catch (Exception ex)
                 {
                     GlobalToolLog.Error("mcp_http_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-                    Console.Error.WriteLine($"Error: MCP HTTP server failed ({ex.GetType().Name}: {ex.Message}).");
+                    CommandErrorWriter.WriteStderr($"Error: MCP HTTP server failed ({ex.GetType().Name}: {ex.Message}).");
                     Console.Out.Flush();
                     Console.Error.Flush();
                     return CommandExitCodes.DatabaseError;
@@ -2533,9 +2534,9 @@ internal static partial class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
-        Console.Error.WriteLine("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
-        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
+        CommandErrorWriter.WriteStderr("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
+        CommandErrorWriter.WriteStderr("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
+        CommandErrorWriter.WriteStderr($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
     internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string? thresholdValue, out string error)
@@ -2841,8 +2842,8 @@ internal static partial class ProgramRunner
                 wantsJson = true;
                 continue;
             }
-            Console.Error.WriteLine($"Error: --check-updates does not accept '{arg}'.");
-            Console.Error.WriteLine("Hint: use `cdidx --check-updates` or `cdidx --check-updates --json`.");
+            CommandErrorWriter.WriteStderr($"Error: --check-updates does not accept '{arg}'.");
+            CommandErrorWriter.WriteStderr("Hint: use `cdidx --check-updates` or `cdidx --check-updates --json`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -2998,10 +2999,10 @@ internal static partial class ProgramRunner
             }
             else
             {
-                Console.Error.WriteLine("Error: cdidx upgrade cannot replace the running Windows binary directly.");
-                Console.Error.WriteLine($"Hint: update via NuGet global tool: {handoff.Command}");
-                Console.Error.WriteLine($"Release page: {handoff.Url}");
-                Console.Error.WriteLine($"Manual zip asset: {handoff.Asset} ({handoff.AssetUrl})");
+                CommandErrorWriter.WriteStderr("Error: cdidx upgrade cannot replace the running Windows binary directly.");
+                CommandErrorWriter.WriteStderr($"Hint: update via NuGet global tool: {handoff.Command}");
+                CommandErrorWriter.WriteStderr($"Release page: {handoff.Url}");
+                CommandErrorWriter.WriteStderr($"Manual zip asset: {handoff.Asset} ({handoff.AssetUrl})");
             }
             return CommandExitCodes.FeatureUnavailable;
         }
@@ -3023,8 +3024,8 @@ internal static partial class ProgramRunner
             }
             else
             {
-                Console.Error.WriteLine("Error: cdidx upgrade currently requires a POSIX shell installer on Linux or macOS.");
-                Console.Error.WriteLine("Hint: download the latest release asset manually, or rerun install.sh from a shell environment.");
+                CommandErrorWriter.WriteStderr("Error: cdidx upgrade currently requires a POSIX shell installer on Linux or macOS.");
+                CommandErrorWriter.WriteStderr("Hint: download the latest release asset manually, or rerun install.sh from a shell environment.");
             }
             return CommandExitCodes.FeatureUnavailable;
         }
@@ -3048,10 +3049,10 @@ internal static partial class ProgramRunner
             }
             else
             {
-                Console.Error.WriteLine($"Error: install directory is not writable: {installDir}");
+                CommandErrorWriter.WriteStderr($"Error: install directory is not writable: {installDir}");
                 if (installDirectoryError != null)
-                    Console.Error.WriteLine($"Reason: {installDirectoryError}");
-                Console.Error.WriteLine("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
+                    CommandErrorWriter.WriteStderr($"Reason: {installDirectoryError}");
+                CommandErrorWriter.WriteStderr("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
             }
             return CommandExitCodes.UsageError;
         }
@@ -3131,8 +3132,8 @@ internal static partial class ProgramRunner
             }
             else
             {
-                Console.Error.WriteLine($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
-                Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+                CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
             }
             return CommandExitCodes.InstallError;
         }
@@ -3147,8 +3148,8 @@ internal static partial class ProgramRunner
 
     private static int WriteUpgradeUsageError(string message)
     {
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine("Hint: use `cdidx upgrade [--check-only] [--channel stable|prerelease] [--prerelease] [--version vX.Y.Z]`.");
+        CommandErrorWriter.WriteStderr($"Error: {message}");
+        CommandErrorWriter.WriteStderr("Hint: use `cdidx upgrade [--check-only] [--channel stable|prerelease] [--prerelease] [--version vX.Y.Z]`.");
         return CommandExitCodes.UsageError;
     }
 
@@ -3339,7 +3340,7 @@ internal static partial class ProgramRunner
         if (process == null)
         {
             if (!suppressOutput)
-                Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
+                CommandErrorWriter.WriteStderr("Error: failed to start install.sh for upgrade.");
             return InstallerProcessResult.Failure(CommandExitCodes.InstallError);
         }
 
@@ -3374,7 +3375,7 @@ internal static partial class ProgramRunner
             if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
             {
                 if (!suppressOutput)
-                    Console.Error.WriteLine("Error: install.sh was cancelled and did not exit after cancellation.");
+                    CommandErrorWriter.WriteStderr("Error: install.sh was cancelled and did not exit after cancellation.");
             }
             else
             {
@@ -3397,16 +3398,16 @@ internal static partial class ProgramRunner
         if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
         {
             if (!suppressOutput)
-                Console.Error.WriteLine("Error: install.sh timed out and did not exit after cancellation.");
+                CommandErrorWriter.WriteStderr("Error: install.sh timed out and did not exit after cancellation.");
         }
         else
         {
             outputDrainTask.GetAwaiter().GetResult();
             if (!suppressOutput)
-                Console.Error.WriteLine($"Error: install.sh timed out after {FormatDuration(timeout)}.");
+                CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
         }
         if (!suppressOutput)
-            Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+            CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
         var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
             ? outputDrainTask.GetAwaiter().GetResult()
             : SuppressedInstallerOutputResult.Empty;
@@ -3505,7 +3506,7 @@ internal static partial class ProgramRunner
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
@@ -3698,7 +3699,7 @@ internal static partial class ProgramRunner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"Warning: failed to delete install directory write probe {ConsoleUi.FormatBoundedValue(probePath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete install directory write probe {ConsoleUi.FormatBoundedValue(probePath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
@@ -3750,8 +3751,8 @@ internal static partial class ProgramRunner
                 wantsJson = true;
                 continue;
             }
-            Console.Error.WriteLine($"Error: --version does not accept '{arg}'.");
-            Console.Error.WriteLine("Hint: use `cdidx --version` or `cdidx --version --json`.");
+            CommandErrorWriter.WriteStderr($"Error: --version does not accept '{arg}'.");
+            CommandErrorWriter.WriteStderr("Hint: use `cdidx --version` or `cdidx --version --json`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -3850,17 +3851,17 @@ internal static partial class ProgramRunner
 
     private static int ShowError(string[] args, string message)
     {
-        Console.Error.WriteLine($"Error: {message}");
+        CommandErrorWriter.WriteStderr($"Error: {message}");
 
         var input = args[0];
         if (!input.StartsWith('-'))
         {
             var best = ConsoleUi.FindClosestCommand(input);
             if (best != null)
-                Console.Error.WriteLine($"Did you mean: cdidx {best}?");
+                CommandErrorWriter.WriteStderr($"Did you mean: cdidx {best}?");
         }
 
-        Console.Error.WriteLine("Run 'cdidx --help' for usage information.");
+        CommandErrorWriter.WriteStderr("Run 'cdidx --help' for usage information.");
         return CommandExitCodes.UsageError;
     }
 }

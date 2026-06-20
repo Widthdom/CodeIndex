@@ -72,7 +72,7 @@ public class DbDebugTests
     }
 
     [Fact]
-    public void ExecuteTrackedReader_ProfileCapsQueryPlanRows()
+    public void ExecuteTrackedReader_ProfileCapsQueryPlanRows_Issue3739()
     {
         DbDebug.ResetForTesting();
         try
@@ -89,8 +89,10 @@ public class DbDebugTests
             }
 
             var entry = Assert.Single(DbDebug.EndProfile());
-            Assert.True(entry.QueryPlan.Count <= DbDebug.MaxQueryPlanRows + 1);
-            Assert.Contains(entry.QueryPlan, row => row.Detail.Contains("truncated after", StringComparison.Ordinal));
+            Assert.Equal(DbDebug.MaxQueryPlanRows + 1, entry.QueryPlan.Count);
+            Assert.Equal(
+                $"EXPLAIN QUERY PLAN rows truncated after {DbDebug.MaxQueryPlanRows} rows.",
+                entry.QueryPlan[^1].Detail);
         }
         finally
         {
@@ -99,7 +101,7 @@ public class DbDebugTests
     }
 
     [Fact]
-    public void ExecuteTrackedReader_ProfileTruncatesLongQueryPlanDetails()
+    public void ExecuteTrackedReader_ProfileTruncatesLongQueryPlanDetails_Issue3739()
     {
         DbDebug.ResetForTesting();
         try
@@ -284,6 +286,31 @@ public class DbDebugTests
 
             Assert.Contains("CDIDX_DEBUG value 'token=<redacted>' is not recognized", output);
             Assert.DoesNotContain(secret, output);
+        }
+        finally
+        {
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void IsEnabled_InvalidDebugValue_RedactsThroughSharedStderrSink_Issue3683()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        const string secret = "fedcba9876543210fedcba9876543210";
+        env.Set("CDIDX_DEBUG", $"password={secret}");
+        try
+        {
+            DbDebug.ResetForTesting();
+            using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+
+            Assert.False(DbDebug.IsEnabled);
+
+            var stdout = capture.Out!.ToString()!;
+            var stderr = capture.Error!.ToString()!;
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("CDIDX_DEBUG value 'password=<redacted>' is not recognized", stderr);
+            Assert.DoesNotContain(secret, stderr);
         }
         finally
         {

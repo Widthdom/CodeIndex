@@ -49,7 +49,6 @@ public class DbWriter
     private static readonly TimeSpan TransactionStateContentionWaitInterval = TimeSpan.FromMilliseconds(50);
     private const int BatchSize = 500;
     private const int DeleteFilesBatchSize = 500;
-    private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
     private const int TypeScriptModuleSyntaxFallbackMaxBytes = (int)FileIndexer.DefaultMaxFileSizeBytes;
     private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
@@ -889,14 +888,7 @@ public class DbWriter
         DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
 
         using var deleteCmd = _conn.CreateCommand();
-        var parameters = new List<string>(fileIds.Count);
-        for (var i = 0; i < fileIds.Count; i++)
-        {
-            var parameterName = $"@id{i}";
-            parameters.Add(parameterName);
-            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
-        }
-
+        var parameters = SqliteDynamicSql.AddParameters(deleteCmd, "id", fileIds, SqliteType.Integer, "file id delete batch");
         deleteCmd.CommandText = $"DELETE FROM files WHERE id IN ({string.Join(", ", parameters)})";
         deleteCmd.ExecuteNonQuery();
     }
@@ -904,14 +896,7 @@ public class DbWriter
     private void DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(IReadOnlyList<long> fileIds)
     {
         using var deleteCmd = _conn.CreateCommand();
-        var parameters = new List<string>(fileIds.Count);
-        for (var i = 0; i < fileIds.Count; i++)
-        {
-            var parameterName = $"@id{i}";
-            parameters.Add(parameterName);
-            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
-        }
-
+        var parameters = SqliteDynamicSql.AddParameters(deleteCmd, "id", fileIds, SqliteType.Integer, "cross-file reference delete batch");
         var idList = string.Join(", ", parameters);
         deleteCmd.CommandText = $@"
             DELETE FROM symbol_references
@@ -1182,7 +1167,7 @@ public class DbWriter
         if (testSink != null)
             testSink(message);
         else
-            Console.Error.WriteLine(message);
+            CommandErrorWriter.WriteStderr(message);
     }
 
     internal static string BuildBatchRowSkipWarningForTesting(string rowIdentifier, Exception batchException, Exception rowException)
@@ -2179,22 +2164,7 @@ public class DbWriter
                     return false;
                 }
 
-                // Inline the SetReadyBit body. SetReadyBit opens its own BEGIN IMMEDIATE
-                // when not already in a DbWriter-tracked transaction, but our raw
-                // BEGIN IMMEDIATE above is not tracked in _transactionDepth, so a direct
-                // SetReadyBit call would attempt a nested BEGIN IMMEDIATE and fail.
-                // SetReadyBit は _transactionDepth ベースでしか外側 transaction を見ないため、
-                // 生 BEGIN IMMEDIATE 内では呼べない。内容を inline 展開する。
-                int current;
-                using (var read = _conn.CreateCommand())
-                {
-                    read.CommandText = "PRAGMA user_version";
-                    var raw = read.ExecuteScalar();
-                    current = raw is long l ? (int)l : (raw is int i ? i : 0);
-                }
-                int next = current | DbContext.FoldReadyFlag;
-                if (next != current)
-                    Execute($"PRAGMA user_version = {next}");
+                ApplyReadyBitToUserVersion(DbContext.FoldReadyFlag, ownTransaction ? null : _activeTransaction);
 
                 SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
@@ -3423,8 +3393,8 @@ public class DbWriter
         cmd.Transaction = _activeTransaction;
         cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
                             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        cmd.Parameters.AddWithValue("@key", key);
-        cmd.Parameters.AddWithValue("@value", (object?)value ?? DBNull.Value);
+        cmd.Parameters.Add("@key", SqliteType.Text).Value = key;
+        cmd.Parameters.Add("@value", SqliteType.Text).Value = (object?)value ?? DBNull.Value;
         cmd.ExecuteNonQuery();
     }
 
@@ -3828,7 +3798,7 @@ public class DbWriter
         if (columnCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(columnCount));
 
-        return Math.Max(1, Math.Min(BatchSize, MaxSqlVariables / columnCount));
+        return Math.Max(1, Math.Min(BatchSize, SqliteDynamicSql.MaxSqlVariables / columnCount));
     }
 
     private void SetReadyBit(int flag)
@@ -3855,17 +3825,7 @@ public class DbWriter
             var transaction = ownTransaction ? null : _activeTransaction;
             try
             {
-                int current;
-                using (var read = _conn.CreateCommand())
-                {
-                    read.Transaction = transaction;
-                    read.CommandText = "PRAGMA user_version";
-                    var raw = read.ExecuteScalar();
-                    current = raw is long l ? (int)l : (raw is int i ? i : 0);
-                }
-                int next = current | flag;
-                if (next != current)
-                    Execute($"PRAGMA user_version = {next}", transaction);
+                ApplyReadyBitToUserVersion(flag, transaction);
                 if (ownTransaction)
                 {
                     Execute("COMMIT");
@@ -3887,17 +3847,26 @@ public class DbWriter
         }
     }
 
-    private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
+    private void ApplyReadyBitToUserVersion(int flag, SqliteTransaction? transaction)
     {
-        var inParams = new List<string>(supportedLanguages.Count);
-        for (int i = 0; i < supportedLanguages.Count; i++)
+        int current;
+        using (var read = _conn.CreateCommand())
         {
-            var paramName = $"@lang{i}";
-            inParams.Add(paramName);
-            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
+            read.Transaction = transaction;
+            read.CommandText = "PRAGMA user_version";
+            var raw = read.ExecuteScalar();
+            current = raw is long l ? (int)l : (raw is int i ? i : 0);
         }
 
-        return inParams;
+        int next = current | flag;
+        if (next != current)
+            Execute($"PRAGMA user_version = {next}", transaction);
+    }
+
+    private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
+    {
+        var values = supportedLanguages as IReadOnlyList<string> ?? supportedLanguages.ToList();
+        return SqliteDynamicSql.AddParameters(cmd, "lang", values, SqliteType.Text, "supported language filters");
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;

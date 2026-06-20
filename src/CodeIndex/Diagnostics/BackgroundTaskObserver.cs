@@ -1,3 +1,5 @@
+using CodeIndex.Cli;
+
 namespace CodeIndex.Diagnostics;
 
 internal static class BackgroundTaskObserver
@@ -74,7 +76,7 @@ internal static class BackgroundTaskObserver
             if (warningWriter is not null)
                 warningWriter(message);
             else
-                Console.Error.WriteLine(message);
+                CommandErrorWriter.WriteStderr(message);
         }
         catch (ObjectDisposedException)
         {

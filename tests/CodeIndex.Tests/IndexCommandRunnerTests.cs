@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -695,6 +696,66 @@ public class IndexCommandRunnerTests
                 protocolLimit.ToString(CultureInfo.InvariantCulture),
             ],
             startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void IsolatedWorkers_StartInfo_ShareDefaultsAndProtocolArguments_Issue3703()
+    {
+        var protocolLimit = WorkerProtocolLineLimits.MaxLineUtf8Bytes + 1024;
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+
+        var symbolCreated = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var symbolStartInfo,
+            out var symbolError);
+        var hookCreated = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var hookStartInfo,
+            out var hookError);
+
+        Assert.True(symbolCreated, symbolError);
+        Assert.True(hookCreated, hookError);
+        AssertIsolatedWorkerStartInfoDefaults(symbolStartInfo);
+        AssertIsolatedWorkerStartInfoDefaults(hookStartInfo);
+        Assert.Equal(currentProcessPath, symbolStartInfo.FileName);
+        Assert.Equal(currentProcessPath, hookStartInfo.FileName);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            symbolStartInfo.ArgumentList);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            hookStartInfo.ArgumentList);
+    }
+
+    private static void AssertIsolatedWorkerStartInfoDefaults(ProcessStartInfo startInfo)
+    {
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.True(startInfo.CreateNoWindow);
+        Assert.Equal(Encoding.UTF8.WebName, startInfo.StandardInputEncoding?.WebName);
+        Assert.Equal(Encoding.UTF8.WebName, startInfo.StandardOutputEncoding?.WebName);
+        Assert.Equal(Encoding.UTF8.WebName, startInfo.StandardErrorEncoding?.WebName);
     }
 
     [Fact]
@@ -1436,6 +1497,80 @@ public sealed class Caller
         finally
         {
             DbContext.PlannerStatisticsCommandExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_PlannerStatisticsMaintenanceFailure_AddsLastIndexRunDiagnostic_Issue3718()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            DbContext.PlannerStatisticsCommandCreatedForTesting = command =>
+            {
+                command.CommandText = "SELECT * FROM cdidx_missing_planner_statistics_table";
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            using var db = new DbContext(dbPath);
+            var status = new DbReader(db.Connection).GetStatus();
+            Assert.NotNull(status.LastIndexRun);
+            var lastIndexRun = status.LastIndexRun!;
+            var diagnostic = Assert.Single(lastIndexRun.Diagnostics ?? []);
+            Assert.Contains("planner_statistics_maintenance_failed", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("SELECT * FROM cdidx_missing_planner_statistics_table", diagnostic, StringComparison.Ordinal);
+            Assert.Contains(nameof(SqliteException), diagnostic, StringComparison.Ordinal);
+            Assert.Equal(1, lastIndexRun.DiagnosticCount);
+            Assert.False(lastIndexRun.DiagnosticsTruncated);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandCreatedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_PlannerStatisticsMaintenanceDiagnosticStampFailure_DoesNotFailSuccessfulIndex_Issue3718()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            DbContext.PlannerStatisticsCommandCreatedForTesting = command =>
+            {
+                command.CommandText = "SELECT * FROM cdidx_missing_planner_statistics_table";
+            };
+            var stampCalls = 0;
+            string[] capturedDiagnostics = [];
+            IndexCommandRunner.PlannerStatisticsMaintenanceDiagnosticStampingForTesting = (_, diagnostics) =>
+            {
+                stampCalls++;
+                capturedDiagnostics = diagnostics.ToArray();
+                throw new IOException("metadata store became unavailable");
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, stampCalls);
+            var diagnostic = Assert.Single(capturedDiagnostics);
+            Assert.Contains("planner_statistics_maintenance_failed", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("SELECT * FROM cdidx_missing_planner_statistics_table", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandCreatedForTesting = null;
+            IndexCommandRunner.PlannerStatisticsMaintenanceDiagnosticStampingForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

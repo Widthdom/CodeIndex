@@ -178,10 +178,18 @@
     "journal_mode": "wal",
     "synchronous": "NORMAL",
     "wal_autocheckpoint": 1000,
+    "busy_timeout_ms": 5000,
     "page_count": "\u003CCOUNT\u003E",
     "freelist_count": 0,
     "page_size": 4096,
     "auto_vacuum": 2
+  },
+  "prepared_command_cache": {
+    "count": 0,
+    "capacity": 32,
+    "hit_count": 0,
+    "miss_count": 0,
+    "eviction_count": 0
   },
   "maintenance_guidance": {
     "wal_state": "ok",

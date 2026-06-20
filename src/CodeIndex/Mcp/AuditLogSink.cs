@@ -321,7 +321,10 @@ internal sealed class AuditLogSink : IDisposable
     private static bool TrySerializeEventCore(AuditEvent evt, bool includeValues, out string serialized)
     {
         serialized = string.Empty;
-        using var buffer = new BoundedAuditEventUtf8Stream(MaxSerializedEventBytes);
+        using var buffer = new BoundedJsonUtf8Stream(
+            MaxSerializedEventBytes,
+            captureSerialized: true,
+            bytes => new AuditEventByteLimitExceededException(bytes));
         try
         {
             using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
@@ -334,7 +337,7 @@ internal sealed class AuditLogSink : IDisposable
             {
                 WriteEventCore(jw, evt, includeValues);
             }
-            serialized = buffer.GetCapturedString();
+            serialized = buffer.GetCapturedString() ?? string.Empty;
             return true;
         }
         catch (AuditEventByteLimitExceededException)
@@ -513,61 +516,6 @@ internal sealed class AuditLogSink : IDisposable
     private sealed class AuditEventByteLimitExceededException(int bytesWritten) : Exception
     {
         public int BytesWritten { get; } = bytesWritten;
-    }
-
-    private sealed class BoundedAuditEventUtf8Stream(int maxBytes) : Stream
-    {
-        private readonly MemoryStream _buffer = new(Math.Min(Math.Max(maxBytes, 0), 16 * 1024));
-
-        public int BytesWritten { get; private set; }
-
-        public override bool CanRead => false;
-        public override bool CanSeek => false;
-        public override bool CanWrite => true;
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public string GetCapturedString()
-            => Encoding.UTF8.GetString(_buffer.GetBuffer(), 0, (int)_buffer.Length);
-
-        public override void Flush()
-        {
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-            => throw new NotSupportedException();
-
-        public override long Seek(long offset, SeekOrigin origin)
-            => throw new NotSupportedException();
-
-        public override void SetLength(long value)
-            => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count)
-            => Write(buffer.AsSpan(offset, count));
-
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            if (buffer.Length == 0)
-                return;
-
-            var remaining = maxBytes - BytesWritten;
-            if (remaining < buffer.Length)
-            {
-                if (remaining > 0)
-                    _buffer.Write(buffer[..remaining]);
-                BytesWritten = maxBytes == int.MaxValue ? int.MaxValue : maxBytes + 1;
-                throw new AuditEventByteLimitExceededException(BytesWritten);
-            }
-
-            _buffer.Write(buffer);
-            BytesWritten += buffer.Length;
-        }
     }
 
     internal static JsonNode? SanitizeArgValue(string key, JsonNode? value, out bool redacted)

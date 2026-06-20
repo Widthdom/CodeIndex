@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer;
 
@@ -382,7 +383,7 @@ public static partial class SymbolExtractor
                 return;
         }
 
-        Console.Error.WriteLine("cdidx: warning: " + message);
+        CommandErrorWriter.WriteStderr("cdidx: warning: " + message);
     }
 
     private static IReadOnlyList<TypeScriptPathAliasRule> SortTypeScriptPathAliasRules(IReadOnlyList<TypeScriptPathAliasRule> rules) =>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -212,6 +213,59 @@ public partial class QueryCommandRunnerTests
                     item => item.GetProperty("message").GetString()!.Contains("candidate limit", StringComparison.Ordinal));
                 Assert.EndsWith("hooks", diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
                 Assert.DoesNotContain(projectRoot, diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReportsAcceptedExtensionTrustOverrides_3735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_trust_overrides_3735");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
+                ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "true");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                    ["--db", dbPath, "--json"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var trustOverrides = document.RootElement.GetProperty("trust_overrides").EnumerateArray().ToArray();
+                Assert.Equal(2, trustOverrides.Length);
+
+                var pluginOverride = Assert.Single(
+                    trustOverrides,
+                    item => item.GetProperty("kind").GetString() == "workspace_plugin_directory");
+                Assert.Equal(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, pluginOverride.GetProperty("environment_variable").GetString());
+                Assert.Equal("true", pluginOverride.GetProperty("value").GetString());
+                Assert.EndsWith(".cdidx/plugins", pluginOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, pluginOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                Assert.Contains("workspace plugin", pluginOverride.GetProperty("message").GetString(), StringComparison.Ordinal);
+
+                var hookOverride = Assert.Single(
+                    trustOverrides,
+                    item => item.GetProperty("kind").GetString() == "hook_directory_override");
+                Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hookOverride.GetProperty("environment_variable").GetString());
+                Assert.EndsWith("hooks", hookOverride.GetProperty("value").GetString(), StringComparison.Ordinal);
+                Assert.EndsWith("hooks", hookOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, hookOverride.GetProperty("value").GetString(), StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, hookOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                Assert.Contains("hook assemblies execute", hookOverride.GetProperty("message").GetString(), StringComparison.Ordinal);
             }
             finally
             {
@@ -1224,6 +1278,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("wal", pragmas.GetProperty("journal_mode").GetString());
             Assert.Equal(DbContext.DefaultSynchronousMode, pragmas.GetProperty("synchronous").GetString());
             Assert.Equal(DbContext.DefaultWalAutocheckpointPages, pragmas.GetProperty("wal_autocheckpoint").GetInt32());
+            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, pragmas.GetProperty("busy_timeout_ms").GetInt32());
+            var preparedCommandCache = json.GetProperty("prepared_command_cache");
+            Assert.Equal(PreparedCommandCache.DefaultCapacity, preparedCommandCache.GetProperty("capacity").GetInt32());
+            Assert.True(preparedCommandCache.GetProperty("count").GetInt32() >= 0);
+            Assert.True(preparedCommandCache.GetProperty("miss_count").GetInt64() >= 0);
+            Assert.True(preparedCommandCache.GetProperty("hit_count").GetInt64() >= 0);
+            Assert.True(preparedCommandCache.GetProperty("eviction_count").GetInt64() >= 0);
         }
         finally
         {

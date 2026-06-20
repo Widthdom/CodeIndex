@@ -19,6 +19,7 @@ public class DbContext : IDisposable
     public const long MaxMmapSizeBytes = 1073741824;
     public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
+    public const string BusyTimeoutEnvironmentVariable = "CDIDX_SQLITE_BUSY_TIMEOUT_MS";
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -101,6 +102,7 @@ public class DbContext : IDisposable
     private bool _rebuildFtsAfterSchemaMigration;
 
     private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
 
@@ -108,6 +110,12 @@ public class DbContext : IDisposable
     {
         get => ScopedOptimizePragmaExecutedForTesting.Value;
         set => ScopedOptimizePragmaExecutedForTesting.Value = value;
+    }
+
+    internal static Action<SqliteCommand>? PlannerStatisticsCommandCreatedForTesting
+    {
+        get => ScopedPlannerStatisticsCommandCreatedForTesting.Value;
+        set => ScopedPlannerStatisticsCommandCreatedForTesting.Value = value;
     }
 
     internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting
@@ -154,7 +162,9 @@ public class DbContext : IDisposable
     /// ホットパス共有の prepared command LRU キャッシュ。Issue #1566.
     /// </summary>
     internal PreparedCommandCache PreparedCommands
-        => _preparedCommands ??= new PreparedCommandCache(_connection);
+        => _preparedCommands ??= new PreparedCommandCache(
+            _connection,
+            PreparedCommandCache.ReadCapacityFromEnvironment());
 
     public static bool TryValidateExistingCodeIndexDb(
         string dbPath,
@@ -291,7 +301,7 @@ public class DbContext : IDisposable
                     _connection = new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
                     cancellationToken.ThrowIfCancellationRequested();
                     _connection.Open();
-                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyBusyTimeoutPragma();
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
@@ -327,7 +337,7 @@ public class DbContext : IDisposable
                 static connection => connection.Open(),
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
-            Execute("PRAGMA busy_timeout=5000");
+            ApplyBusyTimeoutPragma();
             ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
             EnsureWritableUserVersionSupported(dbPath);
@@ -338,7 +348,7 @@ public class DbContext : IDisposable
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
             if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
-                Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+                CommandErrorWriter.WriteStderr($"Warning: WAL mode not enabled (got '{journalMode}')");
             ExecuteSynchronousPragmaWithFallback(Execute);
             Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
             ApplyPrivateDatabaseFileModes(dbPath);
@@ -367,7 +377,7 @@ public class DbContext : IDisposable
                         static connection => connection.Open(),
                         dbPath: dbPath,
                         cancellationToken: cancellationToken);
-                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyBusyTimeoutPragma();
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     EnsureWritableUserVersionSupported(dbPath);
@@ -376,7 +386,7 @@ public class DbContext : IDisposable
                     ApplyPrivateDatabaseFileModes(dbPath);
                     var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
                     if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
-                        Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+                        CommandErrorWriter.WriteStderr($"Warning: WAL mode not enabled (got '{journalMode}')");
                     ExecuteSynchronousPragmaWithFallback(Execute);
                     Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
                     ApplyPrivateDatabaseFileModes(dbPath);
@@ -425,7 +435,7 @@ public class DbContext : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         _connection = OpenReadOnly(dbPath);
-        Execute("PRAGMA busy_timeout=5000");
+        ApplyBusyTimeoutPragma();
         ApplyConnectionPerformancePragmas();
         RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
         _isReadOnly = true;
@@ -549,7 +559,7 @@ public class DbContext : IDisposable
         var raw = GetMetaString(BatchInProgressMetaKey);
         if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
+            CommandErrorWriter.WriteStderr("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
             if (!_isReadOnly)
                 Execute("PRAGMA user_version = 0");
         }
@@ -644,6 +654,12 @@ public class DbContext : IDisposable
             TryGetWalFileSize());
 
     private long ReadAutoVacuumMode() => ReadPragmaLong("auto_vacuum");
+
+    private void ApplyBusyTimeoutPragma()
+    {
+        var busyTimeoutMs = DbPragmaPolicy.ReadBusyTimeoutMs(BusyTimeoutEnvironmentVariable);
+        Execute($"PRAGMA busy_timeout={busyTimeoutMs}");
+    }
 
     private long? TryGetDatabaseFileSize()
     {
@@ -2292,7 +2308,7 @@ public class DbContext : IDisposable
         Execute("PRAGMA foreign_keys=ON");
         var fkResult = ExecuteScalar("PRAGMA foreign_keys");
         if (fkResult != "1")
-            Console.Error.WriteLine("Warning: foreign_keys pragma not enabled");
+            CommandErrorWriter.WriteStderr("Warning: foreign_keys pragma not enabled");
     }
 
     /// <summary>
@@ -2617,7 +2633,7 @@ public class DbContext : IDisposable
         // Single line so the next read attempt only sees one clear "migration partial" record
         // even if multiple commands share the same process / log stream.
         // 1 行に集約し、後続 read エラーと混在しても拾いやすい形にする。
-        Console.Error.WriteLine(
+        CommandErrorWriter.WriteStderr(
             $"Warning: cdidx schema migration step \"{failure.Step}\" failed " +
             $"(SQLite error {failure.SqliteErrorCode}: {failure.SqliteMessage.TrimEnd('.')}). " +
             "Subsequent read queries may fail with 'no such column' until the migration completes. " +
@@ -2716,26 +2732,31 @@ public class DbContext : IDisposable
         }
     }
 
-    internal void RunPlannerStatisticsMaintenance(bool forceAnalyze)
+    internal sealed record PlannerStatisticsMaintenanceFailure(string CommandText, SqliteException Exception);
+
+    internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(bool forceAnalyze)
     {
         if (_isReadOnly)
-            return;
+            return null;
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = forceAnalyze ? "ANALYZE" : "PRAGMA optimize";
         try
         {
+            PlannerStatisticsCommandCreatedForTesting?.Invoke(cmd);
             cmd.ExecuteNonQuery();
             PlannerStatisticsCommandExecutedForTesting?.Invoke(_connection.DataSource, cmd.CommandText);
             if (!forceAnalyze)
                 OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
             _hasWriteWork = false;
+            return null;
         }
-        catch (SqliteException)
+        catch (SqliteException ex)
         {
             // Planner statistics are an index-performance aid. If SQLite rejects ANALYZE /
             // optimize during cleanup (read-only handoff, transient filesystem state), keep
             // the completed index usable instead of converting success into failure.
+            return new PlannerStatisticsMaintenanceFailure(cmd.CommandText, ex);
         }
     }
 
