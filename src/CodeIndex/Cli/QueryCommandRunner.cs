@@ -1550,6 +1550,7 @@ public static partial class QueryCommandRunner
                         scope,
                         selection.Queries.Count,
                         compactTotal,
+                        BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, compactTotal),
                         compactQueryResults),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult));
                 return CommandExitCodes.Success;
@@ -1566,6 +1567,7 @@ public static partial class QueryCommandRunner
                         scope,
                         selection.Queries.Count,
                         total,
+                        BuildSearchRecipeRunSummary(queryResults, options.Limit, total),
                         queryResults),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult));
                 return CommandExitCodes.Success;
@@ -1699,6 +1701,8 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 rows.Count,
+                options.Limit,
+                0,
                 BuildSearchRecipeTopFiles(rows),
                 false,
                 null,
@@ -1756,7 +1760,9 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
+            var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
+            var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1769,6 +1775,8 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
                 rows.Count,
+                options.Limit,
+                minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
                 truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
@@ -1809,7 +1817,9 @@ public static partial class QueryCommandRunner
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
+            var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
             queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1819,6 +1829,8 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
                 rows.Count,
+                options.Limit,
+                minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
                 truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
@@ -1835,6 +1847,30 @@ public static partial class QueryCommandRunner
 
         return queryResults;
     }
+
+    private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        int limitPerQuery,
+        int emittedResultCount)
+        => new(
+            limitPerQuery,
+            emittedResultCount,
+            queryResults.Count(query => query.Truncated),
+            queryResults.Sum(query => query.MinimumOmittedResultCount),
+            queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
+            "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
+
+    private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
+        IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
+        int limitPerQuery,
+        int emittedResultCount)
+        => new(
+            limitPerQuery,
+            emittedResultCount,
+            queryResults.Count(query => query.Truncated),
+            queryResults.Sum(query => query.MinimumOmittedResultCount),
+            queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
+            "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
 
     private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
     {

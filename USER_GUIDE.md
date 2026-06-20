@@ -1009,6 +1009,10 @@ Recipe runs support text output, `--json` / `--format json`, `--format compact`,
 and `--format issue-drafts`; `--list-recipes` supports text or JSON. Other
 search export formats and `--json=array` are rejected for recipe modes because
 recipe output is grouped by query or list metadata.
+Recipe JSON and compact output apply `--limit` per query, include a `summary`
+with emitted/truncated counts, and mark truncated child queries with
+`next_cursor`; rerun a single child query as
+`--recipe <recipe>/<query> --cursor <next_cursor>` to page the next result set.
 The MCP `search` tool exposes the same recipe surface with
 `{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
 execution. MCP recipe runs apply the same default source scope as the CLI; pass
@@ -3537,6 +3541,10 @@ recipe run が対応する形式は text output、`--json` / `--format json`、`
 `--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
+recipe の JSON/compact output は `--limit` を query ごとに適用し、emitted/truncated
+count を含む `summary` を出力し、truncated な child query には `next_cursor` を付けます。
+次の result set を取得するには、単一 child query を
+`--recipe <recipe>/<query> --cursor <next_cursor>` として再実行してください。
 MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
 `{"recipe":"risky-code"}` で実行できます。MCP の recipe run も CLI と同じ既定の source
 scope を適用します。docs、tests、changelog、recipe definitions を意図的に audit する場合は

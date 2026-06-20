@@ -1798,7 +1798,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_RecipeCompactJsonEmitsSummaryAndCursor_Issue3392()
+    public void RunSearch_RecipeCompactJsonEmitsSummaryAndCursor_Issues3392_3667()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_compact_json");
         try
@@ -1841,12 +1841,19 @@ public partial class QueryCommandRunnerTests
             var firstRoot = firstDocument.RootElement;
             var firstQuery = Assert.Single(firstRoot.GetProperty("queries").EnumerateArray());
             var firstResult = Assert.Single(firstQuery.GetProperty("results").EnumerateArray());
+            var firstSummary = firstRoot.GetProperty("summary");
             var firstPath = firstResult.GetProperty("path").GetString();
             var nextCursor = firstQuery.GetProperty("next_cursor").GetString();
 
             Assert.Equal(1, firstRoot.GetProperty("query_count").GetInt32());
             Assert.Equal(1, firstRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, firstSummary.GetProperty("limit_per_query").GetInt32());
+            Assert.Equal(1, firstSummary.GetProperty("emitted_result_count").GetInt32());
+            Assert.Equal(1, firstSummary.GetProperty("truncated_query_count").GetInt32());
+            Assert.True(firstSummary.GetProperty("cursoring_available").GetBoolean());
             Assert.Equal("raw-diagnostic-echo", firstQuery.GetProperty("name").GetString());
+            Assert.Equal(1, firstQuery.GetProperty("result_limit").GetInt32());
+            Assert.Equal(1, firstQuery.GetProperty("minimum_omitted_result_count").GetInt32());
             Assert.Equal(1, firstQuery.GetProperty("top_files")[0].GetProperty("count").GetInt32());
             Assert.True(firstResult.TryGetProperty("match_lines", out _));
             Assert.False(firstResult.TryGetProperty("snippet", out _));
@@ -1859,8 +1866,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, jsonExitCode);
             Assert.Equal(string.Empty, jsonStderr);
             using var jsonDocument = ParseJsonOutput(jsonStdout);
+            var jsonSummary = jsonDocument.RootElement.GetProperty("summary");
             var jsonQuery = Assert.Single(jsonDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(1, jsonSummary.GetProperty("limit_per_query").GetInt32());
+            Assert.Equal(1, jsonSummary.GetProperty("minimum_omitted_result_count").GetInt32());
             Assert.True(jsonQuery.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, jsonQuery.GetProperty("minimum_omitted_result_count").GetInt32());
             Assert.False(string.IsNullOrWhiteSpace(jsonQuery.GetProperty("next_cursor").GetString()));
 
             var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
