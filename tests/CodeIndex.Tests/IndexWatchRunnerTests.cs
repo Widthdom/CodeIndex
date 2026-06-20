@@ -564,7 +564,11 @@ public class IndexWatchRunnerTests
             var watchingLine = capturedOut
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .First(line => line.Contains("\"status\":\"watching\"", StringComparison.Ordinal));
+            Assert.DoesNotContain(projectRoot, watchingLine);
+            Assert.DoesNotContain(dbPath, watchingLine);
             using var watchStarted = JsonDocument.Parse(watchingLine);
+            Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("project_root").GetString());
+            Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("db").GetString());
             Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
         }
         finally

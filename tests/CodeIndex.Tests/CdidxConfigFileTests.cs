@@ -891,6 +891,54 @@ public class CdidxConfigFileTests
         finally { TestProjectHelper.DeleteDirectory(root); }
     }
 
+    [Fact]
+    public void LoadAndApply_InvalidTypeSanitizesConfigPath_Issue3793()
+    {
+        var root = CreateTempDir();
+        var sensitiveSegment = "secret-config-token-ghp_1234567890abcdef-private";
+        var dir = Path.Combine(root, sensitiveSegment);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """{ "debug": 1 }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains("`debug` must be a string", result.Error);
+            Assert.DoesNotContain(dir, result.Error);
+            Assert.DoesNotContain(root, result.Error);
+            Assert.DoesNotContain(sensitiveSegment, result.Error);
+            Assert.DoesNotContain("ghp_1234567890abcdef", result.Error);
+        }
+        finally { TestProjectHelper.DeleteDirectory(root); }
+    }
+
+    [Fact]
+    public void LoadAndApply_WorkspaceOutputPathErrorSanitizesConfigRoot_Issue3793()
+    {
+        var root = CreateTempDir();
+        var sensitiveSegment = "secret-config-token-ghp_1234567890abcdef-private";
+        var dir = Path.Combine(root, sensitiveSegment);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """{ "metrics_path": "../outside/metrics.jsonl" }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains("config workspace root", result.Error);
+            Assert.DoesNotContain(dir, result.Error);
+            Assert.DoesNotContain(root, result.Error);
+            Assert.DoesNotContain(sensitiveSegment, result.Error);
+            Assert.DoesNotContain("ghp_1234567890abcdef", result.Error);
+        }
+        finally { TestProjectHelper.DeleteDirectory(root); }
+    }
+
     private static string CreateTempDir()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx_config_{Guid.NewGuid():N}");

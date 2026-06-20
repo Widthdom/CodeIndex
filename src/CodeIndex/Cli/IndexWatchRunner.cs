@@ -485,8 +485,8 @@ internal static class IndexWatchRunner
             {
                 Status = "watching",
                 Phase = "initial_scan",
-                ProjectRoot = projectRoot,
-                Db = resolvedDbPath,
+                ProjectRoot = "[redacted]",
+                Db = "[redacted]",
                 DebounceMs = (int)debounce.TotalMilliseconds,
                 WatchPendingPathLimit = maxPendingPaths,
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));

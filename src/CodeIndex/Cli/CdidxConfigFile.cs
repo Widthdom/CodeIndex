@@ -145,7 +145,7 @@ internal static class CdidxConfigFile
         {
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return new LoadResult(Path: path, Error: $"[cdidx] {path}: top-level value must be a JSON object.");
+                return new LoadResult(Path: path, Error: $"{FormatConfigDiagnosticPrefix(path)} top-level value must be a JSON object.");
 
             var pending = new List<(string EnvName, string Value)>();
             var errors = new List<string>();
@@ -201,7 +201,7 @@ internal static class CdidxConfigFile
         if (root.TryGetProperty("disable_persistent_log", out var disableLog))
         {
             if (disableLog.ValueKind != JsonValueKind.True && disableLog.ValueKind != JsonValueKind.False)
-                errors.Add($"[cdidx] {path}: `disable_persistent_log` must be a boolean.");
+                errors.Add($"{FormatConfigDiagnosticPrefix(path)} `disable_persistent_log` must be a boolean.");
             else if (disableLog.GetBoolean())
                 pending.Add(("CDIDX_DISABLE_PERSISTENT_LOG", "1"));
         }
@@ -250,7 +250,7 @@ internal static class CdidxConfigFile
             {
                 var parsedMaxAgeDays = int.Parse(value!, CultureInfo.InvariantCulture);
                 if (parsedMaxAgeDays > SuggestionStore.MaximumMaxAgeDays)
-                    errors.Add($"[cdidx] {path}: `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
+                    errors.Add($"{FormatConfigDiagnosticPrefix(path)} `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
                 else
                     pending.Add((SuggestionStore.MaxAgeDaysEnvironmentVariable, value!));
             }
@@ -264,7 +264,7 @@ internal static class CdidxConfigFile
             {
                 var parsedMaxCount = int.Parse(value!, CultureInfo.InvariantCulture);
                 if (parsedMaxCount > SuggestionStore.MaximumMaxCount)
-                    errors.Add($"[cdidx] {path}: `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
+                    errors.Add($"{FormatConfigDiagnosticPrefix(path)} `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
                 else
                     pending.Add((SuggestionStore.MaxCountEnvironmentVariable, value!));
             }
@@ -278,7 +278,7 @@ internal static class CdidxConfigFile
 
         if (indexing.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `indexing` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `indexing` must be a JSON object.");
             return;
         }
 
@@ -316,7 +316,7 @@ internal static class CdidxConfigFile
             {
                 var parsedLimit = int.Parse(value!, CultureInfo.InvariantCulture);
                 if (parsedLimit > IndexWatchRunner.MaxWatchPendingPathLimit)
-                    errors.Add($"[cdidx] {path}: `indexing.watchPendingPathLimit` must be <= {IndexWatchRunner.MaxWatchPendingPathLimit}.");
+                    errors.Add($"{FormatConfigDiagnosticPrefix(path)} `indexing.watchPendingPathLimit` must be <= {IndexWatchRunner.MaxWatchPendingPathLimit}.");
                 else
                     pending.Add((IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, value!));
             }
@@ -330,7 +330,7 @@ internal static class CdidxConfigFile
 
         if (search.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `search` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `search` must be a JSON object.");
             return;
         }
 
@@ -368,7 +368,7 @@ internal static class CdidxConfigFile
 
         if (mcp.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `mcp` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `mcp` must be a JSON object.");
             return;
         }
 
@@ -385,7 +385,7 @@ internal static class CdidxConfigFile
 
         if (tools.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `mcp.tools` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `mcp.tools` must be a JSON object.");
             return;
         }
 
@@ -415,7 +415,7 @@ internal static class CdidxConfigFile
 
         if (rateLimit.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `mcp.rate_limit` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `mcp.rate_limit` must be a JSON object.");
             return;
         }
 
@@ -604,7 +604,7 @@ internal static class CdidxConfigFile
             return;
         if (value.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `{key}` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a JSON object.");
             return;
         }
 
@@ -659,6 +659,9 @@ internal static class CdidxConfigFile
     internal static string FormatConfigDiagnosticPath(string path)
         => FormatConfigDiagnosticText(path, MaxConfigDiagnosticChars, redactPaths: true).Text;
 
+    private static string FormatConfigDiagnosticPrefix(string path)
+        => $"[cdidx] {FormatConfigDiagnosticPath(path)}:";
+
     internal static string FormatConfigExceptionMessage(Exception ex)
         => FormatConfigDiagnosticText(ex.Message, MaxConfigDiagnosticChars, redactPaths: true).Text;
 
@@ -679,18 +682,18 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.String)
         {
-            error = $"[cdidx] {path}: `{key}` must be a string.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a string.";
             return false;
         }
         var raw = element.GetString();
         if (string.IsNullOrWhiteSpace(raw))
         {
-            error = $"[cdidx] {path}: `{key}` must be a non-empty string.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a non-empty string.";
             return false;
         }
         if (raw.Length > maxChars)
         {
-            error = $"[cdidx] {path}: `{key}` must be <= {maxChars} characters.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be <= {maxChars} characters.";
             return false;
         }
 
@@ -728,7 +731,7 @@ internal static class CdidxConfigFile
 
                 if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
                 {
-                    pathError = $"[cdidx] {path}: `{key}` must resolve inside the config workspace root `{normalizedRoot}`.";
+                    pathError = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must resolve inside the config workspace root `{FormatConfigDiagnosticPath(normalizedRoot)}`.";
                     return false;
                 }
 
@@ -741,7 +744,7 @@ internal static class CdidxConfigFile
                                            or PathTooLongException
                                            or UnauthorizedAccessException)
             {
-                pathError = $"[cdidx] {path}: `{key}` path is invalid (invalid_path).";
+                pathError = $"{FormatConfigDiagnosticPrefix(path)} `{key}` path is invalid (invalid_path).";
                 return false;
             }
         }
@@ -762,13 +765,13 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Array)
         {
-            error = $"[cdidx] {path}: `{key}` must be an array of strings.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be an array of strings.";
             return false;
         }
         var arrayLength = element.GetArrayLength();
         if (arrayLength > MaxConfigStringArrayItems)
         {
-            error = $"[cdidx] {path}: `{key}` must contain <= {MaxConfigStringArrayItems} items.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must contain <= {MaxConfigStringArrayItems} items.";
             return false;
         }
 
@@ -777,13 +780,13 @@ internal static class CdidxConfigFile
         {
             if (item.ValueKind != JsonValueKind.String)
             {
-                error = $"[cdidx] {path}: `{key}` must contain only strings.";
+                error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must contain only strings.";
                 return false;
             }
             var raw = item.GetString() ?? string.Empty;
             if (raw.Length > MaxConfigStringArrayItemChars)
             {
-                error = $"[cdidx] {path}: `{key}` items must be <= {MaxConfigStringArrayItemChars} characters.";
+                error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` items must be <= {MaxConfigStringArrayItemChars} characters.";
                 return false;
             }
             if (string.IsNullOrWhiteSpace(raw))
@@ -807,7 +810,7 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Number)
         {
-            error = $"[cdidx] {path}: `{key}` must be a number.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a number.";
             return false;
         }
 
@@ -817,7 +820,7 @@ internal static class CdidxConfigFile
             || parsed > maxInclusive)
         {
             var minimum = allowZero ? "non-negative" : "positive";
-            error = $"[cdidx] {path}: `{key}` must be a finite {minimum} number <= {maxInclusive.ToString(CultureInfo.InvariantCulture)}.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a finite {minimum} number <= {maxInclusive.ToString(CultureInfo.InvariantCulture)}.";
             return false;
         }
 
@@ -831,13 +834,13 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Number)
         {
-            error = $"[cdidx] {path}: `{key}` must be a number.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a number.";
             return false;
         }
 
         if (!element.TryGetInt32(out var parsed) || parsed <= 0)
         {
-            error = $"[cdidx] {path}: `{key}` must be a positive integer.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a positive integer.";
             return false;
         }
 
@@ -851,21 +854,21 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Number)
         {
-            error = $"[cdidx] {path}: `{key}` must be a number.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a number.";
             return false;
         }
 
         if (!element.TryGetInt32(out var parsed) || parsed < 0 || (!allowZero && parsed == 0))
         {
             error = allowZero
-                ? $"[cdidx] {path}: `{key}` must be a non-negative integer."
-                : $"[cdidx] {path}: `{key}` must be a positive integer.";
+                ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a non-negative integer."
+                : $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a positive integer.";
             return false;
         }
 
         if (QueryCommandRunner.NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && parsed > maxAllowed)
         {
-            error = $"[cdidx] {path}: `{key}` must be <= {maxAllowed}.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be <= {maxAllowed}.";
             return false;
         }
 
