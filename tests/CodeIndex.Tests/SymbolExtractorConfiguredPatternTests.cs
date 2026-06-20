@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 
@@ -109,6 +110,37 @@ public partial class SymbolExtractorTests
 
                 Assert.Contains("Skipped pattern config", stderr, StringComparison.Ordinal);
                 Assert.Contains("invalid regex", stderr, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Extract_ConfiguredPatternYaml_UsesSharedBoundedRegexFactory_Issue3721()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_bounded_{Guid.NewGuid():N}");
+            try
+            {
+                WritePatternConfig(
+                    tempDir,
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.ReloadForTests();
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(tempDir);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out var extractor));
+                var configured = Assert.IsType<ConfiguredSymbolExtractor>(extractor);
+                var pattern = Assert.Single(configured.PatternsForTests);
+
+                Assert.IsType<BoundedRegex>(pattern.Regex);
+                Assert.Equal(ExtractorPluginRegistry.PatternRegexTimeout, pattern.Regex.MatchTimeout);
+                Assert.True((pattern.Regex.Options & RegexOptions.CultureInvariant) != 0);
             }
             finally
             {
