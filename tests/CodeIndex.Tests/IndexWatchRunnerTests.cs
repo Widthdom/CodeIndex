@@ -100,6 +100,29 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void FileChangeBatcher_RequestFullRescan_SanitizesAndBoundsReason_Issue3804()
+    {
+        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(100), () => clock);
+        var rawReason = "watch failed for /Users/alice/private/project/secret.txt token=ghp_"
+            + new string('a', 40)
+            + " "
+            + new string('x', IndexWatchRunner.MaxWatchDiagnosticChars * 2);
+
+        batcher.RequestFullRescan(rawReason);
+
+        clock = clock.AddMilliseconds(200);
+        Assert.True(batcher.TryDrain(out _, out var rescan, out var reason));
+        Assert.True(rescan);
+        Assert.NotNull(reason);
+        Assert.True(reason!.Length <= IndexWatchRunner.MaxWatchDiagnosticChars);
+        Assert.Contains("[redacted]", reason);
+        Assert.Contains("[truncated]", reason);
+        Assert.DoesNotContain("/Users/alice/private/project/secret.txt", reason);
+        Assert.DoesNotContain("ghp_", reason);
+    }
+
+    [Fact]
     public void FileChangeBatcher_Add_WhenPendingPathLimitExceeded_CollapsesToFullRescan()
     {
         var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -200,6 +223,29 @@ public class IndexWatchRunnerTests
         var flagIndex = args.IndexOf("--max-symbols-per-file");
         Assert.True(flagIndex >= 0);
         Assert.Equal("42", args[flagIndex + 1]);
+    }
+
+    [Fact]
+    public void BuildBatchPathSamples_BoundsLongRelativePaths_Issue3804()
+    {
+        var method = typeof(IndexWatchRunner).GetMethod("BuildBatchPathSamples", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        var longSegment = string.Concat(Enumerable.Repeat("very-long-segment-", 32));
+        var longRelative = Path.Combine("src", longSegment + ".cs");
+        object?[] parameters =
+        [
+            "/repo",
+            new[] { Path.Combine("/repo", longRelative) },
+            false,
+        ];
+
+        var samples = Assert.IsType<List<string>>(method.Invoke(null, parameters));
+
+        var sample = Assert.Single(samples);
+        Assert.True((bool)parameters[2]!);
+        Assert.True(sample.Length <= IndexWatchRunner.BatchPathSampleMaxChars);
+        Assert.Contains("[truncated]", sample);
+        Assert.DoesNotContain(longSegment, sample);
     }
 
     [Fact]
@@ -370,10 +416,12 @@ public class IndexWatchRunnerTests
         Assert.Equal("cdidx", recovery.GetProperty("command").GetString());
         var args = recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()).ToList();
         Assert.Equal("index", args[0]);
-        Assert.Equal("/repo", args[1]);
+        Assert.Equal("[redacted]", args[1]);
         Assert.Contains("--json", args);
         Assert.Contains("--quiet", args);
-        AssertOptionValue(args, "--db", resolvedDbPath);
+        AssertOptionValue(args, "--db", "[redacted]");
+        Assert.DoesNotContain("/repo", args);
+        Assert.DoesNotContain(resolvedDbPath, args);
         AssertOptionValue(args, "--max-file-bytes", "4096");
         AssertOptionValue(args, "--max-symbols-per-file", "42");
         AssertOptionValue(args, "--parallelism", parallelism.ToString(System.Globalization.CultureInfo.InvariantCulture));
