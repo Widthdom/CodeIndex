@@ -143,6 +143,12 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
         Assert.True(root.GetProperty("http_request_queue_limit").GetInt32() >= 1);
+        Assert.Equal(0, root.GetProperty("http_request_log_queue_depth").GetInt32());
+        Assert.Equal(0, root.GetProperty("http_request_log_queue_capacity").GetInt32());
+        Assert.Equal(0, root.GetProperty("http_request_log_dropped_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_request_log_queue_full_drop_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_request_log_callback_failure_count").GetInt64());
+        Assert.False(root.GetProperty("http_request_log_degraded").GetBoolean());
         Assert.Equal(0, root.GetProperty("http_concurrent_handler_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_request_queue_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_event_stream_rejection_count").GetInt64());
@@ -271,6 +277,55 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal("POST", okPost.Method);
         Assert.Equal("/", okPost.Path);
         Assert.Equal((int)HttpStatusCode.OK, okPost.StatusCode);
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_DropsWhenQueueSaturated_Issue3747()
+    {
+        using var writerEntered = new ManualResetEventSlim();
+        using var releaseWriter = new ManualResetEventSlim();
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            requestLogger: record =>
+            {
+                records.Enqueue(record);
+                writerEntered.Set();
+                releaseWriter.Wait();
+            },
+            requestLogQueueCapacity: 1);
+
+        var healthUri = new Uri(new Uri(harness.Endpoint), "healthz");
+        using var client = new HttpClient();
+        try
+        {
+            using var first = await client.GetAsync(healthUri);
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "request log writer should enter the blocking callback");
+
+            using var second = await client.GetAsync(healthUri);
+            Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+            using var third = await client.GetAsync(healthUri);
+            Assert.Equal(HttpStatusCode.OK, third.StatusCode);
+
+            await WaitForRequestLogDropAsync(harness);
+            Assert.True(harness.RequestLogQueueFullDropCount > 0);
+        }
+        finally
+        {
+            releaseWriter.Set();
+        }
+
+        using var degraded = await client.GetAsync(healthUri);
+        Assert.Equal(HttpStatusCode.OK, degraded.StatusCode);
+        using var document = JsonDocument.Parse(await degraded.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        Assert.Equal("degraded", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("http_request_log_dropped_count").GetInt64() > 0);
+        Assert.True(root.GetProperty("http_request_log_queue_full_drop_count").GetInt64() > 0);
+        Assert.Equal(0, root.GetProperty("http_request_log_callback_failure_count").GetInt64());
+        Assert.True(root.GetProperty("http_request_log_degraded").GetBoolean());
+        Assert.Contains("queue_full", root.GetProperty("http_request_log_last_drop_reason").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1303,6 +1358,20 @@ public class HttpMcpTransportTests : IDisposable
         return snapshot;
     }
 
+    private static async Task WaitForRequestLogDropAsync(McpHttpHarness harness)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (harness.RequestLogDroppedCount > 0)
+                return;
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail("Expected the request log queue to report at least one dropped record.");
+    }
+
     private static void AssertTooManyRequests(HttpResponseMessage response, string rejectionReason)
     {
         Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
@@ -1400,6 +1469,10 @@ public class HttpMcpTransportTests : IDisposable
 
         public int EventStreamCount => _transport.EventStreamCount;
 
+        public long RequestLogDroppedCount => _transport.RequestLogDroppedCount;
+
+        public long RequestLogQueueFullDropCount => _transport.RequestLogQueueFullDropCount;
+
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
@@ -1418,7 +1491,8 @@ public class HttpMcpTransportTests : IDisposable
             IMcpAuthenticator? authenticator = null,
             Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null,
             int? maxRequestBodyBytes = null,
-            int? maxQueuedRequests = null)
+            int? maxQueuedRequests = null,
+            int? requestLogQueueCapacity = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
             var transport = new HttpMcpTransport(
@@ -1428,7 +1502,8 @@ public class HttpMcpTransportTests : IDisposable
                 bearerToken,
                 requestLogger,
                 maxRequestBodyBytes,
-                maxQueuedRequests);
+                maxQueuedRequests,
+                requestLogQueueCapacity: requestLogQueueCapacity);
             var server = authenticator is null
                 ? new McpServer(dbPath, ConsoleUi.LoadVersion())
                 : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);

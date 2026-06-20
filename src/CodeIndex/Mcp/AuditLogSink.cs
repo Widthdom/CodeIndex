@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -43,25 +44,34 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxAuditArgumentKeyChars = McpBoundedText.MaxDiagnosticDisplayChars;
     internal const int MaxRequestIdChars = 256;
     internal const int MaxSerializedEventBytes = 64 * 1024;
+    internal const int DefaultQueueCapacity = 1024;
+    internal const int MaxConfiguredQueueCapacity = 16 * 1024;
+    private static readonly TimeSpan DisposeWriterTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly Regex SecretValuePattern = new(
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private readonly object _gate = new();
     private readonly string _path;
     private readonly long _maxBytes;
     private readonly bool _includeValues;
+    private readonly int _queueCapacity;
+    private readonly Channel<byte[]> _recordQueue;
+    private readonly Task _writerTask;
     private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
     private long _bytesWritten;
+    private long _pendingRecordCount;
     private long _droppedRecordCount;
+    private long _queueFullDropCount;
     private long _serializationFailureCount;
     private long _writeFailureCount;
     private long _rotationFailureCount;
     private long _rotationCleanupFailureCount;
     private string? _lastDropReason;
     private string? _lastRotationFailure;
-    private bool _disposed;
+    private int _disposed;
+
+    internal Action? BeforeWriteForTests { get; set; }
 
     internal sealed record AuditLogDiagnostics(
         string Path,
@@ -69,7 +79,10 @@ internal sealed class AuditLogSink : IDisposable
         long MaxBytes,
         long BytesWritten,
         bool Disposed,
+        int QueueCapacity,
+        long QueueDepth,
         long DroppedRecordCount,
+        long QueueFullDropCount,
         long SerializationFailureCount,
         long WriteFailureCount,
         long RotationFailureCount,
@@ -78,7 +91,7 @@ internal sealed class AuditLogSink : IDisposable
         string? LastDropReason,
         string? LastRotationFailure);
 
-    internal AuditLogSink(string path, long maxBytes, bool includeValues)
+    internal AuditLogSink(string path, long maxBytes, bool includeValues, int? queueCapacity = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Audit log path must be non-empty.", nameof(path));
@@ -90,6 +103,7 @@ internal sealed class AuditLogSink : IDisposable
         _path = System.IO.Path.GetFullPath(path);
         _maxBytes = maxBytes;
         _includeValues = includeValues;
+        _queueCapacity = ResolveQueueCapacity(queueCapacity);
         var directory = System.IO.Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
@@ -106,6 +120,14 @@ internal sealed class AuditLogSink : IDisposable
             _bytesWritten = probe.Length;
         }
         PrivateLogFile.TrySetPrivatePermissions(_path);
+        _recordQueue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(_queueCapacity)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
+            AllowSynchronousContinuations = false,
+        });
+        _writerTask = BackgroundTaskObserver.Run(DrainQueueAsync, "cdidx-mcp-audit", "audit log writer");
     }
 
     /// <summary>Path the sink writes to (absolute, post normalisation).</summary>
@@ -119,36 +141,37 @@ internal sealed class AuditLogSink : IDisposable
 
     internal AuditLogDiagnostics SnapshotDiagnostics()
     {
-        lock (_gate)
-        {
-            var droppedRecordCount = Interlocked.Read(ref _droppedRecordCount);
-            var serializationFailureCount = Interlocked.Read(ref _serializationFailureCount);
-            var writeFailureCount = Interlocked.Read(ref _writeFailureCount);
-            var rotationFailureCount = Interlocked.Read(ref _rotationFailureCount);
-            var rotationCleanupFailureCount = Interlocked.Read(ref _rotationCleanupFailureCount);
-            var rotationDegraded = rotationFailureCount > 0
-                || rotationCleanupFailureCount > 0
-                || _bytesWritten >= _maxBytes;
-            return new AuditLogDiagnostics(
-                _path,
-                _includeValues,
-                _maxBytes,
-                _bytesWritten,
-                _disposed,
-                droppedRecordCount,
-                serializationFailureCount,
-                writeFailureCount,
-                rotationFailureCount,
-                rotationCleanupFailureCount,
-                rotationDegraded,
-                Volatile.Read(ref _lastDropReason),
-                Volatile.Read(ref _lastRotationFailure));
-        }
+        var bytesWritten = Volatile.Read(ref _bytesWritten);
+        var droppedRecordCount = Interlocked.Read(ref _droppedRecordCount);
+        var serializationFailureCount = Interlocked.Read(ref _serializationFailureCount);
+        var writeFailureCount = Interlocked.Read(ref _writeFailureCount);
+        var rotationFailureCount = Interlocked.Read(ref _rotationFailureCount);
+        var rotationCleanupFailureCount = Interlocked.Read(ref _rotationCleanupFailureCount);
+        var rotationDegraded = rotationFailureCount > 0
+            || rotationCleanupFailureCount > 0
+            || bytesWritten >= _maxBytes;
+        return new AuditLogDiagnostics(
+            _path,
+            _includeValues,
+            _maxBytes,
+            bytesWritten,
+            Volatile.Read(ref _disposed) != 0,
+            _queueCapacity,
+            Math.Max(0, Interlocked.Read(ref _pendingRecordCount)),
+            droppedRecordCount,
+            Interlocked.Read(ref _queueFullDropCount),
+            serializationFailureCount,
+            writeFailureCount,
+            rotationFailureCount,
+            rotationCleanupFailureCount,
+            rotationDegraded,
+            Volatile.Read(ref _lastDropReason),
+            Volatile.Read(ref _lastRotationFailure));
     }
 
     internal void Record(AuditEvent evt)
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
             return;
 
         string line;
@@ -164,37 +187,58 @@ internal sealed class AuditLogSink : IDisposable
         }
 
         var encoded = _utf8NoBom.GetBytes(line + "\n");
-        lock (_gate)
-        {
-            if (_disposed)
-                return;
+        Interlocked.Increment(ref _pendingRecordCount);
+        if (_recordQueue.Writer.TryWrite(encoded))
+            return;
 
+        Interlocked.Decrement(ref _pendingRecordCount);
+        if (Volatile.Read(ref _disposed) == 0)
+            RecordDropped("queue_full", new AuditLogQueueFullException());
+    }
+
+    private async Task DrainQueueAsync()
+    {
+        await foreach (var encoded in _recordQueue.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
             try
             {
-                // Open + write + close per record so an external `tail -F` keeps following
-                // rotations and so the file is closed during rename. Audit volume is bounded
-                // by tool-call cadence (not loop hot paths), so the per-call open is cheap.
-                // 1 レコードごとに open/write/close する。外部 `tail -F` の rotation 追従と
-                // rename 中のロック回避のため。ツール呼び出し頻度はループのホットパスではない
-                // ので open のコストは許容範囲。
-                using (var stream = PrivateLogFile.OpenAppend(_path, FileShare.ReadWrite))
-                {
-                    stream.Write(encoded, 0, encoded.Length);
-                    stream.Flush();
-                }
-                _bytesWritten += encoded.Length;
-
-                if (_bytesWritten >= _maxBytes)
-                {
-                    RotateLocked();
-                }
+                WriteEncodedRecord(encoded);
             }
-            catch (Exception ex)
+            finally
             {
-                // Best-effort: a failing audit write must not break the tool call.
-                // ベストエフォート: 監査出力失敗で本体呼び出しを壊さない。
-                RecordDropped("write_failure", ex);
+                Interlocked.Decrement(ref _pendingRecordCount);
             }
+        }
+    }
+
+    private void WriteEncodedRecord(byte[] encoded)
+    {
+        try
+        {
+            BeforeWriteForTests?.Invoke();
+            // Open + write + close per record so an external `tail -F` keeps following
+            // rotations and so the file is closed during rename. The queue keeps this
+            // IO off the caller's hot path while preserving serialized file writes.
+            // 1 レコードごとに open/write/close する。queue により呼び出し側の hot path から
+            // IO を外しつつ、ファイル書き込みの直列性は維持する。
+            using (var stream = PrivateLogFile.OpenAppend(_path, FileShare.ReadWrite))
+            {
+                stream.Write(encoded, 0, encoded.Length);
+                stream.Flush();
+            }
+            var bytesWritten = Volatile.Read(ref _bytesWritten) + encoded.Length;
+            Volatile.Write(ref _bytesWritten, bytesWritten);
+
+            if (bytesWritten >= _maxBytes)
+            {
+                RotateLocked();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: a failing audit write must not break the tool call.
+            // ベストエフォート: 監査出力失敗で本体呼び出しを壊さない。
+            RecordDropped("write_failure", ex);
         }
     }
 
@@ -202,7 +246,7 @@ internal sealed class AuditLogSink : IDisposable
     /// Rotate the current file to `<path>.1`, cascading older files up to `RotationKeep` slots.
     /// `<path>.(RotationKeep-1)` is the oldest retained slot, and the previous oldest is
     /// deleted so a slow drain of the audit log cannot fill the disk.
-    /// Caller must hold `_gate`.
+    /// Caller must be the single audit queue writer.
     /// </summary>
     private void RotateLocked()
     {
@@ -211,7 +255,7 @@ internal sealed class AuditLogSink : IDisposable
             RotationKeep,
             onFailure: ex => RecordRotationFailure("rotation_failure", ex),
             onCleanupFailure: ex => RecordRotationFailure("rotation_cleanup_failure", ex)))
-            _bytesWritten = 0;
+            Volatile.Write(ref _bytesWritten, 0);
     }
 
     private void RecordDropped(string reason, Exception exception)
@@ -221,6 +265,9 @@ internal sealed class AuditLogSink : IDisposable
         {
             case "serialization_failure":
                 Interlocked.Increment(ref _serializationFailureCount);
+                break;
+            case "queue_full":
+                Interlocked.Increment(ref _queueFullDropCount);
                 break;
             case "write_failure":
                 Interlocked.Increment(ref _writeFailureCount);
@@ -252,10 +299,46 @@ internal sealed class AuditLogSink : IDisposable
 
     public void Dispose()
     {
-        lock (_gate)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        _recordQueue.Writer.TryComplete();
+        try
         {
-            _disposed = true;
+            _writerTask.Wait(DisposeWriterTimeout);
         }
+        catch
+        {
+            // Disposal is best-effort; audit logging must not block process shutdown.
+            // dispose は best-effort。監査ログでプロセス終了を止めない。
+        }
+    }
+
+    internal bool WaitForIdle(TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (Interlocked.Read(ref _pendingRecordCount) > 0)
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                return false;
+            Thread.Sleep(10);
+        }
+        return true;
+    }
+
+    private static int ResolveQueueCapacity(int? queueCapacity)
+    {
+        var capacity = queueCapacity ?? DefaultQueueCapacity;
+        if (capacity <= 0 || capacity > MaxConfiguredQueueCapacity)
+            throw new ArgumentOutOfRangeException(
+                nameof(queueCapacity),
+                capacity,
+                $"Audit log queue capacity must be between 1 and {MaxConfiguredQueueCapacity.ToString(CultureInfo.InvariantCulture)}.");
+        return capacity;
+    }
+
+    private sealed class AuditLogQueueFullException : Exception
+    {
     }
 
     internal static string SerializeEvent(AuditEvent evt, bool includeValues)
