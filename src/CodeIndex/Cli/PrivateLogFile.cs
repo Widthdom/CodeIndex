@@ -157,18 +157,16 @@ internal static class PrivateLogFile
             {
                 var current = SlotPath(path, slot);
                 var next = SlotPath(path, slot + 1);
-                var ioCurrent = LongPath.EnsureWindowsPrefix(current);
-                if (!File.Exists(ioCurrent))
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(current)))
                     continue;
-                MoveReplacing(ioCurrent, LongPath.EnsureWindowsPrefix(next));
+                MoveReplacing(current, next);
                 afterMove?.Invoke(next);
             }
 
-            var ioPath = LongPath.EnsureWindowsPrefix(path);
-            if (File.Exists(ioPath))
+            if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
             {
                 var first = SlotPath(path, 1);
-                MoveReplacing(ioPath, LongPath.EnsureWindowsPrefix(first));
+                MoveReplacing(path, first);
                 afterMove?.Invoke(first);
             }
 
@@ -185,7 +183,10 @@ internal static class PrivateLogFile
         => slot <= 0 ? path : path + "." + slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     private static void MoveReplacing(string sourcePath, string destinationPath)
-        => File.Move(sourcePath, destinationPath, overwrite: true);
+    {
+        File.Move(LongPath.EnsureWindowsPrefix(sourcePath), LongPath.EnsureWindowsPrefix(destinationPath), overwrite: true);
+        AtomicFileWriter.FlushParentDirectoryAfterReplace(destinationPath);
+    }
 
     private static void SafeDelete(string path, Action<Exception>? onCleanupFailure = null)
     {

@@ -160,6 +160,39 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_TryRotateSlots_ReportsPostReplaceFlushFailure_Issue3776()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_rotate_flush_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "metrics.jsonl");
+        var failures = new List<Exception>();
+        try
+        {
+            File.WriteAllText(path, "current");
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ => throw new IOException("flush denied");
+
+            var rotated = PrivateLogFile.TryRotateSlots(
+                path,
+                retainedFileCount: 3,
+                onFailure: failures.Add);
+
+            Assert.False(rotated);
+            var failure = Assert.Single(failures);
+            Assert.Contains("Atomic replace completed", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("target file was already replaced", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("parent directory could not be flushed", failure.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(path));
+            Assert.Equal("current", File.ReadAllText(path + ".1"));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryStart_WritesPrivateLogDiagnostics_Issue3475()
     {
         if (OperatingSystem.IsWindows())

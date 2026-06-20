@@ -7,6 +7,8 @@ namespace CodeIndex.Cli;
 
 internal static class AtomicFileWriter
 {
+    internal const int MaxTempFileNameChars = 120;
+    private const int MaxTempStemChars = 48;
     internal static Action<string>? FlushParentDirectoryForTesting { get; set; }
 
     public enum WriteProfile
@@ -86,7 +88,7 @@ internal static class AtomicFileWriter
 
             File.Move(ioTempPath, ioTargetPath, overwrite: true);
             moved = true;
-            FlushParentDirectory(path);
+            FlushParentDirectoryAfterReplace(path);
         }
         catch
         {
@@ -115,7 +117,7 @@ internal static class AtomicFileWriter
     private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
         => profile == WriteProfile.Sensitive ? DataDirectorySecurity.ApplyPrivateFileMode : null;
 
-    private static void FlushParentDirectory(string path)
+    internal static void FlushParentDirectoryAfterReplace(string path)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (string.IsNullOrEmpty(directory))
@@ -153,16 +155,27 @@ internal static class AtomicFileWriter
     }
 
     private static IOException BuildDirectoryFlushException(string path, int errno)
-        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}, but the parent directory could not be flushed to disk (errno {errno}).");
+        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}; the target file was already replaced, but the parent directory could not be flushed to disk (errno {errno}).");
 
     private static IOException BuildDirectoryFlushException(string path, Exception inner)
-        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}, but the parent directory could not be flushed to disk ({CommandErrorWriter.FormatSanitizedException(inner)}).", inner);
+        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}; the target file was already replaced, but the parent directory could not be flushed to disk ({CommandErrorWriter.FormatSanitizedException(inner)}).", inner);
+
+    internal static string BuildTempPathForTesting(string path) => BuildTempPath(path);
 
     private static string BuildTempPath(string path)
     {
         var directory = Path.GetDirectoryName(path);
         var fileName = Path.GetFileName(path);
-        var tempFileName = $".{fileName}.{Guid.NewGuid():N}.tmp";
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        if (string.IsNullOrWhiteSpace(stem))
+            stem = "target";
+        if (stem.Length > MaxTempStemChars)
+            stem = stem[..MaxTempStemChars];
+
+        var tempFileName = $".cdidx-{stem}.{Guid.NewGuid():N}.tmp";
+        if (tempFileName.Length > MaxTempFileNameChars)
+            tempFileName = $".cdidx-{Guid.NewGuid():N}.tmp";
+
         return string.IsNullOrEmpty(directory)
             ? tempFileName
             : Path.Combine(directory, tempFileName);
