@@ -952,6 +952,11 @@ public static class GitHelper
     private static GitProcessCaptureResult? RunProcessCapturingResult(
         ProcessStartInfo psi,
         CancellationToken cancellationToken = default)
+        => RunProcessCapturingResultAsync(psi, cancellationToken).GetAwaiter().GetResult();
+
+    private static async Task<GitProcessCaptureResult?> RunProcessCapturingResultAsync(
+        ProcessStartInfo psi,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process { StartInfo = psi };
@@ -997,9 +1002,11 @@ public static class GitHelper
                 diagnostic);
         }
 
-        var stdoutTask = Task.Run(() => ReadCapturedStream(process.StandardOutput, stdout, "stdout", MarkFailure));
-        var stderrTask = Task.Run(() => ReadCapturedStream(process.StandardError, stderr, "stderr", MarkFailure));
-        var exited = WaitForGitExit(process, GitCommandTimeout, cancellationToken, out var cancelled);
+        var stdoutTask = ReadCapturedStreamAsync(process.StandardOutput, stdout, "stdout", MarkFailure);
+        var stderrTask = ReadCapturedStreamAsync(process.StandardError, stderr, "stderr", MarkFailure);
+        var waitResult = await WaitForGitExitAsync(process, GitCommandTimeout, cancellationToken).ConfigureAwait(false);
+        var cancelled = waitResult.Cancelled;
+        var exited = waitResult.Exited;
         if (!exited)
         {
             MarkFailure(
@@ -1007,7 +1014,7 @@ public static class GitHelper
                 cancelled
                 ? "git command cancelled."
                 : $"git command timed out after {FormatDuration(GitCommandTimeout)}.");
-            if (!process.WaitForExit(ToWaitMilliseconds(GitKillWaitTimeout)))
+            if (!await WaitForGitExitAfterKillAsync(process, GitKillWaitTimeout).ConfigureAwait(false))
             {
                 if (cancelled)
                     cancellationToken.ThrowIfCancellationRequested();
@@ -1019,11 +1026,8 @@ public static class GitHelper
                     failureDiagnostic);
             }
         }
-        else
-        {
-            _ = process.WaitForExit(0);
-        }
-        if (!WaitForCaptureReaders(stdoutTask, stderrTask))
+
+        if (!await WaitForCaptureReadersAsync(stdoutTask, stderrTask).ConfigureAwait(false))
             MarkFailure(GitCommandFailureKind.OutputCaptureIncomplete, "git command output capture did not finish.");
 
         var output = ReadCaptured(stdout);
@@ -1055,35 +1059,23 @@ public static class GitHelper
         return new GitProcessCaptureResult(exitCode, output, error, GitCommandFailureKind.None, null);
     }
 
-    private static bool WaitForGitExit(
+    private readonly record struct GitExitWaitResult(bool Exited, bool Cancelled);
+
+    private static async Task<GitExitWaitResult> WaitForGitExitAsync(
         Process process,
         TimeSpan timeout,
-        CancellationToken cancellationToken,
-        out bool cancelled)
+        CancellationToken cancellationToken)
     {
-        var timeoutMilliseconds = ToWaitMilliseconds(timeout);
-        var waitSliceMilliseconds = Math.Min(50, timeoutMilliseconds);
-        var stopwatch = Stopwatch.StartNew();
-        while (true)
+        var exitTask = process.WaitForExitAsync(CancellationToken.None);
+        var delayTask = Task.Delay(NormalizePositiveTimeout(timeout), cancellationToken);
+        var completed = await Task.WhenAny(exitTask, delayTask).ConfigureAwait(false);
+        if (completed == exitTask)
         {
-            if (process.WaitForExit(waitSliceMilliseconds))
-            {
-                cancelled = false;
-                return true;
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                cancelled = true;
-                return false;
-            }
-
-            if (stopwatch.ElapsedMilliseconds >= timeoutMilliseconds)
-            {
-                cancelled = false;
-                return false;
-            }
+            await exitTask.ConfigureAwait(false);
+            return new GitExitWaitResult(true, false);
         }
+
+        return new GitExitWaitResult(false, cancellationToken.IsCancellationRequested);
     }
 
     private static string ReadCaptured(StringBuilder builder)
@@ -1092,19 +1084,41 @@ public static class GitHelper
             return builder.ToString();
     }
 
-    private static bool WaitForCaptureReaders(Task stdoutTask, Task stderrTask)
+    private static async Task<bool> WaitForGitExitAfterKillAsync(Process process, TimeSpan timeout)
     {
         try
         {
-            return Task.WaitAll([stdoutTask, stderrTask], ToWaitMilliseconds(GitKillWaitTimeout));
+            await process.WaitForExitAsync(CancellationToken.None)
+                .WaitAsync(NormalizePositiveTimeout(timeout))
+                .ConfigureAwait(false);
+            return true;
         }
-        catch (AggregateException)
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (TimeoutException)
         {
             return false;
         }
     }
 
-    private static void ReadCapturedStream(
+    private static async Task<bool> WaitForCaptureReadersAsync(Task stdoutTask, Task stderrTask)
+    {
+        try
+        {
+            await Task.WhenAll(stdoutTask, stderrTask)
+                .WaitAsync(NormalizePositiveTimeout(GitKillWaitTimeout))
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task ReadCapturedStreamAsync(
         TextReader reader,
         StringBuilder builder,
         string streamName,
@@ -1115,7 +1129,7 @@ public static class GitHelper
         {
             while (true)
             {
-                var read = reader.Read(buffer, 0, buffer.Length);
+                var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length)).ConfigureAwait(false);
                 if (read == 0)
                     return;
                 if (!AppendBoundedCapturedChars(builder, buffer.AsSpan(0, read), streamName, markFailure))
@@ -1180,13 +1194,11 @@ public static class GitHelper
             ? diagnostic
             : diagnostic + "\n" + stderr.TrimEnd('\r', '\n'));
 
-    private static int ToWaitMilliseconds(TimeSpan timeout)
+    private static TimeSpan NormalizePositiveTimeout(TimeSpan timeout)
     {
         if (timeout <= TimeSpan.Zero)
-            return 1;
-        if (timeout.TotalMilliseconds >= int.MaxValue)
-            return int.MaxValue;
-        return Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds));
+            return TimeSpan.FromMilliseconds(1);
+        return timeout;
     }
 
     private static string FormatDuration(TimeSpan timeout)

@@ -708,6 +708,43 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void RunGitCapturingResult_CancelDuringOutputCapture_ThrowsOperationCanceled_Issue3761()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-output-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-output-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatStreamsStdoutUntilKilled(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var stopwatch = Stopwatch.StartNew();
+
+            Assert.Throws<OperationCanceledException>(() =>
+                GitHelper.RunGitCapturingResultForTests(
+                    repoDir,
+                    gitEnvironmentOverrides: null,
+                    cts.Token,
+                    "status"));
+
+            stopwatch.Stop();
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Cancellation during output capture took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
     public void TrustedGitExecutableCandidates_OnMacOS_ExcludeDeveloperToolsShim_Issue3433()
     {
         if (!OperatingSystem.IsMacOS())
@@ -1438,6 +1475,17 @@ if [ "$1" = "rev-parse" ]; then
   exit 0
 fi
 exit 1
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatStreamsStdoutUntilKilled(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+perl -e '$|=1; while (1) { print "x" x 4096; select undef, undef, undef, 0.01 }'
 """);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
