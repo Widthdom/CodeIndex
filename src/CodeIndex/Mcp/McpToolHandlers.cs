@@ -47,6 +47,7 @@ public partial class McpServer
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
+    internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }
     private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
 
     // --- Tool implementations / ツール実装 ---
@@ -3176,8 +3177,10 @@ public partial class McpServer
                     .ToList();
             }
             status.Version = _version;
+            var requestToken = _currentRequestToken.Value;
+            requestToken.ThrowIfCancellationRequested();
             status.UpdateCheck = runUpdateCheck
-                ? UpdateChecker.Check(_version, CancellationToken.None)
+                ? (StatusUpdateCheckForTesting ?? UpdateChecker.Check)(_version, requestToken)
                 : null;
             if (!status.FoldReady)
             {

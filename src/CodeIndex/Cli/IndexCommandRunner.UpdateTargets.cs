@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -122,33 +123,64 @@ public static partial class IndexCommandRunner
         string phase,
         Func<string?>? detailProvider = null)
     {
-        if (!options.Json || options.Quiet)
+        return StartObservedJsonPhaseHeartbeat(
+            options.Json && !options.Quiet,
+            "cdidx-index",
+            phase,
+            ConsoleUi.TryWriteErrorLine,
+            detailProvider);
+    }
+
+    internal static (CancellationTokenSource Cts, Task Task)? StartObservedJsonPhaseHeartbeat(
+        bool enabled,
+        string component,
+        string phase,
+        Action<string> messageWriter,
+        Func<string?>? detailProvider = null,
+        TimeSpan? interval = null,
+        Action<string>? warningWriter = null)
+    {
+        if (!enabled)
             return null;
 
+        ArgumentNullException.ThrowIfNull(messageWriter);
+
         var cts = new CancellationTokenSource();
-        var token = cts.Token;
-        var task = Task.Run(async () =>
-        {
-            while (!token.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-
-                if (token.IsCancellationRequested)
-                    break;
-
-                var detail = detailProvider?.Invoke();
-                var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
-                CommandErrorWriter.WriteStderr($"cdidx: still {phase}{suffix}...");
-            }
-        }, token);
+        var heartbeatInterval = interval ?? TimeSpan.FromSeconds(5);
+        var task = BackgroundTaskObserver.Run(
+            token => RunObservedJsonPhaseHeartbeatLoop(phase, messageWriter, detailProvider, heartbeatInterval, token),
+            component,
+            $"{phase} heartbeat",
+            cts.Token,
+            warningWriter);
         return (cts, task);
+    }
+
+    private static async Task RunObservedJsonPhaseHeartbeatLoop(
+        string phase,
+        Action<string> messageWriter,
+        Func<string?>? detailProvider,
+        TimeSpan interval,
+        CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(interval, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (token.IsCancellationRequested)
+                break;
+
+            var detail = detailProvider?.Invoke();
+            var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
+            messageWriter($"cdidx: still {phase}{suffix}...");
+        }
     }
 
     private static void StopIndexJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
