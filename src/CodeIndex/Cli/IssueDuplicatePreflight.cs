@@ -17,10 +17,15 @@ internal sealed class IssueDuplicatePreflight
     internal const int MaxOpenIssueLabelLength = 128;
     internal const int MaxOpenIssueNumberLength = 32;
     internal const int MaxTitleTokenizationInputLength = MaxOpenIssueTitleLength;
+    internal const int MaxOpenIssueBodyLength = 24 * 1024;
+    internal const int MaxBodyTokenizationInputLength = 4096;
     internal const int MaxGitHubRepositoryLength = 200;
     internal const double LowDuplicateThreshold = 0.35;
     internal const double DefaultDuplicateThreshold = 0.45;
     internal const double HighDuplicateThreshold = 0.7;
+    internal const double TitleLabelSimilarityThreshold = DefaultDuplicateThreshold;
+    internal const double EvidencePathSimilarityThreshold = 0.34;
+    internal const double BodyLabelSimilarityThreshold = 0.35;
     internal const string LowDuplicateConfidence = "low";
     internal const string DefaultDuplicateConfidence = "medium";
     internal const string HighDuplicateConfidence = "high";
@@ -106,34 +111,40 @@ internal sealed class IssueDuplicatePreflight
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
-            error = $"could not read --open-issues file '{path}': {ex.Message}";
+            error = $"could not read --open-issues file '{path}': {CommandErrorWriter.FormatSanitizedException(ex)}";
             return false;
         }
     }
 
     public static bool TryLoad(string? source, string? repository, out IssueDuplicatePreflight preflight, out string? error)
     {
-        error = null;
+        var result = TryLoadAsync(source, repository, CancellationToken.None).GetAwaiter().GetResult();
+        preflight = result.Preflight;
+        error = result.Error;
+        return result.Loaded;
+    }
+
+    internal static async Task<IssueDuplicatePreflightLoadResult> TryLoadAsync(
+        string? source,
+        string? repository,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!IsGitHubOpenIssuesSource(source))
         {
             if (!string.IsNullOrWhiteSpace(repository))
-            {
-                preflight = new IssueDuplicatePreflight(false, null, []);
-                error = "--repo can only be used with `--open-issues github`.";
-                return false;
-            }
+                return IssueDuplicatePreflightLoadResult.Failure("--repo can only be used with `--open-issues github`.");
 
-            return TryLoad(source, out preflight, out error);
+            return TryLoad(source, out var filePreflight, out var fileError)
+                ? IssueDuplicatePreflightLoadResult.Success(filePreflight)
+                : IssueDuplicatePreflightLoadResult.Failure(fileError!);
         }
 
         var requestedRepository = ExtractGitHubRepository(source, repository);
-        if (!TryNormalizeGitHubRepository(requestedRepository, out var normalizedRepository, out error))
-        {
-            preflight = new IssueDuplicatePreflight(false, null, []);
-            return false;
-        }
+        if (!TryNormalizeGitHubRepository(requestedRepository, out var normalizedRepository, out var error))
+            return IssueDuplicatePreflightLoadResult.Failure(error!);
 
-        return TryLoadFromGitHub(normalizedRepository, out preflight, out error);
+        return await TryLoadFromGitHubAsync(normalizedRepository, cancellationToken).ConfigureAwait(false);
     }
 
     public static bool TryNormalizeDuplicateConfidence(string value, out string confidence)
@@ -150,12 +161,27 @@ internal sealed class IssueDuplicatePreflight
     };
 
     public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(string draftTitle, IReadOnlyList<string> draftLabels)
-        => FindMatches(draftTitle, draftLabels, DefaultDuplicateThreshold);
+        => FindMatches(draftTitle, draftLabels, DefaultDuplicateThreshold, null, null);
 
     public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
         string draftTitle,
         IReadOnlyList<string> draftLabels,
         double minimumScore)
+        => FindMatches(draftTitle, draftLabels, minimumScore, null, null);
+
+    public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
+        string draftTitle,
+        IReadOnlyList<string> draftLabels,
+        IReadOnlyList<string>? draftEvidencePaths,
+        string? draftBody)
+        => FindMatches(draftTitle, draftLabels, DefaultDuplicateThreshold, draftEvidencePaths, draftBody);
+
+    public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
+        string draftTitle,
+        IReadOnlyList<string> draftLabels,
+        double minimumScore,
+        IReadOnlyList<string>? draftEvidencePaths,
+        string? draftBody)
     {
         if (!Checked || _issues.Count == 0)
             return [];
@@ -163,6 +189,8 @@ internal sealed class IssueDuplicatePreflight
         var draftLabelSet = draftLabels.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var normalizedDraftTitle = NormalizeTitleText(draftTitle);
         var draftTokens = TokenizeTitle(draftTitle);
+        var draftEvidencePathSet = NormalizeEvidencePaths(draftEvidencePaths);
+        var draftBodyTokens = TokenizeBody(draftBody);
         var matches = new List<SuggestionIssueDraftDuplicateMatchJsonResult>();
         foreach (var issue in _issues)
         {
@@ -177,11 +205,13 @@ internal sealed class IssueDuplicatePreflight
             var normalizedIssueTitle = NormalizeTitleText(issue.Title);
             var score = 0.0;
             string? reason = null;
+            var signals = new List<string>();
             if (normalizedIssueTitle.Length > 0 && normalizedIssueTitle == normalizedDraftTitle)
             {
                 score = 1.0;
                 if (score >= minimumScore)
                     reason = "title_exact";
+                signals.Add("title_exact");
             }
             else if (overlappingLabels.Count > 0)
             {
@@ -189,6 +219,8 @@ internal sealed class IssueDuplicatePreflight
                 if (score >= minimumScore)
                 {
                     reason = "title_label_similarity";
+                    signals.Add("title_similarity");
+                    signals.Add("label_overlap");
                 }
                 else if (normalizedIssueTitle.Length > 16
                     && normalizedDraftTitle.Length > 16
@@ -198,11 +230,43 @@ internal sealed class IssueDuplicatePreflight
                     score = Math.Max(score, DefaultDuplicateThreshold);
                     if (score >= minimumScore)
                         reason = "title_label_contains";
+                    signals.Add("title_contains");
+                    signals.Add("label_overlap");
+                }
+
+                var evidenceScore = ScoreEvidencePathSimilarity(
+                    draftEvidencePathSet,
+                    ExtractEvidencePathsFromBody(issue.Body));
+                if (evidenceScore >= EvidencePathSimilarityThreshold)
+                {
+                    var evidenceCandidateScore = 0.65 + Math.Min(0.2, evidenceScore * 0.2);
+                    if (evidenceCandidateScore >= minimumScore)
+                    {
+                        reason ??= "evidence_path_overlap";
+                        score = Math.Max(score, evidenceCandidateScore);
+                        signals.Add("evidence_path_overlap");
+                        signals.Add("label_overlap");
+                    }
+                }
+
+                var bodyScore = ScoreTitleSimilarity(draftBodyTokens, TokenizeBody(issue.Body));
+                if (bodyScore >= BodyLabelSimilarityThreshold)
+                {
+                    var bodyCandidateScore = 0.5 + Math.Min(0.25, bodyScore * 0.25);
+                    if (bodyCandidateScore >= minimumScore)
+                    {
+                        reason ??= "body_label_similarity";
+                        score = Math.Max(score, bodyCandidateScore);
+                        signals.Add("body_similarity");
+                        signals.Add("label_overlap");
+                    }
                 }
             }
 
             if (reason == null)
                 continue;
+
+            var roundedScore = Math.Round(score, 3);
 
             matches.Add(new SuggestionIssueDraftDuplicateMatchJsonResult(
                 issue.Number,
@@ -211,7 +275,9 @@ internal sealed class IssueDuplicatePreflight
                 issueLabels,
                 overlappingLabels,
                 reason,
-                Math.Round(score, 3)));
+                roundedScore,
+                ClassifyConfidence(roundedScore),
+                signals.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
         }
 
         return matches
@@ -246,7 +312,8 @@ internal sealed class IssueDuplicatePreflight
                 TryReadInt(item?["number"]),
                 title,
                 TryReadString(item?["html_url"], MaxOpenIssueUrlLength) ?? TryReadString(item?["url"], MaxOpenIssueUrlLength),
-                ReadLabels(item?["labels"])));
+                ReadLabels(item?["labels"]),
+                TryReadString(item?["body"], MaxOpenIssueBodyLength)));
         }
 
         return issues;
@@ -274,51 +341,99 @@ internal sealed class IssueDuplicatePreflight
         return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static bool TryLoadFromGitHub(string repository, out IssueDuplicatePreflight preflight, out string? error)
+    private static async Task<IssueDuplicatePreflightLoadResult> TryLoadFromGitHubAsync(
+        string repository,
+        CancellationToken cancellationToken)
     {
         var issues = new List<OpenIssue>();
         try
         {
             for (var page = 1; page <= MaxGitHubOpenIssuePages && issues.Count < MaxOpenIssueCount; page++)
             {
-                var pageIssues = FetchGitHubOpenIssuePage(repository, page, out var rawEntryCount);
-                issues.AddRange(pageIssues);
-                if (rawEntryCount == 0 || rawEntryCount < GitHubOpenIssuesPerPage)
+                var pageResult = await FetchGitHubOpenIssuePageAsync(repository, page, cancellationToken)
+                    .ConfigureAwait(false);
+                issues.AddRange(pageResult.Issues);
+                if (pageResult.RawEntryCount == 0 || pageResult.RawEntryCount < GitHubOpenIssuesPerPage)
                     break;
             }
 
-            preflight = new IssueDuplicatePreflight(true, $"{GitHubSourcePrefix}{repository}", issues.Take(MaxOpenIssueCount).ToList());
-            error = null;
-            return true;
+            return IssueDuplicatePreflightLoadResult.Success(
+                new IssueDuplicatePreflight(
+                    true,
+                    $"{GitHubSourcePrefix}{repository}",
+                    issues.Take(MaxOpenIssueCount).ToList()));
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or InvalidOperationException or InvalidOpenIssuesFileException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            preflight = new IssueDuplicatePreflight(false, null, []);
-            error = $"could not fetch --open-issues github for repository '{repository}': {ex.Message}";
-            return false;
+            throw;
+        }
+        catch (Exception ex) when (IsRecoverableGitHubPreflightException(ex))
+        {
+            return IssueDuplicatePreflightLoadResult.Failure(
+                $"could not fetch --open-issues github for repository '{repository}': {FormatPreflightFailureDetail(ex)}");
         }
     }
 
-    private static List<OpenIssue> FetchGitHubOpenIssuePage(string repository, int page, out int rawEntryCount)
+    private static async Task<GitHubOpenIssuePageResult> FetchGitHubOpenIssuePageAsync(
+        string repository,
+        int page,
+        CancellationToken cancellationToken)
     {
         var slash = repository.IndexOf('/');
         var owner = repository[..slash];
         var name = repository[(slash + 1)..];
         var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues?state=open&per_page={GitHubOpenIssuesPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
+        using var timeoutCts = new CancellationTokenSource(GitHubIssueReporter.ResolveSubmitTimeout());
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
         var token = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        using var response = HttpClient.Send(request, HttpCompletionOption.ResponseHeadersRead);
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"GitHub API responded {(int)response.StatusCode} {response.ReasonPhrase}");
+        HttpResponseMessage response;
+        try
+        {
+            response = await HttpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"GitHub open-issues preflight timed out after {GitHubIssueReporter.ResolveSubmitTimeout().TotalSeconds:0} seconds.",
+                ex);
+        }
 
-        var json = ReadContentWithinLimit(response.Content, MaxOpenIssuesJsonBytes)
-            ?? throw new IOException($"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-        var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
-        rawEntryCount = root is JsonArray array ? array.Count : 0;
-        return ParseOpenIssues(root, skipPullRequests: true);
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+                throw new GitHubPreflightException(
+                    await BuildGitHubApiErrorDetailAsync(response, linkedCts.Token).ConfigureAwait(false));
+
+            var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, linkedCts.Token)
+                .ConfigureAwait(false)
+                ?? throw new IOException($"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
+            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+            var rawEntryCount = root is JsonArray array ? array.Count : 0;
+            return new GitHubOpenIssuePageResult(ParseOpenIssues(root, skipPullRequests: true), rawEntryCount);
+        }
+    }
+
+    private static async Task<string> BuildGitHubApiErrorDetailAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var errorBody = await GitHubIssueReporter.ReadBoundedApiErrorBodyAsync(stream, cancellationToken)
+            .ConfigureAwait(false);
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(
+            response,
+            GitHubIssueReporter.TimeProvider.GetUtcNow().UtcDateTime);
+        return retryAt is null
+            ? GitHubIssueReporter.BuildApiErrorDetail((int)response.StatusCode, errorBody)
+            : GitHubIssueReporter.BuildRateLimitErrorDetail((int)response.StatusCode, errorBody, retryAt.Value);
     }
 
     private static string? ExtractGitHubRepository(string? source, string? repository)
@@ -370,15 +485,19 @@ internal sealed class IssueDuplicatePreflight
     private static bool IsValidGitHubRepositoryPart(string value)
         => value.Length > 0 && value.All(c => char.IsLetterOrDigit(c) || c is '.' or '_' or '-');
 
-    private static string? ReadContentWithinLimit(HttpContent content, int maxBytes)
+    private static async Task<string?> ReadContentWithinLimitAsync(
+        HttpContent content,
+        int maxBytes,
+        CancellationToken cancellationToken)
     {
-        using var stream = content.ReadAsStream();
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var buffer = new MemoryStream(Math.Min(maxBytes, 8192));
         var chunk = new byte[8192];
         var total = 0;
         while (true)
         {
-            var read = stream.Read(chunk, 0, chunk.Length);
+            var read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken)
+                .ConfigureAwait(false);
             if (read == 0)
                 break;
             total += read;
@@ -389,6 +508,21 @@ internal sealed class IssueDuplicatePreflight
 
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
+
+    private static bool IsRecoverableGitHubPreflightException(Exception ex)
+        => ex is HttpRequestException
+            or OperationCanceledException
+            or TimeoutException
+            or JsonException
+            or IOException
+            or InvalidOperationException
+            or InvalidOpenIssuesFileException
+            or GitHubPreflightException;
+
+    private static string FormatPreflightFailureDetail(Exception ex)
+        => ex is GitHubPreflightException githubPreflight
+            ? githubPreflight.Message
+            : CommandErrorWriter.FormatSanitizedException(ex);
 
     private static HttpClient CreateDefaultHttpClient()
         => GitHubHttpClientFactory.CreateDefaultHttpClient(TimeSpan.FromSeconds(10));
@@ -457,10 +591,25 @@ internal sealed class IssueDuplicatePreflight
 
     private static HashSet<string> TokenizeTitle(string title)
     {
-        title = BoundTitleProcessingInput(title);
+        return TokenizeWords(BoundTitleProcessingInput(title));
+    }
+
+    private static HashSet<string> TokenizeBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return [];
+
+        var bounded = body.Length <= MaxBodyTokenizationInputLength
+            ? body
+            : body[..MaxBodyTokenizationInputLength];
+        return TokenizeWords(bounded);
+    }
+
+    private static HashSet<string> TokenizeWords(string text)
+    {
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var current = new StringBuilder();
-        foreach (var c in title)
+        foreach (var c in text)
         {
             if (char.IsLetterOrDigit(c))
             {
@@ -473,6 +622,59 @@ internal sealed class IssueDuplicatePreflight
 
         AddToken(tokens, current);
         return tokens;
+    }
+
+    private static HashSet<string> NormalizeEvidencePaths(IReadOnlyList<string>? paths)
+    {
+        if (paths is null || paths.Count == 0)
+            return [];
+
+        return paths
+            .Select(NormalizeEvidencePath)
+            .Where(path => path is not null)
+            .Select(path => path!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static HashSet<string> ExtractEvidencePathsFromBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return [];
+
+        var bounded = body.Length <= MaxOpenIssueBodyLength
+            ? body
+            : body[..MaxOpenIssueBodyLength];
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in bounded.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = line.Trim();
+            if (candidate.StartsWith("- ", StringComparison.Ordinal))
+                candidate = candidate[2..].Trim();
+            var normalized = NormalizeEvidencePath(candidate);
+            if (normalized != null)
+                paths.Add(normalized);
+        }
+
+        return paths;
+    }
+
+    private static string? NormalizeEvidencePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var trimmed = value.Trim().Trim('`', '*');
+        if (trimmed.Length > 512
+            || trimmed.Any(char.IsControl)
+            || trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || (!trimmed.Contains('/', StringComparison.Ordinal) && !trimmed.Contains('\\', StringComparison.Ordinal))
+            || !trimmed.Contains('.', StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return trimmed.Replace('\\', '/');
     }
 
     private static string BoundTitleProcessingInput(string title) =>
@@ -501,7 +703,38 @@ internal sealed class IssueDuplicatePreflight
         return union == 0 ? 0.0 : intersection / (double)union;
     }
 
-    private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels);
+    private static double ScoreEvidencePathSimilarity(HashSet<string> draftPaths, HashSet<string> issuePaths)
+    {
+        if (draftPaths.Count == 0 || issuePaths.Count == 0)
+            return 0.0;
+
+        var overlap = draftPaths.Count(issuePaths.Contains);
+        return overlap / (double)Math.Max(draftPaths.Count, issuePaths.Count);
+    }
+
+    private static string ClassifyConfidence(double score)
+        => score >= HighDuplicateThreshold
+            ? HighDuplicateConfidence
+            : score >= DefaultDuplicateThreshold
+                ? DefaultDuplicateConfidence
+                : LowDuplicateConfidence;
+
+    internal sealed record IssueDuplicatePreflightLoadResult(
+        bool Loaded,
+        IssueDuplicatePreflight Preflight,
+        string? Error)
+    {
+        internal static IssueDuplicatePreflightLoadResult Success(IssueDuplicatePreflight preflight) => new(true, preflight, null);
+
+        internal static IssueDuplicatePreflightLoadResult Failure(string error) =>
+            new(false, new IssueDuplicatePreflight(false, null, []), error);
+    }
+
+    private sealed record GitHubOpenIssuePageResult(List<OpenIssue> Issues, int RawEntryCount);
+
+    private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels, string? Body);
 
     private sealed class InvalidOpenIssuesFileException(string message) : Exception(message);
+
+    private sealed class GitHubPreflightException(string message) : Exception(message);
 }

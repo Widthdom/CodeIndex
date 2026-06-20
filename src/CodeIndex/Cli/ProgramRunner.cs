@@ -30,6 +30,9 @@ internal static partial class ProgramRunner
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
     private const int InstallerSuppressedOutputDrainBufferChars = 4096;
+    internal const int InstallerSuppressedOutputTailChars = 4096;
+    private const string UpgradeInstallerVerification = "same_release_sha256_manifest";
+    private const string UpgradeInstallerTrustBoundary = "install.sh is verified against sha256sums.txt from the same GitHub release asset namespace; no independent signature is currently available.";
     internal const int WorkspaceVersionPinMaxBytes = 4096;
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
@@ -3027,7 +3030,7 @@ internal static partial class ProgramRunner
         }
 
         var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!CanWriteDirectory(installDir))
+        if (!TryCheckInstallDirectoryWritable(installDir, out var installDirectoryError))
         {
             if (wantsJson)
             {
@@ -3039,12 +3042,15 @@ internal static partial class ProgramRunner
                         includePrerelease,
                         installAttempted: false,
                         installExitCode: null,
-                        error: "install_directory_not_writable"),
+                        error: "install_directory_not_writable",
+                        installDirectoryError: installDirectoryError),
                     jsonOptions));
             }
             else
             {
                 Console.Error.WriteLine($"Error: install directory is not writable: {installDir}");
+                if (installDirectoryError != null)
+                    Console.Error.WriteLine($"Reason: {installDirectoryError}");
                 Console.Error.WriteLine("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
             }
             return CommandExitCodes.UsageError;
@@ -3079,11 +3085,12 @@ internal static partial class ProgramRunner
             }
 
             var startInfo = CreateInstallerProcessStartInfo(scriptPath, selectedReleaseTag, installDir);
-            var installExitCode = RunInstallerProcess(
+            var installerResult = RunInstallerProcessDetailed(
                 startInfo,
                 InstallerRunTimeout,
                 cancellationToken,
                 suppressOutput: wantsJson);
+            var installExitCode = installerResult.ExitCode;
             if (wantsJson)
             {
                 var error = installExitCode == CommandExitCodes.Success
@@ -3097,7 +3104,8 @@ internal static partial class ProgramRunner
                         includePrerelease,
                         installAttempted: true,
                         installExitCode: installExitCode,
-                        error: error),
+                        error: error,
+                        installerResult: installerResult),
                     jsonOptions));
             }
             return installExitCode;
@@ -3186,7 +3194,37 @@ internal static partial class ProgramRunner
         normalizedVersion = trimmed[0] is 'v' or 'V'
             ? "v" + trimmed[1..]
             : "v" + trimmed;
+        if (!IsValidUpgradeReleaseTag(normalizedVersion))
+        {
+            error = "--version must be a release tag shaped like vX.Y.Z or vX.Y.Z-prerelease.";
+            normalizedVersion = null;
+            return false;
+        }
+
         return true;
+    }
+
+    internal static bool IsValidUpgradeReleaseTag(string releaseTag)
+    {
+        if (string.IsNullOrWhiteSpace(releaseTag) || releaseTag[0] != 'v')
+            return false;
+
+        var rest = releaseTag[1..];
+        var prereleaseStart = rest.IndexOf('-');
+        var core = prereleaseStart >= 0 ? rest[..prereleaseStart] : rest;
+        var prerelease = prereleaseStart >= 0 ? rest[(prereleaseStart + 1)..] : null;
+        var parts = core.Split('.');
+        if (parts.Length != 3 || parts.Any(part => part.Length == 0 || !part.All(char.IsDigit)))
+            return false;
+
+        if (prerelease == null)
+            return true;
+
+        var identifiers = prerelease.Split('.');
+        return identifiers.Length > 0
+            && identifiers.All(identifier =>
+                identifier.Length > 0
+                && identifier.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '-'));
     }
 
     private static bool IsPrereleaseTag(string releaseTag)
@@ -3283,6 +3321,13 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
         bool suppressOutput = false)
+        => RunInstallerProcessDetailed(startInfo, timeout, cancellationToken, suppressOutput).ExitCode;
+
+    internal static InstallerProcessResult RunInstallerProcessDetailed(
+        ProcessStartInfo startInfo,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default,
+        bool suppressOutput = false)
     {
         if (suppressOutput)
         {
@@ -3295,12 +3340,12 @@ internal static partial class ProgramRunner
         {
             if (!suppressOutput)
                 Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
-            return CommandExitCodes.InstallError;
+            return InstallerProcessResult.Failure(CommandExitCodes.InstallError);
         }
 
         var outputDrainTask = suppressOutput
             ? DrainSuppressedInstallerOutputAsync(process)
-            : Task.CompletedTask;
+            : Task.FromResult(SuppressedInstallerOutputResult.Empty);
 
         try
         {
@@ -3312,8 +3357,12 @@ internal static partial class ProgramRunner
             {
                 timeoutCts.Cancel();
                 waitTask.GetAwaiter().GetResult();
-                outputDrainTask.GetAwaiter().GetResult();
-                return process.ExitCode;
+                var output = outputDrainTask.GetAwaiter().GetResult();
+                return new InstallerProcessResult(
+                    process.ExitCode,
+                    output.StdoutTail,
+                    output.StderrTail,
+                    output.Truncated);
             }
 
             if (cancellationToken.IsCancellationRequested)
@@ -3336,8 +3385,12 @@ internal static partial class ProgramRunner
 
         if (process.HasExited)
         {
-            outputDrainTask.GetAwaiter().GetResult();
-            return process.ExitCode;
+            var output = outputDrainTask.GetAwaiter().GetResult();
+            return new InstallerProcessResult(
+                process.ExitCode,
+                output.StdoutTail,
+                output.StderrTail,
+                output.Truncated);
         }
 
         TryKillProcessTree(process);
@@ -3354,19 +3407,87 @@ internal static partial class ProgramRunner
         }
         if (!suppressOutput)
             Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
-        return CommandExitCodes.InstallError;
+        var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
+            ? outputDrainTask.GetAwaiter().GetResult()
+            : SuppressedInstallerOutputResult.Empty;
+        return new InstallerProcessResult(
+            CommandExitCodes.InstallError,
+            timeoutOutput.StdoutTail,
+            timeoutOutput.StderrTail,
+            timeoutOutput.Truncated);
     }
 
-    private static Task DrainSuppressedInstallerOutputAsync(Process process)
-        => Task.WhenAll(
+    private static async Task<SuppressedInstallerOutputResult> DrainSuppressedInstallerOutputAsync(Process process)
+    {
+        var outputs = await Task.WhenAll(
             DrainSuppressedInstallerOutputAsync(process.StandardOutput),
-            DrainSuppressedInstallerOutputAsync(process.StandardError));
+            DrainSuppressedInstallerOutputAsync(process.StandardError)).ConfigureAwait(false);
+        return new SuppressedInstallerOutputResult(
+            outputs[0].Tail,
+            outputs[1].Tail,
+            outputs[0].Truncated || outputs[1].Truncated);
+    }
 
-    private static async Task DrainSuppressedInstallerOutputAsync(TextReader reader)
+    private static async Task<SuppressedInstallerOutput> DrainSuppressedInstallerOutputAsync(TextReader reader)
     {
         var buffer = new char[InstallerSuppressedOutputDrainBufferChars];
-        while (await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false) > 0)
+        var tail = new SuppressedOutputTail(InstallerSuppressedOutputTailChars);
+        while (true)
         {
+            var read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+            if (read == 0)
+                break;
+
+            tail.Append(buffer.AsSpan(0, read));
+        }
+
+        return new SuppressedInstallerOutput(tail.Value, tail.Truncated);
+    }
+
+    internal sealed record InstallerProcessResult(
+        int ExitCode,
+        string? StdoutTail,
+        string? StderrTail,
+        bool OutputTruncated)
+    {
+        internal static InstallerProcessResult Failure(int exitCode) => new(exitCode, null, null, false);
+    }
+
+    private sealed record SuppressedInstallerOutputResult(
+        string? StdoutTail,
+        string? StderrTail,
+        bool Truncated)
+    {
+        internal static SuppressedInstallerOutputResult Empty { get; } = new(null, null, false);
+    }
+
+    private sealed record SuppressedInstallerOutput(string? Tail, bool Truncated);
+
+    private sealed class SuppressedOutputTail(int maxChars)
+    {
+        private readonly StringBuilder _builder = new(maxChars);
+        private long _totalChars;
+
+        internal bool Truncated { get; private set; }
+
+        internal string? Value => _builder.Length == 0 ? null : _builder.ToString();
+
+        internal void Append(ReadOnlySpan<char> value)
+        {
+            _totalChars += value.Length;
+            if (_totalChars > maxChars)
+                Truncated = true;
+
+            if (value.Length >= maxChars)
+            {
+                _builder.Clear();
+                _builder.Append(value[^maxChars..]);
+                return;
+            }
+
+            _builder.Append(value);
+            if (_builder.Length > maxChars)
+                _builder.Remove(0, _builder.Length - maxChars);
         }
     }
 
@@ -3396,7 +3517,9 @@ internal static partial class ProgramRunner
         bool installAttempted,
         int? installExitCode,
         string? error,
-        UpgradeHandoff? handoff = null)
+        UpgradeHandoff? handoff = null,
+        InstallerProcessResult? installerResult = null,
+        string? installDirectoryError = null)
         => new(
             result.CurrentVersion,
             result.LatestVersion,
@@ -3415,7 +3538,13 @@ internal static partial class ProgramRunner
             handoff?.Command,
             handoff?.Url,
             handoff?.Asset,
-            handoff?.AssetUrl);
+            handoff?.AssetUrl,
+            result.LatestVersion is null ? null : UpgradeInstallerVerification,
+            result.LatestVersion is null ? null : UpgradeInstallerTrustBoundary,
+            installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.StdoutTail : null,
+            installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.StderrTail : null,
+            installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.OutputTruncated : null,
+            installDirectoryError);
 
     internal static string BuildReleasePageUrl(string releaseTag)
         => string.Format(
@@ -3528,7 +3657,11 @@ internal static partial class ProgramRunner
     }
 
     internal static bool CanWriteDirectory(string directory)
+        => TryCheckInstallDirectoryWritable(directory, out _);
+
+    internal static bool TryCheckInstallDirectoryWritable(string directory, out string? diagnostic)
     {
+        diagnostic = null;
         string? probe = null;
         var createdProbe = false;
         try
@@ -3539,8 +3672,9 @@ internal static partial class ProgramRunner
             createdProbe = true;
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            diagnostic = CommandErrorWriter.FormatSanitizedException(ex);
             return false;
         }
         finally

@@ -46,6 +46,8 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class GitHubIssueReporter
 {
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
@@ -131,7 +133,11 @@ internal static class GitHubIssueReporter
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
             // 当該提案ハッシュを含む既存 Issue を探す。
-            var existingLookup = await FindExistingIssueByHashDetailedAsync(record.Hash, token, BuildIssueLabels(record), linkedCts.Token);
+            var existingLookup = await FindExistingIssueByHashDetailedAsync(
+                record.Hash,
+                token,
+                BuildExistingSuggestionLookupLabels(record),
+                linkedCts.Token);
             if (existingLookup.Error != null)
             {
                 Console.Error.WriteLine(BuildSubmissionFailureMessage(existingLookup.Error));
@@ -153,8 +159,9 @@ internal static class GitHubIssueReporter
         {
             // Best-effort: log to stderr but do not propagate.
             // ベストエフォート: stderr にログ出力するが伝播しない。
-            Console.Error.WriteLine(BuildSubmissionFailureMessage(ex.Message));
-            return SuggestionStore.SubmitAttemptResult.Failure($"{ex.GetType().Name}: {ex.Message}");
+            var detail = CommandErrorWriter.FormatSanitizedException(ex);
+            Console.Error.WriteLine(BuildSubmissionFailureMessage(detail));
+            return SuggestionStore.SubmitAttemptResult.Failure(detail);
         }
     }
 
@@ -250,9 +257,10 @@ internal static class GitHubIssueReporter
             cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
             return ExistingIssueLookupResult.Failure(
-                BuildExistingSuggestionLookupFailure("search", BuildApiErrorDetail((int)response.StatusCode, errorBody)));
+                BuildExistingSuggestionLookupFailure(
+                    "search",
+                    await BuildGitHubApiErrorDetailAsync(response, cancellationToken).ConfigureAwait(false)));
         }
 
         JsonNode? node;
@@ -263,7 +271,7 @@ internal static class GitHubIssueReporter
         catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
         {
             return ExistingIssueLookupResult.Failure(
-                BuildExistingSuggestionLookupFailure("search", $"{ex.GetType().Name}: {ex.Message}"));
+                BuildExistingSuggestionLookupFailure("search", CommandErrorWriter.FormatSanitizedException(ex)));
         }
 
         var items = node?["items"] as JsonArray;
@@ -288,7 +296,7 @@ internal static class GitHubIssueReporter
         catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
         {
             return ExistingIssueLookupResult.Failure(
-                BuildExistingSuggestionLookupFailure("search", $"{ex.GetType().Name}: {ex.Message}"));
+                BuildExistingSuggestionLookupFailure("search", CommandErrorWriter.FormatSanitizedException(ex)));
         }
 
         return ExistingIssueLookupResult.NotFound;
@@ -300,8 +308,11 @@ internal static class GitHubIssueReporter
         IReadOnlyList<string> lookupLabels,
         CancellationToken cancellationToken)
     {
-        foreach (var label in lookupLabels.Distinct(StringComparer.OrdinalIgnoreCase))
+        var labelsToQuery = lookupLabels.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        for (var labelIndex = 0; labelIndex < labelsToQuery.Count; labelIndex++)
         {
+            var label = labelsToQuery[labelIndex];
+            var sawCandidateIssueForLabel = false;
             for (var page = 1; page <= MaxExistingSuggestionLookupPagesPerLabel; page++)
             {
                 var labels = Uri.EscapeDataString(label);
@@ -316,11 +327,10 @@ internal static class GitHubIssueReporter
                     cancellationToken);
                 if (!response.IsSuccessStatusCode)
                 {
-                    var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
                     return ExistingIssueLookupResult.Failure(
                         BuildExistingSuggestionLookupFailure(
                             $"label list '{label}' page {page}",
-                            BuildApiErrorDetail((int)response.StatusCode, errorBody)));
+                            await BuildGitHubApiErrorDetailAsync(response, cancellationToken).ConfigureAwait(false)));
                 }
 
                 JsonNode? node;
@@ -333,7 +343,7 @@ internal static class GitHubIssueReporter
                     return ExistingIssueLookupResult.Failure(
                         BuildExistingSuggestionLookupFailure(
                             $"label list '{label}' page {page}",
-                            $"{ex.GetType().Name}: {ex.Message}"));
+                            CommandErrorWriter.FormatSanitizedException(ex)));
                 }
 
                 var items = node as JsonArray;
@@ -354,6 +364,8 @@ internal static class GitHubIssueReporter
                     {
                         var body = item?["body"]?.GetValue<string>();
                         var itemUrl = TryGetOpenIssueUrl(item);
+                        if (itemUrl != null)
+                            sawCandidateIssueForLabel = true;
                         if (itemUrl != null && body != null && body.Contains(hash, StringComparison.Ordinal))
                             return ExistingIssueLookupResult.Found(itemUrl);
                     }
@@ -363,15 +375,28 @@ internal static class GitHubIssueReporter
                     return ExistingIssueLookupResult.Failure(
                         BuildExistingSuggestionLookupFailure(
                             $"label list '{label}' page {page}",
-                            $"{ex.GetType().Name}: {ex.Message}"));
+                            CommandErrorWriter.FormatSanitizedException(ex)));
                 }
 
                 if (items.Count < 100)
                     break;
 
                 if (page == MaxExistingSuggestionLookupPagesPerLabel)
+                {
                     WriteExistingSuggestionLookupPageCapWarning(label);
+                    return ExistingIssueLookupResult.NotFound;
+                }
             }
+
+            // Fan out to supplemental labels only when the primary label returned
+            // plausible open issues. An empty primary list is treated as a bounded
+            // "no local backstop candidates" result to avoid scanning every cdidx
+            // label on the common no-duplicate path.
+            // primary label が open issue 候補を返した場合だけ補助 label に広げる。
+            // 空の primary list は bounded な候補なしとして扱い、通常の重複なし経路で
+            // cdidx label 全体を走査しない。
+            if (labelIndex == 0 && !sawCandidateIssueForLabel)
+                return ExistingIssueLookupResult.NotFound;
         }
 
         return ExistingIssueLookupResult.NotFound;
@@ -388,6 +413,17 @@ internal static class GitHubIssueReporter
 
     private static string BuildExistingSuggestionLookupFailure(string phase, string detail)
         => $"GitHub existing-suggestion lookup failed during {phase}: {detail}";
+
+    private static async Task<string> BuildGitHubApiErrorDetailAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var rateLimitRetryAt = GetRateLimitRetryAt(response, TimeProvider.GetUtcNow().UtcDateTime);
+        return rateLimitRetryAt is null
+            ? BuildApiErrorDetail((int)response.StatusCode, errorBody)
+            : BuildRateLimitErrorDetail((int)response.StatusCode, errorBody, rateLimitRetryAt.Value);
+    }
 
     private static void WriteExistingSuggestionLookupPageCapWarning(string label)
     {
@@ -542,7 +578,7 @@ internal static class GitHubIssueReporter
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
-            var rateLimitRetryAt = GetRateLimitRetryAt(response, DateTime.UtcNow);
+            var rateLimitRetryAt = GetRateLimitRetryAt(response, TimeProvider.GetUtcNow().UtcDateTime);
             if (rateLimitRetryAt != null)
             {
                 Console.Error.WriteLine(BuildRateLimitFailureMessage((int)response.StatusCode, errorBody, rateLimitRetryAt.Value));
@@ -656,6 +692,12 @@ internal static class GitHubIssueReporter
             ? ["bug"]
             : ["enhancement"];
     }
+
+    private static string[] BuildExistingSuggestionLookupLabels(SuggestionRecord record)
+        => BuildIssueLabels(record)
+            .Concat(ExistingSuggestionLookupLabels)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static List<string> NormalizeEvidencePaths(string[]? paths)
         => SuggestionEvidencePaths.Normalize(paths);

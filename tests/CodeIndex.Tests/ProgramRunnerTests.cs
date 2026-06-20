@@ -972,6 +972,215 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void UpdateChecker_Check_MalformedCacheDiagnosticsAreGated_Issue3708()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var cachePathWithoutDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var cachePathWithDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
+            var diagnostics = new List<string>();
+            UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
+            try
+            {
+                File.WriteAllText(cachePathWithoutDiagnostics, "{");
+                env.Set(UpdateChecker.DiagnosticsEnvVar, null);
+
+                var quietResult = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePathWithoutDiagnostics,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    _ => Task.FromResult<string?>("v1.11.0"));
+
+                Assert.True(quietResult.UpdateAvailable);
+                Assert.Empty(diagnostics);
+
+                File.WriteAllText(cachePathWithDiagnostics, "{");
+                env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
+
+                var diagnosticResult = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePathWithDiagnostics,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    _ => Task.FromResult<string?>("v1.11.0"));
+
+                Assert.True(diagnosticResult.UpdateAvailable);
+                var diagnostic = Assert.Single(diagnostics, value => value.Contains("code=cache_read_failed", StringComparison.Ordinal));
+                Assert.Contains("update_check_cache_diagnostic", diagnostic);
+                Assert.Contains("Json", diagnostic, StringComparison.Ordinal);
+            }
+            finally
+            {
+                UpdateChecker.CacheDiagnosticSinkForTesting = null;
+                if (File.Exists(cachePathWithoutDiagnostics))
+                    File.Delete(cachePathWithoutDiagnostics);
+                if (File.Exists(cachePathWithDiagnostics))
+                    File.Delete(cachePathWithDiagnostics);
+            }
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_UnwritableCachePathReportsWriteDiagnostic_Issue3708()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_dir_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(cachePath);
+            using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
+            env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
+            var diagnostics = new List<string>();
+            UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
+            try
+            {
+                var result = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePath,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    _ => Task.FromResult<string?>("v1.11.0"));
+
+                Assert.True(result.UpdateAvailable);
+                var diagnostic = Assert.Single(diagnostics);
+                Assert.Contains("update_check_cache_diagnostic", diagnostic);
+                Assert.Contains("code=cache_write_failed", diagnostic);
+            }
+            finally
+            {
+                UpdateChecker.CacheDiagnosticSinkForTesting = null;
+                if (Directory.Exists(cachePath))
+                    Directory.Delete(cachePath);
+            }
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_TransientFailureDoesNotRefreshStaleCache_Issue3822()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var checkedAt = DateTimeOffset.Parse("2025-12-31T00:00:00Z", CultureInfo.InvariantCulture);
+        var originalCache =
+            $$"""{"checked_at":"{{checkedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"v9.9.9"}""";
+        try
+        {
+            File.WriteAllText(cachePath, originalCache);
+
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-02T00:00:00Z", CultureInfo.InvariantCulture),
+                _ => throw new HttpRequestException("secret host detail"));
+
+            Assert.Equal("network_failure", result.Error);
+            Assert.Equal("v9.9.9", result.LatestVersion);
+            Assert.True(result.UpdateAvailable);
+            Assert.False(result.FromCache);
+            Assert.Equal(originalCache, File.ReadAllText(cachePath));
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_NullFetchDoesNotCreateCache_Issue3822()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-02T00:00:00Z", CultureInfo.InvariantCulture),
+                _ => Task.FromResult<string?>(null));
+
+            Assert.Null(result.LatestVersion);
+            Assert.False(result.UpdateAvailable);
+            Assert.False(File.Exists(cachePath));
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_ResolveDefaultCachePath_IgnoresRelativeXdgCacheHome_Issue3822()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DiagnosticsEnvVar);
+            env.Set("XDG_CACHE_HOME", "relative-cache-root");
+            env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
+            var diagnostics = new List<string>();
+            UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
+            try
+            {
+                var path = UpdateChecker.ResolveDefaultCachePath();
+
+                Assert.True(Path.IsPathFullyQualified(path));
+                Assert.DoesNotContain("relative-cache-root", path, StringComparison.Ordinal);
+                var diagnostic = Assert.Single(diagnostics, value => value.Contains("code=cache_root_invalid", StringComparison.Ordinal));
+                Assert.Contains("update_check_cache_diagnostic", diagnostic);
+            }
+            finally
+            {
+                UpdateChecker.CacheDiagnosticSinkForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_RateLimitResponseReportsRetryMetadata_Issue3822()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var now = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
+            var expectedRetryAt = now.UtcDateTime.AddSeconds(90);
+            var previousTimeProvider = UpdateChecker.TimeProvider;
+            UpdateChecker.TimeProvider = new FixedTimeProvider(now);
+            try
+            {
+                using var content = new ByteArrayContent(Encoding.UTF8.GetBytes(
+                    """{"message":"rate limited","token":"secret-token"}"""));
+                var handler = new StaticResponseHandler(content, (HttpStatusCode)429)
+                {
+                    ConfigureResponse = response =>
+                        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                            TimeSpan.FromSeconds(90)),
+                };
+                using var client = new HttpClient(handler)
+                {
+                    Timeout = Timeout.InfiniteTimeSpan,
+                };
+
+                var result = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePath,
+                    now,
+                    token => UpdateChecker.FetchLatestReleaseTagAsync(client, TimeSpan.FromSeconds(1), token));
+
+                Assert.Equal("rate_limited", result.Error);
+                Assert.Equal("rate_limit", result.ErrorCategory);
+                Assert.Contains("429", result.ErrorHint);
+                Assert.Contains("next_retry_at=", result.ErrorHint);
+                Assert.Contains(expectedRetryAt.ToString("O", CultureInfo.InvariantCulture), result.ErrorHint);
+                Assert.DoesNotContain("secret-token", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+                Assert.False(File.Exists(cachePath));
+            }
+            finally
+            {
+                UpdateChecker.TimeProvider = previousTimeProvider;
+                if (File.Exists(cachePath))
+                    File.Delete(cachePath);
+            }
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
     {
         var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
@@ -1312,6 +1521,53 @@ exit 0
     }
 
     [Fact]
+    public void RunInstallerProcessDetailed_SuppressedFailureCapturesBoundedTail_Issue3831()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_tail_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+i=0
+while [ "$i" -lt 700 ]; do
+  printf 'stdout-tail-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i"
+  printf 'stderr-tail-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 7
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var result = ProgramRunner.RunInstallerProcessDetailed(
+                    startInfo,
+                    TimeSpan.FromSeconds(10),
+                    suppressOutput: true);
+
+                Assert.Equal(7, result.ExitCode);
+                Assert.True(result.OutputTruncated);
+                Assert.True(result.StdoutTail!.Length <= ProgramRunner.InstallerSuppressedOutputTailChars);
+                Assert.True(result.StderrTail!.Length <= ProgramRunner.InstallerSuppressedOutputTailChars);
+                Assert.Contains("stdout-tail-0699", result.StdoutTail);
+                Assert.Contains("stderr-tail-0699", result.StderrTail);
+                Assert.DoesNotContain("stdout-tail-0000", result.StdoutTail);
+                Assert.DoesNotContain("stderr-tail-0000", result.StderrTail);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
     public void RunUpgrade_JsonPreparationFailure_UsesInstallError_Issue3373()
     {
         if (OperatingSystem.IsWindows())
@@ -1487,6 +1743,69 @@ exit 0
     }
 
     [Fact]
+    public void RunUpgrade_JsonInstallerFailureIncludesSuppressedOutputTail_Issue3831()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = """
+#!/bin/sh
+i=0
+while [ "$i" -lt 700 ]; do
+  printf 'json-stdout-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i"
+  printf 'json-stderr-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 7
+""";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(7, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.True(root.GetProperty("install_attempted").GetBoolean());
+                Assert.False(root.GetProperty("install_succeeded").GetBoolean());
+                Assert.Equal(7, root.GetProperty("install_exit_code").GetInt32());
+                Assert.Equal("installer_exit_code_7", root.GetProperty("error").GetString());
+                Assert.True(root.GetProperty("installer_output_truncated").GetBoolean());
+                Assert.Contains("json-stdout-0699", root.GetProperty("installer_stdout_tail").GetString(), StringComparison.Ordinal);
+                Assert.Contains("json-stderr-0699", root.GetProperty("installer_stderr_tail").GetString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("json-stdout-0000", root.GetProperty("installer_stdout_tail").GetString(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void RunUpgrade_InstallerScriptCleanupFailure_EmitsWarning_Issue3372()
     {
         if (OperatingSystem.IsWindows())
@@ -1588,6 +1907,55 @@ exit 0
             Assert.Equal("explicit_version", root.GetProperty("selection_source").GetString());
             Assert.True(root.GetProperty("include_prerelease").GetBoolean());
             Assert.False(root.GetProperty("install_attempted").GetBoolean());
+            Assert.Equal("same_release_sha256_manifest", root.GetProperty("installer_verification").GetString());
+            Assert.Contains("same GitHub release asset namespace", root.GetProperty("installer_trust_boundary").GetString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("v1.2.3", true)]
+    [InlineData("1.2.3", false)]
+    [InlineData("v1.2.3-rc.1", true)]
+    [InlineData("v1.2", false)]
+    [InlineData("v1.2.3/evil", false)]
+    [InlineData("v1.2.3+build", false)]
+    public void IsValidUpgradeReleaseTag_ConstrainShape_Issue3831(string releaseTag, bool expected)
+    {
+        Assert.Equal(expected, ProgramRunner.IsValidUpgradeReleaseTag(releaseTag));
+    }
+
+    [Fact]
+    public void RunUpgrade_InvalidExplicitVersion_ReturnsUsageError_Issue3831()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["upgrade", "--check-only", "--version", "release/test"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains("vX.Y.Z", stderr);
+        }
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_FilePathReportsDiagnostic_Issue3831()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_file_{Guid.NewGuid():N}");
+        try
+        {
+            File.WriteAllText(path, "");
+
+            var writable = ProgramRunner.TryCheckInstallDirectoryWritable(path, out var diagnostic);
+
+            Assert.False(writable);
+            Assert.Equal("IOException", diagnostic);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
         }
     }
 
@@ -1712,6 +2080,26 @@ exit 0
         var tag = await UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None);
 
         Assert.Equal("v1.27.0", tag);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_FetchLatestReleaseTagAsync_UsesSharedGitHubHeaders_Issue3750()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""{"tag_name":"v1.27.0"}"""));
+        var handler = new StaticResponseHandler(content);
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var tag = await UpdateChecker.FetchLatestReleaseTagAsync(client, TimeSpan.FromSeconds(1), CancellationToken.None);
+
+        Assert.Equal("v1.27.0", tag);
+        Assert.NotNull(handler.LastRequest);
+        Assert.Contains(handler.LastRequest!.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(handler.LastRequest.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var values));
+        Assert.Contains("2022-11-28", values);
     }
 
     [Fact]
@@ -3203,6 +3591,18 @@ exit 0
         }
     }
 
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _now;
+
+        internal FixedTimeProvider(DateTimeOffset now)
+        {
+            _now = now;
+        }
+
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
     // --- --audit-log flag parsing (#1562) ---
 
     [Fact]
@@ -3357,14 +3757,25 @@ exit 0
     private sealed class StaticResponseHandler : HttpMessageHandler
     {
         private readonly HttpContent _content;
+        private readonly HttpStatusCode _statusCode;
 
-        internal StaticResponseHandler(HttpContent content)
+        internal HttpRequestMessage? LastRequest { get; private set; }
+
+        internal Action<HttpResponseMessage>? ConfigureResponse { get; init; }
+
+        internal StaticResponseHandler(HttpContent content, HttpStatusCode statusCode = HttpStatusCode.OK)
         {
             _content = content;
+            _statusCode = statusCode;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+        {
+            LastRequest = request;
+            var response = new HttpResponseMessage(_statusCode) { Content = _content };
+            ConfigureResponse?.Invoke(response);
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class UpgradeAssetResponseHandler : HttpMessageHandler

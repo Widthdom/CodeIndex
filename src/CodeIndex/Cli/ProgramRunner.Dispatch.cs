@@ -214,7 +214,7 @@ internal static partial class ProgramRunner
     private static Func<string[], int>? ResolveQueryRunner(string commandName, CommandRunContext context) =>
         commandName switch
         {
-            "search" => a => QueryCommandRunner.RunSearch(a, context.JsonOptions),
+            "search" => a => QueryCommandRunner.RunSearch(a, context.JsonOptions, context.CancellationToken),
             "definition" => a => QueryCommandRunner.RunDefinition(a, context.JsonOptions),
             "goto" => a => QueryCommandRunner.RunGoto(a, context.JsonOptions),
             "references" => a => QueryCommandRunner.RunReferences(a, context.JsonOptions),
@@ -235,7 +235,7 @@ internal static partial class ProgramRunner
             "unused" => a => QueryCommandRunner.RunUnused(a, context.JsonOptions),
             "hotspots" => a => QueryCommandRunner.RunHotspots(a, context.JsonOptions),
             "batch" => a => QueryCommandRunner.RunBatch(a, context.JsonOptions),
-            "suggestions" => a => SuggestionsCommandRunner.Run(a, context.JsonOptions),
+            "suggestions" => a => SuggestionsCommandRunner.Run(a, context.JsonOptions, context.CancellationToken),
             _ => null,
         };
 

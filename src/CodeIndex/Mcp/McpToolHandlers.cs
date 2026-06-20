@@ -5622,7 +5622,7 @@ public partial class McpServer
         if (maxFileBytes is <= 0 or > int.MaxValue)
             return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
         var projectPath = Path.GetFullPath(path);
-        var runStartedAtUtc = DateTime.UtcNow;
+        var runStartedAtUtc = GetUtcNow();
         var runStopwatch = Stopwatch.StartNew();
         var memorySamples = memoryTrace
             ? new JsonArray { CaptureMcpIndexMemorySample("start", runStopwatch) }
