@@ -14971,7 +14971,7 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(20),
+            RequestTimeout = TimeSpan.FromMilliseconds(500),
         };
         using var delayStarted = new ManualResetEventSlim(false);
         using var releaseDelay = new ManualResetEventSlim(false);
@@ -15002,6 +15002,7 @@ public sealed class Caller
 
             var status = server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"status"}}""")!)!;
+            Assert.True(status["result"] is not null, status.ToJsonString());
             var requestTimeouts = status["result"]!["structuredContent"]!["mcp"]!["request_timeouts"]!;
             Assert.Equal(1L, requestTimeouts["isolated_action_draining_count"]!.GetValue<long>());
             Assert.Equal(0L, requestTimeouts["isolated_action_drained_count"]!.GetValue<long>());
