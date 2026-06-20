@@ -36,6 +36,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const int DefaultMaxEventStreams = 16;
     internal const int MaxConfiguredEventStreams = 1024;
     internal const int MaxRequestLogFieldCharacters = 256;
+    internal const int MaxHealthJsonBytes = 64 * 1024;
+    internal const int MaxSseEventFrameBytes = 64 * 1024;
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
@@ -47,7 +49,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string EventStreamLimitRejection = "event_stream_limit";
     internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running on a loopback listener without bearer authentication; local processes can connect.";
     private const string BearerPrefix = "Bearer ";
+    private const string DefaultStartingHealthJson = """{"status":"starting","db_open":false}""";
+    private const string InvalidHealthJson = """{"status":"degraded","db_open":false,"error":"health_provider_invalid"}""";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan EventStreamWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly HttpListener _listener;
@@ -57,6 +62,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue;
+    private readonly SemaphoreSlim _queueSlots;
     private readonly SemaphoreSlim _handlerSemaphore;
     private readonly int _maxRequestBodyBytes;
     private readonly int _maxQueuedRequests;
@@ -137,6 +143,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
+        _queueSlots = new SemaphoreSlim(_maxQueuedRequests, _maxQueuedRequests);
         if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
             throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
         IsLoopbackBind = IsLoopbackHost(host);
@@ -363,6 +370,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             var request = await _requestQueue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             Interlocked.Decrement(ref _queuedRequestCount);
+            _queueSlots.Release();
             _pendingRequest = request;
             return request.Body;
         }
@@ -450,7 +458,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 return;
             }
 
-            var healthJson = HealthJsonProvider?.Invoke() ?? """{"status":"starting","db_open":false}""";
+            var healthJson = ResolveHealthJson(HealthJsonProvider);
             await RespondJsonAsync(context, (int)HttpStatusCode.OK, healthJson).ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.OK);
             return;
@@ -538,11 +546,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private bool TryQueueRequest(PendingRequest request)
     {
+        if (!_queueSlots.Wait(0))
+            return false;
+
         Interlocked.Increment(ref _queuedRequestCount);
         if (_requestQueue.Writer.TryWrite(request))
             return true;
 
         Interlocked.Decrement(ref _queuedRequestCount);
+        _queueSlots.Release();
         return false;
     }
 
@@ -649,16 +661,23 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (_eventStreams.IsEmpty)
             return;
 
+        var writes = new List<Task>(_eventStreams.Count);
         foreach (var (id, stream) in _eventStreams)
+            writes.Add(WriteOutOfBandFrameToStreamAsync(id, stream, frame, cancellationToken));
+        await Task.WhenAll(writes).ConfigureAwait(false);
+    }
+
+    private async Task WriteOutOfBandFrameToStreamAsync(Guid id, EventStream stream, string frame, CancellationToken cancellationToken)
+    {
+        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        writeCts.CancelAfter(EventStreamWriteTimeout);
+        try
         {
-            try
-            {
-                await stream.WriteJsonRpcEventAsync(frame, cancellationToken).ConfigureAwait(false);
-            }
-            catch
-            {
-                RemoveEventStream(id, stream);
-            }
+            await stream.WriteJsonRpcEventAsync(frame, writeCts.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            RemoveEventStream(id, stream);
         }
     }
 
@@ -755,6 +774,32 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             AbortResponseBestEffort(context.Response, "json response failure");
         }
+    }
+
+    private static string ResolveHealthJson(Func<string>? provider)
+    {
+        if (provider is null)
+            return DefaultStartingHealthJson;
+
+        string candidate;
+        try
+        {
+            candidate = provider();
+        }
+        catch
+        {
+            return InvalidHealthJson;
+        }
+
+        if (string.IsNullOrWhiteSpace(candidate)
+            || Encoding.UTF8.GetByteCount(candidate) > MaxHealthJsonBytes
+            || !JsonFrameParser.TryParseNode(candidate, McpServer.MaxJsonDepth, out var node, out _)
+            || node is not JsonObject)
+        {
+            return InvalidHealthJson;
+        }
+
+        return candidate;
     }
 
     private static bool IsEventsPath(string? path)
@@ -871,6 +916,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 builder.Append("data: ").Append(line).Append('\n');
             builder.Append('\n');
             var bytes = Encoding.UTF8.GetBytes(builder.ToString());
+            if (bytes.Length > MaxSseEventFrameBytes)
+                throw new InvalidDataException($"SSE event frame exceeds {MaxSseEventFrameBytes.ToString(CultureInfo.InvariantCulture)} bytes.");
 
             await WriteSseBytesAsync(bytes, cancellationToken).ConfigureAwait(false);
         }
