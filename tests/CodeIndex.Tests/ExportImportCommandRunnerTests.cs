@@ -176,7 +176,10 @@ public class ExportImportCommandRunnerTests
         Directory.CreateDirectory(workDir);
         try
         {
-            var archivePath = CreateArchiveWithEntries(workDir, ("manifest.json", "{}"));
+            var manifest = $$"""
+                {"format_version":"1","cdidx_version":"test","user_version":0,"database_sha256":"{{new string('0', 64)}}"}
+                """;
+            var archivePath = CreateArchiveWithEntries(workDir, ("manifest.json", manifest));
             var dbPath = Path.Combine(workDir, "codeindex.db");
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 

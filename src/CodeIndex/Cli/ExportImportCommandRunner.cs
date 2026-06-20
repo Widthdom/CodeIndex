@@ -145,6 +145,9 @@ internal static class ExportImportCommandRunner
                 AddImportValidationPhase(validationPhases, PhaseManifest);
 
                 phase = PhaseDatabaseEntry;
+                if (dbEntry == null)
+                    return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_missing", $"archive is missing {DatabaseEntryName}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
+
                 if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
                     return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_too_large", sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", ImportUsage);
 
@@ -668,7 +671,7 @@ internal static class ExportImportCommandRunner
     private static bool TryValidateImportArchiveEntries(
         ZipArchive archive,
         out ZipArchiveEntry manifestEntry,
-        out ZipArchiveEntry databaseEntry,
+        out ZipArchiveEntry? databaseEntry,
         out string phase,
         out string errorCode,
         out string message)
@@ -708,16 +711,8 @@ internal static class ExportImportCommandRunner
             return false;
         }
 
-        if (!entries.TryGetValue(DatabaseEntryName, out var foundDatabaseEntry))
-        {
-            phase = PhaseDatabaseEntry;
-            errorCode = "import_database_entry_missing";
-            message = $"archive is missing {DatabaseEntryName}.";
-            return false;
-        }
-
         manifestEntry = foundManifestEntry;
-        databaseEntry = foundDatabaseEntry;
+        entries.TryGetValue(DatabaseEntryName, out databaseEntry);
         return true;
     }
 
