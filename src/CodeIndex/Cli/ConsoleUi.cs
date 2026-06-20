@@ -99,7 +99,7 @@ public static class ConsoleUi
         ("find", "cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]"),
-        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("inspect", "cdidx inspect <query>|--query <query>|-- <query>|--path <file> --line <line> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--line <line>|--start-line <line>] [--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
@@ -833,29 +833,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx --help-all");
         Console.WriteLine("  cdidx --help-flags");
         Console.WriteLine();
-        Console.WriteLine("Commands:");
-        Console.WriteLine("  index <projectPath>        Build or update the index for a project");
-        Console.WriteLine("  search <query>             Full-text search across indexed chunks");
-        Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
-        Console.WriteLine("  references <query>         Find indexed references for a symbol (--kind uses reference kind)");
-        Console.WriteLine("  callers <query>            Find callers of a symbol (--kind uses reference kind)");
-        Console.WriteLine("  callees <query>            Find callees used by a caller (--kind uses reference kind)");
-        Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
-        Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
-        Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
-        Console.WriteLine("  status                     Show database statistics, freshness, config, and logs");
-        Console.WriteLine("  doctor                     Print a redacted environment summary for bug reports");
-        Console.WriteLine("  validate                   Report encoding issues (U+FFFD origin/severity, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
-        Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
-        Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
-        Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
-        Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
-        Console.WriteLine("  export                     Export ctags or a portable CodeIndex archive");
-        Console.WriteLine("  import                     Import a portable CodeIndex archive");
-        Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
-        Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
-        Console.WriteLine("  lsp                        Start LSP server over stdio (for LSP-native editors)");
-        Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
+        PrintCommandSummary();
         Console.WriteLine();
         Console.WriteLine("Run `cdidx --help-all` for every command and option, `cdidx --help-flags` for shared flags, or `cdidx <command> --help` for one command.");
         Console.WriteLine();
@@ -929,6 +907,7 @@ public static class ConsoleUi
     {
         Console.WriteLine("Commands:");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
+        Console.WriteLine("  hooks                      Install, uninstall, or inspect git hook integration");
         Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
         Console.WriteLine("  optimize                   Optimize FTS5 segments in an existing index DB");
         Console.WriteLine("  vacuum                     Reclaim free SQLite pages from an existing index DB");

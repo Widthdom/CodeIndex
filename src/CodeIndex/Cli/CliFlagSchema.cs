@@ -116,7 +116,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] KindCommands =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
+        "definition", "goto", "references", "callers", "callees", "symbols", "inspect", "unused", "hotspots", "validate",
     ];
     private static readonly string[] SeverityCommands = ["validate"];
     private static readonly string[] VisibilityCommands =
@@ -161,6 +161,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
     private static readonly string[] InspectFieldCommands = ["inspect"];
+    private static readonly string[] InspectSourceExcerptCommands = ["inspect"];
 
     private static readonly string[] MaxLineWidthCommands =
     [
@@ -300,7 +301,8 @@ internal static class CliFlagSchema
             new() { Name = "--body", Description = "Include definition body snippets in JSON-capable result rows", Commands = Set(BodyCommands) },
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", Commands = Set(InspectFieldCommands) },
-            new() { Name = "--fields", ValuePlaceholder = "<file,workspace,graph,definitions,body,nearby_symbols,references,callers,callees,all>", Description = "Inspect: select top-level JSON evidence groups", Commands = Set(InspectFieldCommands) },
+            new() { Name = "--body-line-count", ValuePlaceholder = "<n>", Description = "Inspect: alias for --body-lines", Commands = Set(InspectFieldCommands) },
+            new() { Name = "--fields", ValuePlaceholder = "<file,workspace,graph,definitions,body,source_excerpt,nearby_symbols,references,callers,callees,all>", Description = "Inspect: select top-level JSON evidence groups", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", Commands = Set(InspectFieldCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
             new() { Name = "--regex", Description = "Use regular expression matching", Commands = Set("find") },
@@ -334,12 +336,14 @@ internal static class CliFlagSchema
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
             new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
-            new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt") },
-            new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt") },
+            new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect: include one source line as source_excerpt", Commands = Set(InspectSourceExcerptCommands) },
+            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Inspect: source_excerpt context lines before and after", Commands = Set(InspectSourceExcerptCommands) },
+            new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt", "inspect") },
+            new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },
-            new() { Name = "--start-line", ValuePlaceholder = "<line>", Description = "Alias for --start", Commands = Set("excerpt") },
+            new() { Name = "--start-line", ValuePlaceholder = "<line>", Description = "Alias for --start; inspect source_excerpt start line", Commands = Set("excerpt", "inspect") },
             new() { Name = "--end", ValuePlaceholder = "<line>", Description = "End line", Commands = Set("excerpt") },
-            new() { Name = "--end-line", ValuePlaceholder = "<line>", Description = "Alias for --end", Commands = Set("excerpt") },
+            new() { Name = "--end-line", ValuePlaceholder = "<line>", Description = "Alias for --end; inspect source_excerpt end line", Commands = Set("excerpt", "inspect") },
             new() { Name = "--focus-line", ValuePlaceholder = "<line>", Description = "Focused line to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-column", ValuePlaceholder = "<n>", Description = "Focused column to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-length", ValuePlaceholder = "<n>", Description = "Focused span width when clamping", Commands = Set("excerpt") },
