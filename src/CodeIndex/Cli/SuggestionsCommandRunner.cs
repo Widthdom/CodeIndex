@@ -32,6 +32,9 @@ internal static class SuggestionsCommandRunner
             CommandErrorWriter.WriteStderr(Usage);
             return CommandExitCodes.UsageError;
         }
+        if ((options.DuplicateConfidenceSpecified || options.DuplicateThresholdSpecified)
+            && (verb != "export" || options.ExportFormat != "issue-drafts"))
+            return WriteUsageError("--duplicate-confidence and --duplicate-threshold can only be used with `suggestions export --format issue-drafts`.");
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.");
         if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))

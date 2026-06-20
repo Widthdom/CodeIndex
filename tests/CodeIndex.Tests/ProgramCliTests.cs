@@ -1148,6 +1148,21 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_DuplicateTuningRequiresIssueDraftExport_Issue3827()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("output_format", "csharp", "Duplicate tuning should not be ignored by list.", submitted: false);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--format", "issue-drafts", "--duplicate-threshold", "0.4"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("suggestions export --format issue-drafts", stderr);
+    }
+
+    [Fact]
     public void Suggestions_ExportIssueDraftsGitHubOpenIssuesRequiresRepository_Issue3449()
     {
         using var fixture = SuggestionFixture.Create();
