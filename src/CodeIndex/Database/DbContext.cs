@@ -25,6 +25,7 @@ public class DbContext : IDisposable
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
     private const int MigrationDiagnosticTextLimit = 240;
+    private const int MigrationForeignKeyViolationSampleLimit = 5;
 
     private static readonly string[] RequiredCodeIndexTables =
     [
@@ -107,6 +108,7 @@ public class DbContext : IDisposable
     private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteConnection, string>?> ScopedForeignKeyValidationBeforeCheckForTesting = new();
 
     internal static Action<string>? OptimizePragmaExecutedForTesting
     {
@@ -130,6 +132,12 @@ public class DbContext : IDisposable
     {
         get => ScopedWalCheckpointTruncateExecutedForTesting.Value;
         set => ScopedWalCheckpointTruncateExecutedForTesting.Value = value;
+    }
+
+    internal static Action<SqliteConnection, string>? ForeignKeyValidationBeforeCheckForTesting
+    {
+        get => ScopedForeignKeyValidationBeforeCheckForTesting.Value;
+        set => ScopedForeignKeyValidationBeforeCheckForTesting.Value = value;
     }
 
     public SqliteConnection Connection => _connection;
@@ -1567,6 +1575,8 @@ public class DbContext : IDisposable
     public void InitializeSchema()
     {
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
+        var foreignKeys = ReadPragmaLong("foreign_keys");
+        Execute("PRAGMA foreign_keys=OFF");
         Execute("PRAGMA legacy_alter_table=ON");
         try
         {
@@ -1807,6 +1817,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            Execute($"PRAGMA foreign_keys={foreignKeys}");
             Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
             _schemaCache?.Refresh();
         }
@@ -2071,12 +2082,14 @@ public class DbContext : IDisposable
             Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldReferenceLines}");
+            InvokeForeignKeyValidationBeforeCheckForTesting("reference_lines_context_key");
         }
         finally
         {
             Execute($"PRAGMA foreign_keys={foreignKeys}");
         }
 
+        ValidateForeignKeysAfterMigration("reference_lines_context_key");
         _schemaCache?.Refresh();
     }
 
@@ -2162,20 +2175,89 @@ public class DbContext : IDisposable
         const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
 
         var foreignKeys = ReadPragmaLong("foreign_keys");
+        var rebuilt = false;
         Execute("PRAGMA foreign_keys=OFF");
         try
         {
             if (!TableCheckContainsAll("symbols", SymbolKindCatalog.SymbolKinds))
+            {
                 RebuildTableWithCurrentKindChecks("symbols", "_symbols_kind_check", symbolsCreateSql, symbolsColumns);
+                rebuilt = true;
+            }
 
             if (!TableCheckContainsAll("symbol_references", SymbolKindCatalog.SymbolKinds.Concat(SymbolKindCatalog.ReferenceKinds)))
+            {
                 RebuildTableWithCurrentKindChecks("symbol_references", "_symbol_references_kind_check", symbolReferencesCreateSql, symbolReferencesColumns);
+                rebuilt = true;
+            }
+
+            if (rebuilt)
+                InvokeForeignKeyValidationBeforeCheckForTesting("kind_check_constraints");
         }
         finally
         {
             Execute($"PRAGMA foreign_keys={foreignKeys}");
         }
+
+        if (rebuilt)
+            ValidateForeignKeysAfterMigration("kind_check_constraints");
     }
+
+    private void InvokeForeignKeyValidationBeforeCheckForTesting(string phase)
+    {
+        var boundedPhase = DiagnosticRedactor.BoundDiagnosticText(phase, MigrationDiagnosticTextLimit);
+        ForeignKeyValidationBeforeCheckForTesting?.Invoke(_connection, boundedPhase);
+    }
+
+    private void ValidateForeignKeysAfterMigration(string phase)
+    {
+        var boundedPhase = DiagnosticRedactor.BoundDiagnosticText(phase, MigrationDiagnosticTextLimit);
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "PRAGMA foreign_key_check";
+
+        var violations = new List<string>();
+        var violationCount = 0;
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            violationCount++;
+            if (violations.Count < MigrationForeignKeyViolationSampleLimit)
+                violations.Add(FormatForeignKeyViolation(reader));
+        }
+
+        if (violationCount == 0)
+            return;
+
+        var sample = string.Join("; ", violations);
+        var truncated = violationCount > violations.Count
+            ? $" (showing {violations.Count.ToString(CultureInfo.InvariantCulture)})"
+            : string.Empty;
+        throw new CodeIndexException(
+            code: CommandErrorCodes.DbIntegrityFailed,
+            category: CodeIndexExceptionCategory.Database,
+            message: $"Foreign key validation failed after schema migration phase '{boundedPhase}' with {violationCount.ToString(CultureInfo.InvariantCulture)} violation(s){truncated}: {sample}.",
+            hint: "Run `cdidx db --integrity-check --db <db>` and rebuild the index on writable storage if violations persist.");
+    }
+
+    private static string FormatForeignKeyViolation(SqliteDataReader reader)
+    {
+        var table = FormatForeignKeyCheckValue(reader.IsDBNull(0) ? "<unknown>" : reader.GetString(0));
+        var rowId = reader.IsDBNull(1)
+            ? "<null>"
+            : Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        var parent = FormatForeignKeyCheckValue(reader.IsDBNull(2) ? "<unknown>" : reader.GetString(2));
+        var fkId = reader.IsDBNull(3)
+            ? "<null>"
+            : Convert.ToInt64(reader.GetValue(3), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        return $"table={table}, rowid={rowId}, parent={parent}, fkid={fkId}";
+    }
+
+    private static string FormatForeignKeyCheckValue(string value)
+        => DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(value, redactPaths: true),
+            MigrationDiagnosticTextLimit);
 
     private bool TableCheckContainsAll(string tableName, IEnumerable<string> allowedValues)
     {
