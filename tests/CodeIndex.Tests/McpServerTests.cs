@@ -10633,6 +10633,60 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_GeneratedCodePatternCountsProcessedAndSkipsExtraction_Issue3720()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_generated_pattern_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_generated_pattern_{Guid.NewGuid():N}.db");
+        try
+        {
+            env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "generated/**");
+            Directory.CreateDirectory(Path.Combine(fixtureDir, "generated"));
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "generated", "Client.cs"),
+                "public class GeneratedClient { public string Lookup() => \"generated\"; }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("1", verifyDb.GetMetaString(DbContext.LastIndexRunRowsUpsertedMetaKey));
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+            }.ToString();
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT f.generated,
+                       (SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id AND c.content LIKE '%GeneratedClient%'),
+                       (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id),
+                       (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id),
+                       (SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id AND i.kind = @issueKind)
+                FROM files f
+                WHERE f.path = @path
+                """;
+            command.Parameters.AddWithValue("@issueKind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+            command.Parameters.AddWithValue("@path", "generated/Client.cs");
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(0, reader.GetInt32(0));
+            Assert.True(reader.GetInt32(1) > 0);
+            Assert.Equal(0, reader.GetInt32(2));
+            Assert.Equal(0, reader.GetInt32(3));
+            Assert.Equal(1, reader.GetInt32(4));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnknownArgumentName_TruncatesDisplay_Issue3117()
     {
         var argumentName = new string('x', McpBoundedText.MaxDiagnosticDisplayChars + 25);

@@ -5226,7 +5226,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildRecord_ConfiguredGeneratedPatternMarksGeneratedAndBuildsExtractionIssue()
+    public void BuildRecord_ConfiguredGeneratedPatternBuildsExtractionIssueWithoutGeneratedFlag()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
@@ -5244,7 +5244,7 @@ public class FileIndexerTests
             var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
             var issue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
 
-            Assert.True(record.Generated);
+            Assert.False(record.Generated);
             Assert.Equal("src/generated/Client.cs", record.Path);
             Assert.Contains("public class Client", content, StringComparison.Ordinal);
             Assert.True(rawBytes.Length > 0);

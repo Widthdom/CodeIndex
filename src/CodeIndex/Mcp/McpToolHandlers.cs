@@ -5975,6 +5975,8 @@ public partial class McpServer
                     WriteProjectRootOnce();
                     writer.ClearBatchInProgress();
                     txn.Commit();
+                    processed++;
+                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
                     McpIndexFileCommittedForTesting?.Invoke(record.Path);
                     continue;
                 }

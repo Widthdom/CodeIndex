@@ -6062,7 +6062,7 @@ public sealed class Caller
                 using (var reader = generatedCmd.ExecuteReader())
                 {
                     Assert.True(reader.Read());
-                    Assert.Equal(1, reader.GetInt32(0));
+                    Assert.Equal(0, reader.GetInt32(0));
                     Assert.True(reader.GetInt32(1) > 0);
                     Assert.Equal(0, reader.GetInt32(2));
                     Assert.Equal(0, reader.GetInt32(3));

@@ -3484,8 +3484,7 @@ public class FileIndexer
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
             Modified = loaded.ModifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content)
-                || IsConfiguredGeneratedCodeFile(normalizedRelativePath),
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
         return (record, loaded.Content, loaded.RawBytes, loaded.Warning);
@@ -3508,8 +3507,7 @@ public class FileIndexer
             Lines = 0,
             Checksum = null,
             Modified = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
-            Generated = HasGeneratedCodeFileName(normalizedRelativePath)
-                || IsConfiguredGeneratedCodeFile(normalizedRelativePath),
+            Generated = HasGeneratedCodeFileName(normalizedRelativePath),
         };
     }
 
@@ -3572,9 +3570,6 @@ public class FileIndexer
         => HasGeneratedCodeFileName(relativePath) || HasGeneratedCodeHeader(content);
 
     internal const string GeneratedCodeExtractionSkippedIssueKind = "generated_code_extraction_skipped";
-
-    internal bool IsConfiguredGeneratedCodeFile(string relativePath)
-        => _generatedCodePatterns.TryMatch(relativePath, out _);
 
     internal FileIssue? BuildGeneratedCodeExtractionSkippedIssue(string relativePath)
         => _generatedCodePatterns.TryMatch(relativePath, out _)
