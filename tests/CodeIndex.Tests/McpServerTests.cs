@@ -7649,6 +7649,35 @@ public sealed class Caller
     }
 
     [Fact]
+    public void BoundedJsonUtf8Stream_RejectsUnsupportedReadAndSeekOperations_Issue3681()
+    {
+        using var stream = new BoundedJsonUtf8Stream(16, captureSerialized: true, bytes => new InvalidOperationException(bytes.ToString()));
+
+        Assert.False(stream.CanRead);
+        Assert.False(stream.CanSeek);
+        Assert.True(stream.CanWrite);
+        Assert.Throws<NotSupportedException>(() => stream.Length);
+        Assert.Throws<NotSupportedException>(() => stream.Position);
+        Assert.Throws<NotSupportedException>(() => stream.Position = 0);
+        Assert.Throws<NotSupportedException>(() => stream.Read([], 0, 0));
+        Assert.Throws<NotSupportedException>(() => stream.Seek(0, SeekOrigin.Begin));
+        Assert.Throws<NotSupportedException>(() => stream.SetLength(0));
+    }
+
+    [Fact]
+    public void BoundedJsonUtf8Stream_CapturesPartialBytesBeforeLimitException_Issue3681()
+    {
+        using var stream = new BoundedJsonUtf8Stream(5, captureSerialized: true, bytes => new InvalidOperationException(bytes.ToString()));
+
+        stream.Write(Encoding.UTF8.GetBytes("abc"));
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Write(Encoding.UTF8.GetBytes("def")));
+
+        Assert.Equal("6", ex.Message);
+        Assert.Equal(6, stream.BytesWritten);
+        Assert.Equal("abcde", stream.GetCapturedString());
+    }
+
+    [Fact]
     public void ClientResponsePayload_RejectsOversizedResultBeforeClone_Issue3098()
     {
         var payload = new JsonObject

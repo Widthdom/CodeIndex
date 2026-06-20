@@ -3983,7 +3983,10 @@ public partial class McpServer : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "JSON byte limit must be non-negative.");
 
         serialized = null;
-        using var stream = new BoundedJsonUtf8Stream(maxBytes, captureSerialized);
+        using var stream = new BoundedJsonUtf8Stream(
+            maxBytes,
+            captureSerialized,
+            bytes => new JsonResponseByteLimitExceededException(bytes));
         var writerOptions = new JsonWriterOptions
         {
             Encoder = options.Encoder,
@@ -4009,65 +4012,6 @@ public partial class McpServer : IDisposable
     private sealed class JsonResponseByteLimitExceededException(int bytesWritten) : Exception
     {
         public int BytesWritten { get; } = bytesWritten;
-    }
-
-    private sealed class BoundedJsonUtf8Stream(int maxBytes, bool captureSerialized) : Stream
-    {
-        private readonly MemoryStream? _buffer = captureSerialized ? new MemoryStream(Math.Min(Math.Max(maxBytes, 0), 16 * 1024)) : null;
-
-        public int BytesWritten { get; private set; }
-
-        public override bool CanRead => false;
-        public override bool CanSeek => false;
-        public override bool CanWrite => true;
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public string? GetCapturedString()
-        {
-            if (_buffer is null)
-                return null;
-            return Encoding.UTF8.GetString(_buffer.GetBuffer(), 0, (int)_buffer.Length);
-        }
-
-        public override void Flush()
-        {
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-            => throw new NotSupportedException();
-
-        public override long Seek(long offset, SeekOrigin origin)
-            => throw new NotSupportedException();
-
-        public override void SetLength(long value)
-            => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count)
-            => Write(buffer.AsSpan(offset, count));
-
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            if (buffer.Length == 0)
-                return;
-
-            var remaining = maxBytes - BytesWritten;
-            if (remaining < buffer.Length)
-            {
-                if (remaining > 0)
-                    _buffer?.Write(buffer[..remaining]);
-                BytesWritten = maxBytes == int.MaxValue ? int.MaxValue : maxBytes + 1;
-                throw new JsonResponseByteLimitExceededException(BytesWritten);
-            }
-
-            _buffer?.Write(buffer);
-            BytesWritten += buffer.Length;
-        }
     }
 
     private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
