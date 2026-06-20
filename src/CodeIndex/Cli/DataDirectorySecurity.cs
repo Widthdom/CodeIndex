@@ -59,7 +59,7 @@ internal static class DataDirectorySecurity
     public static void WritePrivateText(string path, string contents, Encoding? encoding = null)
     {
         var outputEncoding = encoding is null || encoding.CodePage == Encoding.UTF8.CodePage ? Utf8NoBom : encoding;
-        AtomicFileWriter.WriteText(path, contents, outputEncoding, ApplyPrivateFileMode);
+        AtomicFileWriter.WriteText(path, contents, outputEncoding, AtomicFileWriter.WriteProfile.Sensitive);
     }
 
     public static byte[]? ReadBytesWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)

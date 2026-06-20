@@ -24,8 +24,10 @@ internal static class GlobalToolLog
     internal const int MirroredStderrWriteMaxChars = 8192;
     internal const int MaxLogSizeMb = 1024;
     internal const long MaxLogSizeBytes = MaxLogSizeMb * 1024L * 1024L;
+    internal const int MaxExceptionChainChars = 8192;
     internal const int RedactionArgumentLengthLimit = 8192;
     internal const string RedactionTruncationMarker = "<truncated>";
+    internal const string ExceptionChainTruncationMarker = "...<exception_chain_truncated>";
     private const string RedactedValue = "<redacted>";
     private const int PrivateLogDiagnosticEmitLimit = 16;
     private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
@@ -115,10 +117,10 @@ internal static class GlobalToolLog
     {
         var sb = new StringBuilder();
         AppendException(sb, ex, 0, includeStacks);
-        return sb.ToString().TrimEnd();
+        return TruncateExceptionChain(sb.ToString().TrimEnd());
     }
 
-    private static void AppendException(StringBuilder sb, Exception ex, int depth, bool includeStacks)
+    private static bool AppendException(StringBuilder sb, Exception ex, int depth, bool includeStacks)
     {
         var indent = new string(' ', depth * 2);
         sb.Append(indent);
@@ -130,6 +132,8 @@ internal static class GlobalToolLog
         sb.Append(" message=");
         sb.Append(QuoteLogValue(DiagnosticRedactor.ClassifyException(ex)));
         sb.AppendLine();
+        if (HasReachedExceptionChainLimit(sb))
+            return false;
 
         if (includeStacks && !string.IsNullOrWhiteSpace(ex.StackTrace))
         {
@@ -138,6 +142,8 @@ internal static class GlobalToolLog
                 sb.Append(indent);
                 sb.Append("  stack: ");
                 sb.AppendLine(DiagnosticRedactor.FormatExceptionStackLine(line.TrimEnd('\r')));
+                if (HasReachedExceptionChainLimit(sb))
+                    return false;
             }
         }
 
@@ -149,15 +155,31 @@ internal static class GlobalToolLog
                 sb.Append(indent);
                 sb.Append("  aggregate_inner_index=");
                 sb.AppendLine(index.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                AppendException(sb, inner, depth + 1, includeStacks);
+                if (HasReachedExceptionChainLimit(sb) || !AppendException(sb, inner, depth + 1, includeStacks))
+                    return false;
                 index++;
             }
 
-            return;
+            return true;
         }
 
         if (ex.InnerException is not null)
-            AppendException(sb, ex.InnerException, depth + 1, includeStacks);
+            return AppendException(sb, ex.InnerException, depth + 1, includeStacks);
+
+        return true;
+    }
+
+    private static bool HasReachedExceptionChainLimit(StringBuilder sb) => sb.Length >= MaxExceptionChainChars;
+
+    private static string TruncateExceptionChain(string value)
+    {
+        if (value.Length <= MaxExceptionChainChars)
+            return value;
+
+        if (MaxExceptionChainChars <= ExceptionChainTruncationMarker.Length)
+            return ExceptionChainTruncationMarker[..MaxExceptionChainChars];
+
+        return value[..(MaxExceptionChainChars - ExceptionChainTruncationMarker.Length)] + ExceptionChainTruncationMarker;
     }
 
     private static string QuoteLogValue(string value) =>

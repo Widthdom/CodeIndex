@@ -504,7 +504,11 @@ public static partial class IndexCommandRunner
             if (WriteScanCheckpointForTesting != null)
                 WriteScanCheckpointForTesting(path);
             else
-                AtomicFileWriter.WriteJson(path, checkpoint, new JsonSerializerOptions { WriteIndented = true });
+                AtomicFileWriter.WriteJson(
+                    path,
+                    checkpoint,
+                    new JsonSerializerOptions { WriteIndented = true },
+                    AtomicFileWriter.WriteProfile.Sensitive);
         }
         catch (Exception ex) when (IsScanCheckpointPersistenceException(ex))
         {

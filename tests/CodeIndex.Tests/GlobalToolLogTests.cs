@@ -337,6 +337,24 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatExceptionChain_BoundsLongNestedMessagesAndRedactsSensitiveValues_Issue3725()
+    {
+        const string secretPath = "/Users/widthdom/private/project/token.txt";
+        const string secretToken = "0123456789abcdef0123456789abcdef";
+        Exception exception = new IOException($"failed to read {secretPath} token={secretToken}");
+        for (var i = 0; i < 220; i++)
+            exception = new InvalidOperationException($"outer {i} raw path {secretPath} token={secretToken}", exception);
+
+        var formatted = GlobalToolLog.FormatExceptionChain(exception);
+
+        Assert.True(formatted.Length <= GlobalToolLog.MaxExceptionChainChars);
+        Assert.Contains(GlobalToolLog.ExceptionChainTruncationMarker, formatted);
+        Assert.Contains("message=\"invalid_operation\"", formatted);
+        Assert.DoesNotContain(secretPath, formatted);
+        Assert.DoesNotContain(secretToken, formatted);
+    }
+
+    [Fact]
     public void LogOptionsFromEnvironment_AcceptsMaximumMbValue()
     {
         using var env = EnvironmentVariableScope.Capture(
