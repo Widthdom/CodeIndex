@@ -856,8 +856,8 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "maxReferencesPerFile" or "debounce" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "maxReferencesPerFile" or "debounce" or
                 "staleAfterSeconds" or
                 "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
             "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or

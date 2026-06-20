@@ -33,7 +33,7 @@ public partial class McpServer
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "byBucket", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "dryRun", "dry_run", "maxFileBytes", "maxSymbolsPerFile", "followSymlinks", "includeSymbolKind", "excludeSymbolKind", "memoryTrace", "parallelism", "commits", "changedBetween", "files", "watch", "debounce" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "dryRun", "dry_run", "maxFileBytes", "maxSymbolsPerFile", "maxReferencesPerFile", "followSymlinks", "includeSymbolKind", "excludeSymbolKind", "memoryTrace", "parallelism", "commits", "changedBetween", "files", "watch", "debounce" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
         _ => new HashSet<string>(StringComparer.Ordinal),
