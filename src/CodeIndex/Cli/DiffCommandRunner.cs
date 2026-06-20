@@ -11,7 +11,11 @@ public static class DiffCommandRunner
 {
     private const int DefaultDiffLimit = 20;
     internal const int MaxDiffEncodedFieldSampleLength = 1024;
+    internal const int MaxDiffComparedRowsPerSide = 1_000_000;
+    internal const int MaxDiffComparedRowBytes = 4 * 1024 * 1024;
     internal static int MaxDiffLimit => QueryCommandRunner.NumericFlagUpperBounds["--limit"];
+    internal static int? MaxDiffComparedRowsPerSideForTesting { get; set; }
+    internal static int? MaxDiffComparedRowBytesForTesting { get; set; }
     private const int DriftExitCode = 1;
     private const int SchemaMismatchExitCode = 2;
     private const int UnreadableExitCode = 3;
@@ -397,8 +401,10 @@ public static class DiffCommandRunner
 
         var onlyInLeft = new List<string>(limit);
         var onlyInRight = new List<string>(limit);
-        var leftHasValue = TryReadRow(leftReader, out var leftValue);
-        var rightHasValue = TryReadRow(rightReader, out var rightValue);
+        var leftRowsRead = 0;
+        var rightRowsRead = 0;
+        var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left");
+        var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right");
         var equal = true;
 
         while (leftHasValue || rightHasValue)
@@ -409,8 +415,8 @@ public static class DiffCommandRunner
 
             if (comparison == 0)
             {
-                leftHasValue = TryReadRow(leftReader, out leftValue);
-                rightHasValue = TryReadRow(rightReader, out rightValue);
+                leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left");
+                rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right");
                 continue;
             }
 
@@ -419,13 +425,13 @@ public static class DiffCommandRunner
             {
                 if (onlyInLeft.Count < limit)
                     onlyInLeft.Add(EncodeRow(leftValue.SortValues));
-                leftHasValue = TryReadRow(leftReader, out leftValue);
+                leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left");
             }
             else
             {
                 if (onlyInRight.Count < limit)
                     onlyInRight.Add(EncodeRow(rightValue.SortValues));
-                rightHasValue = TryReadRow(rightReader, out rightValue);
+                rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right");
             }
 
             if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
@@ -449,8 +455,10 @@ public static class DiffCommandRunner
 
         var onlyInLeft = new List<string>(limit);
         var onlyInRight = new List<string>(limit);
-        var leftHasValue = TryReadString(leftReader, out var leftValue);
-        var rightHasValue = TryReadString(rightReader, out var rightValue);
+        var leftRowsRead = 0;
+        var rightRowsRead = 0;
+        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left");
+        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right");
         var equal = true;
 
         while (leftHasValue || rightHasValue)
@@ -461,8 +469,8 @@ public static class DiffCommandRunner
 
             if (comparison == 0)
             {
-                leftHasValue = TryReadString(leftReader, out leftValue);
-                rightHasValue = TryReadString(rightReader, out rightValue);
+                leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left");
+                rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right");
                 continue;
             }
 
@@ -471,13 +479,13 @@ public static class DiffCommandRunner
             {
                 if (onlyInLeft.Count < limit)
                     onlyInLeft.Add(leftValue);
-                leftHasValue = TryReadString(leftReader, out leftValue);
+                leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left");
             }
             else
             {
                 if (onlyInRight.Count < limit)
                     onlyInRight.Add(rightValue);
-                rightHasValue = TryReadString(rightReader, out rightValue);
+                rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right");
             }
 
             if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
@@ -499,14 +507,16 @@ public static class DiffCommandRunner
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
-        var leftHasValue = TryReadRow(leftReader, out var leftValue);
-        var rightHasValue = TryReadRow(rightReader, out var rightValue);
+        var leftRowsRead = 0;
+        var rightRowsRead = 0;
+        var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left");
+        var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right");
         while (leftHasValue && rightHasValue)
         {
             if (CompareRows(leftValue, rightValue) != 0)
                 return false;
-            leftHasValue = TryReadRow(leftReader, out leftValue);
-            rightHasValue = TryReadRow(rightReader, out rightValue);
+            leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left");
+            rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right");
         }
 
         return leftHasValue == rightHasValue;
@@ -521,20 +531,22 @@ public static class DiffCommandRunner
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
-        var leftHasValue = TryReadString(leftReader, out var leftValue);
-        var rightHasValue = TryReadString(rightReader, out var rightValue);
+        var leftRowsRead = 0;
+        var rightRowsRead = 0;
+        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left");
+        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right");
         while (leftHasValue && rightHasValue)
         {
             if (!string.Equals(leftValue, rightValue, StringComparison.Ordinal))
                 return false;
-            leftHasValue = TryReadString(leftReader, out leftValue);
-            rightHasValue = TryReadString(rightReader, out rightValue);
+            leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left");
+            rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right");
         }
 
         return leftHasValue == rightHasValue;
     }
 
-    private static bool TryReadRow(SqliteDataReader reader, out DiffRow value)
+    private static bool TryReadRow(SqliteDataReader reader, out DiffRow value, ref int rowsRead, string side)
     {
         if (!reader.Read())
         {
@@ -542,9 +554,16 @@ public static class DiffCommandRunner
             return false;
         }
 
+        IncrementDiffRowsRead(ref rowsRead, side);
         var sortValues = new object?[reader.FieldCount];
+        long rowBytes = 0;
         for (var i = 0; i < reader.FieldCount; i++)
-            sortValues[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+        {
+            var fieldValue = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            rowBytes += EstimateDiffValueBytes(fieldValue);
+            EnsureDiffRowByteBudget(rowBytes, side);
+            sortValues[i] = fieldValue;
+        }
 
         value = new DiffRow(sortValues);
         return true;
@@ -612,7 +631,7 @@ public static class DiffCommandRunner
         return left.Length.CompareTo(right.Length);
     }
 
-    private static bool TryReadString(SqliteDataReader reader, out string value)
+    private static bool TryReadString(SqliteDataReader reader, out string value, ref int rowsRead, string side)
     {
         if (!reader.Read())
         {
@@ -620,9 +639,35 @@ public static class DiffCommandRunner
             return false;
         }
 
+        IncrementDiffRowsRead(ref rowsRead, side);
         value = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+        EnsureDiffRowByteBudget(EstimateDiffValueBytes(value), side);
         return true;
     }
+
+    private static void IncrementDiffRowsRead(ref int rowsRead, string side)
+    {
+        rowsRead++;
+        var maxRows = MaxDiffComparedRowsPerSideForTesting ?? MaxDiffComparedRowsPerSide;
+        if (rowsRead > maxRows)
+            throw new InvalidOperationException($"diff {side} row comparison exceeded the safety budget of {maxRows} rows.");
+    }
+
+    private static void EnsureDiffRowByteBudget(long rowBytes, string side)
+    {
+        var maxBytes = MaxDiffComparedRowBytesForTesting ?? MaxDiffComparedRowBytes;
+        if (rowBytes > maxBytes)
+            throw new InvalidOperationException($"diff {side} row comparison exceeded the safety budget of {maxBytes} bytes per row.");
+    }
+
+    private static long EstimateDiffValueBytes(object? value)
+        => value switch
+        {
+            null or DBNull => 0,
+            byte[] bytes => bytes.LongLength,
+            string text => Encoding.UTF8.GetByteCount(text),
+            _ => Encoding.UTF8.GetByteCount(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty),
+        };
 
     private static SqliteConnection OpenReadOnlyConnection(string dbPath)
     {
@@ -675,7 +720,7 @@ public static class DiffCommandRunner
     private static bool ColumnExists(SqliteConnection connection, string table, string column)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = $"PRAGMA table_info({table})";
+        command.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

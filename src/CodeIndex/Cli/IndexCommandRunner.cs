@@ -33,6 +33,7 @@ public static partial class IndexCommandRunner
     private const int MaxIndexRunDiagnosticLength = 512;
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
+    private static readonly System.Threading.AsyncLocal<Action<DbWriter, IReadOnlyList<string>>?> ScopedPlannerStatisticsMaintenanceDiagnosticStampingForTesting = new();
     private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);
 
     internal readonly record struct FileByteReadSummary(long BytesRead, long SkippedFileCount);
@@ -302,7 +303,11 @@ public static partial class IndexCommandRunner
                     ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
                     : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
-                    db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
+                {
+                    var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
+                    if (plannerMaintenanceFailure != null)
+                        TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
+                }
             }
         }
         catch (IndexInterruptedException ex)
@@ -516,6 +521,31 @@ public static partial class IndexCommandRunner
             (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    internal static Action<DbWriter, IReadOnlyList<string>>? PlannerStatisticsMaintenanceDiagnosticStampingForTesting
+    {
+        get => ScopedPlannerStatisticsMaintenanceDiagnosticStampingForTesting.Value;
+        set => ScopedPlannerStatisticsMaintenanceDiagnosticStampingForTesting.Value = value;
+    }
+
+    internal static bool TryStampPlannerStatisticsMaintenanceDiagnostic(
+        DbWriter writer,
+        List<string> indexRunDiagnostics,
+        DbContext.PlannerStatisticsMaintenanceFailure plannerMaintenanceFailure)
+    {
+        indexRunDiagnostics.Add(FormatPlannerStatisticsMaintenanceDiagnostic(plannerMaintenanceFailure));
+        try
+        {
+            PlannerStatisticsMaintenanceDiagnosticStampingForTesting?.Invoke(writer, indexRunDiagnostics);
+            StampLastIndexRunDiagnostics(writer, indexRunDiagnostics);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("planner_statistics_maintenance_diagnostic_persist_failed", ex, includeStacks: false);
+            return false;
+        }
+    }
+
     internal static string FormatIndexRunDiagnostic(string code, Exception ex)
     {
         var raw = $"{code}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
@@ -534,6 +564,12 @@ public static partial class IndexCommandRunner
             ? raw
             : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
     }
+
+    internal static string FormatPlannerStatisticsMaintenanceDiagnostic(DbContext.PlannerStatisticsMaintenanceFailure failure)
+        => FormatIndexRunDiagnostic(
+            "planner_statistics_maintenance_failed",
+            failure.CommandText,
+            failure.Exception);
 
     private static void RecordIndexRunDiagnostic(List<string>? diagnostics, string code, Exception ex)
     {

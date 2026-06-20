@@ -1186,6 +1186,41 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void ReadyBitStamps_ShareUserVersionHelperAcrossRawAndTrackedTransactions_Issue3716()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ready_bits_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+
+            Assert.True(writer.MarkFoldReady());
+            var afterFold = db.GetUserVersion();
+            Assert.NotEqual(0, afterFold & DbContext.FoldReadyFlag);
+            Assert.Equal(0, afterFold & DbContext.GraphReadyFlag);
+
+            using (var transaction = writer.BeginTransaction())
+            {
+                writer.MarkGraphReady();
+                transaction.Commit();
+            }
+
+            var afterGraph = db.GetUserVersion();
+            Assert.NotEqual(0, afterGraph & DbContext.FoldReadyFlag);
+            Assert.NotEqual(0, afterGraph & DbContext.GraphReadyFlag);
+            Assert.Equal(0, afterGraph & DbContext.IssuesReadyFlag);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void ReadOnlyLegacyDb_MissingSignatureColumn_DepsAndImpactDoNotCrashOnCSharp()
     {
         // Issue #431 regression: `BuildMetadataTargetKindExpr` (the shared C#/JS-TS/other

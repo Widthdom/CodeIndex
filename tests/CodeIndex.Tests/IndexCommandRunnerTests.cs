@@ -1503,6 +1503,80 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_PlannerStatisticsMaintenanceFailure_AddsLastIndexRunDiagnostic_Issue3718()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            DbContext.PlannerStatisticsCommandCreatedForTesting = command =>
+            {
+                command.CommandText = "SELECT * FROM cdidx_missing_planner_statistics_table";
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            using var db = new DbContext(dbPath);
+            var status = new DbReader(db.Connection).GetStatus();
+            Assert.NotNull(status.LastIndexRun);
+            var lastIndexRun = status.LastIndexRun!;
+            var diagnostic = Assert.Single(lastIndexRun.Diagnostics ?? []);
+            Assert.Contains("planner_statistics_maintenance_failed", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("SELECT * FROM cdidx_missing_planner_statistics_table", diagnostic, StringComparison.Ordinal);
+            Assert.Contains(nameof(SqliteException), diagnostic, StringComparison.Ordinal);
+            Assert.Equal(1, lastIndexRun.DiagnosticCount);
+            Assert.False(lastIndexRun.DiagnosticsTruncated);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandCreatedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_PlannerStatisticsMaintenanceDiagnosticStampFailure_DoesNotFailSuccessfulIndex_Issue3718()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            DbContext.PlannerStatisticsCommandCreatedForTesting = command =>
+            {
+                command.CommandText = "SELECT * FROM cdidx_missing_planner_statistics_table";
+            };
+            var stampCalls = 0;
+            string[] capturedDiagnostics = [];
+            IndexCommandRunner.PlannerStatisticsMaintenanceDiagnosticStampingForTesting = (_, diagnostics) =>
+            {
+                stampCalls++;
+                capturedDiagnostics = diagnostics.ToArray();
+                throw new IOException("metadata store became unavailable");
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, stampCalls);
+            var diagnostic = Assert.Single(capturedDiagnostics);
+            Assert.Contains("planner_statistics_maintenance_failed", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("SELECT * FROM cdidx_missing_planner_statistics_table", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandCreatedForTesting = null;
+            IndexCommandRunner.PlannerStatisticsMaintenanceDiagnosticStampingForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_CancelDuringFreshIndex_ReturnsInterruptedJson()
     {
         var projectRoot = CreateTempProject();
