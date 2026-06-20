@@ -247,9 +247,9 @@ public static class ConsoleUi
         try
         {
             if (value == null)
-                Console.Error.WriteLine();
+                CommandErrorWriter.WriteStderr();
             else
-                Console.Error.WriteLine(value);
+                CommandErrorWriter.WriteStderr(value);
         }
         catch (ObjectDisposedException)
         {
@@ -390,7 +390,7 @@ public static class ConsoleUi
         if (IsTruthyEnvironmentVariable(DisableProgressEnvironmentVariable))
             return false;
 
-        var reducedMotion = Environment.GetEnvironmentVariable(PrefersReducedMotionEnvironmentVariable);
+        var reducedMotion = CdidxEnvironment.GetEnvironmentVariable(PrefersReducedMotionEnvironmentVariable);
         return string.IsNullOrWhiteSpace(reducedMotion) || !IsTruthyEnvironmentValue(reducedMotion);
     }
 
@@ -592,7 +592,7 @@ public static class ConsoleUi
         lock (TerminalLock)
         {
             ClearProgressLineCore();
-            Console.Error.WriteLine($"  [WARN] {message}");
+            CommandErrorWriter.WriteStderr($"  [WARN] {message}");
             Console.Error.Flush();
             Console.Out.Flush();
         }
@@ -1404,7 +1404,7 @@ public static class ConsoleUi
         }
         catch (ArgumentOutOfRangeException)
         {
-            Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
+            CommandErrorWriter.WriteStderr($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
             return false;
         }
     }
@@ -1944,7 +1944,7 @@ public static class ConsoleUi
         if (_explicitPalette is { } explicitPalette)
             return explicitPalette;
 
-        var envPalette = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
+        var envPalette = CdidxEnvironment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
         if (!string.IsNullOrWhiteSpace(envPalette) && TryParseColorPalette(envPalette, out var parsed))
             return parsed;
 
@@ -1960,7 +1960,7 @@ public static class ConsoleUi
     /// </summary>
     internal static ColorPalette DetectColorPalette()
     {
-        var colorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+        var colorTerm = CdidxEnvironment.GetEnvironmentVariable("COLORTERM");
         if (!string.IsNullOrEmpty(colorTerm))
         {
             var ct = colorTerm.Trim().ToLowerInvariant();
@@ -1968,7 +1968,7 @@ public static class ConsoleUi
                 return ColorPalette.Truecolor;
         }
 
-        var term = Environment.GetEnvironmentVariable("TERM");
+        var term = CdidxEnvironment.GetEnvironmentVariable("TERM");
         if (!string.IsNullOrEmpty(term))
         {
             var t = term.ToLowerInvariant();
@@ -2162,14 +2162,14 @@ public static class ConsoleUi
 
     private static bool HasTerminalEnvironmentHint()
     {
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_SESSION")))
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_SESSION")))
             return true;
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_PROFILE_ID")))
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_PROFILE_ID")))
             return true;
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TERM_PROGRAM")))
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("TERM_PROGRAM")))
             return true;
 
-        var term = Environment.GetEnvironmentVariable("TERM");
+        var term = CdidxEnvironment.GetEnvironmentVariable("TERM");
         return !string.IsNullOrWhiteSpace(term)
             && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
     }
@@ -2179,7 +2179,7 @@ public static class ConsoleUi
 
     private static bool IsCiEnvironment()
     {
-        var ci = Environment.GetEnvironmentVariable("CI");
+        var ci = CdidxEnvironment.GetEnvironmentVariable("CI");
         return !string.IsNullOrEmpty(ci)
             && !ci.Equals("0", StringComparison.OrdinalIgnoreCase)
             && !ci.Equals("false", StringComparison.OrdinalIgnoreCase)
@@ -2230,17 +2230,17 @@ public static class ConsoleUi
 
     private static bool IsForceColorRequested()
     {
-        var force = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+        var force = CdidxEnvironment.GetEnvironmentVariable("CLICOLOR_FORCE");
         return !string.IsNullOrEmpty(force) && force != "0";
     }
 
     private static bool IsNoColorRequested()
     {
-        var noColor = Environment.GetEnvironmentVariable("NO_COLOR");
+        var noColor = CdidxEnvironment.GetEnvironmentVariable("NO_COLOR");
         if (!string.IsNullOrEmpty(noColor))
             return true;
 
-        var cliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+        var cliColor = CdidxEnvironment.GetEnvironmentVariable("CLICOLOR");
         return cliColor == "0";
     }
 
@@ -2265,29 +2265,29 @@ public static class ConsoleUi
         if (_asciiOutputForced)
             return true;
 
-        var ascii = Environment.GetEnvironmentVariable("CDIDX_ASCII");
+        var ascii = CdidxEnvironment.GetEnvironmentVariable("CDIDX_ASCII");
         if (!string.IsNullOrEmpty(ascii) && ascii != "0")
             return true;
 
-        var noUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
+        var noUnicode = CdidxEnvironment.GetEnvironmentVariable("NO_UNICODE");
         if (!string.IsNullOrEmpty(noUnicode) && noUnicode != "0")
             return true;
 
-        var atBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
+        var atBridgeType = CdidxEnvironment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
         if (!string.IsNullOrEmpty(atBridgeType))
             return true;
 
-        var accessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+        var accessibilityEnabled = CdidxEnvironment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
         if (!string.IsNullOrEmpty(accessibilityEnabled) && accessibilityEnabled != "0")
             return true;
 
-        return IsPosixLocale(Environment.GetEnvironmentVariable("LC_ALL"))
-            || IsPosixLocale(Environment.GetEnvironmentVariable("LC_CTYPE"))
-            || IsPosixLocale(Environment.GetEnvironmentVariable("LANG"));
+        return IsPosixLocale(CdidxEnvironment.GetEnvironmentVariable("LC_ALL"))
+            || IsPosixLocale(CdidxEnvironment.GetEnvironmentVariable("LC_CTYPE"))
+            || IsPosixLocale(CdidxEnvironment.GetEnvironmentVariable("LANG"));
     }
 
     private static bool IsTruthyEnvironmentVariable(string name)
-        => IsTruthyEnvironmentValue(Environment.GetEnvironmentVariable(name));
+        => IsTruthyEnvironmentValue(CdidxEnvironment.GetEnvironmentVariable(name));
 
     private static bool IsTruthyEnvironmentValue(string? value)
     {
@@ -2298,7 +2298,7 @@ public static class ConsoleUi
     }
 
     private static bool IsDumbTerminal()
-        => string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(CdidxEnvironment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPosixLocale(string? locale)
         => locale != null
@@ -2313,7 +2313,7 @@ public static class ConsoleUi
     {
         foreach (var name in names)
         {
-            var value = Environment.GetEnvironmentVariable(name);
+            var value = CdidxEnvironment.GetEnvironmentVariable(name);
             if (!string.IsNullOrEmpty(value))
                 return value;
         }
@@ -2362,7 +2362,7 @@ public static class ConsoleUi
         if (_traceWidthDetectionFailures && !_widthDetectionTraceWritten)
         {
             var suffix = exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})";
-            Console.Error.WriteLine($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
+            CommandErrorWriter.WriteStderr($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
             _widthDetectionTraceWritten = true;
         }
 
@@ -2371,7 +2371,7 @@ public static class ConsoleUi
 
     private static bool TryGetColumnsEnvironmentWidth(out int width)
     {
-        var columns = Environment.GetEnvironmentVariable("COLUMNS");
+        var columns = CdidxEnvironment.GetEnvironmentVariable("COLUMNS");
         if (int.TryParse(columns, NumberStyles.Integer, CultureInfo.InvariantCulture, out width) && width > 0)
             return true;
 

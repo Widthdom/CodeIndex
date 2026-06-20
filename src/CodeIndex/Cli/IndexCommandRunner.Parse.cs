@@ -145,7 +145,7 @@ public static partial class IndexCommandRunner
                     else
                     {
                         var displayValue = ConsoleUi.FormatBoundedValue(args[i + 1]);
-                        Console.Error.WriteLine($"Warning: invalid --debounce value '{displayValue}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{displayValue}'（無視。ミリ秒の0以上の整数を指定）");
+                        CommandErrorWriter.WriteStderr($"Warning: invalid --debounce value '{displayValue}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{displayValue}'（無視。ミリ秒の0以上の整数を指定）");
                         i++;
                     }
                     break;
@@ -198,14 +198,14 @@ public static partial class IndexCommandRunner
                         AddCommitRef(commit, commits, ref parseError);
                     }
                     if (commits.Count == 0)
-                        Console.Error.WriteLine("Warning: --commits specified but no commit refs provided / --commits が指定されましたがコミットrefがありません");
+                        CommandErrorWriter.WriteStderr("Warning: --commits specified but no commit refs provided / --commits が指定されましたがコミットrefがありません");
                     break;
                 case "--changed-between":
                     changedBetweenSpecified = true;
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-') && changedBetweenRefs.Count < 2)
                         changedBetweenRefs.Add(args[++i]);
                     if (changedBetweenRefs.Count != 2)
-                        Console.Error.WriteLine("Warning: --changed-between requires exactly two refs / --changed-between は2つのrefが必要です");
+                        CommandErrorWriter.WriteStderr("Warning: --changed-between requires exactly two refs / --changed-between は2つのrefが必要です");
                     break;
                 case "--solution" when i + 1 < args.Length:
                     solutionPath = args[++i];
@@ -255,7 +255,7 @@ public static partial class IndexCommandRunner
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                         updateFiles.Add(args[++i]);
                     if (updateFiles.Count == 0)
-                        Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
+                        CommandErrorWriter.WriteStderr("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
                     break;
                 case "--help" or "-h":
                     return new IndexCommandOptions { ShowHelp = true };
@@ -291,8 +291,8 @@ public static partial class IndexCommandRunner
 
         if (spinnerFlagCount > 1)
         {
-            Console.Error.WriteLine("\U0001f375 Simultaneous intake of beer and coffee is not recommended. How about some matcha instead?");
-            Console.Error.WriteLine("   \u30d3\u30fc\u30eb\u3068\u30b3\u30fc\u30d2\u30fc\u306e\u540c\u6642\u6442\u53d6\u306f\u304a\u3059\u3059\u3081\u3057\u307e\u305b\u3093\u3002\u62b9\u8336\u306f\u3044\u304b\u304c\uff1f");
+            CommandErrorWriter.WriteStderr("\U0001f375 Simultaneous intake of beer and coffee is not recommended. How about some matcha instead?");
+            CommandErrorWriter.WriteStderr("   \u30d3\u30fc\u30eb\u3068\u30b3\u30fc\u30d2\u30fc\u306e\u540c\u6642\u6442\u53d6\u306f\u304a\u3059\u3059\u3081\u3057\u307e\u305b\u3093\u3002\u62b9\u8336\u306f\u3044\u304b\u304c\uff1f");
             easterEgg = "--matcha";
         }
 
@@ -501,12 +501,12 @@ public static partial class IndexCommandRunner
                 return parsed;
 
             var displayValue = ConsoleUi.FormatBoundedValue(value);
-            Console.Error.WriteLine($"Warning: {source} value '{displayValue}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{displayValue}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
+            CommandErrorWriter.WriteStderr($"Warning: {source} value '{displayValue}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{displayValue}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
             return MaxIndexParallelism;
         }
 
         var invalidDisplayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid {source} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
         return fallback;
     }
 
@@ -520,7 +520,7 @@ public static partial class IndexCommandRunner
             return parsed;
 
         var displayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid {FileIndexer.MaxFileSizeEnvironmentVariable} value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な {FileIndexer.MaxFileSizeEnvironmentVariable} 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid {FileIndexer.MaxFileSizeEnvironmentVariable} value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な {FileIndexer.MaxFileSizeEnvironmentVariable} 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
         return null;
     }
 
@@ -530,7 +530,7 @@ public static partial class IndexCommandRunner
             return parsed;
 
         var displayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid --max-file-bytes value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid --max-file-bytes value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
         return fallback;
     }
 
@@ -546,7 +546,7 @@ public static partial class IndexCommandRunner
         }
 
         var displayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
         return fallback;
     }
 
@@ -562,7 +562,7 @@ public static partial class IndexCommandRunner
         }
 
         var displayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
         return fallback;
     }
 
@@ -580,7 +580,7 @@ public static partial class IndexCommandRunner
     private static DurationOutputFormat WarnInvalidDurationFormat(string value, DurationOutputFormat fallback)
     {
         var displayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid --duration-format value '{displayValue}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{displayValue}'（無視。auto, seconds, hms のいずれかを指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid --duration-format value '{displayValue}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{displayValue}'（無視。auto, seconds, hms のいずれかを指定）");
         return fallback;
     }
 
@@ -620,7 +620,7 @@ public static partial class IndexCommandRunner
     private static void WarnInvalidCompletionNotificationEnvironmentValue(string value)
     {
         var displayValue = ConsoleUi.FormatBoundedValue(value);
-        Console.Error.WriteLine($"Warning: invalid {CompletionNotificationEnvironmentVariable} value '{displayValue}' (ignored; use auto, bell, osc9, desktop, or none) / 不正な {CompletionNotificationEnvironmentVariable} 値 '{displayValue}'（無視。auto, bell, osc9, desktop, none のいずれかを指定）");
+        CommandErrorWriter.WriteStderr($"Warning: invalid {CompletionNotificationEnvironmentVariable} value '{displayValue}' (ignored; use auto, bell, osc9, desktop, or none) / 不正な {CompletionNotificationEnvironmentVariable} 値 '{displayValue}'（無視。auto, bell, osc9, desktop, none のいずれかを指定）");
     }
 
     private static string? AbsolutizePathOption(string? value)

@@ -1,3 +1,5 @@
+using CodeIndex.Diagnostics;
+
 namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
@@ -51,9 +53,13 @@ public static partial class ExtractorPluginRegistry
         {
             return Directory.EnumerateFiles(directory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "plugin",
+                "Plugin directory",
+                ex);
+            ReportPluginDirectorySkipped(directory, diagnostic.Message, diagnostic.Category);
             return null;
         }
     }
@@ -69,9 +75,13 @@ public static partial class ExtractorPluginRegistry
             pluginPath = enumerator.Current;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "plugin",
+                "Plugin directory",
+                ex);
+            ReportPluginDirectorySkipped(directory, diagnostic.Message, diagnostic.Category);
             return false;
         }
     }
@@ -92,6 +102,33 @@ public static partial class ExtractorPluginRegistry
     private static IEnumerable<string> EnumerateWorkspacePluginDirectories(string projectRoot)
     {
         yield return Path.Combine(projectRoot, ".cdidx", "plugins");
+    }
+
+    internal static IReadOnlyList<ExtensionTrustOverride> GetAcceptedTrustOverrides(string? projectRoot)
+    {
+        var value = Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable);
+        if (!WorkspacePluginsTrusted(value) || string.IsNullOrWhiteSpace(projectRoot))
+            return [];
+
+        string fullRoot;
+        try
+        {
+            fullRoot = Path.GetFullPath(projectRoot);
+        }
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
+        {
+            return [];
+        }
+
+        return
+        [
+            new ExtensionTrustOverride(
+                "workspace_plugin_directory",
+                TrustWorkspacePluginsEnvironmentVariable,
+                DiagnosticSanitizer.ForMessage(value),
+                DiagnosticSanitizer.ForPath(Path.Combine(fullRoot, ".cdidx", "plugins")),
+                "Workspace plugin discovery enabled by environment; workspace plugin DLLs execute checkout-provided code.")
+        ];
     }
 
     private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot, bool includeUserDirectory = true)
@@ -158,9 +195,13 @@ public static partial class ExtractorPluginRegistry
         {
             return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly).GetEnumerator();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "pattern",
+                "Pattern directory",
+                ex);
+            ReportPatternDirectoryRejected(directory, diagnostic.Message, diagnostic.Category);
             return null;
         }
     }
@@ -176,9 +217,13 @@ public static partial class ExtractorPluginRegistry
             patternPath = enumerator.Current;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "pattern",
+                "Pattern directory",
+                ex);
+            ReportPatternDirectoryRejected(directory, diagnostic.Message, diagnostic.Category);
             return false;
         }
     }
@@ -220,8 +265,10 @@ public static partial class ExtractorPluginRegistry
     }
 
     private static bool WorkspacePluginsTrusted()
+        => WorkspacePluginsTrusted(Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable));
+
+    private static bool WorkspacePluginsTrusted(string? value)
     {
-        var value = Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable);
         return value != null
                && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
                    || value.Equals("true", StringComparison.OrdinalIgnoreCase)

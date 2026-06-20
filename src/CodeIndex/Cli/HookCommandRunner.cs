@@ -361,7 +361,7 @@ fi
     }
 
     private static void PrintUsage()
-        => Console.Error.WriteLine("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]");
+        => CommandErrorWriter.WriteStderr("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]");
 }
 
 public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp, string? ParseError);

@@ -53,7 +53,7 @@ internal static class McpEnvironment
     }
 
     internal static void WriteWarning(string source, string message)
-        => Console.Error.WriteLine($"Warning: {source}: {message}");
+        => CommandErrorWriter.WriteStderr($"Warning: {source}: {message}");
 
     internal static string FormatDiagnosticValue(string? raw)
         => DiagnosticRedactor.FormatEnvironmentValue(raw);

@@ -580,7 +580,7 @@ public class SuggestionStore
     {
         try
         {
-            Console.Error.WriteLine(
+            CommandErrorWriter.WriteStderr(
                 $"cdidx: fuzzy suggestion duplicate matched hash {hash} with score {score:0.###} (threshold {threshold:0.###})");
         }
         catch (ObjectDisposedException)
@@ -1115,7 +1115,7 @@ public class SuggestionStore
     {
         try
         {
-            Console.Error.WriteLine($"[cdidx] Redacted sensitive suggestion text before local persistence/GitHub submission: {string.Join(", ", redactedTypes)}.");
+            CommandErrorWriter.WriteStderr($"[cdidx] Redacted sensitive suggestion text before local persistence/GitHub submission: {string.Join(", ", redactedTypes)}.");
         }
         catch (ObjectDisposedException)
         {

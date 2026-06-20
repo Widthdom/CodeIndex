@@ -104,6 +104,19 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_UnknownOptionJson_WritesStructuredErrorWithoutStderr_Issue3683()
+    {
+        var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["--json", "--bogus"]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unknown option '--bogus'", document.RootElement.GetProperty("message").GetString());
+        Assert.DoesNotContain("Usage: cdidx hooks", stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Hooks_CommandUnknownOption_ReturnsUsageError()
     {
         var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["status", "--bogus"]);

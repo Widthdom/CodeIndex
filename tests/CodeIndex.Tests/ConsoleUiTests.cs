@@ -532,6 +532,20 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void ShouldUseUnicodeGlyphs_UsesScopedCdidxEnvironmentOverride_Issue3690()
+    {
+        var previous = Environment.GetEnvironmentVariable("CDIDX_ASCII");
+        using var env = CdidxEnvironment.Push(new Dictionary<string, string>
+        {
+            ["CDIDX_ASCII"] = "1",
+            ["LANG"] = "en_US.UTF-8",
+        });
+
+        Assert.Equal(previous, Environment.GetEnvironmentVariable("CDIDX_ASCII"));
+        Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+    }
+
+    [Fact]
     public void ShouldUseUnicodeGlyphs_PosixLangDisablesUnicode()
     {
         WithUnicodeEnvironment(cdidxAscii: null, lang: "C", () =>

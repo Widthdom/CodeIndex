@@ -188,8 +188,8 @@ public static partial class IndexCommandRunner
         }
         else
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: --rebuild cannot be used with --commits, --changed-between, or --files (rebuild requires a full rescan)");
-            Console.Error.WriteLine("Hint: use one of: " + rebuildConflictSynopsis + ".");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: --rebuild cannot be used with --commits, --changed-between, or --files (rebuild requires a full rescan)");
+            CommandErrorWriter.WriteStderr("Hint: use one of: " + rebuildConflictSynopsis + ".");
         }
         return CommandExitCodes.UsageError;
     }

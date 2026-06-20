@@ -222,6 +222,21 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatArgs_UsesScopedCdidxEnvironmentRedactionOverride_Issue3690()
+    {
+        var previous = Environment.GetEnvironmentVariable("CDIDX_LOG_REDACT");
+        using var env = CdidxEnvironment.Push(new Dictionary<string, string>
+        {
+            ["CDIDX_LOG_REDACT"] = "none",
+        });
+
+        var formatted = GlobalToolLog.FormatArgs(["--token=abc123"]);
+
+        Assert.Equal(previous, Environment.GetEnvironmentVariable("CDIDX_LOG_REDACT"));
+        Assert.Contains("abc123", formatted);
+    }
+
+    [Fact]
     public void FormatArgs_RedactsUnderscoreSeparatedSecretArguments()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");

@@ -168,6 +168,44 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-success-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
+
+            var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
+
+            Assert.True(result);
+            Assert.False(File.Exists(probePath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void FileWriteProbe_TryWriteAndDeleteEmptyFile_ReturnsFalseForDirectoryPath_Issue3689()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-failure-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(tempDir, Encoding.UTF8);
+
+            Assert.False(result);
+            Assert.True(Directory.Exists(tempDir));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");

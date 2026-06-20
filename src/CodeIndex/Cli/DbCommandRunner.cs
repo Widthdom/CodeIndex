@@ -292,7 +292,7 @@ public static class DbCommandRunner
                 Console.WriteLine($"  orphan symbols           : {result.OrphanSymbols:N0}");
                 Console.WriteLine($"  total                    : {result.Total:N0}");
                 foreach (var warning in result.Warnings)
-                    Console.Error.WriteLine($"Warning [{warning.Code}]: {warning.Message}");
+                    CommandErrorWriter.WriteStderr($"Warning [{warning.Code}]: {warning.Message}");
             }
 
             return CommandExitCodes.Success;
@@ -391,7 +391,7 @@ public static class DbCommandRunner
             }
 
             foreach (var diagnostic in result.Diagnostics)
-                Console.Error.WriteLine($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
+                CommandErrorWriter.WriteStderr($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
         }
 
         return CommandExitCodes.Success;
@@ -962,7 +962,7 @@ public static class DbCommandRunner
             }
             catch (Exception rollbackEx) when (IsRecoverableRestoreException(rollbackEx))
             {
-                Console.Error.WriteLine($"Warning: failed to roll back database restore from backup {ConsoleUi.FormatBoundedValue(backupPath)} ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to roll back database restore from backup {ConsoleUi.FormatBoundedValue(backupPath)} ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
             }
 
             throw;
@@ -1070,7 +1070,7 @@ public static class DbCommandRunner
         {
             if (!TryValidateTemporaryDirectoryCleanupTarget(path, safeRoot, expectedNamePrefix, out var fullPath, out var validationFailure))
             {
-                Console.Error.WriteLine($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
                 return;
             }
 

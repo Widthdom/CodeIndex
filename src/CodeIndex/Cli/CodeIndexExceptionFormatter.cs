@@ -34,11 +34,11 @@ internal static class CodeIndexExceptionFormatter
         // QueryCommandRunner / IndexCommandRunner already emit so downstream
         // parsers do not need a second format.
         // 既存の `Error [Exxx]: ...` 形に揃え、parser の差分を最小化する。
-        Console.Error.WriteLine($"Error [{ex.Code}]: {ex.Message}");
+        CommandErrorWriter.WriteStderr($"Error [{ex.Code}]: {ex.Message}");
         if (!string.IsNullOrEmpty(ex.Path))
-            Console.Error.WriteLine($"Path: {ex.Path}");
+            CommandErrorWriter.WriteStderr($"Path: {ex.Path}");
         if (!string.IsNullOrEmpty(ex.Hint))
-            Console.Error.WriteLine($"Hint: {ex.Hint}");
+            CommandErrorWriter.WriteStderr($"Hint: {ex.Hint}");
     }
 
     internal static bool HasJsonFlag(string[] args)
