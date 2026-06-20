@@ -3177,7 +3177,6 @@ public partial class McpServer
                     .ToList();
             }
             status.Version = _version;
-            var requestToken = _currentRequestToken.Value;
             requestToken.ThrowIfCancellationRequested();
             status.UpdateCheck = runUpdateCheck
                 ? (StatusUpdateCheckForTesting ?? UpdateChecker.Check)(_version, requestToken)
