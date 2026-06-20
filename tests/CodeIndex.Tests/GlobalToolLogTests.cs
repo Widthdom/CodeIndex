@@ -43,6 +43,36 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_OpenAppend_OnUnixRejectsSymlinkTargets_Issue3824()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_symlink_{Guid.NewGuid():N}");
+        var target = Path.Combine(directory, "target.log");
+        var link = Path.Combine(directory, "link.log");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(target, "target");
+            File.CreateSymbolicLink(link, target);
+
+            var ex = Assert.Throws<IOException>(() =>
+            {
+                using var _ = PrivateLogFile.OpenAppend(link);
+            });
+
+            Assert.Contains("symbolic link or reparse point", ex.Message, StringComparison.Ordinal);
+            Assert.Equal("target", File.ReadAllText(target));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void PrivateLogFile_HardenExisting_CapsBestEffortWork_Issue3027()
     {
         if (OperatingSystem.IsWindows())
@@ -51,6 +81,7 @@ public class GlobalToolLogTests
         var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_harden_{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         var fileCount = PrivateLogFile.MaxExistingFilesToHarden + 2;
+        var diagnostics = new List<PrivateLogFileDiagnostic>();
         try
         {
             for (var i = 0; i < fileCount; i++)
@@ -60,7 +91,7 @@ public class GlobalToolLogTests
                 File.SetUnixFileMode(path, PermissionBits);
             }
 
-            PrivateLogFile.HardenExisting(directory, "stderr-*.log");
+            PrivateLogFile.HardenExisting(directory, "stderr-*.log", diagnostics.Add);
 
             var privateCount = 0;
             for (var i = 0; i < fileCount; i++)
@@ -71,6 +102,11 @@ public class GlobalToolLogTests
             }
 
             Assert.Equal(PrivateLogFile.MaxExistingFilesToHarden, privateCount);
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(Path.Combine(directory, "stderr-0000.log")) & PermissionBits);
+            Assert.NotEqual(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(Path.Combine(directory, $"stderr-{fileCount - 1:D4}.log")) & PermissionBits);
+            var diagnostic = Assert.Single(diagnostics, item => item.Operation == "harden_existing_cap");
+            Assert.Equal("cap_exceeded", diagnostic.Reason);
+            Assert.DoesNotContain(directory, diagnostic.Target, StringComparison.Ordinal);
         }
         finally
         {

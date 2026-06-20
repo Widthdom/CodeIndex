@@ -11,6 +11,8 @@ internal static class PrivateLogFile
 
     internal static FileStream OpenAppend(string path, FileShare share = FileShare.ReadWrite)
     {
+        RejectUnsafeTarget(path);
+
         if (OperatingSystem.IsWindows())
             return new FileStream(path, FileMode.Append, FileAccess.Write, share);
 
@@ -36,6 +38,7 @@ internal static class PrivateLogFile
 
         try
         {
+            RejectUnsafeTarget(path);
             File.SetUnixFileMode(path, PrivateFileMode);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
@@ -52,18 +55,59 @@ internal static class PrivateLogFile
         try
         {
             var hardened = 0;
-            foreach (var file in new DirectoryInfo(directory).EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
+            foreach (var file in SelectFirstByName(
+                new DirectoryInfo(directory).EnumerateFiles(pattern, SearchOption.TopDirectoryOnly),
+                MaxExistingFilesToHarden + 1))
             {
+                if (hardened >= MaxExistingFilesToHarden)
+                {
+                    ReportDiagnostic(diagnosticSink, "harden_existing_cap", "cap_exceeded", directory);
+                    break;
+                }
+
                 TrySetPrivatePermissions(file.FullName, diagnosticSink);
                 hardened++;
-                if (hardened >= MaxExistingFilesToHarden)
-                    break;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             ReportDiagnostic(diagnosticSink, "harden_existing", directory, ex);
         }
+    }
+
+    private static IReadOnlyList<FileInfo> SelectFirstByName(IEnumerable<FileInfo> files, int retainedFileCount)
+    {
+        if (retainedFileCount <= 0)
+            return [];
+
+        var retained = new List<FileInfo>(retainedFileCount);
+        foreach (var file in files)
+            AddFirstByName(retained, file, retainedFileCount);
+
+        return retained;
+    }
+
+    private static void AddFirstByName(List<FileInfo> retained, FileInfo file, int retainedFileCount)
+    {
+        var insertAt = retained.FindIndex(existing => CompareHardenOrder(file, existing) < 0);
+        if (insertAt < 0)
+        {
+            if (retained.Count < retainedFileCount)
+                retained.Add(file);
+            return;
+        }
+
+        retained.Insert(insertAt, file);
+        if (retained.Count > retainedFileCount)
+            retained.RemoveAt(retained.Count - 1);
+    }
+
+    private static int CompareHardenOrder(FileInfo left, FileInfo right)
+    {
+        var name = string.Compare(left.Name, right.Name, StringComparison.Ordinal);
+        return name != 0
+            ? name
+            : string.Compare(left.FullName, right.FullName, StringComparison.Ordinal);
     }
 
     internal static void PruneOldFiles(string directory, string pattern, int retainedFileCount, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
@@ -222,6 +266,13 @@ internal static class PrivateLogFile
         string operation,
         string path,
         Exception exception)
+        => ReportDiagnostic(diagnosticSink, operation, ClassifyFailure(exception), path);
+
+    private static void ReportDiagnostic(
+        Action<PrivateLogFileDiagnostic>? diagnosticSink,
+        string operation,
+        string reason,
+        string path)
     {
         if (diagnosticSink is null)
             return;
@@ -230,12 +281,25 @@ internal static class PrivateLogFile
         {
             diagnosticSink(new PrivateLogFileDiagnostic(
                 operation,
-                ClassifyFailure(exception),
+                reason,
                 FormatDiagnosticTarget(path)));
         }
         catch
         {
             // Diagnostics must not make best-effort log hardening fail.
+        }
+    }
+
+    private static void RejectUnsafeTarget(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Refusing to use private log target because it is a symbolic link or reparse point.");
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
         }
     }
 
