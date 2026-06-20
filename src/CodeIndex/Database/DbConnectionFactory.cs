@@ -91,28 +91,52 @@ internal static class DbConnectionFactory
         return $"{fileUri}?immutable=1&mode=ro";
     }
 
+    internal const string FileUriPathParseFailedReason = "file_uri_path_parse_failed";
+    internal const string FileUriParseFailedReason = "file_uri_parse_failed";
+    internal const string FileUriNotLocalFileReason = "file_uri_not_local_file";
+
     // Best-effort: extract the filesystem path from a SQLite URI so -wal checks can run.
-    // Returns null if parsing fails; the caller simply skips the gate in that case.
-    // URI から filesystem path を取り出すベストエフォート。失敗したらゲートをスキップ。
+    // Returns null if parsing fails; the caller records why the freshness gate was skipped.
+    // URI から filesystem path を取り出すベストエフォート。失敗理由は freshness 診断に載せる。
     internal static string? TryGetLocalPath(string uriText)
+        => TryGetLocalPath(uriText, out var localPath, out _) ? localPath : null;
+
+    internal static bool TryGetLocalPath(string uriText, out string? localPath, out string? failureReason)
     {
+        localPath = null;
+        failureReason = null;
         try
         {
             // Trim the query string (?immutable=1 etc.) before parsing so LocalPath is clean.
             if (!SqliteFileUri.TryGetPathBeforeQuery(uriText, out var trimmed, out _))
-                return null;
+            {
+                failureReason = FileUriPathParseFailedReason;
+                return false;
+            }
 
             var uri = new Uri(trimmed);
-            return uri.IsFile ? uri.LocalPath : null;
+            if (!uri.IsFile)
+            {
+                failureReason = FileUriNotLocalFileReason;
+                return false;
+            }
+
+            localPath = uri.LocalPath;
+            return true;
         }
         catch (UriFormatException)
         {
-            return null;
+            failureReason = FileUriParseFailedReason;
+            return false;
         }
     }
 
     internal static SqliteConnection OpenReadOnly(string dbPath)
+        => OpenReadOnly(dbPath, out _);
+
+    internal static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
     {
+        usedImmutableFallback = false;
         // Attempt 1: Mode=ReadOnly. Works for most read-only FS scenarios and, crucially,
         // still reads hot -wal state so nothing committed but not yet checkpointed is lost.
         // 第一段: Mode=ReadOnly。多くの read-only 環境で動作し、hot -wal の未チェックポイント
@@ -128,7 +152,7 @@ internal static class DbConnectionFactory
             conn.Open();
             return conn;
         }
-        catch (SqliteException)
+        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
         {
             // Attempt 2: immutable=1 URI. This bypasses -shm/-wal entirely, which is the only
             // way to survive a sandbox that cannot touch side files. Trade-off documented:
@@ -160,6 +184,7 @@ internal static class DbConnectionFactory
             var rawConnStr = $"Data Source={fileUri}?immutable=1;Mode=ReadOnly";
             var conn = new SqliteConnection(rawConnStr);
             conn.Open();
+            usedImmutableFallback = true;
             return conn;
         }
     }

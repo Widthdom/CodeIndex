@@ -94,6 +94,9 @@ public class DbContext : IDisposable
     private bool _readOnlyFallback;
     private bool _walCheckpointAttempted;
     private bool _walCheckpointSucceeded;
+    private bool _readOnlyImmutableFallback;
+    private string? _walCheckpointSkippedReason;
+    private string? _walCheckpointFailureReason;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private bool _readMigrationInsideExternalTransaction;
@@ -145,6 +148,9 @@ public class DbContext : IDisposable
     public bool ReadOnlyFallback => _readOnlyFallback;
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
+    public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
+    public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
+    public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
 
     public static string GetSymbolExtractorVersionMetaKey(string lang)
         => SymbolExtractorVersionMetaPrefix + lang;
@@ -327,11 +333,15 @@ public class DbContext : IDisposable
 
             // Bare file: URI — normalize to a filesystem path and fall through.
             // immutable/mode=ro 指定のない file: URI はローカルパスに戻して通常経路で開く。
-            var normalized = TryGetLocalPath(dbPath);
-            if (normalized != null)
+            if (TryGetLocalPath(dbPath, out var normalized, out var pathFailureReason)
+                && normalized != null)
             {
                 dbPath = normalized;
                 _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
+            }
+            else
+            {
+                _walCheckpointSkippedReason = pathFailureReason;
             }
         }
 
@@ -377,7 +387,8 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _walCheckpointAttempted = true;
-            _walCheckpointSucceeded = TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken);
+            _walCheckpointSucceeded = _walCheckpointSkippedReason == null
+                && TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken, out _walCheckpointFailureReason);
             if (_walCheckpointSucceeded)
             {
                 try
@@ -444,7 +455,7 @@ public class DbContext : IDisposable
     private void OpenReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _connection = OpenReadOnly(dbPath);
+        _connection = OpenReadOnly(dbPath, out _readOnlyImmutableFallback);
         ApplyBusyTimeoutPragma();
         ApplyConnectionPerformancePragmas();
         RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
@@ -452,8 +463,12 @@ public class DbContext : IDisposable
         WarnIfBatchInProgress();
     }
 
-    private static bool TryCheckpointWalBeforeReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
+    private static bool TryCheckpointWalBeforeReadOnlyFallback(
+        string dbPath,
+        CancellationToken cancellationToken,
+        out string? failureReason)
     {
+        failureReason = null;
         try
         {
             var builder = new SqliteConnectionStringBuilder
@@ -474,9 +489,17 @@ public class DbContext : IDisposable
         }
         catch (Exception ex) when (ex is SqliteException or CodeIndexException)
         {
+            failureReason = FormatWalCheckpointFailureReason(ex);
             return false;
         }
     }
+
+    private static string FormatWalCheckpointFailureReason(Exception ex) => ex switch
+    {
+        SqliteException sqlite => $"sqlite_error_{sqlite.SqliteErrorCode.ToString(CultureInfo.InvariantCulture)}",
+        CodeIndexException codeIndexException => codeIndexException.Code,
+        _ => "wal_checkpoint_failed",
+    };
 
     public bool TryCheckpointWalTruncate()
     {
@@ -763,8 +786,14 @@ public class DbContext : IDisposable
     private static string? TryGetLocalPath(string uriText)
         => DbConnectionFactory.TryGetLocalPath(uriText);
 
+    private static bool TryGetLocalPath(string uriText, out string? localPath, out string? failureReason)
+        => DbConnectionFactory.TryGetLocalPath(uriText, out localPath, out failureReason);
+
     private static SqliteConnection OpenReadOnly(string dbPath)
         => DbConnectionFactory.OpenReadOnly(dbPath);
+
+    private static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
+        => DbConnectionFactory.OpenReadOnly(dbPath, out usedImmutableFallback);
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
     {

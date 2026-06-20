@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -474,6 +475,11 @@ public class LegacySchemaMigrationTests : IDisposable
             .GetField("_activeMigrationTransaction", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(db);
 
+    private static void SetDbContextField<T>(DbContext db, string fieldName, T value)
+        => typeof(DbContext)
+            .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(db, value);
+
     [Fact]
     public void DbContext_ReadOnlyFilesystem_FallsBackToReadOnlyOpen()
     {
@@ -500,12 +506,28 @@ public class LegacySchemaMigrationTests : IDisposable
 
             using var db = new DbContext(_dbPath);
             Assert.True(db.IsReadOnly, "DbContext should have fallen back to read-only open.");
+            Assert.True(db.ReadOnlyFallback);
+            Assert.True(db.WalCheckpointAttempted);
 
             // Migration is skipped (catches SQLITE_READONLY). Reader still builds and query
             // paths — including the previously unguarded deps / issues — degrade to empty.
             // マイグレーションはスキップされ、deps / issues も空で縮退する。
             db.TryMigrateForRead();
-            var reader = new DbReader(db.Connection);
+            var reader = new DbReader(db);
+            Assert.True(reader.ReadOnlyFallback);
+            Assert.Equal(db.WalCheckpointAttempted, reader.WalCheckpointAttempted);
+            Assert.Equal(db.WalCheckpointSucceeded, reader.WalCheckpointSucceeded);
+            Assert.Equal(db.ReadOnlyImmutableFallback, reader.ReadOnlyImmutableFallback);
+            Assert.Equal(reader.ReadOnlyImmutableFallback && !reader.WalCheckpointSucceeded, reader.WalStaleSnapshotRisk);
+
+            var status = reader.GetStatus();
+            Assert.True(status.ReadOnlyFallback);
+            Assert.Equal(reader.WalCheckpointAttempted, status.WalCheckpointAttempted);
+            Assert.Equal(reader.WalCheckpointSucceeded, status.WalCheckpointSucceeded);
+            Assert.Equal(reader.ReadOnlyImmutableFallback, status.ReadOnlyImmutableFallback);
+            Assert.Equal(reader.WalStaleSnapshotRisk, status.WalStaleSnapshotRisk);
+            Assert.Equal(reader.WalStaleSnapshotReason, status.WalStaleSnapshotReason);
+
             Assert.Empty(reader.GetFileDependencies());
             Assert.Empty(reader.GetIssues());
 
@@ -518,6 +540,46 @@ public class LegacySchemaMigrationTests : IDisposable
             File.SetUnixFileMode(_dbDir, originalMode);
             SqliteConnection.ClearAllPools();
         }
+    }
+
+    [Fact]
+    public void ReadOnlyFallbackDiagnostics_AddsStaleWalRiskToQueryPayload()
+    {
+        using var db = new DbContext(_dbPath);
+        SetDbContextField(db, "_readOnlyFallback", true);
+        SetDbContextField(db, "_walCheckpointAttempted", true);
+        SetDbContextField(db, "_walCheckpointSucceeded", false);
+        SetDbContextField(db, "_readOnlyImmutableFallback", true);
+        SetDbContextField(db, "_walCheckpointSkippedReason", DbConnectionFactory.FileUriPathParseFailedReason);
+
+        var reader = new DbReader(db);
+        var payload = new JsonObject();
+        QueryCommandRunner.AddReadOnlyFallbackDiagnostics(payload, reader);
+
+        Assert.True(payload["read_only_fallback"]!.GetValue<bool>());
+        Assert.True(payload["wal_checkpoint_attempted"]!.GetValue<bool>());
+        Assert.False(payload["wal_checkpoint_succeeded"]!.GetValue<bool>());
+        Assert.True(payload["read_only_immutable_fallback"]!.GetValue<bool>());
+        Assert.Equal(DbConnectionFactory.FileUriPathParseFailedReason, payload["wal_checkpoint_skipped_reason"]!.GetValue<string>());
+        Assert.True(payload["wal_stale_snapshot_risk"]!.GetValue<bool>());
+        Assert.Equal(DbConnectionFactory.FileUriPathParseFailedReason, payload["wal_stale_snapshot_reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void DbConnectionFactory_ReadOnlyFallbackClassification_RejectsOrdinarySqliteErrors()
+    {
+        Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("readonly", 8)));
+        Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("io error", 10)));
+        Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("cantopen", 14)));
+        Assert.False(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("not a database", 26)));
+    }
+
+    [Fact]
+    public void DbConnectionFactory_TryGetLocalPath_ReportsMachineReadableFailureReason()
+    {
+        Assert.False(DbConnectionFactory.TryGetLocalPath("https://example.invalid/codeindex.db", out var localPath, out var reason));
+        Assert.Null(localPath);
+        Assert.Equal(DbConnectionFactory.FileUriNotLocalFileReason, reason);
     }
 
     [Fact]

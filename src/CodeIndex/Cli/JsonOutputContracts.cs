@@ -284,7 +284,23 @@ internal sealed record QueryPathErrorJsonResult(
 internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("done")] bool Done,
     [property: JsonPropertyName("count")] int Count,
-    [property: JsonPropertyName("interrupted")] bool Interrupted);
+    [property: JsonPropertyName("interrupted")] bool Interrupted,
+    [property: JsonPropertyName("read_only_fallback")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnlyFallback = null,
+    [property: JsonPropertyName("wal_checkpoint_attempted")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WalCheckpointAttempted = null,
+    [property: JsonPropertyName("wal_checkpoint_succeeded")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WalCheckpointSucceeded = null,
+    [property: JsonPropertyName("read_only_immutable_fallback")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnlyImmutableFallback = null,
+    [property: JsonPropertyName("wal_checkpoint_skipped_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WalCheckpointSkippedReason = null,
+    [property: JsonPropertyName("wal_checkpoint_failure_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WalCheckpointFailureReason = null,
+    [property: JsonPropertyName("wal_stale_snapshot_risk")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WalStaleSnapshotRisk = null,
+    [property: JsonPropertyName("wal_stale_snapshot_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WalStaleSnapshotReason = null);
 
 internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("lang")] string Lang,
