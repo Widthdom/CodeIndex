@@ -1715,6 +1715,26 @@ exit 0
     }
 
     [Fact]
+    public async Task UpdateChecker_FetchLatestReleaseTagAsync_UsesSharedGitHubHeaders_Issue3750()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""{"tag_name":"v1.27.0"}"""));
+        var handler = new StaticResponseHandler(content);
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var tag = await UpdateChecker.FetchLatestReleaseTagAsync(client, TimeSpan.FromSeconds(1), CancellationToken.None);
+
+        Assert.Equal("v1.27.0", tag);
+        Assert.NotNull(handler.LastRequest);
+        Assert.Contains(handler.LastRequest!.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(handler.LastRequest.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var values));
+        Assert.Contains("2022-11-28", values);
+    }
+
+    [Fact]
     public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsOverLimitResponse()
     {
         using var content = new ByteArrayContent(new byte[(int)UpdateChecker.MaxLatestReleaseResponseBytes + 1]);
@@ -3358,13 +3378,18 @@ exit 0
     {
         private readonly HttpContent _content;
 
+        internal HttpRequestMessage? LastRequest { get; private set; }
+
         internal StaticResponseHandler(HttpContent content)
         {
             _content = content;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+        {
+            LastRequest = request;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+        }
     }
 
     private sealed class UpgradeAssetResponseHandler : HttpMessageHandler

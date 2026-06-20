@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using CodeIndex.Models;
 
@@ -189,7 +188,7 @@ internal static class UpdateChecker
 
     private static async Task<string?> FetchLatestReleaseTagAsync(CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var client = GitHubHttpClientFactory.CreateDefaultHttpClient(RequestTimeout);
         return await FetchLatestReleaseTagAsync(client, RequestTimeout, cancellationToken).ConfigureAwait(false);
     }
 
@@ -201,8 +200,7 @@ internal static class UpdateChecker
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCts.CancelAfter(timeout);
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUrl);
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("cdidx", ConsoleUi.LoadVersion()));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
 
         using var response = await client.SendAsync(
             request,
@@ -222,8 +220,7 @@ internal static class UpdateChecker
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCts.CancelAfter(timeout);
         using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("cdidx", ConsoleUi.LoadVersion()));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
 
         using var response = await client.SendAsync(
             request,
