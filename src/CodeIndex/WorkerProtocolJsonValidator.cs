@@ -19,9 +19,9 @@ internal static class WorkerProtocolJsonValidator
             ValidateElement(document.RootElement, maxProperties, effectiveMaxStringCharacters, ref propertyCount, out error);
             return error.Length == 0;
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            error = SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex);
+            error = SafeDiagnosticFormatter.FormatCategoryType("worker_protocol_error", nameof(JsonException));
             return false;
         }
     }
