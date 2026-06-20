@@ -3756,13 +3756,30 @@ public class FileIndexer
             AddRawByteContentIssues(issues, relativePath, rawBytes);
 
         AddOversizeContentIssues(issues, relativePath, content);
-        if (language == "dockerfile"
-            || (language == null && TryDetectLanguage(relativePath, content).Language == "dockerfile"))
+        var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
+        if (effectiveLanguage is "xml" or "msbuild")
+            AddXmlStructureIssues(issues, relativePath, content);
+        if (effectiveLanguage == "dockerfile")
         {
             AddDockerfileJsonFormIssues(issues, relativePath, content);
         }
 
         return issues;
+    }
+
+    private static void AddXmlStructureIssues(List<FileIssue> issues, string relativePath, string content)
+    {
+        if (!SymbolExtractor.TryGetXmlStructureIssue(content, out var issue))
+            return;
+
+        issues.Add(new FileIssue
+        {
+            Path = relativePath,
+            Kind = issue.Kind,
+            Line = issue.Line,
+            Message = issue.Message,
+            Severity = FileIssue.SeverityWarning,
+        });
     }
 
     private static void AddDockerfileJsonFormIssues(List<FileIssue> issues, string relativePath, string content)

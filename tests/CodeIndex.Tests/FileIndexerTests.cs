@@ -5718,6 +5718,39 @@ public class FileIndexerTests
         Assert.Contains(instruction, issue.Message);
     }
 
+    [Fact]
+    public void ValidateContent_MsBuildXmlBudgetExceeded_EmitsValidationIssue_Issue3801()
+    {
+        var depth = SymbolExtractor.XmlExtractionMaxDepth + 2;
+        var content = "<Project>" + string.Concat(Enumerable.Repeat("<PropertyGroup>", depth))
+            + string.Concat(Enumerable.Repeat("</PropertyGroup>", depth)) + "</Project>";
+        var rawBytes = Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("App.csproj", rawBytes, content, "msbuild");
+
+        var issue = Assert.Single(issues, i => i.Kind == "xml_structure_budget_exceeded");
+        Assert.Equal(FileIssue.SeverityWarning, issue.Severity);
+        Assert.Contains("depth", issue.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateContent_XmlDtd_EmitsValidationIssue_Issue3801()
+    {
+        const string content = """
+            <!DOCTYPE root [
+              <!ENTITY injected "value">
+            ]>
+            <root />
+            """;
+        var rawBytes = Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("app.config", rawBytes, content, "xml");
+
+        var issue = Assert.Single(issues, i => i.Kind == "xml_dtd_prohibited");
+        Assert.Equal(FileIssue.SeverityWarning, issue.Severity);
+        Assert.Contains("DTD", issue.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("VOLUME")]
     [InlineData("COPY")]

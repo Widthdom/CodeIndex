@@ -16067,6 +16067,49 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_MsBuild_CapsBroadXmlElementTables_Issue3801()
+    {
+        var items = Enumerable.Range(0, SymbolExtractor.XmlExtractionMaxElements + 8)
+            .Select(i => $"  <PackageReference Include=\"Pkg{i}\" />");
+        var content = "<Project>\n<ItemGroup>\n" + string.Join('\n', items) + "\n</ItemGroup>\n</Project>\n";
+
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Pkg" + (SymbolExtractor.XmlExtractionMaxElements + 7));
+        Assert.True(symbols.Count <= SymbolExtractor.XmlExtractionMaxElements);
+    }
+
+    [Fact]
+    public void Extract_MsBuild_CapsDeepXmlElementTrees_Issue3801()
+    {
+        var depth = SymbolExtractor.XmlExtractionMaxDepth + 4;
+        var content = "<Project>" + string.Concat(Enumerable.Repeat("<PropertyGroup>", depth))
+            + "<TargetFramework>net8.0</TargetFramework>"
+            + string.Concat(Enumerable.Repeat("</PropertyGroup>", depth)) + "</Project>";
+
+        var exception = Record.Exception(() => SymbolExtractor.Extract(1, "msbuild", content));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Extract_MsBuild_ProhibitsDtdDeclarations_Issue3801()
+    {
+        const string content = """
+            <!DOCTYPE Project [
+              <!ENTITY injected "value">
+            ]>
+            <Project>
+              <Target Name="Build" />
+            </Project>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void GetContractVersion_DockerfileSpecificKinds_UsesDedicatedVersion()
     {
         Assert.Equal(SymbolExtractor.DockerfileContractVersion, SymbolExtractor.GetContractVersion("dockerfile"));
@@ -18333,6 +18376,41 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Sample.MainWindow");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveButton");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "StatusText");
+    }
+
+    [Fact]
+    public void Extract_Xml_CapsDeepXamlElementTrees_Issue3801()
+    {
+        var depth = SymbolExtractor.XmlExtractionMaxDepth + 4;
+        var content = "<ContentPage x:Class=\"Sample.MainWindow\" "
+            + "xmlns=\"http://schemas.microsoft.com/dotnet/2021/maui\" "
+            + "xmlns:x=\"http://schemas.microsoft.com/winfx/2009/xaml\">"
+            + string.Concat(Enumerable.Repeat("<Grid x:Name=\"NestedGrid\">", depth))
+            + string.Concat(Enumerable.Repeat("</Grid>", depth))
+            + "</ContentPage>";
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void Extract_Xml_ProhibitsDtdDeclarations_Issue3801()
+    {
+        const string content = """
+            <!DOCTYPE ContentPage [
+              <!ENTITY injected "value">
+            ]>
+            <ContentPage x:Class="Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+                <Button x:Name="SaveButton" />
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Empty(symbols);
     }
 
     [Fact]
