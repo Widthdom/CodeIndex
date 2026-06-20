@@ -956,10 +956,13 @@ public partial class McpServer
                 {
                     ["message"] = $"{propertyName} must contain at most {MaxMcpArrayFilterCount} entries.",
                     ["invalid_count"] = array.Count - MaxMcpArrayFilterCount,
+                    ["max_count"] = MaxMcpArrayFilterCount,
+                    ["actual_count"] = array.Count,
                 };
 
             var invalidCount = 0;
             var invalidSamples = new JsonArray();
+            var hasTooLongEntry = false;
             for (var i = 0; i < array.Count; i++)
             {
                 var element = array[i];
@@ -974,17 +977,19 @@ public partial class McpServer
                 if (text.Length > MaxMcpArrayFilterStringLength)
                 {
                     invalidCount++;
+                    hasTooLongEntry = true;
                     if (invalidSamples.Count < 3)
                         invalidSamples.Add($"[{i}] length {text.Length}");
                 }
             }
 
-            if (invalidCount > 0 && !(propertyName == "names" && invalidCount == array.Count))
+            if (invalidCount > 0 && (propertyName != "names" || invalidCount != array.Count || hasTooLongEntry))
                 return new JsonObject
                 {
                     ["message"] = $"{propertyName} contains {invalidCount} invalid entr{(invalidCount == 1 ? "y" : "ies")}. Entries must be non-empty strings no longer than {MaxMcpArrayFilterStringLength} characters.",
                     ["invalid_count"] = invalidCount,
                     ["invalid_samples"] = invalidSamples,
+                    ["max_length"] = MaxMcpArrayFilterStringLength,
                 };
             return null;
         }
@@ -1011,6 +1016,8 @@ public partial class McpServer
                     ["message"] = $"{propertyName} must be no longer than {MaxMcpArrayFilterStringLength} characters.",
                     ["invalid_count"] = 1,
                     ["invalid_samples"] = new JsonArray { $"length {scalarText.Length}" },
+                    ["max_length"] = MaxMcpArrayFilterStringLength,
+                    ["actual_length"] = scalarText.Length,
                 };
             return null;
         }

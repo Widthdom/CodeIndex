@@ -10170,6 +10170,96 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ToolsCall_StringListArgumentsExposeSharedBounds_Issue3752()
+    {
+        var names = new JsonArray();
+        for (var i = 0; i < McpServer.MaxMcpArrayFilterCount + 1; i++)
+            names.Add($"App{i}");
+        var tooManyResponse = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "symbols",
+                ["arguments"] = new JsonObject
+                {
+                    ["names"] = names,
+                },
+            },
+        })!;
+
+        var tooManyStructured = tooManyResponse["result"]!["structuredContent"]!;
+        Assert.True(tooManyResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount, tooManyStructured["max_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount + 1, tooManyStructured["actual_count"]!.GetValue<int>());
+
+        var longExclude = new string('x', McpServer.MaxMcpArrayFilterStringLength + 1);
+        var tooLongResponse = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "App",
+                    ["excludePaths"] = longExclude,
+                },
+            },
+        })!;
+
+        var tooLongStructured = tooLongResponse["result"]!["structuredContent"]!;
+        Assert.True(tooLongResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterStringLength, tooLongStructured["max_length"]!.GetValue<int>());
+        Assert.Equal(longExclude.Length, tooLongStructured["actual_length"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_StringListArgumentErrorsCarryBounds_Issue3752()
+    {
+        var paths = new JsonArray();
+        for (var i = 0; i < McpServer.MaxMcpArrayFilterCount + 1; i++)
+            paths.Add($"src/{i}.cs");
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = "search",
+                            ["arguments"] = new JsonObject
+                            {
+                                ["query"] = "App",
+                                ["path"] = paths,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var slot = response["result"]!["structuredContent"]!["results"]!.AsArray().Single()!;
+        Assert.False(slot["ok"]!.GetValue<bool>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, slot["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount, slot["max_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount + 1, slot["actual_count"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_TruncatesAggregateResponse_Issue1416()
     {
         var previous = Environment.GetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
