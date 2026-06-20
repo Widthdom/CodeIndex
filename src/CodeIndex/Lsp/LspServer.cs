@@ -133,6 +133,12 @@ internal sealed class LspServer : IDisposable
             _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
     }
 
+    /// <summary>
+    /// Compatibility wrapper that runs without caller cancellation. Prefer the overload that
+    /// accepts <see cref="CancellationToken"/> when the caller has a shutdown or disconnect token.
+    /// caller cancellation を持たない互換 wrapper。shutdown / disconnect token がある場合は
+    /// <see cref="Run(Stream, Stream, CancellationToken)"/> を使う。
+    /// </summary>
     public int Run(Stream input, Stream output) => Run(input, output, CancellationToken.None);
 
     public int Run(Stream input, Stream output, CancellationToken cancellationToken)
@@ -141,6 +147,7 @@ internal sealed class LspServer : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var response = HandleMessage(payload);
+            cancellationToken.ThrowIfCancellationRequested();
             if (response != null)
                 WriteMessage(output, response.ToJsonString(_jsonOptions));
             if (_exitRequested)
@@ -1704,6 +1711,12 @@ internal sealed class LspServer : IDisposable
         },
     };
 
+    /// <summary>
+    /// Compatibility wrapper that reads without caller cancellation. Prefer the overload that
+    /// accepts <see cref="CancellationToken"/> for cancellable transports.
+    /// caller cancellation を持たない互換 wrapper。キャンセル可能な transport では
+    /// token を受け取る overload を使う。
+    /// </summary>
     internal static bool TryReadMessage(Stream input, out string payload) =>
         TryReadMessage(input, out payload, CancellationToken.None);
 

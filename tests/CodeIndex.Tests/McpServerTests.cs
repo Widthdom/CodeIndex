@@ -7727,6 +7727,37 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task ToolsCall_StatusUpdateCheck_UsesRequestCancellationToken_Issue3658()
+    {
+        var previous = McpServer.StatusUpdateCheckForTesting;
+        using var cts = new CancellationTokenSource();
+        var observedToken = CancellationToken.None;
+        var observedCallerCancellation = false;
+        McpServer.StatusUpdateCheckForTesting = (version, token) =>
+        {
+            observedToken = token;
+            cts.Cancel();
+            observedCallerCancellation = token.IsCancellationRequested;
+            return UpdateChecker.CreateDisabledResult(version);
+        };
+        try
+        {
+            using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+            var transport = new QueuedFrameTransport(
+                """{"jsonrpc":"2.0","id":3658,"method":"tools/call","params":{"name":"status","arguments":{"updateCheck":true}}}""");
+
+            await server.RunAsync(transport, cts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(observedToken.CanBeCanceled);
+            Assert.True(observedCallerCancellation);
+        }
+        finally
+        {
+            McpServer.StatusUpdateCheckForTesting = previous;
+        }
+    }
+
+    [Fact]
     public void ToolsList_BatchQuerySchemaAdvertisesLimitsAndControls_Issue3539()
     {
         var response = _server.HandleMessage(JsonNode.Parse(

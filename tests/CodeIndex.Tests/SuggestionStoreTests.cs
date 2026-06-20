@@ -268,6 +268,22 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAddAndSubmit_CanceledBeforeReservation_PropagatesWithoutPersisting_Issue3658()
+    {
+        var record = MakeRecord("other", null, "Sync canceled before reservation");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            _store.TryAddAndSubmit(
+                record,
+                _ => SuggestionStore.SubmitAttemptResult.Success("https://github.com/widthdom/CodeIndex/issues/123"),
+                cts.Token));
+
+        Assert.Empty(_store.LoadAll());
+    }
+
+    [Fact]
     public async Task TryAddAndSubmitAsync_PassesCancellationTokenToSubmitCallback()
     {
         var record = MakeRecord("other", null, "Submit observes cancellation token");
