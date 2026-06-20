@@ -90,6 +90,10 @@ For a faster first pass when you only need text search, `definition`, `symbols`,
 or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
 until you rerun `cdidx .` without that flag.
 
+For generated or dense source that emits excessive reference rows, use
+`cdidx . --max-references-per-file <n>` to keep text search and symbols indexed
+while skipping references for only the over-limit file.
+
 ## Highlights
 
 | Area | What to use |
@@ -264,6 +268,10 @@ cdidx lsp --db .cdidx/codeindex.db
 まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
 `cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで
 `cdidx .` を再実行するまで degraded のままです。
+
+生成コードや高密度なソースが過剰な reference 行を生成する場合は
+`cdidx . --max-references-per-file <n>` を使うと、text search と symbols は保持しつつ
+上限を超えたファイルだけ references をスキップできます。
 
 ## 特長
 

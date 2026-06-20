@@ -21,6 +21,8 @@ public static partial class IndexCommandRunner
     internal const string ExcludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS";
     internal const int DefaultMaxSymbolsPerFile = 5000;
     internal const int MaxSymbolsPerFileLimit = 50_000;
+    internal const int DefaultMaxReferencesPerFile = 100_000;
+    internal const int MaxReferencesPerFileLimit = 1_000_000;
     internal const int MaxCommitRefCount = 64;
     internal const int MaxCommitRefLength = 256;
     internal const int MaxGitExcludeBytes = 256 * 1024;
@@ -1592,6 +1594,7 @@ public sealed class IndexCommandOptions
     public CompletionNotificationMode NotifyMode { get; init; } = CompletionNotificationMode.Auto;
     public long? MaxFileSizeBytes { get; init; }
     public int MaxSymbolsPerFile { get; init; } = IndexCommandRunner.DefaultMaxSymbolsPerFile;
+    public int MaxReferencesPerFile { get; init; } = IndexCommandRunner.DefaultMaxReferencesPerFile;
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
     public bool MemoryTrace { get; init; }
     public FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; } = FileIndexer.SymlinkPolicy.None;

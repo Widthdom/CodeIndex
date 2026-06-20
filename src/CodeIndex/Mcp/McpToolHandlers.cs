@@ -5331,6 +5331,15 @@ public partial class McpServer
             Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the maxSymbolsPerFile limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise maxSymbolsPerFile if this is expected.",
         };
 
+    private static FileIssue BuildMcpReferenceCountExceededIssue(string path, int referenceCount, int maxReferencesPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "reference_count_exceeded",
+            Line = 0,
+            Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the maxReferencesPerFile limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise maxReferencesPerFile if this is expected.",
+        };
+
     private static bool TryReadMcpIndexSymlinkPolicy(JsonNode? args, out FileIndexer.SymlinkPolicy symlinkPolicy, out string? error)
     {
         symlinkPolicy = FileIndexer.SymlinkPolicy.None;
@@ -5421,6 +5430,7 @@ public partial class McpServer
         bool rebuild,
         long? maxFileBytes,
         int maxSymbolsPerFile,
+        int maxReferencesPerFile,
         FileIndexer.SymlinkPolicy symlinkPolicy,
         IReadOnlyList<string> includeSymbolKinds,
         IReadOnlyList<string> excludeSymbolKinds,
@@ -5434,6 +5444,7 @@ public partial class McpServer
             ["rebuild"] = rebuild,
             ["maxFileBytes"] = maxFileBytes.HasValue ? JsonValue.Create(maxFileBytes.Value) : null,
             ["maxSymbolsPerFile"] = maxSymbolsPerFile,
+            ["maxReferencesPerFile"] = maxReferencesPerFile,
             ["followSymlinks"] = FormatMcpIndexSymlinkPolicy(symlinkPolicy),
             ["includeSymbolKind"] = ToJsonStringArray(includeSymbolKinds),
             ["excludeSymbolKind"] = ToJsonStringArray(excludeSymbolKinds),
@@ -5514,6 +5525,9 @@ public partial class McpServer
         var maxSymbolsPerFile = args?["maxSymbolsPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
         if (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit)
             return CreateToolErrorResponse(id, $"maxSymbolsPerFile must be between 1 and {IndexCommandRunner.MaxSymbolsPerFileLimit}");
+        var maxReferencesPerFile = args?["maxReferencesPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxReferencesPerFile;
+        if (maxReferencesPerFile <= 0 || maxReferencesPerFile > IndexCommandRunner.MaxReferencesPerFileLimit)
+            return CreateToolErrorResponse(id, $"maxReferencesPerFile must be between 1 and {IndexCommandRunner.MaxReferencesPerFileLimit}");
         if (!TryReadMcpIndexSymlinkPolicy(args, out var symlinkPolicy, out var symlinkPolicyError))
             return CreateToolErrorResponse(id, symlinkPolicyError!);
         var includeSymbolKinds = ReadStringOrCommaSeparatedList(args, "includeSymbolKind");
@@ -5547,6 +5561,7 @@ public partial class McpServer
             rebuild,
             maxFileBytes,
             maxSymbolsPerFile,
+            maxReferencesPerFile,
             symlinkPolicy,
             includeSymbolKinds,
             excludeSymbolKinds,
@@ -5831,7 +5846,9 @@ public partial class McpServer
                 if (existingId != null)
                 {
                     if (writer.CountSymbolsForFile(existingId.Value) > maxSymbolsPerFile
-                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded")
+                        || writer.CountReferencesForFile(existingId.Value) > maxReferencesPerFile
+                        || writer.HasIssueForFile(existingId.Value, "reference_count_exceeded"))
                     {
                         existingId = null;
                     }
@@ -5876,10 +5893,18 @@ public partial class McpServer
                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                         requestToken);
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    FileIssue? referenceCapIssue = null;
+                    if (references.Count > maxReferencesPerFile)
+                    {
+                        referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
+                        references = [];
+                    }
                     writer.InsertReferences(references);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    if (referenceCapIssue != null)
+                        issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);
                 }
                 WriteProjectRootOnce();

@@ -47,6 +47,31 @@ public static partial class IndexCommandRunner
             Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the --max-symbols-per-file limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise --max-symbols-per-file if this is expected.",
         };
 
+    private static FileIssue BuildReferenceCountExceededIssue(string path, int referenceCount, int maxReferencesPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "reference_count_exceeded",
+            Line = 0,
+            Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the --max-references-per-file limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise --max-references-per-file if this is expected.",
+        };
+
+    private static bool ExistingFileViolatesExtractionCaps(DbWriter writer, long fileId, int maxSymbolsPerFile, int maxReferencesPerFile) =>
+        writer.CountSymbolsForFile(fileId) > maxSymbolsPerFile
+        || writer.HasIssueForFile(fileId, "symbol_count_exceeded")
+        || writer.CountReferencesForFile(fileId) > maxReferencesPerFile
+        || writer.HasIssueForFile(fileId, "reference_count_exceeded");
+
+    internal static IReadOnlyList<FileIssue> AppendIssue(IReadOnlyList<FileIssue> issues, FileIssue issue)
+    {
+        if (issues.Count == 0)
+            return [issue];
+
+        var combined = issues.ToList();
+        combined.Add(issue);
+        return combined;
+    }
+
     internal static string FormatIndexPhasePath(string path, string phase) =>
         $"{path} ({phase})";
 
@@ -1054,6 +1079,12 @@ public static partial class IndexCommandRunner
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                                if (references.Count > options.MaxReferencesPerFile)
+                                {
+                                    var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                                    references = [];
+                                    issues = AppendIssue(issues, issue);
+                                }
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
@@ -1202,13 +1233,10 @@ public static partial class IndexCommandRunner
                                 && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                 && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                     }
-                    if (existingId != null)
+                    if (existingId != null
+                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
                     {
-                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
-                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
-                        {
-                            existingId = null;
-                        }
+                        existingId = null;
                     }
                     if (existingId != null)
                     {
@@ -1326,6 +1354,13 @@ public static partial class IndexCommandRunner
                                 cancellationToken)
                             : ReassignReferenceFileIds(item.References, fileId);
                         postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
+                        if (references.Count > options.MaxReferencesPerFile)
+                        {
+                            var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                            references = [];
+                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            item = item with { Issues = AppendIssue(baseIssues, issue) };
+                        }
                     }
                     writer.InsertReferences(references, refreshMutualRecursionFlags: false);
                     if (references.Count > 0)

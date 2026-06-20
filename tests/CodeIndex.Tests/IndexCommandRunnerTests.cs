@@ -1127,6 +1127,111 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FileAboveMaxReferencesPerFile_FullScanPersistsReferenceCountExceededIssueOnly_Issue3719()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("--max-references-per-file", issue.Message);
+
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, raisedExitCode);
+            Assert.Equal("success", raisedJson.GetProperty("status").GetString());
+            Assert.True(CountRows(dbPath, "symbol_references") > 0);
+            Assert.Empty(reader.GetIssues("reference_count_exceeded"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FileAboveMaxReferencesPerFile_UpdatePersistsReferenceCountExceededIssueOnly_Issue3719()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.True(CountRows(dbPath, "symbol_references") > 0);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", filePath, "--max-references-per-file", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", issue.Path);
+            Assert.Contains("--max-references-per-file", issue.Message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static string BuildDenseReferenceCSharpSource(int callCount)
+    {
+        var calls = string.Join('\n', Enumerable.Range(0, callCount).Select(static _ => "            Target.Ping();"));
+        return $$"""
+namespace DenseReferences;
+
+public static class Target
+{
+    public static void Ping()
+    {
+    }
+}
+
+public sealed class Caller
+{
+    public void Run()
+    {
+{{calls}}
+    }
+}
+""";
+    }
+
+    [Fact]
     public void Run_SymbolsOnly_FullScanSkipsReferenceGraphUntilNormalIndex()
     {
         var projectRoot = CreateTempProject();
@@ -2708,6 +2813,22 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_MaxReferencesPerFileFlag_ParsesPositiveValue_Issue3719()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-references-per-file", "42"]);
+
+        Assert.Equal(42, options.MaxReferencesPerFile);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxReferencesPerFileInlineFlag_ParsesPositiveValue_Issue3719()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-references-per-file=43"]);
+
+        Assert.Equal(43, options.MaxReferencesPerFile);
+    }
+
+    [Fact]
     public void ParseArgs_SymbolsOnlyFlag_SetsOption()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--symbols-only"]);
@@ -2732,6 +2853,16 @@ public class IndexCommandRunnerTests
 
         Assert.Equal(IndexCommandRunner.DefaultMaxSymbolsPerFile, options.MaxSymbolsPerFile);
         Assert.Contains("--max-symbols-per-file must be less than or equal to 50000", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxReferencesPerFileFlag_RejectsValueAboveMaximum_Issue3719()
+    {
+        var aboveMaximum = $"{IndexCommandRunner.MaxReferencesPerFileLimit + 1}";
+        var options = IndexCommandRunner.ParseArgs([".", $"--max-references-per-file={aboveMaximum}"]);
+
+        Assert.Equal(IndexCommandRunner.DefaultMaxReferencesPerFile, options.MaxReferencesPerFile);
+        Assert.Contains("--max-references-per-file must be less than or equal to 1000000", options.ParseError);
     }
 
     [Fact]

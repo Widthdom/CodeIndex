@@ -720,6 +720,14 @@ public class DbWriter
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
+    public int CountReferencesForFile(long fileId)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id";
+        cmd.Parameters.AddWithValue("@file_id", fileId);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public bool HasIssueForFile(long fileId, string kind)
     {
         using var cmd = _conn.CreateCommand();

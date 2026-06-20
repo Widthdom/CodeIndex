@@ -579,13 +579,10 @@ public static partial class IndexCommandRunner
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
-                    if (statMatchedId != null)
+                    if (statMatchedId != null
+                        && ExistingFileViolatesExtractionCaps(writer, statMatchedId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
                     {
-                        if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile
-                            || writer.HasIssueForFile(statMatchedId.Value, "symbol_count_exceeded"))
-                        {
-                            statMatchedId = null;
-                        }
+                        statMatchedId = null;
                     }
                     if (statMatchedId != null)
                     {
@@ -621,13 +618,10 @@ public static partial class IndexCommandRunner
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
-                    if (existingId != null)
+                    if (existingId != null
+                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
                     {
-                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
-                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
-                        {
-                            existingId = null;
-                        }
+                        existingId = null;
                     }
                     if (existingId != null)
                     {
@@ -722,10 +716,18 @@ public static partial class IndexCommandRunner
                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                         cancellationToken);
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    FileIssue? referenceCapIssue = null;
+                    if (references.Count > options.MaxReferencesPerFile)
+                    {
+                        referenceCapIssue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                        references = [];
+                    }
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    if (referenceCapIssue != null)
+                        issues = AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                     writer.ClearBatchInProgress();
