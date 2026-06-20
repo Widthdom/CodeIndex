@@ -31,6 +31,7 @@ public static partial class ReferenceExtractor
         "assembly",
         "r", "powershell", "shell", "haskell", "solidity",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
+        "solution",
         "zig", "css", "sass", "stylus", "xml", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk"
     ];
 

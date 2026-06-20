@@ -288,6 +288,32 @@ public class DbPathResolverTests
         Assert.NotNull(parseError);
     }
 
+    [Theory]
+    [InlineData("file:sub%2fdir/codeindex.db")]
+    [InlineData("file:sub%5cdir/codeindex.db")]
+    [InlineData("file:%2e%2e/codeindex.db")]
+    public void TryNormalizeDbPath_RejectsEncodedPathBoundaries_Issue3789(string dbUri)
+    {
+        var resolved = DbPathResolver.TryNormalizeDbPath(dbUri, out var normalized, out var parseError);
+
+        Assert.False(resolved);
+        Assert.Equal(dbUri, normalized);
+        Assert.NotNull(parseError);
+    }
+
+    [Fact]
+    public void TryNormalizeDbPath_FileUriWithDecodedSpace_NormalizesOnce_Issue3789()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx decoded space {Guid.NewGuid():N}.db");
+        var decodedSpaceUri = new Uri(dbPath).AbsoluteUri.Replace("%20", " ", StringComparison.Ordinal);
+
+        var resolved = DbPathResolver.TryNormalizeDbPath(decodedSpaceUri, out var normalized, out var parseError);
+
+        Assert.True(resolved);
+        Assert.Null(parseError);
+        Assert.Equal(Path.GetFullPath(dbPath), normalized);
+    }
+
     [Fact]
     public void TryNormalizeDbPath_OversizedFileUri_ReturnsParseErrorWithoutChangingValue()
     {

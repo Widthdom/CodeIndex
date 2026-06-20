@@ -1639,6 +1639,43 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResourcesRead_DecodesSpaceOnce_Issue3789()
+    {
+        InsertIndexedFile("src/space file.cs", "csharp", "public class SpaceFile { }");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/space%20file.cs"}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var content = response["result"]!["contents"]!.AsArray().Single()!;
+        Assert.Equal("cdidx://file/src/space%20file.cs", content["uri"]!.GetValue<string>());
+        Assert.Contains("SpaceFile", content["text"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("cdidx://file/src%2fapp.cs")]
+    [InlineData("cdidx://file/src%5capp.cs")]
+    [InlineData("cdidx://file/src/%2e%2e/app.cs")]
+    public void ResourcesRead_RejectsEncodedPathBoundaries_Issue3789(string uri)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = uri,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.StartsWith("Invalid resource uri:", response["error"]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ResourcesRead_NonStringUri_ReturnsInvalidParams()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":42}}""")!;
@@ -2120,6 +2157,35 @@ public sealed class Caller
         Assert.DoesNotContain("file not found in index", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Directory not found", text, StringComparison.Ordinal);
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void McpPathBoundary_ResolvesSymlinkTargetsBeforeContainment_Issue3753()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = TestProjectHelper.CreateTempProject("cdidx_mcp_boundary_root");
+        var outside = TestProjectHelper.CreateTempProject("cdidx_mcp_boundary_outside");
+        try
+        {
+            var link = Path.Combine(root, "link-outside");
+            try
+            {
+                Directory.CreateSymbolicLink(link, outside);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            Assert.False(McpPathBoundary.IsPathWithinDirectory(root, link));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(outside);
+        }
     }
 
     [Fact]
@@ -4711,10 +4777,38 @@ public sealed class Caller
                 var tooMany = string.Join(',', Enumerable.Repeat("index", McpToolFilter.MaxToolFilterCsvEntries + 1));
                 var filter = McpToolFilter.Parse(null, tooMany);
 
-                Assert.True(filter.IsEnabled("index"));
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an invalid denylist is supplied");
                 Assert.Contains(McpToolFilter.DenyEnvVarName, stderr.ToString());
                 Assert.Contains("accepts at most", stderr.ToString());
                 Assert.Contains("was rejected", stderr.ToString());
+                Assert.Contains("failing closed", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_OverlongDenyListFailsClosed_Issue3829()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse(null, new string('d', McpToolFilter.MaxToolFilterCsvLength + 1));
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an overlong denylist is supplied");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.DenyEnvVarName, warning);
+                Assert.Contains("was rejected", warning);
+                Assert.Contains("failing closed", warning);
             }
             finally
             {
@@ -4903,6 +4997,23 @@ public sealed class Caller
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).OrderBy(n => n, StringComparer.Ordinal).ToArray();
 
         Assert.Equal(new[] { "references", "search" }, names);
+    }
+
+    [Fact]
+    public void ToolsList_KnownToolNamesMatchAdvertisedTools_Issue3829()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var advertised = response["result"]!["tools"]!.AsArray()
+            .Select(tool => tool!["name"]!.GetValue<string>())
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        var known = McpToolFilter.KnownToolNames
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(known, advertised);
     }
 
     [Fact]
@@ -10132,6 +10243,96 @@ public sealed class Caller
             Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
             Assert.Equal(expectedInvalidCount, structured["invalid_count"]!.GetValue<int>());
         }
+    }
+
+    [Fact]
+    public void ToolsCall_StringListArgumentsExposeSharedBounds_Issue3752()
+    {
+        var names = new JsonArray();
+        for (var i = 0; i < McpServer.MaxMcpArrayFilterCount + 1; i++)
+            names.Add($"App{i}");
+        var tooManyResponse = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "symbols",
+                ["arguments"] = new JsonObject
+                {
+                    ["names"] = names,
+                },
+            },
+        })!;
+
+        var tooManyStructured = tooManyResponse["result"]!["structuredContent"]!;
+        Assert.True(tooManyResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount, tooManyStructured["max_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount + 1, tooManyStructured["actual_count"]!.GetValue<int>());
+
+        var longExclude = new string('x', McpServer.MaxMcpArrayFilterStringLength + 1);
+        var tooLongResponse = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "App",
+                    ["excludePaths"] = longExclude,
+                },
+            },
+        })!;
+
+        var tooLongStructured = tooLongResponse["result"]!["structuredContent"]!;
+        Assert.True(tooLongResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterStringLength, tooLongStructured["max_length"]!.GetValue<int>());
+        Assert.Equal(longExclude.Length, tooLongStructured["actual_length"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_StringListArgumentErrorsCarryBounds_Issue3752()
+    {
+        var paths = new JsonArray();
+        for (var i = 0; i < McpServer.MaxMcpArrayFilterCount + 1; i++)
+            paths.Add($"src/{i}.cs");
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = "search",
+                            ["arguments"] = new JsonObject
+                            {
+                                ["query"] = "App",
+                                ["path"] = paths,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var slot = response["result"]!["structuredContent"]!["results"]!.AsArray().Single()!;
+        Assert.False(slot["ok"]!.GetValue<bool>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, slot["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount, slot["max_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpArrayFilterCount + 1, slot["actual_count"]!.GetValue<int>());
     }
 
     [Fact]
