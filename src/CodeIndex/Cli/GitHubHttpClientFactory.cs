@@ -28,6 +28,36 @@ internal static class GitHubHttpClientFactory
         return client;
     }
 
+    internal static RequestCancellationScope CreateRequestCancellationScope(
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => new(timeout, cancellationToken);
+
+    internal sealed class RequestCancellationScope : IDisposable
+    {
+        private readonly CancellationTokenSource timeoutCts;
+        private readonly CancellationTokenSource linkedCts;
+
+        internal RequestCancellationScope(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            timeoutCts = new CancellationTokenSource();
+            if (timeout > TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan)
+                timeoutCts.CancelAfter(timeout);
+
+            linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        }
+
+        internal CancellationToken Token => linkedCts.Token;
+
+        internal bool IsTimeoutCancellationRequested => timeoutCts.IsCancellationRequested;
+
+        public void Dispose()
+        {
+            linkedCts.Dispose();
+            timeoutCts.Dispose();
+        }
+    }
+
     internal static void ApplyDefaultHeaders(HttpRequestHeaders headers)
     {
         if (headers.UserAgent.Count == 0)

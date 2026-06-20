@@ -383,8 +383,8 @@ internal sealed class IssueDuplicatePreflight
         var owner = repository[..slash];
         var name = repository[(slash + 1)..];
         var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues?state=open&per_page={GitHubOpenIssuesPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
-        using var timeoutCts = new CancellationTokenSource(GitHubIssueReporter.ResolveSubmitTimeout());
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        var timeout = GitHubIssueReporter.ResolveSubmitTimeout();
+        using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
         var token = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
@@ -397,12 +397,12 @@ internal sealed class IssueDuplicatePreflight
             response = await HttpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                linkedCts.Token).ConfigureAwait(false);
+                requestCancellation.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestCancellation.IsTimeoutCancellationRequested)
         {
             throw new TimeoutException(
-                $"GitHub open-issues preflight timed out after {GitHubIssueReporter.ResolveSubmitTimeout().TotalSeconds:0} seconds.",
+                $"GitHub open-issues preflight timed out after {timeout.TotalSeconds:0} seconds.",
                 ex);
         }
 
@@ -410,9 +410,9 @@ internal sealed class IssueDuplicatePreflight
         {
             if (!response.IsSuccessStatusCode)
                 throw new GitHubPreflightException(
-                    await BuildGitHubApiErrorDetailAsync(response, linkedCts.Token).ConfigureAwait(false));
+                    await BuildGitHubApiErrorDetailAsync(response, requestCancellation.Token).ConfigureAwait(false));
 
-            var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, linkedCts.Token)
+            var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
                 .ConfigureAwait(false)
                 ?? throw new IOException($"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
             var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
