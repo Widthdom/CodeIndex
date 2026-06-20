@@ -5978,7 +5978,13 @@ public partial class McpServer
                     McpIndexFileCommittedForTesting?.Invoke(record.Path);
                     continue;
                 }
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
+                List<SymbolRecord> symbols;
+                FileIssue? symbolRegexTimeoutIssue;
+                using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "symbol_extraction"))
+                {
+                    symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
+                    symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -5986,9 +5992,12 @@ public partial class McpServer
                 if (symbols.Count > maxSymbolsPerFile)
                 {
                     var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
+                    IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                        ? [issue]
+                        : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
                     writer.InsertSymbols([]);
                     writer.InsertReferences([]);
-                    writer.InsertIssues(fileId, [issue]);
+                    writer.InsertIssues(fileId, capIssues);
                 }
                 else
                 {
@@ -6020,6 +6029,8 @@ public partial class McpServer
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    if (symbolRegexTimeoutIssue != null)
+                        issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
                     if (referenceCapIssue != null)

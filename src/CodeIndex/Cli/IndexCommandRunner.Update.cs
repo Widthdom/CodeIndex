@@ -692,21 +692,27 @@ public static partial class IndexCommandRunner
                         continue;
                     }
                     currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                    var symbols = ExtractSymbolsWithStallTimeout(
+                    var symbolExtraction = ExtractSymbolsWithStallTimeout(
                         fileId,
                         record.Lang,
                         content,
                         absPath,
                         Path.GetFullPath(options.ProjectPath!),
+                        record.Path,
                         currentUpdatePath,
                         symbolExtractionWorker,
                         cancellationToken);
+                    var symbols = symbolExtraction.Symbols;
+                    var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
@@ -722,9 +728,12 @@ public static partial class IndexCommandRunner
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
@@ -738,7 +747,7 @@ public static partial class IndexCommandRunner
                     writer.InsertSymbols(symbols);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "references");
                     List<ReferenceRecord> references;
-                    FileIssue? regexTimeoutIssue;
+                    FileIssue? referenceRegexTimeoutIssue;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
                     {
                         references = ReferenceExtractor.Extract(
@@ -750,7 +759,7 @@ public static partial class IndexCommandRunner
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             cancellationToken,
                             maxReferenceCount: options.MaxReferencesPerFile + 1);
-                        regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                        referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
                     FileIssue? referenceCapIssue = null;
@@ -763,8 +772,10 @@ public static partial class IndexCommandRunner
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
-                    if (regexTimeoutIssue != null)
-                        issues = AppendIssue(issues, regexTimeoutIssue);
+                    if (symbolRegexTimeoutIssue != null)
+                        issues = AppendIssue(issues, symbolRegexTimeoutIssue);
+                    if (referenceRegexTimeoutIssue != null)
+                        issues = AppendIssue(issues, referenceRegexTimeoutIssue);
                     if (referenceCapIssue != null)
                         issues = AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);

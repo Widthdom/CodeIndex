@@ -65,22 +65,38 @@ public static partial class IndexCommandRunner
             Message = ex.Message,
         };
 
-    internal static FileIssue? BuildRegexTimeoutIssue(string path, BoundedRegex.RegexTimeoutCaptureScope capture)
+    internal static FileIssue? BuildRegexTimeoutIssue(string path, BoundedRegex.RegexTimeoutCaptureScope capture) =>
+        BuildRegexTimeoutIssue(
+            path,
+            capture.Language,
+            capture.PatternFamily,
+            capture.TimeoutCount,
+            capture.Diagnostics,
+            capture.DiagnosticsTruncated);
+
+    internal static FileIssue? BuildRegexTimeoutIssue(
+        string path,
+        string? language,
+        string patternFamily,
+        int timeoutCount,
+        IReadOnlyList<BoundedRegex.RegexTimeoutDiagnostic> diagnostics,
+        bool diagnosticsTruncated)
     {
-        if (!capture.HasTimeouts)
+        if (timeoutCount <= 0)
             return null;
 
-        var samples = capture.Diagnostics.Count == 0
+        var normalizedLanguage = string.IsNullOrWhiteSpace(language) ? "unknown" : language;
+        var samples = diagnostics.Count == 0
             ? "none"
-            : string.Join(", ", capture.Diagnostics.Select(static diagnostic =>
+            : string.Join(", ", diagnostics.Select(static diagnostic =>
                 $"{diagnostic.Operation}:{diagnostic.PatternHash} len={diagnostic.PatternLength} timeout={diagnostic.TimeoutMs:0.###}ms"));
-        var truncationSuffix = capture.DiagnosticsTruncated ? "; additional timeout diagnostics omitted" : string.Empty;
+        var truncationSuffix = diagnosticsTruncated ? "; additional timeout diagnostics omitted" : string.Empty;
         return new FileIssue
         {
             Path = path,
             Kind = "regex_timeout",
             Line = 0,
-            Message = $"Regex timeout fallback occurred during {capture.PatternFamily} for language {capture.Language} ({capture.TimeoutCount:N0} timeout(s); samples {samples}{truncationSuffix}); extraction used a safe no-match fallback and may be incomplete for this file.",
+            Message = $"Regex timeout fallback occurred during {patternFamily} for language {normalizedLanguage} ({timeoutCount:N0} timeout(s); samples {samples}{truncationSuffix}); extraction used a safe no-match fallback and may be incomplete for this file.",
         };
     }
 
@@ -166,19 +182,26 @@ public static partial class IndexCommandRunner
         throw new IndexExtractionStalledException(filesProcessed, filesTotal, timeout, activePath);
     }
 
-    private static List<SymbolRecord> ExtractSymbolsWithStallTimeout(
+    private sealed record SymbolExtractionResult(List<SymbolRecord> Symbols, FileIssue? RegexTimeoutIssue);
+
+    private static SymbolExtractionResult ExtractSymbolsWithStallTimeout(
         long fileId,
         string? lang,
         string content,
         string filePath,
         string projectRoot,
+        string issuePath,
         string phasePath,
         SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
         var timeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
         if (timeout <= TimeSpan.Zero)
-            return SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+        {
+            using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
+            var symbols = SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+            return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var result = worker.Invoke(fileId, lang, content, filePath, projectRoot, timeout, cancellationToken);
@@ -188,7 +211,14 @@ public static partial class IndexCommandRunner
         if (!result.Success)
             throw new InvalidOperationException(result.WorkerError ?? "isolated symbol extraction worker failed.");
 
-        return result.Symbols ?? [];
+        var regexTimeoutIssue = BuildRegexTimeoutIssue(
+            issuePath,
+            lang,
+            "symbol_extraction",
+            result.RegexTimeoutCount,
+            result.RegexTimeoutDiagnostics ?? [],
+            result.RegexTimeoutDiagnosticsTruncated);
+        return new SymbolExtractionResult(result.Symbols ?? [], regexTimeoutIssue);
     }
 
     private static string CollapseLineBreaks(string value)
@@ -1143,25 +1173,31 @@ public static partial class IndexCommandRunner
                                     continue;
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
-                                symbols = ExtractSymbolsWithStallTimeout(
+                                var symbolExtraction = ExtractSymbolsWithStallTimeout(
                                     0,
                                     record.Lang,
                                     content,
                                     filePath,
                                     Path.GetFullPath(options.ProjectPath!),
+                                    record.Path,
                                     activeJsonExtractionPhases[workerIndex],
                                     workerSymbolExtractionWorker,
                                     extractionCancellationToken);
+                                symbols = symbolExtraction.Symbols;
+                                var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
                                 if (symbols.Count > options.MaxSymbolsPerFile)
                                 {
                                     var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                                    IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                                        ? [issue]
+                                        : AppendIssue([symbolRegexTimeoutIssue], issue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, issue.Message, [], [], [], [issue]),
+                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, issue.Message, [], [], [], capIssues),
                                         extractionCancellationToken);
                                     continue;
                                 }
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
-                                FileIssue? regexTimeoutIssue = null;
+                                FileIssue? referenceRegexTimeoutIssue = null;
                                 if (options.SymbolsOnly)
                                 {
                                     references = [];
@@ -1179,12 +1215,14 @@ public static partial class IndexCommandRunner
                                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                         extractionCancellationToken,
                                         maxReferenceCount: options.MaxReferencesPerFile + 1);
-                                    regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                                    referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
-                                if (regexTimeoutIssue != null)
-                                    issues = AppendIssue(issues, regexTimeoutIssue);
+                                if (symbolRegexTimeoutIssue != null)
+                                    issues = AppendIssue(issues, symbolRegexTimeoutIssue);
+                                if (referenceRegexTimeoutIssue != null)
+                                    issues = AppendIssue(issues, referenceRegexTimeoutIssue);
                                 if (references.Count > options.MaxReferencesPerFile)
                                 {
                                     var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
@@ -1416,23 +1454,29 @@ public static partial class IndexCommandRunner
                         continue;
                     }
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
+                    SymbolExtractionResult? symbolExtraction = null;
                     var symbols = item.Symbols == null
-                        ? ExtractSymbolsWithStallTimeout(
+                        ? (symbolExtraction = ExtractSymbolsWithStallTimeout(
                             fileId,
                             record.Lang,
                             item.Content!,
                             item.FilePath,
                             Path.GetFullPath(options.ProjectPath!),
+                            record.Path,
                             currentJsonIndexFile,
                             mainSymbolExtractionWorker,
-                            cancellationToken)
+                            cancellationToken)).Symbols
                         : ReassignSymbolFileIds(item.Symbols, fileId);
+                    var symbolRegexTimeoutIssue = symbolExtraction?.RegexTimeoutIssue;
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         if (options.Verbose)
                             WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                         txn.Commit();
@@ -1457,9 +1501,12 @@ public static partial class IndexCommandRunner
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         if (options.Verbose)
                             WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                         txn.Commit();
@@ -1477,6 +1524,11 @@ public static partial class IndexCommandRunner
                     writer.InsertChunks(chunks);
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
+                    if (symbolRegexTimeoutIssue != null)
+                    {
+                        var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                        item = item with { Issues = AppendIssue(baseIssues, symbolRegexTimeoutIssue) };
+                    }
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
                     IReadOnlyList<ReferenceRecord> references;
                     if (options.SymbolsOnly)
