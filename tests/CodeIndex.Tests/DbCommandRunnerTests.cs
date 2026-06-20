@@ -568,7 +568,7 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
-    public void Run_CheckpointJsonReportsRecoverableFileEnumerationFailure_Issue3833()
+    public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");
         var dbPath = Path.Combine(root, "codeindex.db");
@@ -589,6 +589,38 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.EnumerateCheckpointFileNamesForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_Checkpoint_JsonReportsFileEnumerationDiagnostic_Issue3812()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_file_enum_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+            DbCommandRunner.EnumerateCheckpointFilesForTesting = _ => throw new UnauthorizedAccessException("checkpoint file enumeration denied");
+
+            var (checkpointExit, stdout, stderr) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            using var doc = JsonDocument.Parse(stdout);
+            var rootElement = doc.RootElement;
+            Assert.Equal("success", rootElement.GetProperty("status").GetString());
+            Assert.True(rootElement.GetProperty("files_truncated").GetBoolean());
+            var diagnostic = Assert.Single(rootElement.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal("checkpoint_file_enumeration_failed", diagnostic.GetProperty("code").GetString());
+            Assert.Contains("Unable to enumerate every checkpoint file", diagnostic.GetProperty("message").GetString());
+            Assert.Contains("Warning [checkpoint_file_enumeration_failed]", stderr);
+        }
+        finally
+        {
+            DbCommandRunner.EnumerateCheckpointFilesForTesting = null;
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
@@ -835,9 +867,11 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("IOException", stderr);
-            Assert.Contains("restore_rollback_failed", stderr);
-            Assert.DoesNotContain("primary restore failure", stderr);
+            Assert.Contains("primary restore failure", stderr);
+            Assert.Contains("failed to roll back database restore", stderr);
+            var backupPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+            Assert.True(File.Exists(Path.Combine(backupPath, "codeindex.db")));
+            Assert.True(Directory.Exists(dbPath));
         }
         finally
         {
@@ -1068,6 +1102,46 @@ public class DbCommandRunnerTests
             Assert.Contains("InvalidOperationException", stderr);
             Assert.DoesNotContain("not a regular file", stderr);
             Assert.DoesNotContain(checkpointDbPath, stderr);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreRejectsSymlinkedCheckpointSidecar_Issue3812()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_sidecar_symlink_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            File.WriteAllText(dbPath + "-wal", "wal");
+            File.WriteAllText(dbPath + "-shm", "shm");
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            var checkpointWalPath = Path.Combine(dbPath + ".checkpoints", "saved", "codeindex.db-wal");
+            File.Delete(checkpointWalPath);
+            var targetPath = Path.Combine(root, "sidecar-target.wal");
+            File.WriteAllText(targetPath, "not the checkpoint wal");
+            File.CreateSymbolicLink(checkpointWalPath, targetPath);
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("not a regular file", stderr);
             Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
         }
         finally
