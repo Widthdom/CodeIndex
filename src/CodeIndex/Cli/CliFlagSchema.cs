@@ -116,7 +116,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] KindCommands =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
+        "definition", "goto", "references", "callers", "callees", "symbols", "inspect", "unused", "hotspots", "validate",
     ];
     private static readonly string[] SeverityCommands = ["validate"];
     private static readonly string[] VisibilityCommands =

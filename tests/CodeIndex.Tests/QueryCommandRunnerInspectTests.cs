@@ -243,6 +243,91 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_KindFilterJson_FiltersDefinitions_Issue3666()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_kind_filter_3666");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/target.py",
+                "python",
+                """
+                class Target:
+                    pass
+
+                def Target():
+                    return 1
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Target", "--db", dbPath, "--json", "--lang", "python", "--kind", "class", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definitions = document.RootElement.GetProperty("definitions").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(definitions);
+            Assert.Equal("class", definitions[0].GetProperty("kind").GetString());
+            Assert.Equal("Target", definitions[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonPrioritizesSourceDefinitionsOverTests_Issue3666()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_source_priority_3666");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/RunImportTests.cs",
+                "csharp",
+                """
+                public class RunImportTests
+                {
+                    public void RunImport() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/RunImport.cs",
+                "csharp",
+                """
+                public class ImportService
+                {
+                    public void RunImport() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["RunImport", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definitions = document.RootElement.GetProperty("definitions").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(definitions.Count >= 2);
+            Assert.Equal("src/RunImport.cs", definitions[0].GetProperty("path").GetString());
+            Assert.Contains(definitions, definition => definition.GetProperty("path").GetString() == "tests/RunImportTests.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_FormatCompact_ActsLikeCompactJson_Issue3446()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_format_compact");

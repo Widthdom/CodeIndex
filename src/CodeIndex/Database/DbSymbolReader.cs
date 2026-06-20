@@ -1537,7 +1537,7 @@ public partial class DbReader
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null, string? kind = null)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
         {
@@ -1569,7 +1569,7 @@ public partial class DbReader
         // が同じ WAL snapshot を参照するようにする。
         using var txn = _conn.BeginTransaction(deferred: true);
         var definitionLimit = Math.Min(limit, 5);
-        var definitions = GetDefinitions(normalizedQuery, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount);
+        var definitions = PrioritizeSourceDefinitions(GetDefinitions(normalizedQuery, definitionLimit, kind: kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount));
         DefinitionResult? primaryDefinition = definitions
             .FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true && !IsCSharpEnumMemberDefinition(definition))
             ?? definitions.FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true)
@@ -1651,6 +1651,19 @@ public partial class DbReader
         };
         txn.Commit();
         return result;
+    }
+
+    private static List<DefinitionResult> PrioritizeSourceDefinitions(List<DefinitionResult> definitions)
+    {
+        if (definitions.Count <= 1)
+            return definitions;
+
+        return definitions
+            .Select((definition, index) => (definition, index))
+            .OrderBy(item => SearchMatchClassifier.IsLikelyTestPath(item.definition.Path) ? 1 : 0)
+            .ThenBy(item => item.index)
+            .Select(item => item.definition)
+            .ToList();
     }
 
     public HashSet<string> GetUnsupportedExactGraphSymbolKinds(

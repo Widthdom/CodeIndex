@@ -5400,7 +5400,8 @@ public static partial class QueryCommandRunner
                 exact,
                 options.MaxLineWidth,
                 options.BodyStartLine,
-                options.BodyLines);
+                options.BodyLines,
+                kind: options.Kind);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
