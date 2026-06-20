@@ -66,6 +66,7 @@ public partial class McpServer : IDisposable
     // 処理されることがある。短命の tombstone を置き、登録時に cancel を消費する (#1418)。
     private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingRequestCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
+    private readonly object _requestTimeoutDiagnosticsGate = new();
     // Token observed by the currently executing tool call. Set just before
     // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
     // cancellation token to `DbReader` for SQLite work (#1567).
@@ -79,6 +80,9 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
+    private long _timedOutIsolatedActionDrainingCount;
+    private long _timedOutIsolatedActionDrainedCount;
+    private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
     private bool _initializedNotificationPending;
     private bool _initializedNotificationSent;
     private bool _clientRootsStale = true;
@@ -891,18 +895,13 @@ public partial class McpServer : IDisposable
 
     private static bool IsServerResponseFrame(string frame)
     {
-        try
-        {
-            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
-            return node is JsonObject obj
-                && obj.ContainsKey("id")
-                && obj["method"] is null
-                && (obj.ContainsKey("result") || obj.ContainsKey("error"));
-        }
-        catch (JsonException)
-        {
+        if (!JsonFrameParser.TryParseNode(frame, MaxJsonDepth, out var node, out _))
             return false;
-        }
+
+        return node is JsonObject obj
+            && obj.ContainsKey("id")
+            && obj["method"] is null
+            && (obj.ContainsKey("result") || obj.ContainsKey("error"));
     }
 
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
@@ -958,7 +957,7 @@ public partial class McpServer : IDisposable
         IDisposable? frameCorrelationScope = null;
         try
         {
-            request = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
+            request = JsonFrameParser.ParseNode(line, MaxJsonDepth);
             if (request == null)
                 return null;
 
@@ -976,7 +975,7 @@ public partial class McpServer : IDisposable
         catch (JsonException ex)
         {
             // Parse error / パースエラー
-            DeferFrameLog(BuildJsonParseErrorLog(ex.Message));
+            DeferFrameLog(BuildJsonParseErrorLog(JsonFrameParser.FormatExceptionDetail(ex)));
             var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error",
                 category: McpErrorEnvelope.CategoryParseError,
                 suggestion: $"Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON with nesting depth <= {MaxJsonDepth}.",
@@ -1505,6 +1504,14 @@ public partial class McpServer : IDisposable
             result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
             result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
+            result["http_request_queue_limit"] = httpTransport.MaxQueuedRequests;
+            result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
+            result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
+            result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;
+            result["http_auth_required"] = httpTransport.RequiresBearerToken;
+            result["http_auth_disabled"] = httpTransport.AuthDisabled;
+            if (!string.IsNullOrWhiteSpace(httpTransport.AuthDisabledWarning))
+                result["http_auth_disabled_warning"] = httpTransport.AuthDisabledWarning;
             result["http_response_cleanup_degraded"] = httpResponseCleanupDegraded;
             result["http_response_abort_cleanup_failure_count"] = httpTransport.ResponseAbortCleanupFailureCount;
             result["http_response_close_cleanup_failure_count"] = httpTransport.ResponseCloseCleanupFailureCount;
@@ -1656,14 +1663,17 @@ public partial class McpServer : IDisposable
             {
                 try { requestCts.Cancel(); }
                 catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                var elapsed = stopwatch.Elapsed;
+                RecordTimedOutIsolatedActionDraining(requestKey, elapsed);
                 cleanupNow = false;
                 _ = actionTask.ContinueWith(task =>
                 {
                     _ = task.Exception;
                     _activeRequests.TryRemove(requestKey, out _);
+                    RecordTimedOutIsolatedActionDrained(requestKey, task);
                     requestCts.Dispose();
                 }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
+                return CreateRequestTimeoutResponse(id, elapsed, isolatedActionDraining: true);
             }
 
             timeoutDelayCts.Cancel();
@@ -1686,7 +1696,7 @@ public partial class McpServer : IDisposable
         }
     }
 
-    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed)
+    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed, bool isolatedActionDraining = false)
         => CreateErrorResponse(hasId: true, id: id, code: -32603, message: "Request timed out",
             category: McpErrorEnvelope.CategoryInternalError,
             suggestion: "Retry with a narrower query, refresh the index if it is degraded, or increase the MCP request timeout before retrying.",
@@ -1695,7 +1705,65 @@ public partial class McpServer : IDisposable
             {
                 ["reason"] = "timeout",
                 ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
+                ["isolated_action_draining"] = isolatedActionDraining,
             });
+
+    private void RecordTimedOutIsolatedActionDraining(string requestKey, TimeSpan elapsed)
+    {
+        var elapsedMs = (long)Math.Ceiling(elapsed.TotalMilliseconds);
+        Interlocked.Increment(ref _timedOutIsolatedActionDrainingCount);
+        lock (_requestTimeoutDiagnosticsGate)
+        {
+            _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
+                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                elapsedMs,
+                "draining");
+        }
+        Console.Error.WriteLine(BuildTimedOutIsolatedActionDrainingLog(requestKey, elapsedMs));
+    }
+
+    private void RecordTimedOutIsolatedActionDrained(string requestKey, Task task)
+    {
+        Interlocked.Decrement(ref _timedOutIsolatedActionDrainingCount);
+        Interlocked.Increment(ref _timedOutIsolatedActionDrainedCount);
+        var state = task.IsCanceled ? "canceled" : task.IsFaulted ? "faulted" : "completed";
+        lock (_requestTimeoutDiagnosticsGate)
+        {
+            _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
+                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                null,
+                state);
+        }
+    }
+
+    internal JsonObject BuildRequestTimeoutDiagnosticsStatus()
+    {
+        RequestTimeoutDrainDiagnostic? last;
+        lock (_requestTimeoutDiagnosticsGate)
+        {
+            last = _lastRequestTimeoutDrainDiagnostic;
+        }
+
+        var payload = new JsonObject
+        {
+            ["isolated_action_draining_count"] = Interlocked.Read(ref _timedOutIsolatedActionDrainingCount),
+            ["isolated_action_drained_count"] = Interlocked.Read(ref _timedOutIsolatedActionDrainedCount),
+            ["timeout_ms"] = (long)Math.Ceiling(_requestTimeout.TotalMilliseconds),
+        };
+        if (last is not null)
+        {
+            payload["last"] = new JsonObject
+            {
+                ["request_id"] = last.RequestId,
+                ["elapsed_ms"] = last.ElapsedMs.HasValue ? JsonValue.Create(last.ElapsedMs.Value) : null,
+                ["state"] = last.State,
+            };
+        }
+        return payload;
+    }
+
+    internal static string BuildTimedOutIsolatedActionDrainingLog(string requestKey, long elapsedMs)
+        => $"[cdidx-mcp] Request timed out while isolated action is still draining: request_id={McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text} elapsed_ms={elapsedMs}. The response has been sent; cleanup will continue in the background.";
 
     private static IDisposable BeginRequestCorrelation(JsonNode? id)
     {
@@ -1718,6 +1786,7 @@ public partial class McpServer : IDisposable
     }
 
     private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
+    private sealed record RequestTimeoutDrainDiagnostic(string? RequestId, long? ElapsedMs, string State);
 
     private sealed class CorrelationScope : IDisposable
     {
@@ -1795,19 +1864,13 @@ public partial class McpServer : IDisposable
 
     private static bool IsCancellationFrame(string frame)
     {
-        try
-        {
-            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
-            if (node is not JsonObject obj)
-                return false;
-            var method = obj["method"]?.GetValue<string>();
-            return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
-                || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
-        }
-        catch
-        {
+        if (!JsonFrameParser.TryParseNode(frame, MaxJsonDepth, out var node, out _)
+            || node is not JsonObject obj)
             return false;
-        }
+
+        var method = TryGetStringMember(obj, "method");
+        return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
+            || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
     }
 
     // Safe accessor that returns null instead of throwing when `name` is missing OR present
@@ -2164,20 +2227,10 @@ public partial class McpServer : IDisposable
             }
         }
 
-        int listLimit;
-        try
-        {
-            listLimit = checked(offset + pageSize + 1);
-        }
-        catch (OverflowException)
-        {
-            return CreateResourcesListCursorError(id);
-        }
-
         return WithDbReader(id, args: null, reader =>
         {
-            var files = reader.ListFiles(limit: listLimit);
-            var page = files.Skip(offset).Take(pageSize).ToArray();
+            var files = reader.ListFiles(limit: pageSize + 1, offset: offset);
+            var page = files.Take(pageSize).ToArray();
             var resources = new JsonArray();
             foreach (var file in page)
             {
@@ -2199,7 +2252,7 @@ public partial class McpServer : IDisposable
                 ["resources"] = resources,
             };
             var nextOffset = offset + pageSize;
-            if (nextOffset <= MaxMcpPaginationOffset && nextOffset < files.Count)
+            if (nextOffset <= MaxMcpPaginationOffset && files.Count > pageSize)
                 result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
             return CreateSuccessResponse(true, id, result);
         });
@@ -3393,7 +3446,7 @@ public partial class McpServer : IDisposable
         $"[cdidx-mcp] Message too large ({characterCount} chars / {byteCount} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
 
     internal static string BuildJsonParseErrorLog(string detail) =>
-        $"[cdidx-mcp] JSON parse error: {detail}. Send one UTF-8 JSON-RPC object per line and retry.";
+        $"[cdidx-mcp] JSON parse error: {DiagnosticRedactor.BoundDiagnosticText(detail, JsonFrameParser.MaxParseDiagnosticChars)}. Send one UTF-8 JSON-RPC object per line and retry.";
 
     internal static string BuildUnhandledLoopErrorLog(string detail) =>
         $"[cdidx-mcp] Error: {detail}. This request was skipped; fix the request or inspect the server environment, then retry.";
@@ -3444,7 +3497,7 @@ public partial class McpServer : IDisposable
         => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
 
     internal static bool IsUnsafeDebugEnabled()
-        => string.Equals(CdidxEnvironment.GetEnvironmentVariable(DebugEnvironmentVariable), "unsafe", StringComparison.OrdinalIgnoreCase);
+        => McpEnvironment.IsUnsafeDebugEnabled(DebugEnvironmentVariable);
 
     internal static string FormatDbPathForLog(string dbPath)
     {

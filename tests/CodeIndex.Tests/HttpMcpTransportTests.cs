@@ -133,6 +133,15 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(root.GetProperty("http_event_stream_limit").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
+        Assert.True(root.GetProperty("http_request_queue_limit").GetInt32() >= 1);
+        Assert.Equal(0, root.GetProperty("http_concurrent_handler_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_request_queue_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_event_stream_rejection_count").GetInt64());
+        Assert.False(root.GetProperty("http_auth_required").GetBoolean());
+        Assert.True(root.GetProperty("http_auth_disabled").GetBoolean());
+        Assert.Equal(
+            HttpMcpTransport.LoopbackAuthDisabledWarning,
+            root.GetProperty("http_auth_disabled_warning").GetString());
         Assert.False(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
         Assert.Equal(0, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
@@ -338,6 +347,41 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_MalformedCancellationNotification_IsQueuedForNormalHandling_Issue3711()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var outOfBandHandlerCalls = 0;
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null);
+        transport.OutOfBandFrameHandler = (_, _) =>
+        {
+            Interlocked.Increment(ref outOfBandHandlerCalls);
+            return Task.FromResult<string?>(null);
+        };
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        const string body = """{"jsonrpc":"2.0","method":"notifications/cancelled","params":""";
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "malformed cancellation notification to stay in the normal HTTP MCP queue");
+
+        Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(body, frame);
+
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}""", CancellationToken.None);
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_CancellationNotificationBeyondJsonDepth_IsQueuedForNormalHandling()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -443,6 +487,22 @@ public class HttpMcpTransportTests : IDisposable
         Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
         Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
         Assert.InRange(transport.MaxEventStreams, 1, HttpMcpTransport.MaxConfiguredEventStreams);
+        Assert.True(transport.IsLoopbackBind);
+        Assert.True(transport.AuthDisabled);
+        Assert.Equal(HttpMcpTransport.LoopbackAuthDisabledWarning, transport.AuthDisabledWarning);
+    }
+
+    [Fact]
+    public void HttpTransport_NonLoopbackWithoutBearerToken_ThrowsBeforeBinding_Issue3754()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(
+            "http://127.0.0.1:1/",
+            "0.0.0.0",
+            1,
+            bearerToken: null));
+
+        Assert.Contains("requires bearer authentication", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("bearerToken", ex.ParamName);
     }
 
     [Fact]
@@ -637,8 +697,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
-        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+        AssertTooManyRequests(second, HttpMcpTransport.RequestQueueLimitRejection);
+        Assert.Equal(1, transport.RequestQueueLimitRejectionCount);
 
         var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.NotNull(frame);
@@ -668,8 +728,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
-        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+        AssertTooManyRequests(second, HttpMcpTransport.ConcurrentHandlerLimitRejection);
+        Assert.Equal(1, transport.ConcurrentHandlerLimitRejectionCount);
     }
 
     [Fact]
@@ -712,8 +772,8 @@ public class HttpMcpTransportTests : IDisposable
 
         using var second = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
-        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+        AssertTooManyRequests(second, HttpMcpTransport.EventStreamLimitRejection);
+        Assert.Equal(1, transport.EventStreamLimitRejectionCount);
     }
 
     [Fact]
@@ -918,6 +978,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerToken_AcceptsMaxLengthHeader_Issue3798()
+    {
+        var token = new string('t', McpAuthenticationLimits.MaxTokenCharacters);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_RejectsWrongToken()
     {
         // Verifies the rejection path covers the actual constant-time compare, not just the
@@ -1051,7 +1128,35 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(spec.IsLoopback);
         Assert.Equal("127.0.0.1", spec.Host);
         Assert.True(spec.Port > 0);
+        Assert.True(spec.PortWasEphemeral);
         Assert.EndsWith("/", spec.Prefix);
+    }
+
+    [Fact]
+    public void ResolveListenSpec_ExplicitPort_IsNotEphemeral_Issue3754()
+    {
+        var spec = HttpMcpTransport.ResolveListenSpec("127.0.0.1:38080");
+
+        Assert.True(spec.IsLoopback);
+        Assert.Equal(38080, spec.Port);
+        Assert.False(spec.PortWasEphemeral);
+    }
+
+    [Fact]
+    public void FormatBindFailureDiagnostic_EphemeralPortMentionsRace_Issue3754()
+    {
+        var spec = new HttpMcpTransport.HttpListenSpec(
+            "http://127.0.0.1:45678/",
+            "127.0.0.1",
+            45678,
+            IsLoopback: true,
+            PortWasEphemeral: true);
+
+        var diagnostic = HttpMcpTransport.FormatBindFailureDiagnostic(spec, new IOException("Address already in use"));
+
+        Assert.Contains("port-0 probe", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("another process may have claimed it", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("--http-listen", diagnostic, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1099,6 +1204,15 @@ public class HttpMcpTransportTests : IDisposable
             snapshot.Select(record => $"{record.Method} {record.Path} {record.StatusCode} auth={record.AuthOutcome} id={record.RequestId ?? "<none>"}"));
         Assert.Fail($"Expected {expectedCount} request log records, but observed {snapshot.Length}: {observed}");
         return snapshot;
+    }
+
+    private static void AssertTooManyRequests(HttpResponseMessage response, string rejectionReason)
+    {
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("Retry-After", out var retryAfterValues));
+        Assert.Contains("1", retryAfterValues);
+        Assert.True(response.Headers.TryGetValues(HttpMcpTransport.RejectionReasonHeader, out var rejectionValues));
+        Assert.Contains(rejectionReason, rejectionValues);
     }
 
     private static async Task<string> ReadUntilAsync(StreamReader reader, string expected)

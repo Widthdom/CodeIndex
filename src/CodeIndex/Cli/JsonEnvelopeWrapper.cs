@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -235,7 +236,7 @@ internal static class JsonEnvelopeWrapper
             JsonNode? node;
             try
             {
-                node = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxRawJsonItemDepth });
+                node = JsonFrameParser.ParseNode(line, MaxRawJsonItemDepth);
             }
             catch (JsonException)
             {

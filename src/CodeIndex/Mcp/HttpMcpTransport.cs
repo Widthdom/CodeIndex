@@ -41,14 +41,14 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
+    internal const string RejectionReasonHeader = "X-Cdidx-Mcp-Rejection";
+    internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
+    internal const string RequestQueueLimitRejection = "request_queue_limit";
+    internal const string EventStreamLimitRejection = "event_stream_limit";
+    internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running on a loopback listener without bearer authentication; local processes can connect.";
     private const string BearerPrefix = "Bearer ";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
-
-    private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
-    {
-        MaxDepth = McpServer.MaxJsonDepth,
-    };
 
     private readonly HttpListener _listener;
     private readonly string _endpoint;
@@ -75,6 +75,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private int _eventStreamCount;
     private long _responseAbortCleanupFailureCount;
     private long _responseCloseCleanupFailureCount;
+    private long _concurrentHandlerLimitRejectionCount;
+    private long _requestQueueLimitRejectionCount;
+    private long _eventStreamLimitRejectionCount;
     private string? _lastResponseAbortCleanupFailure;
     private string? _lastResponseCloseCleanupFailure;
     private bool _disposed;
@@ -136,14 +139,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         });
         if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
             throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
+        IsLoopbackBind = IsLoopbackHost(host);
+        if (string.IsNullOrEmpty(bearerToken) && !IsLoopbackBind)
+            throw new ArgumentException("HTTP MCP requires bearer authentication when binding outside loopback.", nameof(bearerToken));
+        _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
+            ? null
+            : McpAuthenticationLimits.HashTokenToArray(bearerToken);
         _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
         _requestLogger = requestLogger;
-        _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
-            ? null
-            : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
         _endpoint = $"http://{host}:{boundPort}/";
         _acceptLoop = BackgroundTaskObserver.Run(
             token => AcceptLoopAsync(token),
@@ -157,6 +163,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     public string Endpoint => _endpoint;
 
     internal bool RequiresBearerToken => _bearerTokenHash is not null;
+
+    internal bool IsLoopbackBind { get; }
+
+    internal bool AuthDisabled => !RequiresBearerToken;
+
+    internal string? AuthDisabledWarning => AuthDisabled ? LoopbackAuthDisabledWarning : null;
 
     internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
@@ -184,6 +196,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal long ResponseCloseCleanupFailureCount => Interlocked.Read(ref _responseCloseCleanupFailureCount);
 
+    internal long ConcurrentHandlerLimitRejectionCount => Interlocked.Read(ref _concurrentHandlerLimitRejectionCount);
+
+    internal long RequestQueueLimitRejectionCount => Interlocked.Read(ref _requestQueueLimitRejectionCount);
+
+    internal long EventStreamLimitRejectionCount => Interlocked.Read(ref _eventStreamLimitRejectionCount);
+
     internal bool ResponseCleanupDegraded => ResponseAbortCleanupFailureCount > 0 || ResponseCloseCleanupFailureCount > 0;
 
     internal string? LastResponseAbortCleanupFailure => Volatile.Read(ref _lastResponseAbortCleanupFailure);
@@ -210,14 +228,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var displayHost = host;
         var prefixHost = NormalizePrefixHost(host);
         var ipAddress = ResolveLoopbackIp(host);
+        var portWasEphemeral = port == 0;
 
         var isLoopback = ipAddress is not null && IPAddress.IsLoopback(ipAddress);
 
-        if (port == 0)
+        if (portWasEphemeral)
             port = FindFreePort(ipAddress ?? IPAddress.Loopback);
 
         var prefix = $"http://{prefixHost}:{port.ToString(CultureInfo.InvariantCulture)}/";
-        return new HttpListenSpec(prefix, displayHost, port, isLoopback);
+        return new HttpListenSpec(prefix, displayHost, port, isLoopback, portWasEphemeral);
     }
 
     private static (string host, int port) ParseHostPort(string spec)
@@ -266,6 +285,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
             return IPAddress.Loopback;
         return IPAddress.TryParse(host, out var ip) ? ip : null;
+    }
+
+    private static bool IsLoopbackHost(string host)
+    {
+        var ip = ResolveLoopbackIp(host);
+        return ip is not null && IPAddress.IsLoopback(ip);
+    }
+
+    internal static string FormatBindFailureDiagnostic(HttpListenSpec listenSpec, Exception exception)
+    {
+        var prefix = LimitRequestLogField(listenSpec.Prefix) ?? "<unknown>";
+        var message = LimitRequestLogField(exception.Message) ?? exception.GetType().Name;
+        var diagnostic = $"failed to bind HTTP listener on {prefix}: {message}";
+        if (listenSpec.PortWasEphemeral)
+        {
+            diagnostic += " The listener port came from a port-0 probe; another process may have claimed it before the final bind. Retry or choose an explicit --http-listen port.";
+        }
+        return diagnostic;
     }
 
     private static int FindFreePort(IPAddress address)
@@ -389,7 +426,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         var request = BeginRequest(context);
         request.AuthOutcome = "not-checked";
+        MarkRejected(request, ConcurrentHandlerLimitRejection);
         context.Response.AddHeader("Retry-After", "1");
+        context.Response.AddHeader(RejectionReasonHeader, ConcurrentHandlerLimitRejection);
         await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP concurrent handler limit is full.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.TooManyRequests);
     }
@@ -458,7 +497,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         if (!TryQueueRequest(request))
         {
+            MarkRejected(request, RequestQueueLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
+            context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
             await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
         }
@@ -541,11 +582,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private static bool IsCancellationNotification(string body)
     {
+        if (!JsonFrameParser.TryParseNode(body, McpServer.MaxJsonDepth, out var node, out _)
+            || node is not JsonObject obj)
+            return false;
+
         try
         {
-            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
-            if (node is not JsonObject obj)
-                return false;
             var method = obj["method"]?.GetValue<string>();
             return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
                 || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
@@ -558,18 +600,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private static bool IsJsonRpcResponse(string body)
     {
-        try
-        {
-            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
-            return node is JsonObject obj
-                && obj.ContainsKey("id")
-                && obj["method"] is null
-                && (obj.ContainsKey("result") || obj.ContainsKey("error"));
-        }
-        catch
-        {
+        if (!JsonFrameParser.TryParseNode(body, McpServer.MaxJsonDepth, out var node, out _))
             return false;
-        }
+
+        return node is JsonObject obj
+            && obj.ContainsKey("id")
+            && obj["method"] is null
+            && (obj.ContainsKey("result") || obj.ContainsKey("error"));
     }
 
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
@@ -732,7 +769,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (Interlocked.Increment(ref _eventStreamCount) > _maxEventStreams)
         {
             Interlocked.Decrement(ref _eventStreamCount);
+            MarkRejected(request, EventStreamLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
+            context.Response.AddHeader(RejectionReasonHeader, EventStreamLimitRejection);
             await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
             return;
@@ -872,8 +911,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         // FixedTimeEquals で比較する。リクエスト毎に設定トークンをハッシュすると SHA-256 の
         // ブロック処理量で設定トークン長が漏れるため、設定側を事前計算しておく。
         // salt 無しは「同じ長さの 32 byte 配列の定数時間比較」が目的だから。
-        Span<byte> providedHash = stackalloc byte[32];
-        SHA256.HashData(Encoding.UTF8.GetBytes(provided), providedHash);
+        Span<byte> providedHash = stackalloc byte[McpAuthenticationLimits.Sha256HashBytes];
+        McpAuthenticationLimits.HashToken(provided, providedHash);
         return CryptographicOperations.FixedTimeEquals(providedHash, _bearerTokenHash);
     }
 
@@ -990,8 +1029,19 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             _acceptCts.Dispose();
     }
 
+    private void MarkRejected(PendingRequest request, string reason)
+    {
+        request.RejectionReason = reason;
+        if (string.Equals(reason, ConcurrentHandlerLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _concurrentHandlerLimitRejectionCount);
+        else if (string.Equals(reason, RequestQueueLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _requestQueueLimitRejectionCount);
+        else if (string.Equals(reason, EventStreamLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _eventStreamLimitRejectionCount);
+    }
+
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
-    internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback);
+    internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback, bool PortWasEphemeral);
 
     internal sealed record HttpRequestLogRecord(
         string CorrelationId,
@@ -1001,7 +1051,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         string Path,
         int StatusCode,
         double DurationMs,
-        string AuthOutcome);
+        string AuthOutcome,
+        string? RejectionReason);
 
     private PendingRequest BeginRequest(HttpListenerContext context)
     {
@@ -1041,7 +1092,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                     request.Path,
                     statusCode,
                     request.Elapsed.TotalMilliseconds,
-                    request.AuthOutcome);
+                    request.AuthOutcome,
+                    request.RejectionReason);
             lock (_requestLoggerGate)
             {
                 _requestLogger(record);
@@ -1057,7 +1109,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
-            using var doc = JsonDocument.Parse(body, HttpProbeJsonDocumentOptions);
+            using var doc = JsonDocument.Parse(body, JsonFrameParser.CreateDocumentOptions(McpServer.MaxJsonDepth));
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
 
@@ -1103,6 +1155,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         internal string Path { get; }
 
         internal string AuthOutcome { get; set; } = "none";
+
+        internal string? RejectionReason { get; set; }
 
         internal bool Logged { get; set; }
 

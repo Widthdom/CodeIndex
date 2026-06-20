@@ -2374,22 +2374,11 @@ internal static partial class ProgramRunner
 
     internal static string? ResolveMcpHttpBearerTokenFromEnvironment()
     {
-        var httpToken = NormalizeMcpToken(Environment.GetEnvironmentVariable(McpHttpTokenEnvVar), McpHttpTokenEnvVar);
+        var httpToken = McpEnvironment.GetOptionalToken(McpHttpTokenEnvVar);
         if (httpToken is not null)
             return httpToken;
 
-        return NormalizeMcpToken(Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar), McpAuthenticatorFactory.AuthTokenEnvVar);
-    }
-
-    private static string? NormalizeMcpToken(string? token, string source)
-    {
-        if (string.IsNullOrEmpty(token))
-            return null;
-
-        if (!McpAuthenticationLimits.IsTokenShapeValid(token))
-            throw new FormatException(McpAuthenticationLimits.FormatTokenShapeError(source));
-
-        return token;
+        return McpEnvironment.GetOptionalToken(McpAuthenticatorFactory.AuthTokenEnvVar);
     }
 
     private static int RunMcpHttp(McpServer server, string listenSpec)
@@ -2457,7 +2446,7 @@ internal static partial class ProgramRunner
         }
         catch (HttpListenerException ex)
         {
-            Console.Error.WriteLine($"Error: failed to bind HTTP listener on {resolved.Prefix}: {ex.Message}");
+            Console.Error.WriteLine($"Error: {HttpMcpTransport.FormatBindFailureDiagnostic(resolved, ex)}");
             return CommandExitCodes.UsageError;
         }
 
@@ -2471,10 +2460,16 @@ internal static partial class ProgramRunner
             // supervisord が socket を解放して再起動できるようにする（#1573）。
             using (McpServer.RegisterShutdownHandlers(cts))
             {
-                if (resolved.IsLoopback && bearerToken is null)
+                if (transport.AuthDisabledWarning is { } authWarning)
+                {
+                    Console.Error.WriteLine($"[cdidx-mcp] Warning: {authWarning} Set `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` to require bearer auth.");
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
+                    GlobalToolLog.Info("mcp_http_auth_disabled_warning loopback=true");
+                }
                 else
+                {
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
+                }
 
                 try
                 {
@@ -2515,7 +2510,8 @@ internal static partial class ProgramRunner
             + $" path={FormatLogValue(record.Path)}"
             + $" status={record.StatusCode.ToString(CultureInfo.InvariantCulture)}"
             + $" duration_ms={record.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)}"
-            + $" auth={FormatLogValue(record.AuthOutcome)}");
+            + $" auth={FormatLogValue(record.AuthOutcome)}"
+            + $" rejection={FormatLogValue(record.RejectionReason)}");
     }
 
     private static string FormatLogValue(string? value)

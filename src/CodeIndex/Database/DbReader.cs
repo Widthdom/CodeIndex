@@ -1503,8 +1503,11 @@ public partial class DbReader : IDisposable
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool orderBySize = false)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool orderBySize = false, int offset = 0)
     {
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset), offset, "Offset must be non-negative.");
+
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
         var orderSql = orderBySize
@@ -1527,7 +1530,7 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {orderSql} LIMIT @limit";
+        sql += $" ORDER BY {orderSql} LIMIT @limit OFFSET @offset";
 
         sql += $@"
             )
@@ -1556,6 +1559,7 @@ public partial class DbReader : IDisposable
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@offset", offset);
 
         var results = new List<FileResult>();
         using var reader = cmd.ExecuteTrackedReader();

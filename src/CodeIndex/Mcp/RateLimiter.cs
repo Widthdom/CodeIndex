@@ -13,10 +13,12 @@ namespace CodeIndex.Mcp;
 internal sealed class RateLimiter
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, TokenBucket> _buckets = new(StringComparer.Ordinal);
+    private readonly Dictionary<RateLimiterBucketKey, TokenBucket> _buckets = new();
     private readonly RateLimiterOptions _options;
     private readonly Func<DateTimeOffset> _clock;
     private DateTimeOffset _nextPruneAt = DateTimeOffset.MinValue;
+    private DateTimeOffset? _lastPruneAt;
+    private int _lastPrunedBucketCount;
 
     public RateLimiter(RateLimiterOptions options, Func<DateTimeOffset>? clock = null)
     {
@@ -66,7 +68,21 @@ internal sealed class RateLimiter
         }
     }
 
-    internal static string BuildKey(string tool, string caller) => $"{tool}|{caller}";
+    internal RateLimiterDiagnostics SnapshotDiagnostics()
+    {
+        lock (_gate)
+        {
+            var now = _clock();
+            return new RateLimiterDiagnostics(
+                BucketCount: _buckets.Count,
+                BucketIdleTtlSeconds: Math.Ceiling(_options.BucketIdleTtl.TotalSeconds),
+                NextPruneInMs: ComputeNextPruneInMilliseconds(now, _nextPruneAt),
+                LastPruneAgeMs: _lastPruneAt.HasValue ? ComputeElapsedMilliseconds(now, _lastPruneAt.Value) : null,
+                LastPrunedBucketCount: _lastPrunedBucketCount);
+        }
+    }
+
+    internal static RateLimiterBucketKey BuildKey(string tool, string caller) => new(tool, caller);
 
     private void PruneIdleBuckets(DateTimeOffset now)
     {
@@ -75,11 +91,11 @@ internal sealed class RateLimiter
             return;
 
         var cutoff = ComputeIdleCutoff(now, idleTtl);
-        List<string>? expiredKeys = null;
+        List<RateLimiterBucketKey>? expiredKeys = null;
         foreach (var (key, bucket) in _buckets)
         {
             if (bucket.LastTouched <= cutoff)
-                (expiredKeys ??= new List<string>()).Add(key);
+                (expiredKeys ??= new List<RateLimiterBucketKey>()).Add(key);
         }
 
         if (expiredKeys is not null)
@@ -88,6 +104,8 @@ internal sealed class RateLimiter
                 _buckets.Remove(key);
         }
 
+        _lastPruneAt = now;
+        _lastPrunedBucketCount = expiredKeys?.Count ?? 0;
         _nextPruneAt = ComputeNextPruneAt(now, idleTtl);
     }
 
@@ -118,6 +136,34 @@ internal sealed class RateLimiter
         catch (ArgumentOutOfRangeException)
         {
             return DateTimeOffset.MaxValue;
+        }
+    }
+
+    private static long ComputeNextPruneInMilliseconds(DateTimeOffset now, DateTimeOffset nextPruneAt)
+    {
+        if (nextPruneAt <= now)
+            return 0;
+        try
+        {
+            return (long)Math.Ceiling((nextPruneAt - now).TotalMilliseconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return long.MaxValue;
+        }
+    }
+
+    private static long ComputeElapsedMilliseconds(DateTimeOffset now, DateTimeOffset since)
+    {
+        if (now <= since)
+            return 0;
+        try
+        {
+            return (long)Math.Ceiling((now - since).TotalMilliseconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return long.MaxValue;
         }
     }
 
@@ -180,6 +226,15 @@ internal sealed class RateLimiter
         }
     }
 }
+
+internal readonly record struct RateLimiterBucketKey(string Tool, string Caller);
+
+internal readonly record struct RateLimiterDiagnostics(
+    int BucketCount,
+    double BucketIdleTtlSeconds,
+    long NextPruneInMs,
+    long? LastPruneAgeMs,
+    int LastPrunedBucketCount);
 
 internal readonly record struct RateLimiterDecision(bool Allowed, long RetryAfterMs)
 {
