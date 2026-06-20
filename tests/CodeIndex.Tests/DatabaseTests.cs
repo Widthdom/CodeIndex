@@ -932,6 +932,49 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RunIncrementalVacuum_CancellationBeforeMetrics_ThrowsOperationCanceled_Issue3811()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_cancel_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => db.RunIncrementalVacuum(false, cts.Token));
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunIncrementalVacuum_ReportsProgressBoundaries_Issue3811()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_progress_test_{Guid.NewGuid():N}.db");
+        var progress = new List<string>();
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            DbContext.MaintenanceProgressForTesting = (operation, phase) => progress.Add($"{operation}:{phase}");
+
+            var result = db.RunIncrementalVacuum(dryRun: true);
+
+            Assert.Equal("dry_run", result.Status);
+            Assert.Contains("vacuum:metrics_before", progress);
+            Assert.Contains("vacuum:metrics_after", progress);
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void MaintenanceGuidance_HighWalRecommendsCheckpoint_Issue3564()
     {
         var guidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(

@@ -105,6 +105,7 @@ public class DbContext : IDisposable
     private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
 
     internal static Action<string>? OptimizePragmaExecutedForTesting
     {
@@ -128,6 +129,12 @@ public class DbContext : IDisposable
     {
         get => ScopedWalCheckpointTruncateExecutedForTesting.Value;
         set => ScopedWalCheckpointTruncateExecutedForTesting.Value = value;
+    }
+
+    internal static Action<string, string>? MaintenanceProgressForTesting
+    {
+        get => ScopedMaintenanceProgressForTesting.Value;
+        set => ScopedMaintenanceProgressForTesting.Value = value;
     }
 
     public SqliteConnection Connection => _connection;
@@ -459,7 +466,11 @@ public class DbContext : IDisposable
                 cancellationToken: cancellationToken);
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", dbPath);
             cmd.ExecuteNonQuery();
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", dbPath);
+            cancellationToken.ThrowIfCancellationRequested();
             return true;
         }
         catch (Exception ex) when (ex is SqliteException or CodeIndexException)
@@ -469,19 +480,31 @@ public class DbContext : IDisposable
     }
 
     public bool TryCheckpointWalTruncate()
+        => TryCheckpointWalTruncate(CancellationToken.None);
+
+    public bool TryCheckpointWalTruncate(CancellationToken cancellationToken)
     {
         if (_isReadOnly)
             return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         _walCheckpointAttempted = true;
         try
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
             WalCheckpointTruncateExecutedForTesting?.Invoke(_connection.DataSource);
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", _connection.DataSource);
             cmd.ExecuteNonQuery();
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", _connection.DataSource);
+            cancellationToken.ThrowIfCancellationRequested();
             _walCheckpointSucceeded = true;
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            _walCheckpointSucceeded = false;
+            throw;
         }
         catch (Exception)
         {
@@ -588,6 +611,9 @@ public class DbContext : IDisposable
     }
 
     public VacuumResult RunIncrementalVacuum(bool dryRun = false)
+        => RunIncrementalVacuum(dryRun, CancellationToken.None);
+
+    public VacuumResult RunIncrementalVacuum(bool dryRun, CancellationToken cancellationToken)
     {
         if (_isReadOnly && !dryRun)
         {
@@ -599,17 +625,27 @@ public class DbContext : IDisposable
                 hint: "Copy the database to writable storage or rerun cdidx without a read-only --db URI.");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        ReportMaintenanceProgress("vacuum", "metrics_before", _connection.DataSource);
         var before = ReadVacuumMetrics();
+        cancellationToken.ThrowIfCancellationRequested();
         if (!dryRun && before.AutoVacuumMode == 2)
         {
+            ReportMaintenanceProgress("vacuum", "incremental_vacuum", _connection.DataSource);
             Execute($"PRAGMA incremental_vacuum({before.FreelistCount})");
         }
         else if (!dryRun)
         {
+            ReportMaintenanceProgress("vacuum", "enable_incremental_autovacuum", _connection.DataSource);
             Execute("PRAGMA auto_vacuum=INCREMENTAL");
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("vacuum", "vacuum_rebuild", _connection.DataSource);
             Execute("VACUUM");
         }
+        cancellationToken.ThrowIfCancellationRequested();
+        ReportMaintenanceProgress("vacuum", "metrics_after", _connection.DataSource);
         var after = dryRun ? before : ReadVacuumMetrics();
+        cancellationToken.ThrowIfCancellationRequested();
         var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
         var bytesReclaimed = pagesReclaimed * after.PageSize;
         var estimatedPagesReclaimable = Math.Max(0, before.FreelistCount);
@@ -642,6 +678,12 @@ public class DbContext : IDisposable
             AutoVacuumModeAfter: after.AutoVacuumMode,
             AutoVacuumModeAfterName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(after.AutoVacuumMode) ?? "unknown",
             MaintenanceGuidance: guidance);
+    }
+
+    private static void ReportMaintenanceProgress(string operation, string phase, string dbPath)
+    {
+        GlobalToolLog.Info($"db_maintenance_progress operation={operation} phase={phase} db_path={ConsoleUi.FormatBoundedValue(dbPath)}");
+        MaintenanceProgressForTesting?.Invoke(operation, phase);
     }
 
     private VacuumMetrics ReadVacuumMetrics()

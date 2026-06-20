@@ -254,7 +254,7 @@ internal static partial class ProgramRunner
             "hooks" => HookCommandRunner.Run(subArgs, context.JsonOptions),
             "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, context.JsonOptions),
             "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, context.JsonOptions),
-            "vacuum" => QueryCommandRunner.RunVacuum(subArgs, context.JsonOptions),
+            "vacuum" => QueryCommandRunner.RunVacuum(subArgs, context.JsonOptions, context.CancellationToken),
             "validate-config" => CdidxConfigFile.RunValidate(subArgs, context.JsonOptions),
             "config" => subArgs.Length > 0 && subArgs[0] == "show"
                 ? CdidxConfigFile.RunShow(subArgs[1..], context.JsonOptions)
@@ -265,7 +265,7 @@ internal static partial class ProgramRunner
                     CommandExitCodes.UsageError,
                     "use `cdidx config show`."),
             "workspace" => WorkspaceCommandRunner.Run(subArgs, context.JsonOptions),
-            "db" => DbCommandRunner.Run(subArgs, context.JsonOptions),
+            "db" => DbCommandRunner.Run(subArgs, context.JsonOptions, context.CancellationToken),
             "report" => ReportCommandRunner.Run(subArgs, context.JsonOptions, context.AppVersion),
             "test-extractor" => RunTestExtractor(subArgs, context.JsonOptions),
             _ when IsProjectPathArg(commandName)

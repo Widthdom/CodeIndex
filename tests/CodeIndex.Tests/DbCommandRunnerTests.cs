@@ -290,6 +290,35 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_IntegrityCheck_JsonCancellationReturnsInterrupted_Issue3811()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_cancel_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams(["--integrity-check", "--db", dbPath, "--json"], cts.Token);
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_IntegrityCheck_JsonReportsStableErrorSeverity()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_error_json_{Guid.NewGuid():N}.db");
@@ -439,6 +468,38 @@ public class DbCommandRunnerTests
         finally
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_PruneDryRun_ReportsMaintenanceProgress_Issue3811()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_progress_{Guid.NewGuid():N}.db");
+        var progress = new List<string>();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SeedOrphans(dbPath);
+            SqliteConnection.ClearAllPools();
+            DbCommandRunner.MaintenanceProgressForTesting = (operation, phase) => progress.Add($"{operation}:{phase}");
+
+            var (exitCode, json) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(4, json.GetProperty("total").GetInt32());
+            Assert.Contains("prune:start", progress);
+            Assert.Contains("prune:count_symbol_references", progress);
+            Assert.Contains("prune:count_reference_lines", progress);
+            Assert.Contains("prune:count_symbols", progress);
+            Assert.Contains("prune:complete", progress);
+        }
+        finally
+        {
+            DbCommandRunner.MaintenanceProgressForTesting = null;
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
@@ -1317,17 +1378,17 @@ public class DbCommandRunnerTests
         }
     }
 
-    private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
+    private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args, CancellationToken cancellationToken = default)
     {
         using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
-        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        var exitCode = DbCommandRunner.Run(args, _jsonOptions, cancellationToken);
         return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
-    private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
+    private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args, CancellationToken cancellationToken = default)
     {
         using var capture = ConsoleCapture.Start(captureOut: true);
-        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        var exitCode = DbCommandRunner.Run(args, _jsonOptions, cancellationToken);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
     }
