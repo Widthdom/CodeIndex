@@ -19717,6 +19717,52 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_ExcessivePathAliasExpansionCandidatesTruncatesWithWarning_Issue3764()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_expansion_candidates_symbols");
+        try
+        {
+            var maxExpansionCandidates = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasExpansionCandidates");
+            var moduleBody = new string('a', 80);
+            var ruleCount = (maxExpansionCandidates / 20) + 4;
+            var paths = new StringBuilder();
+            for (var i = 0; i < ruleCount; i++)
+            {
+                if (i > 0)
+                    paths.Append(',');
+
+                var prefixLength = i % 40;
+                var suffixLength = i / 40;
+                var pattern = "@/"
+                    + moduleBody[..prefixLength]
+                    + "*"
+                    + (suffixLength == 0 ? string.Empty : moduleBody[^suffixLength..]);
+                paths.Append('"').Append(pattern).Append("\":[\"missing").Append(i).Append("/*\"]");
+            }
+
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{" + paths + "}}}");
+            var moduleName = "@/" + moduleBody;
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import value from \"" + moduleName + "\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == moduleName);
+            Assert.Contains("Truncated TypeScript path alias expansion candidates", stderr, StringComparison.Ordinal);
+            Assert.Contains("path_alias_expansion_candidate_limit", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(moduleName, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Extract_JavaScript_ResolvesJsconfigPathAliasImportsAndKeepsMissesLiteral()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("jsconfig_alias_symbols");
