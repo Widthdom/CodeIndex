@@ -319,7 +319,9 @@ top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
 definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
-`--body-start`; use `--body-lines` (or alias `--body-line-count`) to choose the page size. If a single long
+`--body-start`; use `--body-lines` (or alias `--body-line-count`) to choose the page size. `inspect`
+can also return a bounded `source_excerpt` when you pass `--line`, `--start-line` / `--end-line`,
+and optional `--context`, `--before`, or `--after`. If a single long
 source line hits the body byte cap, continuation still advances to the following
 source line because body paging is line-based. `inspect --json` also includes
 `body_mode` metadata so clients can see whether body content was requested,
@@ -340,6 +342,7 @@ cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
+cdidx inspect Compute --line 42 --context 2 --json
 ```
 
 ## Editor and index portability
@@ -1366,10 +1369,12 @@ same source location.
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
-| `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
+| `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
+| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect` | Add a bounded `source_excerpt` to inspect output. Use `--path <file> --line <line>` without a symbol query for a file/line excerpt. |
+| `--context <n>` / `--before <n>` / `--after <n>` | `inspect` | Add symmetric or one-sided context lines to the `source_excerpt` window. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -2855,7 +2860,9 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 top-level group を選択します。`--body-only` は `--body --fields definitions` の
 shorthand です。definition body が返却 slice より長い場合は
 `body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
-`--body-lines`（alias: `--body-line-count`）で page size を指定できます。`inspect --json` には `body_mode`
+`--body-lines`（alias: `--body-line-count`）で page size を指定できます。`--line`、`--start-line` / `--end-line`、
+任意の `--context`、`--before`、`--after` を渡すと、`inspect` は範囲を絞った `source_excerpt`
+も返します。`inspect --json` には `body_mode`
 metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
 client 側で判断できます。
 count-only JSON（対応 command の `--count --json` または `--format count`）は、
@@ -2874,6 +2881,7 @@ cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
 cdidx inspect Compute --body --body-start 40 --body-lines 40
+cdidx inspect Compute --line 42 --context 2 --json
 ```
 
 ## Editor / index portability
@@ -3908,10 +3916,12 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
-| `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
+| `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
+| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect` | inspect 出力に範囲を絞った `source_excerpt` を追加する。symbol query なしで `--path <file> --line <line>` を渡すと file/line 抜粋だけを返せる。 |
+| `--context <n>` / `--before <n>` / `--after <n>` | `inspect` | `source_excerpt` の前後または片側 context 行を追加する。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |

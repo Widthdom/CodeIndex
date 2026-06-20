@@ -158,8 +158,12 @@ public static partial class QueryCommandRunner
         "--visibility",
         "--exclude-visibility",
         "--since",
+        "--line",
         "--start",
+        "--start-line",
         "--end",
+        "--end-line",
+        "--context",
         "--before",
         "--after",
         "--body-start",
@@ -5241,6 +5245,9 @@ public static partial class QueryCommandRunner
             case "definitions":
                 keep.Add("definitions");
                 break;
+            case "source_excerpt":
+                keep.Add("source_excerpt");
+                break;
             case "nearby_symbols":
                 keep.Add("nearby_symbols");
                 break;
@@ -5364,17 +5371,18 @@ public static partial class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
-        if (TryWriteBlankQueryError(options, "inspect"))
+        var pathLineInspectMode = IsInspectPathLineMode(options);
+        if (!pathLineInspectMode && TryWriteBlankQueryError(options, "inspect"))
             return CommandExitCodes.UsageError;
-        if (string.IsNullOrWhiteSpace(options.Query))
+        if (!pathLineInspectMode && string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "inspect requires a symbol query argument",
                 GetUsageLineOrThrow("inspect"),
-                "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
+                "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`, or pass `--path <file> --line <line>` for a source excerpt.");
             return CommandExitCodes.UsageError;
         }
-        if (IsBareVerbatimQueryToken(options.Query))
+        if (options.Query != null && IsBareVerbatimQueryToken(options.Query))
         {
             WriteUsageError(
                 "inspect requires a symbol query argument",
@@ -5384,13 +5392,24 @@ public static partial class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
             return CommandExitCodes.UsageError;
+        if (options.StartLine.HasValue && options.EndLine.HasValue && options.EndLine.Value < options.StartLine.Value)
+        {
+            WriteValidationError(
+                $"--start-line ({options.StartLine.Value}) must be less than or equal to --end-line ({options.EndLine.Value}).",
+                "Use `--start-line` less than or equal to `--end-line`, or omit `--end-line` to read one line.");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options, jsonOptions, reader =>
         {
             var compactLimit = GetCompactSectionLimit(options);
             var inspectLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
+            var inspectPath = pathLineInspectMode ? GetSingleSpecificPathPattern(options.PathPatterns) : null;
+            var inspectQuery = pathLineInspectMode
+                ? $"{inspectPath}:{options.StartLine!.Value}"
+                : options.Query!;
             var analysis = reader.AnalyzeSymbol(
-                options.Query,
+                inspectQuery,
                 inspectLimit,
                 options.Lang,
                 options.IncludeBody,
@@ -5402,6 +5421,7 @@ public static partial class QueryCommandRunner
                 options.BodyStartLine,
                 options.BodyLines,
                 kind: options.Kind);
+            var sourceExcerpt = BuildInspectSourceExcerpt(reader, options, analysis, inspectPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -5432,6 +5452,12 @@ public static partial class QueryCommandRunner
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 if (compactTruncation != null)
                     AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                if (sourceExcerpt != null)
+                {
+                    ExcerptRecoveryCommandFormatter.ApplyDbPath(sourceExcerpt, options.DbPath);
+                    sourceExcerpt.SemanticTokens = BuildExcerptSemanticTokens(sourceExcerpt);
+                    payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
+                }
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
                 AddInspectBodyModeJsonFields(payload, options, analysis);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -5471,6 +5497,11 @@ public static partial class QueryCommandRunner
                 }
                 WriteExactZeroHint(analysis.ExactZeroHint);
                 WriteInspectBodyModeHint(analysis, options);
+                if (sourceExcerpt != null)
+                {
+                    Console.WriteLine($"Source Excerpt      : {sourceExcerpt.Path}:{sourceExcerpt.StartLine}-{sourceExcerpt.EndLine}");
+                    WriteNumberedExcerpt(sourceExcerpt.StartLine, sourceExcerpt.Content);
+                }
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -5478,9 +5509,61 @@ public static partial class QueryCommandRunner
                 WriteRepoMapSection("Callees", analysis.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
             }
 
-            return IsEmptySymbolAnalysis(analysis) ? ZeroResultExitCode(options) : CommandExitCodes.Success;
+            return IsEmptySymbolAnalysis(analysis) && sourceExcerpt == null ? ZeroResultExitCode(options) : CommandExitCodes.Success;
         });
     }
+
+    private static bool IsInspectPathLineMode(QueryCommandOptions options)
+        => options.Query == null
+            && options.StartLine.HasValue
+            && GetSingleSpecificPathPattern(options.PathPatterns) != null;
+
+    private static bool IsInspectSourceExcerptRequested(QueryCommandOptions options)
+        => options.StartLine.HasValue
+            || options.EndLine.HasValue
+            || options.ContextBefore > 0
+            || options.ContextAfter > 0;
+
+    private static FileExcerptResult? BuildInspectSourceExcerpt(
+        DbReader reader,
+        QueryCommandOptions options,
+        SymbolAnalysisResult analysis,
+        string? inspectPath)
+    {
+        if (!IsInspectSourceExcerptRequested(options))
+            return null;
+
+        var definition = analysis.Definitions.FirstOrDefault();
+        var path = inspectPath
+            ?? GetSingleSpecificPathPattern(options.PathPatterns)
+            ?? definition?.Path
+            ?? analysis.File?.Path;
+        if (path == null)
+            return null;
+
+        var startLine = options.StartLine ?? definition?.StartLine ?? 1;
+        var endLine = options.EndLine ?? options.StartLine ?? definition?.EndLine ?? startLine;
+        return reader.GetExcerpt(
+            path,
+            startLine,
+            endLine,
+            options.ContextBefore,
+            options.ContextAfter,
+            options.MaxLineWidth,
+            options.StartLine ?? startLine);
+    }
+
+    private static string? GetSingleSpecificPathPattern(IReadOnlyList<string> pathPatterns)
+    {
+        if (pathPatterns.Count != 1)
+            return null;
+
+        var path = pathPatterns[0];
+        return ContainsGlobWildcard(path) ? null : path;
+    }
+
+    private static bool ContainsGlobWildcard(string value)
+        => value.IndexOfAny(['*', '?', '[', ']']) >= 0;
 
     public static int RunOutline(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -9263,6 +9346,19 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError($"Error: could not parse --since value '{ConsoleUi.FormatBoundedValue(sinceValue)}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
+                case "--line":
+                    if (!TryReadRawOptionValue(args, ref i, "--line", inlineValue, out var lineValue, out var missingLineError))
+                        AddParseError(missingLineError!);
+                    else if (TryParsePositiveInt(lineValue!, "--line", out var parsedLine, out var lineError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--start", lineValue!);
+                        WarnIfDuplicateSingleValueOption("--end", lineValue!);
+                        startLine = parsedLine;
+                        endLine = parsedLine;
+                    }
+                    else
+                        AddParseError(lineError!);
+                    break;
                 case "--start":
                 case "--start-line":
                     var startFlag = normalizedArg;
@@ -9288,6 +9384,20 @@ public static partial class QueryCommandRunner
                     }
                     else
                         AddParseError(endError!);
+                    break;
+                case "--context":
+                    if (!TryReadRawOptionValue(args, ref i, "--context", inlineValue, out var contextValue, out var missingContextError))
+                        AddParseError(missingContextError!);
+                    else if (TryParseNonNegativeInt(contextValue!, "--context", out var parsedContext, out var contextError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--before", contextValue!);
+                        WarnIfDuplicateSingleValueOption("--after", contextValue!);
+                        contextBefore = parsedContext;
+                        contextAfter = parsedContext;
+                        contextAfterExplicit = true;
+                    }
+                    else
+                        AddParseError(contextError!);
                     break;
                 case "--before":
                     if (!TryReadRawOptionValue(args, ref i, "--before", inlineValue, out var beforeValue, out var missingBeforeError))
@@ -9694,6 +9804,11 @@ public static partial class QueryCommandRunner
                     canonical = "definitions";
                     includeBody = true;
                     break;
+                case "source":
+                case "source_excerpt":
+                case "excerpt":
+                    canonical = "source_excerpt";
+                    break;
                 case "nearby":
                 case "nearby_symbols":
                 case "nearbysymbols":
@@ -9713,7 +9828,7 @@ public static partial class QueryCommandRunner
                     canonical = "callees";
                     break;
                 default:
-                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, nearby_symbols, references, callers, callees.");
+                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, references, callers, callees.");
                     continue;
             }
 
