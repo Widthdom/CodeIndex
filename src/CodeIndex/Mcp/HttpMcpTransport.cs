@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Specialized;
 using System.Net;
 using System.Net.Sockets;
 using System.Numerics;
@@ -146,6 +147,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         _queueSlots = new SemaphoreSlim(_maxQueuedRequests, _maxQueuedRequests);
         if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
             throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
+        if (bearerToken is { Length: > 0 } && bearerToken.Contains(',', StringComparison.Ordinal))
+            throw new ArgumentException("HTTP bearer token must not contain commas; commas are reserved for rejecting ambiguous Authorization headers.", nameof(bearerToken));
         IsLoopbackBind = IsLoopbackHost(host);
         if (string.IsNullOrEmpty(bearerToken) && !IsLoopbackBind)
             throw new ArgumentException("HTTP MCP requires bearer authentication when binding outside loopback.", nameof(bearerToken));
@@ -694,10 +697,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         // `authorization: bearer ...` are valid and must be accepted.
         // RFC 6750 §2.1 で auth-scheme は case-insensitive と規定されているため、
         // `bearer ...` のような小文字スキームも受理する。
-        var header = context.Request.Headers["Authorization"];
-        if (string.IsNullOrEmpty(header))
+        if (!TryReadSingleAuthorizationHeader(context.Request.Headers, out var header, out var headerFailure))
         {
-            request.AuthOutcome = FormatAuthFailureOutcome("missing");
+            request.AuthOutcome = FormatAuthFailureOutcome(headerFailure);
         }
         else if (TryExtractBearerToken(header, out var provided))
         {
@@ -727,6 +729,27 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private static string FormatAuthFailureOutcome(string detailedOutcome)
         => McpServer.IsUnsafeDebugEnabled() ? detailedOutcome : "unauthorized";
+
+    private static bool TryReadSingleAuthorizationHeader(NameValueCollection headers, out string header, out string failure)
+    {
+        header = string.Empty;
+        var values = headers.GetValues("Authorization");
+        if (values is null || values.Length == 0 || values.All(string.IsNullOrEmpty))
+        {
+            failure = "missing";
+            return false;
+        }
+
+        if (values.Length != 1 || values[0].IndexOf(',', StringComparison.Ordinal) >= 0)
+        {
+            failure = "ambiguous";
+            return false;
+        }
+
+        header = values[0];
+        failure = string.Empty;
+        return true;
+    }
 
     private static bool TryExtractBearerToken(string header, out string? token)
     {

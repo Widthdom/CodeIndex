@@ -1860,6 +1860,8 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   via `CryptographicOperations.FixedTimeEquals`. Unset or empty configured
   tokens keep the stdio gate disabled, while configured tokens must be 1-4096
   characters and cannot contain whitespace or control characters (#3505).
+  HTTP bearer tokens additionally reject commas at startup because commas
+  are reserved for rejecting ambiguous `Authorization` headers (#3756).
   HTTP does not also use this body-token gate: `ProgramRunner` resolves a
   bearer secret for the HTTP transport from `CDIDX_MCP_HTTP_TOKEN`, falling
   back to `CDIDX_MCP_AUTH_TOKEN` when the HTTP-specific variable is unset,
@@ -1962,7 +1964,7 @@ return `-32600`.
   either token to keep the MCP catalog off the LAN by default. Unset or empty
   configured bearer tokens disable the HTTP token gate where allowed by the
   listen host policy, while configured tokens must be 1-4096 characters and
-  cannot contain whitespace or control characters (#3505). Supplied HTTP
+  cannot contain whitespace, control characters, or commas (#3505, #3756). Supplied HTTP
   bearer values are compared exactly after the `Bearer ` prefix: they are not
   trimmed, and invalid-shape or oversized values are rejected before hashing.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`

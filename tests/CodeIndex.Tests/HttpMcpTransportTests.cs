@@ -35,6 +35,15 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void HttpTransport_Ctor_RejectsCommaBearerToken_Issue3756()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken: "abc,def"));
+
+        Assert.Contains("commas", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_PostInitialize_ReturnsHandshakeResult()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
@@ -1006,6 +1015,45 @@ public class HttpMcpTransportTests : IDisposable
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
         };
         using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HttpTransport_BearerToken_RejectsDuplicateAuthorizationHeaders_Issue3756()
+    {
+        const string token = "s3cret-token";
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", new[] { $"Bearer {token}", $"Bearer {token}" });
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(token, body, StringComparison.Ordinal);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("unauthorized", record.AuthOutcome);
+    }
+
+    [Fact]
+    public async Task HttpTransport_BearerToken_RejectsCommaJoinedAuthorizationHeader_Issue3756()
+    {
+        const string token = "s3cret-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}, Bearer {token}");
+        using var response = await client.SendAsync(request);
+
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
