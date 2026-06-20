@@ -112,7 +112,7 @@ public static class ConsoleUi
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
-        ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
+        ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <unused:offset>] [--audit-scope <source|all>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
@@ -1018,7 +1018,7 @@ public static class ConsoleUi
         WriteHelpLine("  --named-query <name>=<query>  search only: add a named ad hoc batch query; repeat to run related searches with grouped compact results");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
-        WriteHelpLine("  --audit-scope <source|all> search recipes only: source uses recipe default production-code paths/excludes; all searches docs, tests, changelog, and recipe definitions unless other filters exclude them");
+        WriteHelpLine("  --audit-scope <source|all> search recipes/unused: source uses production-code cleanup defaults; all disables source-scope defaults");
         Console.WriteLine("  --exclude-comments         search only: suppress comment-only matches");
         Console.WriteLine("  --exclude-strings          search only: suppress string, regex, and help-text matches");
         Console.WriteLine("  --exclude-fixtures         search only: suppress fixture-only matches in tests");

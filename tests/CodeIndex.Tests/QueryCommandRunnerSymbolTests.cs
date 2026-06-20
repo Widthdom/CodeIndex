@@ -978,14 +978,97 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
             Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
+            Assert.Contains(symbols[0].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "no_indexed_references");
+            Assert.Contains(symbols[0].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "private_or_file_local");
             Assert.Equal("PathResolver", symbols[2].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[2].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[2].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "public_or_exported");
             Assert.Equal("ConnectionString", symbols[3].GetProperty("name").GetString());
             Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[3].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "reflection_or_config_suspect");
             Assert.Equal("ApplyConfiguration", symbols[7].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_JsonPaginatesWithUnusedCursor_Issue3691()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "2"],
+                _jsonOptions));
+            using var firstDocument = ParseJsonOutput(firstStdout);
+            var firstJson = firstDocument.RootElement;
+            var firstSymbols = firstJson.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            Assert.Equal(2, firstJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:2", firstJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("Hidden", firstSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("InternalOnly", firstSymbols[1].GetProperty("name").GetString());
+
+            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "2", "--cursor", "unused:2"],
+                _jsonOptions));
+            using var secondDocument = ParseJsonOutput(secondStdout);
+            var secondJson = secondDocument.RootElement;
+            var secondSymbols = secondJson.GetProperty("symbols");
+            var secondQuery = secondJson.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, secondStderr);
+            Assert.Equal(2, secondJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:4", secondJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("unused:2", secondQuery.GetProperty("cursor").GetString());
+            Assert.Equal(2, secondQuery.GetProperty("offset").GetInt32());
+            Assert.Equal("PathResolver", secondSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("ConnectionString", secondSymbols[1].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_AuditScopeSourcePrioritizesPrivateSourceCandidates_Issue3669()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--audit-scope", "source", "--limit", "10"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+            var query = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Collection(
+                symbols.EnumerateArray(),
+                symbol => Assert.Equal("Hidden", symbol.GetProperty("name").GetString()),
+                symbol => Assert.Equal("InternalOnly", symbol.GetProperty("name").GetString()));
+            Assert.Equal("source", query.GetProperty("audit_scope").GetString());
+            Assert.True(query.GetProperty("effective_exclude_tests").GetBoolean());
+            Assert.Contains(query.GetProperty("effective_exclude_path").EnumerateArray(), path => path.GetString() == "*.md");
+            Assert.Collection(
+                query.GetProperty("effective_visibility").EnumerateArray(),
+                visibility => Assert.Equal("private", visibility.GetString()),
+                visibility => Assert.Equal("internal", visibility.GetString()));
         }
         finally
         {
@@ -1039,6 +1122,18 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("compact").GetBoolean());
             Assert.False(json.TryGetProperty("symbols", out _));
             Assert.Contains(json.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "symbols");
+            Assert.Equal(
+                "Hidden",
+                json.GetProperty("representative_symbols")
+                    .GetProperty("likely_unused_private")[0]
+                    .GetProperty("name")
+                    .GetString());
+            Assert.Equal(
+                "function",
+                json.GetProperty("representative_symbols")
+                    .GetProperty("likely_unused_private")[0]
+                    .GetProperty("kind")
+                    .GetString());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
             Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
