@@ -185,6 +185,8 @@ public static partial class QueryCommandRunner
         "--named-query",
         "--open-issues",
         "--repo",
+        "--duplicate-confidence",
+        "--duplicate-threshold",
         "--issue-title",
         "--issue-label",
         "--cursor",
@@ -396,6 +398,14 @@ public static partial class QueryCommandRunner
                 "--repo can only be used with `--open-issues github`.",
                 GetUsageLineOrThrow("search"),
                 "Use `--open-issues github --repo owner/name` to fetch open issues directly from GitHub.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.DuplicatePreflightTuningExplicit && options.OutputFormat != OutputFormatIssueDrafts)
+        {
+            WriteUsageError(
+                "--duplicate-confidence and --duplicate-threshold can only be used with `cdidx search --format issue-drafts`.",
+                GetUsageLineOrThrow("search"),
+                "Use these controls when exporting issue draft JSON with duplicate-preflight metadata.");
             return CommandExitCodes.UsageError;
         }
         if ((options.IncludeRecipeQueries.Count > 0 || options.ExcludeRecipeQueries.Count > 0) && options.RecipeName == null)
@@ -816,6 +826,11 @@ public static partial class QueryCommandRunner
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
+                if (options.Json && (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv))
+                {
+                    WriteDelimitedSearchResults([], options);
+                    return ZeroResultExitCode(options);
+                }
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
                 if (options.Json)
@@ -867,6 +882,11 @@ public static partial class QueryCommandRunner
                 if (options.OutputFormat == OutputFormatGrouped)
                 {
                     WriteGroupedSearchResults(displayRows, options, jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
+                {
+                    WriteDelimitedSearchResults(displayRows, options);
                     return CommandExitCodes.Success;
                 }
                 if (TryWriteFormattedLocations(
@@ -1654,7 +1674,9 @@ public static partial class QueryCommandRunner
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
                         preflight.Source,
-                        preflight.OpenIssueCount),
+                        preflight.OpenIssueCount,
+                        options.DuplicateConfidence,
+                        options.DuplicateThreshold),
                     drafts),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult));
             return CommandExitCodes.Success;
@@ -1722,7 +1744,9 @@ public static partial class QueryCommandRunner
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
                         preflight.Source,
-                        preflight.OpenIssueCount),
+                        preflight.OpenIssueCount,
+                        options.DuplicateConfidence,
+                        options.DuplicateThreshold),
                     drafts),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult));
             return CommandExitCodes.Success;
@@ -2051,7 +2075,7 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
-        var duplicateMatches = preflight.FindMatches(title, labels);
+        var duplicateMatches = preflight.FindMatches(title, labels, options.DuplicateThreshold);
         var triage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, duplicateMatches.Count);
         return new SearchIssueDraftJsonResult(
             $"{recipe.Name}/{queryResult.Name}",
@@ -2087,7 +2111,7 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
-        var duplicateMatches = preflight.FindMatches(title, labels);
+        var duplicateMatches = preflight.FindMatches(title, labels, options.DuplicateThreshold);
         var triage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, duplicateMatches.Count);
         return new SearchIssueDraftJsonResult(
             "search/ad-hoc",
@@ -2248,6 +2272,13 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
             AddReplayValueOption(args, "--repo", options.OpenIssuesRepository);
+        if (options.DuplicatePreflightTuningExplicit)
+        {
+            if (string.Equals(options.DuplicateConfidence, IssueDuplicatePreflight.CustomDuplicateConfidence, StringComparison.Ordinal))
+                AddReplayValueOption(args, "--duplicate-threshold", options.DuplicateThreshold.ToString("0.###", CultureInfo.InvariantCulture));
+            else
+                AddReplayValueOption(args, "--duplicate-confidence", options.DuplicateConfidence);
+        }
         if (queryName == null)
         {
             foreach (var includeQuery in options.IncludeRecipeQueries)
@@ -2951,6 +2982,47 @@ public static partial class QueryCommandRunner
         }
     }
 
+    private static void WriteDelimitedSearchResults(IEnumerable<SearchDisplayRow> rows, QueryCommandOptions options)
+    {
+        var delimiter = options.OutputFormat == OutputFormatTsv ? "\t" : ",";
+        Console.WriteLine(string.Join(delimiter,
+        [
+            "file",
+            "line",
+            "column",
+            "label",
+            "query",
+            "recipe",
+            "query_name",
+            "lang",
+            "visibility",
+            "enclosing_symbol_name",
+            "enclosing_symbol_kind",
+            "match_lines",
+        ]));
+        foreach (var row in rows)
+        {
+            var result = row.Result;
+            var compact = row.Compact;
+            var values = new[]
+            {
+                result.Path,
+                result.StartLine.ToString(CultureInfo.InvariantCulture),
+                "1",
+                $"search match: {options.Query}",
+                options.Query ?? string.Empty,
+                string.Empty,
+                string.Empty,
+                result.Lang ?? string.Empty,
+                result.Visibility ?? string.Empty,
+                compact.EnclosingSymbolName ?? string.Empty,
+                compact.EnclosingSymbolKind ?? string.Empty,
+                string.Join(";", compact.MatchLines.Select(line => line.ToString(CultureInfo.InvariantCulture))),
+            };
+            Console.WriteLine(string.Join(delimiter, values.Select(value => EscapeDelimitedValue(value, options.OutputFormat))));
+        }
+    }
+
     private static string EscapeDelimitedValue(string value, string outputFormat)
     {
         if (outputFormat == OutputFormatTsv)
@@ -2973,9 +3045,19 @@ public static partial class QueryCommandRunner
     {
         var writer = Console.Out;
         var itemOptions = GetCompactJsonOptions(jsonOptions);
-        writer.Write("{\"version\":\"2.1.0\",\"runs\":[{\"tool\":{\"driver\":{\"name\":\"cdidx\",\"informationUri\":\"https://github.com/Widthdom/CodeIndex\"}},\"results\":");
+        var itemList = items.ToList();
+        writer.Write("{\"version\":\"2.1.0\",\"runs\":[{\"tool\":{\"driver\":{\"name\":\"cdidx\",\"informationUri\":\"https://github.com/Widthdom/CodeIndex\",\"rules\":");
         WriteJsonArrayInline(
-            items,
+            itemList
+                .Select(item => item.RuleId)
+                .Where(ruleId => !string.IsNullOrWhiteSpace(ruleId))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(ruleId => ruleId, StringComparer.Ordinal),
+            (ruleWriter, ruleId) => WriteSarifRule(ruleWriter, ruleId, itemOptions),
+            separator: ",");
+        writer.Write("}},\"results\":");
+        WriteJsonArrayInline(
+            itemList,
             (resultWriter, item) => WriteSarifResult(resultWriter, item, itemOptions),
             separator: ",");
         writer.WriteLine("}]}");
@@ -2996,19 +3078,42 @@ public static partial class QueryCommandRunner
         writer.Write(']');
     }
 
+    private static void WriteSarifRule(TextWriter writer, string ruleId, JsonSerializerOptions jsonOptions)
+    {
+        writer.Write("{\"id\":");
+        writer.Write(JsonSerializer.Serialize(ruleId, jsonOptions));
+        writer.Write(",\"name\":");
+        writer.Write(JsonSerializer.Serialize($"cdidx {ruleId}", jsonOptions));
+        writer.Write(",\"shortDescription\":{\"text\":");
+        writer.Write(JsonSerializer.Serialize($"cdidx {ruleId} result", jsonOptions));
+        writer.Write("},\"fullDescription\":{\"text\":");
+        writer.Write(JsonSerializer.Serialize("A machine-readable cdidx finding emitted from an indexed code query.", jsonOptions));
+        writer.Write("},\"helpUri\":\"https://github.com/Widthdom/CodeIndex\",\"help\":{\"text\":");
+        writer.Write(JsonSerializer.Serialize("Review the referenced location and surrounding code before filing or acting on this result.", jsonOptions));
+        writer.Write("},\"defaultConfiguration\":{\"level\":\"warning\"},\"properties\":{\"tags\":[\"cdidx\",\"code-search\"]}}");
+    }
+
     private static void WriteSarifResult(TextWriter writer, (string Path, int Line, int Column, string Message, string RuleId) item, JsonSerializerOptions jsonOptions)
     {
         writer.Write("{\"ruleId\":");
         writer.Write(JsonSerializer.Serialize(item.RuleId, jsonOptions));
-        writer.Write(",\"message\":{\"text\":");
+        writer.Write(",\"level\":\"warning\",\"message\":{\"text\":");
         writer.Write(JsonSerializer.Serialize(item.Message, jsonOptions));
         writer.Write("},\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":");
-        writer.Write(JsonSerializer.Serialize(item.Path, jsonOptions));
+        writer.Write(JsonSerializer.Serialize(NormalizeSarifArtifactUri(item.Path), jsonOptions));
         writer.Write("},\"region\":{\"startLine\":");
         writer.Write(Math.Max(1, item.Line).ToString(CultureInfo.InvariantCulture));
         writer.Write(",\"startColumn\":");
         writer.Write(Math.Max(1, item.Column).ToString(CultureInfo.InvariantCulture));
         writer.Write("}}}]}");
+    }
+
+    private static string NormalizeSarifArtifactUri(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        while (normalized.StartsWith("./", StringComparison.Ordinal))
+            normalized = normalized[2..];
+        return normalized;
     }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -8161,6 +8266,10 @@ public static partial class QueryCommandRunner
         string auditScope = SearchAuditRecipes.DefaultAuditScope;
         bool auditScopeExplicit = false;
         string? openIssuesRepository = null;
+        string duplicateConfidence = IssueDuplicatePreflight.DefaultDuplicateConfidence;
+        double duplicateThreshold = IssueDuplicatePreflight.DefaultDuplicateThreshold;
+        bool duplicateConfidenceExplicit = false;
+        bool duplicateThresholdExplicit = false;
         string? issueTitle = null;
         var issueLabels = new List<string>();
         SearchCursor? searchCursor = null;
@@ -8543,6 +8652,42 @@ public static partial class QueryCommandRunner
                     }
                     else
                         AddParseError(repoError!);
+                    break;
+                case "--duplicate-confidence":
+                    if (TryReadStringOptionValue(args, ref i, "--duplicate-confidence", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var duplicateConfidenceValue, out var duplicateConfidenceError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--duplicate-confidence", duplicateConfidenceValue!);
+                        if (IssueDuplicatePreflight.TryNormalizeDuplicateConfidence(duplicateConfidenceValue!, out var normalizedDuplicateConfidence))
+                        {
+                            duplicateConfidence = normalizedDuplicateConfidence;
+                            duplicateThreshold = IssueDuplicatePreflight.ThresholdForDuplicateConfidence(normalizedDuplicateConfidence);
+                            duplicateConfidenceExplicit = true;
+                        }
+                        else
+                        {
+                            AddParseError($"Error: --duplicate-confidence must be one of low, medium, high; got '{ConsoleUi.FormatBoundedValue(duplicateConfidenceValue)}'.");
+                        }
+                    }
+                    else
+                    {
+                        AddParseError(duplicateConfidenceError!);
+                    }
+                    break;
+                case "--duplicate-threshold":
+                    if (!TryReadRawOptionValue(args, ref i, "--duplicate-threshold", inlineValue, out var duplicateThresholdValue, out var missingDuplicateThresholdError))
+                    {
+                        AddParseError(missingDuplicateThresholdError!);
+                    }
+                    else if (TryParseConfidence(duplicateThresholdValue!, out var parsedDuplicateThreshold))
+                    {
+                        WarnIfDuplicateSingleValueOption("--duplicate-threshold", duplicateThresholdValue!);
+                        duplicateThreshold = parsedDuplicateThreshold;
+                        duplicateThresholdExplicit = true;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: --duplicate-threshold must be a number between 0 and 1; got '{ConsoleUi.FormatBoundedValue(duplicateThresholdValue)}'.");
+                    }
                     break;
                 case "--issue-title":
                     if (TryReadStringOptionValue(args, ref i, "--issue-title", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var issueTitleValue, out var issueTitleError))
@@ -9277,6 +9422,8 @@ public static partial class QueryCommandRunner
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateNamedQuery != null)
             AddParseError($"Error: duplicate --named-query name '{ConsoleUi.FormatBoundedValue(duplicateNamedQuery.Key)}'. Use unique names so grouped results are unambiguous.");
+        if (duplicateConfidenceExplicit && duplicateThresholdExplicit)
+            AddParseError("Error: --duplicate-confidence and --duplicate-threshold cannot be combined; use the preset or the explicit score threshold.");
 
         if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);
@@ -9398,6 +9545,9 @@ public static partial class QueryCommandRunner
             AuditScope = auditScope,
             AuditScopeExplicit = auditScopeExplicit,
             OpenIssuesRepository = openIssuesRepository,
+            DuplicateConfidence = duplicateThresholdExplicit ? IssueDuplicatePreflight.CustomDuplicateConfidence : duplicateConfidence,
+            DuplicateThreshold = duplicateThreshold,
+            DuplicatePreflightTuningExplicit = duplicateConfidenceExplicit || duplicateThresholdExplicit,
             IssueTitle = issueTitle,
             IssueLabels = issueLabels,
             SearchCursor = searchCursor,
@@ -13094,6 +13244,9 @@ public sealed class QueryCommandOptions
     public string AuditScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
     public bool AuditScopeExplicit { get; init; }
     public string? OpenIssuesRepository { get; init; }
+    public string DuplicateConfidence { get; init; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
+    public double DuplicateThreshold { get; init; } = IssueDuplicatePreflight.DefaultDuplicateThreshold;
+    public bool DuplicatePreflightTuningExplicit { get; init; }
     public string? IssueTitle { get; init; }
     public List<string> IssueLabels { get; init; } = [];
     public SearchCursor? SearchCursor { get; init; }

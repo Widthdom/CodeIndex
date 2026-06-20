@@ -1072,6 +1072,8 @@ public class ProgramCliTests
         var root = doc.RootElement;
         Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
         Assert.Equal(1, root.GetProperty("duplicate_preflight").GetProperty("open_issue_count").GetInt32());
+        Assert.Equal("medium", root.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+        Assert.Equal(0.45, root.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
         var draft = root.GetProperty("drafts")[0];
         Assert.Equal(record.Hash, draft.GetProperty("suggestion_id").GetString());
         Assert.Equal("enhancement", draft.GetProperty("labels")[0].GetString());
@@ -1089,6 +1091,60 @@ public class ProgramCliTests
         Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
         Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());
         Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ExportIssueDraftsDuplicateThresholdFiltersMatches_Issue3827()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "Issue draft duplicate threshold should filter weaker title candidates",
+            submitted: false,
+            sampledTitle: "Tune duplicate thresholds",
+            evidencePaths: ["src/CodeIndex/Cli/SuggestionsCommandRunner.cs"]);
+        var openIssuesPath = fixture.WriteOpenIssuesJson("""
+        [
+          {
+            "number": 3827,
+            "title": "[AI Suggestion] output_format: Tune duplicate thresholds follow-up review backlog noisy candidate validation scheduler evidence report",
+            "url": "https://github.com/Widthdom/CodeIndex/issues/3827",
+            "labels": [{ "name": "enhancement" }]
+          }
+        ]
+        """);
+
+        var (highExitCode, highStdout, highStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts",
+            "--open-issues", openIssuesPath, "--duplicate-confidence", "high"
+        ]);
+        var (customExitCode, customStdout, customStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts",
+            "--open-issues", openIssuesPath, "--duplicate-threshold", "0.4"
+        ]);
+
+        Assert.Equal(0, highExitCode);
+        Assert.Equal(string.Empty, highStderr);
+        using var highDoc = JsonDocument.Parse(highStdout);
+        var highRoot = highDoc.RootElement;
+        var highDraft = highRoot.GetProperty("drafts")[0];
+        Assert.Equal("high", highRoot.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+        Assert.Equal(0.7, highRoot.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
+        Assert.Equal(0, highDraft.GetProperty("duplicate_preflight").GetProperty("match_count").GetInt32());
+
+        Assert.Equal(0, customExitCode);
+        Assert.Equal(string.Empty, customStderr);
+        using var customDoc = JsonDocument.Parse(customStdout);
+        var customRoot = customDoc.RootElement;
+        var customDraft = customRoot.GetProperty("drafts")[0];
+        var customMatch = customDraft.GetProperty("duplicate_preflight").GetProperty("matches")[0];
+        Assert.Equal("custom", customRoot.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+        Assert.Equal(0.4, customRoot.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
+        Assert.Equal(1, customDraft.GetProperty("duplicate_preflight").GetProperty("match_count").GetInt32());
+        Assert.Equal(3827, customMatch.GetProperty("number").GetInt32());
+        Assert.Equal("title_label_contains", customMatch.GetProperty("reason").GetString());
+        Assert.Equal(0.45, customMatch.GetProperty("score").GetDouble());
     }
 
     [Fact]

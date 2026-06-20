@@ -845,8 +845,17 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
             Assert.Equal("2.1.0", root.GetProperty("version").GetString());
-            var result = Assert.Single(root.GetProperty("runs")[0].GetProperty("results").EnumerateArray());
+            var run = root.GetProperty("runs")[0];
+            var rule = Assert.Single(run.GetProperty("tool").GetProperty("driver").GetProperty("rules").EnumerateArray());
+            var result = Assert.Single(run.GetProperty("results").EnumerateArray());
+
+            Assert.Equal("search", rule.GetProperty("id").GetString());
+            Assert.Equal("cdidx search", rule.GetProperty("name").GetString());
+            Assert.Equal("https://github.com/Widthdom/CodeIndex", rule.GetProperty("helpUri").GetString());
+            Assert.Contains("surrounding code", rule.GetProperty("help").GetProperty("text").GetString(), StringComparison.Ordinal);
+            Assert.Contains(rule.GetProperty("properties").GetProperty("tags").EnumerateArray(), tag => tag.GetString() == "cdidx");
             Assert.Equal("search", result.GetProperty("ruleId").GetString());
+            Assert.Equal("warning", result.GetProperty("level").GetString());
             Assert.Equal("src/app.cs", result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("artifactLocation").GetProperty("uri").GetString());
         }
         finally
@@ -875,9 +884,18 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             var lines = stdout.Trim().Split(Environment.NewLine);
-            Assert.Equal("file,line,column,label", lines[0]);
-            Assert.Contains("src/app.cs", lines[1]);
-            Assert.Contains("search match: Authenticate", lines[1]);
+            Assert.Equal("file,line,column,label,query,recipe,query_name,lang,visibility,enclosing_symbol_name,enclosing_symbol_kind,match_lines", lines[0]);
+            var cells = lines[1].Split(',');
+            Assert.Equal(12, cells.Length);
+            Assert.Equal("src/app.cs", cells[0]);
+            Assert.Equal("search match: Authenticate", cells[3]);
+            Assert.Equal("Authenticate", cells[4]);
+            Assert.Equal(string.Empty, cells[5]);
+            Assert.Equal(string.Empty, cells[6]);
+            Assert.Equal("csharp", cells[7]);
+            Assert.Equal("Run", cells[9]);
+            Assert.Equal("function", cells[10]);
+            Assert.Equal("1", cells[11]);
         }
         finally
         {
@@ -2055,6 +2073,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, root.GetProperty("count").GetInt32());
             Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
             Assert.Equal(1, root.GetProperty("duplicate_preflight").GetProperty("open_issue_count").GetInt32());
+            Assert.Equal("medium", root.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+            Assert.Equal(0.45, root.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
             Assert.Equal("Search audit recipe risky-code: unbounded-json-parse", draft.GetProperty("title").GetString());
             Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "audit");
             Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "bug");
@@ -2145,6 +2165,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, root.GetProperty("query_count").GetInt32());
             Assert.Equal(JsonValueKind.Null, root.GetProperty("recipe").ValueKind);
             Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal("medium", root.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+            Assert.Equal(0.45, root.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
             Assert.Equal("Thread.Yield audit", draft.GetProperty("title").GetString());
             Assert.Contains("audit", labels);
             Assert.Contains("bug", labels);
@@ -2163,6 +2185,91 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
             Assert.Equal(3520, match.GetProperty("number").GetInt32());
             Assert.Equal("title_exact", match.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AdHocIssueDraftDuplicateThresholdFiltersMatches_Issue3827()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_draft_threshold_3827");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var openIssuesPath = Path.Combine(projectRoot, "open-issues.json");
+            File.WriteAllText(
+                openIssuesPath,
+                """
+                [
+                  {
+                    "number": 3827,
+                    "title": "Search issue draft: Thread.Yield stale match follow-up scheduler report review backlog duplicate candidate validation note",
+                    "labels": [{"name": "bug"}],
+                    "url": "https://example.test/issues/3827"
+                  }
+                ]
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/scheduler.cs",
+                "csharp",
+                """
+                public sealed class Scheduler
+                {
+                    public void Run()
+                    {
+                        Thread.Yield();
+                    }
+                }
+                """);
+
+            var (highExitCode, highStdout, highStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "Thread.Yield",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--exact-substring",
+                    "--issue-label", "bug",
+                    "--open-issues", openIssuesPath,
+                    "--duplicate-confidence", "high"
+                ],
+                _jsonOptions));
+            var (customExitCode, customStdout, customStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "Thread.Yield",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--exact-substring",
+                    "--issue-label", "bug",
+                    "--open-issues", openIssuesPath,
+                    "--duplicate-threshold", "0.4"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, highExitCode);
+            Assert.Equal(string.Empty, highStderr);
+            using var highDocument = ParseJsonOutput(highStdout);
+            var highRoot = highDocument.RootElement;
+            var highDraft = Assert.Single(highRoot.GetProperty("drafts").EnumerateArray());
+            Assert.Equal("high", highRoot.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+            Assert.Equal(0.7, highRoot.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
+            Assert.Equal(0, highDraft.GetProperty("duplicate_preflight").GetProperty("match_count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, customExitCode);
+            Assert.Equal(string.Empty, customStderr);
+            using var customDocument = ParseJsonOutput(customStdout);
+            var customRoot = customDocument.RootElement;
+            var customDraft = Assert.Single(customRoot.GetProperty("drafts").EnumerateArray());
+            var customMatch = Assert.Single(customDraft.GetProperty("duplicate_preflight").GetProperty("matches").EnumerateArray());
+            Assert.Equal("custom", customRoot.GetProperty("duplicate_preflight").GetProperty("confidence").GetString());
+            Assert.Equal(0.4, customRoot.GetProperty("duplicate_preflight").GetProperty("minimum_score").GetDouble());
+            Assert.Equal(1, customDraft.GetProperty("duplicate_preflight").GetProperty("match_count").GetInt32());
+            Assert.Equal(3827, customMatch.GetProperty("number").GetInt32());
+            Assert.Equal("title_label_contains", customMatch.GetProperty("reason").GetString());
+            Assert.Equal(0.45, customMatch.GetProperty("score").GetDouble());
         }
         finally
         {
