@@ -503,6 +503,36 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void ActiveWorkspaceEnvironment_RelativeDbPath_DoesNotOverrideQueryResolution_Issue3825()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_env_relative_project");
+        const string RelativeDbPath = "relative_active_workspace_SENTINEL_3825.db";
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, RelativeDbPath);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
+            Assert.Contains("value must be an absolute database path", stderr);
+            Assert.DoesNotContain(RelativeDbPath, stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void MalformedActiveWorkspaceState_DoesNotOverrideQueryResolution()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_malformed_project");
@@ -528,6 +558,85 @@ public class WorkspaceCommandRunnerTests
             Assert.DoesNotContain(ActiveWorkspace.StatePath, stderr);
             Assert.DoesNotContain("LineNumber", stderr);
             Assert.Contains("invalid JSON", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ActiveWorkspaceState_ControlCharacterName_DoesNotOverrideQueryResolution_Issue3825()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_bad_name_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_bad_name_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
+                {
+                  "name": "bad\nname",
+                  "root": {{JsonSerializer.Serialize(projectRoot)}},
+                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+                }
+                """);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.Contains("`name` must not contain control characters", stderr);
+            Assert.DoesNotContain("bad", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ActiveWorkspaceState_OversizedName_DoesNotOverrideQueryResolution_Issue3825()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_long_name_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_long_name_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
+                {
+                  "name": {{JsonSerializer.Serialize(new string('n', ActiveWorkspace.MaxWorkspaceNameChars + 1))}},
+                  "root": {{JsonSerializer.Serialize(projectRoot)}},
+                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+                }
+                """);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.Contains($"`name` exceeds {ActiveWorkspace.MaxWorkspaceNameChars} characters", stderr);
             Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
         }

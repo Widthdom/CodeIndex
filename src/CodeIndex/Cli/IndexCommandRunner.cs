@@ -383,7 +383,13 @@ public static partial class IndexCommandRunner
         if (holder == null)
             return string.Empty;
         var startedLocal = holder.StartedAt.ToLocalTime();
-        return $"PID {holder.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)}, started {startedLocal.ToString("yyyy-MM-dd HH:mm:ss zzz", System.Globalization.CultureInfo.InvariantCulture)}";
+        var verification = holder.Verification switch
+        {
+            IndexLockHolderVerification.Verified => "verified",
+            IndexLockHolderVerification.Stale => "stale",
+            _ => "unverified",
+        };
+        return $"PID {holder.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)} ({verification}), started {startedLocal.ToString("yyyy-MM-dd HH:mm:ss zzz", System.Globalization.CultureInfo.InvariantCulture)}";
     }
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
     {

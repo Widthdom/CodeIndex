@@ -12533,6 +12533,34 @@ public sealed class Caller
     }
 
     [Fact]
+    public void IndexLock_TryReadHolderInfo_WhenProcessDoesNotMatch_MarksMetadataStale_Issue3825()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_stale_holder_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+            File.WriteAllText(infoPath, "pid=2147483647\nstarted_at=2020-01-01T00:00:00.000Z\n");
+
+            var holder = IndexLock.TryReadHolderInfo(lockPath);
+
+            Assert.NotNull(holder);
+            Assert.Equal(2147483647, holder.Pid);
+            Assert.Equal(IndexLockHolderVerification.Stale, holder.Verification);
+        }
+        finally
+        {
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_LockHeldByAnotherHolder_RejectedWithHolderInfo()
     {
         var projectRoot = CreateTempProject();
@@ -12680,7 +12708,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void Run_StaleLockFile_ReclaimedAndCleanedUpAfterSuccess()
+    public void Run_StaleLockFile_ReclaimedWithoutDeletingLockFileAfterSuccess_Issue3825()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_stale_{Guid.NewGuid():N}.db");
@@ -12692,14 +12720,15 @@ public sealed class Caller
             Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
 
             // Stale on-disk lockfile with no live holder; OS releases handles on
-            // process death so a fresh acquire must succeed and clean up after itself.
+            // process death so a fresh acquire must succeed. The lockfile path is
+            // intentionally left in place after release to avoid racing a later holder.
             File.WriteAllText(lockPath, string.Empty);
             File.WriteAllText(infoPath, "pid=99999\nstarted_at=2020-01-01T00:00:00.000Z\nhost=stale\nproject=/old\n");
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.False(File.Exists(lockPath), "lock file should be removed after a clean exit");
+            Assert.True(File.Exists(lockPath), "lock file should remain after a clean exit");
             Assert.False(File.Exists(infoPath), "lock metadata sidecar should be removed after a clean exit");
         }
         finally

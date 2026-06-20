@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using CodeIndex.Indexer;
@@ -33,6 +35,8 @@ internal sealed class IndexLock : IDisposable
     internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
     internal static Action<LockCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
+    private static readonly TimeSpan HolderStartTimeTolerance = TimeSpan.FromSeconds(2);
 
     private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
@@ -105,7 +109,8 @@ internal sealed class IndexLock : IDisposable
         {
             var info = new IndexLockInfo(
                 Pid: Environment.ProcessId,
-                StartedAt: GetUtcNow());
+                StartedAt: GetCurrentProcessStartTimeUtc(),
+                Verification: IndexLockHolderVerification.Verified);
             DataDirectorySecurity.WritePrivateText(infoPath, SerializeInfo(info), Encoding.UTF8);
         }
         catch (Exception)
@@ -138,7 +143,10 @@ internal sealed class IndexLock : IDisposable
             var text = DataDirectorySecurity.ReadTextWithinLimit(ioInfoPath, MaxInfoBytes, FileShare.ReadWrite);
             if (string.IsNullOrWhiteSpace(text))
                 return null;
-            return ParseInfo(text);
+            var info = ParseInfo(text);
+            return info is null
+                ? null
+                : info with { Verification = VerifyHolder(info) };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -163,7 +171,6 @@ internal sealed class IndexLock : IDisposable
             // Best-effort. / ベストエフォート。
         }
 
-        TryDeleteCleanupTarget(_lockPath, "lockfile");
     }
 
     // --- Tiny key=value serializer (avoids touching JsonSerializerContext) ---
@@ -194,7 +201,7 @@ internal sealed class IndexLock : IDisposable
             switch (key)
             {
                 case "pid":
-                    if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var p))
+                    if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var p) && p > 0)
                         pid = p;
                     break;
                 case "started_at":
@@ -208,6 +215,50 @@ internal sealed class IndexLock : IDisposable
             return null;
         return new IndexLockInfo(pid.Value, started.Value);
     }
+
+    private static DateTime GetCurrentProcessStartTimeUtc()
+    {
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            return process.StartTime.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            return GetUtcNow();
+        }
+    }
+
+    private static IndexLockHolderVerification VerifyHolder(IndexLockInfo info)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(info.Pid);
+            if (process.HasExited)
+                return IndexLockHolderVerification.Stale;
+
+            var processStartedAt = process.StartTime.ToUniversalTime();
+            var holderStartedAt = NormalizeUtc(info.StartedAt);
+            return (processStartedAt - holderStartedAt).Duration() <= HolderStartTimeTolerance
+                ? IndexLockHolderVerification.Verified
+                : IndexLockHolderVerification.Stale;
+        }
+        catch (ArgumentException)
+        {
+            return IndexLockHolderVerification.Stale;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException or UnauthorizedAccessException)
+        {
+            return IndexLockHolderVerification.Unverified;
+        }
+    }
+
+    private static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
 
     private static string UnescapeValue(string value)
     {
@@ -258,7 +309,15 @@ internal sealed class IndexLock : IDisposable
 
 internal sealed record IndexLockInfo(
     int Pid,
-    DateTime StartedAt);
+    DateTime StartedAt,
+    IndexLockHolderVerification Verification = IndexLockHolderVerification.Unverified);
+
+internal enum IndexLockHolderVerification
+{
+    Verified,
+    Unverified,
+    Stale,
+}
 
 internal sealed class IndexLockConflictException : Exception
 {
