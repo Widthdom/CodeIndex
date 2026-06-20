@@ -2415,7 +2415,7 @@ Security defaults:
 
 - The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
 - Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` to a shared secret. `CDIDX_MCP_HTTP_TOKEN` wins when both are set. When an HTTP bearer secret is configured, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`; HTTP clients do not also need `params.auth.token`.
-- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Leaving the token variable unset, or setting it to the empty string, disables the token gate. Any configured token must be 1-4096 characters and must not contain whitespace or control characters. Supplied HTTP bearer values use the exact bytes after `Bearer ` and are not trimmed before comparison; oversized, whitespace-containing, or control-character-bearing values are rejected before hashing.
+- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Leaving the token variable unset, or setting it to the empty string, disables the token gate. Any configured HTTP bearer token must be 1-4096 characters and must not contain whitespace, control characters, or commas. Supplied HTTP bearer values use the exact bytes after `Bearer ` and are not trimmed before comparison; duplicate or comma-joined `Authorization` headers, oversized values, whitespace-containing values, and control-character-bearing values are rejected before hashing.
 
 The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
 
@@ -4953,7 +4953,7 @@ HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は�
 
 - listener は既定で loopback アドレス（`127.0.0.1`）のみに bind し、ワイルドカード `+` / `*` は最初から拒否します。
 - 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` または `CDIDX_MCP_AUTH_TOKEN` で共有秘密を指定する必要があります。両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` が優先されます。HTTP bearer secret が設定されている場合、すべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。HTTP クライアントは `params.auth.token` も送る必要はありません。
-- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否します。
+- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。HTTP bearer の設定 token は 1-4096 文字で、空白、制御文字、comma を含められません。受信 token は 4096 文字を超える場合、hash 前に拒否します。重複または comma 結合された `Authorization` ヘッダーも bearer 比較前に拒否します。
 
 stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
 
