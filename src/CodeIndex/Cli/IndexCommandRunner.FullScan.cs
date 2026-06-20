@@ -681,20 +681,7 @@ public static partial class IndexCommandRunner
     }
 
     private static void StopFullScanJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
-    {
-        if (heartbeat == null)
-            return;
-
-        heartbeat.Value.Cts.Cancel();
-        try
-        {
-            heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-        {
-        }
-        heartbeat.Value.Cts.Dispose();
-    }
+        => StopObservedJsonPhaseHeartbeat(heartbeat);
 
     private static int RunFullScan(
         DbWriter writer,
