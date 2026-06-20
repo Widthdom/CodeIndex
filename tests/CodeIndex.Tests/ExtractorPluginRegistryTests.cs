@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
@@ -283,6 +284,66 @@ public class ExtractorPluginRegistryTests
                 Assert.True(loadContext.IsCollectible);
                 Assert.NotSame(AssemblyLoadContext.Default, loadContext);
                 Assert.Same(loadContext, AssemblyLoadContext.GetLoadContext(extractor.GetType().Assembly));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void PluginAssemblyPathIdentity_FollowsPathCasingPolicy_Issue3790()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_path_casing_3790");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                var pluginPath = Path.Combine(projectRoot, "Plugin.dll");
+                var caseVariant = Path.Combine(projectRoot, "plugin.dll");
+
+                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
+                Assert.False(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
+
+                ExtractorPluginRegistry.ResetForTests();
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => false;
+
+                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
+                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = originalProbe;
+                PathCasing.ResetCacheForTests();
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.TypeInspectionLimitForTesting = 1;
+
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal("plugin", diagnostic.Kind);
+                Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("plugin_type_limit_exceeded", diagnostic.Category);
+                Assert.Contains("too many loadable types", diagnostic.Message, StringComparison.Ordinal);
             }
             finally
             {
