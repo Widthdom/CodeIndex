@@ -229,6 +229,20 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseBodyLineCountAlias_MapsToBodyLines_Issue3665()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--body-line-count=3"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.IncludeBody);
+        Assert.Equal(3, options.BodyLines);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void RunInspect_FormatCompact_ActsLikeCompactJson_Issue3446()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_format_compact");

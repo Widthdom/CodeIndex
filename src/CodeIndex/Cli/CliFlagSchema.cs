@@ -300,6 +300,7 @@ internal static class CliFlagSchema
             new() { Name = "--body", Description = "Include definition body snippets in JSON-capable result rows", Commands = Set(BodyCommands) },
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", Commands = Set(InspectFieldCommands) },
+            new() { Name = "--body-line-count", ValuePlaceholder = "<n>", Description = "Inspect: alias for --body-lines", Commands = Set(InspectFieldCommands) },
             new() { Name = "--fields", ValuePlaceholder = "<file,workspace,graph,definitions,body,nearby_symbols,references,callers,callees,all>", Description = "Inspect: select top-level JSON evidence groups", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", Commands = Set(InspectFieldCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },

@@ -164,6 +164,7 @@ public static partial class QueryCommandRunner
         "--after",
         "--body-start",
         "--body-lines",
+        "--body-line-count",
         "--name",
         "--snippet-lines",
         "--snippet-focus",
@@ -8915,9 +8916,11 @@ public static partial class QueryCommandRunner
                         AddParseError(bodyStartError!);
                     break;
                 case "--body-lines":
-                    if (!TryReadRawOptionValue(args, ref i, "--body-lines", inlineValue, out var bodyLinesValue, out var missingBodyLinesError))
+                case "--body-line-count":
+                    var bodyLinesFlag = normalizedArg;
+                    if (!TryReadRawOptionValue(args, ref i, bodyLinesFlag, inlineValue, out var bodyLinesValue, out var missingBodyLinesError))
                         AddParseError(missingBodyLinesError!);
-                    else if (TryParsePositiveInt(bodyLinesValue!, "--body-lines", out var parsedBodyLines, out var bodyLinesError))
+                    else if (TryParsePositiveInt(bodyLinesValue!, bodyLinesFlag, out var parsedBodyLines, out var bodyLinesError))
                     {
                         WarnIfDuplicateSingleValueOption("--body-lines", bodyLinesValue!);
                         bodyLines = parsedBodyLines;
@@ -12765,6 +12768,7 @@ public static partial class QueryCommandRunner
             ["--slow-query-ms"] = 3_600_000,
             ["--body-start"] = 10_000_000,
             ["--body-lines"] = DbReader.DefinitionBodyMaxRequestedLines,
+            ["--body-line-count"] = DbReader.DefinitionBodyMaxRequestedLines,
             ["--max-hops"] = 64,
             ["--depth"] = 64,
             ["--before"] = 1_000,
@@ -12791,6 +12795,7 @@ public static partial class QueryCommandRunner
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
         ["--body-start"] = "pass a 1-based source line inside the symbol body, e.g. `--body-start 120`.",
         ["--body-lines"] = "pass a positive line count for the body slice, e.g. `--body-lines 40`.",
+        ["--body-line-count"] = "pass a positive line count for the body slice, e.g. `--body-line-count 40` (alias for `--body-lines`).",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--recipe"] = "pass a built-in audit recipe name, e.g. `--recipe risky-code`, or a child query selector such as `--recipe risky-code/raw-diagnostic-echo`; run `cdidx search --list-recipes` to list available recipes.",

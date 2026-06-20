@@ -319,7 +319,7 @@ top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
 definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
-`--body-start`; use `--body-lines` to choose the page size. If a single long
+`--body-start`; use `--body-lines` (or alias `--body-line-count`) to choose the page size. If a single long
 source line hits the body byte cap, continuation still advances to the following
 source line because body paging is line-based. `inspect --json` also includes
 `body_mode` metadata so clients can see whether body content was requested,
@@ -1369,7 +1369,7 @@ same source location.
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
-| `--body-lines <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
+| `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -2855,7 +2855,7 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 top-level group を選択します。`--body-only` は `--body --fields definitions` の
 shorthand です。definition body が返却 slice より長い場合は
 `body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
-`--body-lines` で page size を指定できます。`inspect --json` には `body_mode`
+`--body-lines`（alias: `--body-line-count`）で page size を指定できます。`inspect --json` には `body_mode`
 metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
 client 側で判断できます。
 count-only JSON（対応 command の `--count --json` または `--format count`）は、
@@ -3911,7 +3911,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
-| `--body-lines <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
+| `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
