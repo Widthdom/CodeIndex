@@ -7750,6 +7750,7 @@ public static partial class QueryCommandRunner
                 "Remove `--count` to page unused results.");
             return CommandExitCodes.UsageError;
         }
+        var unusedScope = BuildUnusedAuditScopeFilters(options);
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -7759,20 +7760,20 @@ public static partial class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
-            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests);
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
-                reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
+                reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests));
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(
                     options.Kind,
                     options.Lang,
-                    options.PathPatterns,
-                    options.ExcludePaths,
-                    options.ExcludeTests,
-                    visibilityFilters: options.VisibilityFilters,
-                    excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                    unusedScope.PathPatterns,
+                    unusedScope.ExcludePaths,
+                    unusedScope.ExcludeTests,
+                    visibilityFilters: unusedScope.VisibilityFilters,
+                    excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
                     bucketFilter: options.UnusedBucket,
                     minConfidence: options.MinUnusedConfidence);
                 var effectiveSqlGraphSignal = countSummary.Count == 0
@@ -7795,7 +7796,7 @@ public static partial class QueryCommandRunner
                         ["degraded"] = !reader._hasReferencesTable
                     };
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+                    payload["query_context"] = BuildUnusedQueryContextJson(options, unusedScope, jsonOptions);
                     if (options.Compact)
                     {
                         payload["compact"] = true;
@@ -7818,11 +7819,11 @@ public static partial class QueryCommandRunner
                 fetchLimit,
                 options.Kind,
                 options.Lang,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
-                visibilityFilters: options.VisibilityFilters,
-                excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                unusedScope.PathPatterns,
+                unusedScope.ExcludePaths,
+                unusedScope.ExcludeTests,
+                visibilityFilters: unusedScope.VisibilityFilters,
+                excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
                 bucketFilter: options.UnusedBucket,
                 minConfidence: options.MinUnusedConfidence);
             var results = fetchedResults
@@ -7850,6 +7851,7 @@ public static partial class QueryCommandRunner
                         reader._hasReferencesTable,
                         jsonOptions,
                         options,
+                        unusedScope,
                         nextCursor: nextCursor));
                 }
                 else
@@ -7866,7 +7868,7 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, byBucket: byBucket, nextCursor: nextCursor));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor));
             }
             else
             {
@@ -7906,6 +7908,64 @@ public static partial class QueryCommandRunner
         "public_or_exported_no_refs",
         "reflection_or_config_suspect",
     ];
+
+    private static readonly string[] UnusedSourceAuditExcludePaths =
+    [
+        "*.md",
+        "docs/*",
+        "doc/*",
+        "CHANGELOG.md",
+        "changelog.d/*",
+        "README.md",
+        "USER_GUIDE.md",
+        "DEVELOPER_GUIDE.md",
+        "TESTING_GUIDE.md",
+        "AGENT_GUIDE.md",
+        ".codex/*",
+        ".github/*",
+    ];
+
+    private static readonly string[] UnusedSourceAuditVisibilityFilters =
+    [
+        "private",
+        "internal",
+    ];
+
+    private sealed record UnusedAuditScopeFilters(
+        IReadOnlyList<string> PathPatterns,
+        IReadOnlyList<string> ExcludePaths,
+        bool ExcludeTests,
+        IReadOnlyList<string> VisibilityFilters,
+        IReadOnlyList<string> ExcludeVisibilityFilters,
+        bool AppliedSourceDefaults);
+
+    private static UnusedAuditScopeFilters BuildUnusedAuditScopeFilters(QueryCommandOptions options)
+    {
+        if (!options.AuditScopeExplicit
+            || !string.Equals(options.AuditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            return new(
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.VisibilityFilters,
+                options.ExcludeVisibilityFilters,
+                AppliedSourceDefaults: false);
+        }
+
+        var excludePaths = new List<string>(options.ExcludePaths);
+        AddDistinct(excludePaths, UnusedSourceAuditExcludePaths);
+        var visibilityFilters = options.VisibilityFilters.Count > 0
+            ? options.VisibilityFilters
+            : [.. UnusedSourceAuditVisibilityFilters];
+        return new(
+            options.PathPatterns,
+            excludePaths,
+            ExcludeTests: true,
+            visibilityFilters,
+            options.ExcludeVisibilityFilters,
+            AppliedSourceDefaults: true);
+    }
 
     internal static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
     {
@@ -8010,7 +8070,7 @@ public static partial class QueryCommandRunner
         _ => "Unknown unused-symbol bucket.",
     };
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, bool byBucket = false, string? nextCursor = null)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -8046,8 +8106,26 @@ public static partial class QueryCommandRunner
 
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
         if (queryOptions != null)
-            payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
+            payload["query_context"] = unusedScope != null
+                ? BuildUnusedQueryContextJson(queryOptions, unusedScope, jsonOptions)
+                : BuildQueryContextJson(queryOptions, jsonOptions);
         return payload.ToJsonString(jsonOptions);
+    }
+
+    private static JsonObject BuildUnusedQueryContextJson(QueryCommandOptions options, UnusedAuditScopeFilters unusedScope, JsonSerializerOptions jsonOptions)
+    {
+        var query = BuildQueryContextJson(options, jsonOptions);
+        if (!unusedScope.AppliedSourceDefaults)
+            return query;
+
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        if (!options.ExcludeTests && unusedScope.ExcludeTests)
+            query["effective_exclude_tests"] = true;
+        if (!options.ExcludePaths.SequenceEqual(unusedScope.ExcludePaths, StringComparer.Ordinal))
+            query["effective_exclude_path"] = JsonSerializer.SerializeToNode(unusedScope.ExcludePaths.ToList(), context.ListString);
+        if (options.VisibilityFilters.Count == 0 && unusedScope.VisibilityFilters.Count > 0)
+            query["effective_visibility"] = JsonSerializer.SerializeToNode(unusedScope.VisibilityFilters.ToList(), context.ListString);
+        return query;
     }
 
     private static JsonObject BuildUnusedResultsByBucketJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
@@ -11634,6 +11712,12 @@ public static partial class QueryCommandRunner
             query["bucket"] = options.UnusedBucket;
         if (options.MinUnusedConfidence != null)
             query["min_confidence"] = options.MinUnusedConfidence;
+        if (options.AuditScopeExplicit)
+            query["audit_scope"] = options.AuditScope;
+        if (options.VisibilityFilters.Count > 0)
+            query["visibility"] = JsonSerializer.SerializeToNode(options.VisibilityFilters, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.ExcludeVisibilityFilters.Count > 0)
+            query["exclude_visibility"] = JsonSerializer.SerializeToNode(options.ExcludeVisibilityFilters, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.UnusedCursorOffset.HasValue)
         {
             query["cursor"] = FormatUnusedCursor(options.UnusedCursorOffset.Value);

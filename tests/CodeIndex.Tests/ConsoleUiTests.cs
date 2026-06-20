@@ -172,7 +172,7 @@ public class ConsoleUiTests
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--compact]", output);
-        Assert.Contains("[--cursor <unused:offset>]", output);
+        Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (search/files stream ndjson by", output);
         Assert.Contains("search/files/validate accept --json=array for one array)", output);
@@ -290,7 +290,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused", output);
-        Assert.Contains("[--cursor <unused:offset>]", output);
+        Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
         Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx completions <shell>", output);
         Assert.Contains("cdidx --completions <shell>", output);

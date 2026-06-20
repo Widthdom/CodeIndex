@@ -1041,6 +1041,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_AuditScopeSourcePrioritizesPrivateSourceCandidates_Issue3669()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--audit-scope", "source", "--limit", "10"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+            var query = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Collection(
+                symbols.EnumerateArray(),
+                symbol => Assert.Equal("Hidden", symbol.GetProperty("name").GetString()),
+                symbol => Assert.Equal("InternalOnly", symbol.GetProperty("name").GetString()));
+            Assert.Equal("source", query.GetProperty("audit_scope").GetString());
+            Assert.True(query.GetProperty("effective_exclude_tests").GetBoolean());
+            Assert.Contains(query.GetProperty("effective_exclude_path").EnumerateArray(), path => path.GetString() == "*.md");
+            Assert.Collection(
+                query.GetProperty("effective_visibility").EnumerateArray(),
+                visibility => Assert.Equal("private", visibility.GetString()),
+                visibility => Assert.Equal("internal", visibility.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonByBucketGroupsReturnedSymbolsByTaxonomyBucket()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
