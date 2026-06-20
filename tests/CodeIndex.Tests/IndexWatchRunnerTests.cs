@@ -203,6 +203,47 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void BuildPartialUpdateBatches_SplitsBeforeArgumentLimit_Issue3803()
+    {
+        var baseArgs = new List<string> { "/repo", "--json", "--quiet" };
+        var longPath = "/" + new string('a', IndexWatchRunner.MaxSubRunArgumentChars / 2);
+
+        var batches = IndexWatchRunner.BuildPartialUpdateBatches(
+            baseArgs,
+            [longPath + "1", longPath + "2", longPath + "3"]);
+
+        Assert.NotNull(batches);
+        Assert.Equal(3, batches.Count);
+        Assert.All(batches, batch => Assert.Single(batch));
+    }
+
+    [Fact]
+    public void BuildPartialUpdateBatches_OversizedSinglePathRequestsFullRescan_Issue3803()
+    {
+        var baseArgs = new List<string> { "/repo", "--json", "--quiet" };
+        var oversizedPath = "/" + new string('p', IndexWatchRunner.MaxSubRunArgumentChars);
+
+        var batches = IndexWatchRunner.BuildPartialUpdateBatches(baseArgs, [oversizedPath]);
+
+        Assert.Null(batches);
+    }
+
+    [Fact]
+    public void WatchSubRunCaptureWriter_CapsCaptureAndPreservesSpooledOutput_Issue3803()
+    {
+        using var spool = new StringWriter();
+        using var writer = new IndexWatchRunner.WatchSubRunCaptureWriter(10, spool);
+        var payload = new string('x', 32);
+
+        writer.Write(payload);
+        writer.Flush();
+
+        Assert.Equal(new string('x', 10), writer.CapturedText);
+        Assert.True(writer.Truncated);
+        Assert.Equal(payload, spool.ToString());
+    }
+
+    [Fact]
     public void InvokeSubRunAndEmit_JsonSubRunFailure_EmitsFailedStatusAndExitCode()
     {
         var projectRoot = CreateTempProject();

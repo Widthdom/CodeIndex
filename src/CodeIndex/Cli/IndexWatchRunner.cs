@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Indexer;
 
@@ -21,6 +22,7 @@ internal static class IndexWatchRunner
     internal const int MaxHumanSummarySubRunJsonChars = 64 * 1024;
     internal const int MaxHumanSummaryJsonDepth = 16;
     internal const int BatchPathSampleLimit = 20;
+    internal const int MaxSubRunArgumentChars = 64 * 1024;
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
 
@@ -174,14 +176,66 @@ internal static class IndexWatchRunner
         IReadOnlyList<string> changedPaths,
         string resolvedDbPath)
     {
-        var stopwatch = Stopwatch.StartNew();
-        var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
-        args.Add("--files");
-        foreach (var path in changedPaths)
-            args.Add(path);
+        var baseArgs = BuildSubRunArgs(baseOptions, resolvedDbPath);
+        var batches = BuildPartialUpdateBatches(baseArgs, changedPaths);
+        if (batches == null)
+            return RunFullRescan(baseOptions, jsonOptions, resolvedDbPath);
 
-        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", changedPaths.Count, "incremental", changedPaths);
+        var exitCode = CommandExitCodes.Success;
+        foreach (var batch in batches)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var args = new List<string>(baseArgs.Count + 1 + batch.Count);
+            args.AddRange(baseArgs);
+            args.Add("--files");
+            args.AddRange(batch);
+
+            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, "incremental", batch);
+            RecordSubRunExitCode(ref exitCode, subRunExitCode);
+        }
+
+        return exitCode;
     }
+
+    internal static List<List<string>>? BuildPartialUpdateBatches(IReadOnlyList<string> baseArgs, IReadOnlyList<string> changedPaths)
+    {
+        var baseArgumentChars = EstimateSubRunArgumentChars(baseArgs) + EstimateSubRunArgumentChars("--files");
+        var batches = new List<List<string>>();
+        var current = new List<string>();
+        var currentArgumentChars = baseArgumentChars;
+
+        foreach (var path in changedPaths)
+        {
+            var pathArgumentChars = EstimateSubRunArgumentChars(path);
+            if (baseArgumentChars + pathArgumentChars > MaxSubRunArgumentChars)
+                return null;
+
+            if (current.Count > 0 && currentArgumentChars + pathArgumentChars > MaxSubRunArgumentChars)
+            {
+                batches.Add(current);
+                current = new List<string>();
+                currentArgumentChars = baseArgumentChars;
+            }
+
+            current.Add(path);
+            currentArgumentChars += pathArgumentChars;
+        }
+
+        if (current.Count > 0)
+            batches.Add(current);
+        return batches;
+    }
+
+    private static int EstimateSubRunArgumentChars(IEnumerable<string> args)
+    {
+        var total = 0;
+        foreach (var arg in args)
+            total += EstimateSubRunArgumentChars(arg);
+        return total;
+    }
+
+    private static int EstimateSubRunArgumentChars(string arg)
+        => arg.Length + 1;
 
     private static int RunFullRescan(
         IndexCommandOptions baseOptions,
@@ -266,20 +320,41 @@ internal static class IndexWatchRunner
         IReadOnlyList<string>? batchPaths)
     {
         string capturedJson;
+        string? spoolPath = null;
         int subRunExitCode;
         var previousOut = Console.Out;
-        using var captureWriter = new StringWriter();
-        Console.SetOut(captureWriter);
+        WatchSubRunCaptureWriter? captureWriter = null;
         try
         {
-            subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions);
+            TextWriter? spoolWriter = null;
+            if (baseOptions.Json)
+            {
+                spoolPath = Path.Combine(Path.GetTempPath(), $"cdidx-watch-subrun-{Guid.NewGuid():N}.jsonl");
+                spoolWriter = new StreamWriter(
+                    new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read),
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            }
+
+            captureWriter = new WatchSubRunCaptureWriter(MaxHumanSummarySubRunJsonChars + 1, spoolWriter);
+            Console.SetOut(captureWriter);
+            try
+            {
+                subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions);
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+            }
+
+            captureWriter.Flush();
+            capturedJson = captureWriter.CapturedText;
         }
         finally
         {
             Console.SetOut(previousOut);
+            captureWriter?.Dispose();
         }
         stopwatch.Stop();
-        capturedJson = captureWriter.ToString();
         var eventStatus = subRunExitCode == CommandExitCodes.Success ? status : "failed";
         var failureReason = subRunExitCode == CommandExitCodes.Success
             ? null
@@ -310,9 +385,16 @@ internal static class IndexWatchRunner
                 Reason = failureReason,
             }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
 
-            var trimmed = capturedJson.TrimEnd('\r', '\n');
-            if (!string.IsNullOrEmpty(trimmed))
-                Console.Out.WriteLine(trimmed);
+            if (!TryWriteSpooledSubRunOutput(spoolPath, out var endedWithLineBreak))
+            {
+                var trimmed = capturedJson.TrimEnd('\r', '\n');
+                if (!string.IsNullOrEmpty(trimmed))
+                    Console.Out.WriteLine(trimmed);
+            }
+            else if (!endedWithLineBreak)
+            {
+                Console.Out.WriteLine();
+            }
         }
         else
         {
@@ -320,8 +402,112 @@ internal static class IndexWatchRunner
             CommandErrorWriter.WriteStderr(human);
         }
 
+        DeleteSpoolFile(spoolPath);
         return subRunExitCode;
     }
+
+    private static bool TryWriteSpooledSubRunOutput(string? spoolPath, out bool endedWithLineBreak)
+    {
+        endedWithLineBreak = true;
+        if (string.IsNullOrWhiteSpace(spoolPath) || !File.Exists(spoolPath) || new FileInfo(spoolPath).Length == 0)
+            return false;
+
+        var buffer = new char[8192];
+        var wroteAny = false;
+        char lastChar = '\0';
+        using var reader = new StreamReader(spoolPath, Encoding.UTF8);
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            Console.Out.Write(buffer, 0, read);
+            wroteAny = true;
+            lastChar = buffer[read - 1];
+        }
+
+        endedWithLineBreak = !wroteAny || lastChar is '\n' or '\r';
+        return wroteAny;
+    }
+
+    private static void DeleteSpoolFile(string? spoolPath)
+    {
+        if (string.IsNullOrWhiteSpace(spoolPath))
+            return;
+        try
+        {
+            File.Delete(spoolPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+        }
+    }
+
+    internal sealed class WatchSubRunCaptureWriter : TextWriter
+    {
+        private readonly int _maxCapturedChars;
+        private readonly TextWriter? _inner;
+        private readonly StringBuilder _captured = new();
+
+        internal WatchSubRunCaptureWriter(int maxCapturedChars, TextWriter? inner)
+        {
+            _maxCapturedChars = Math.Max(0, maxCapturedChars);
+            _inner = inner;
+        }
+
+        public override Encoding Encoding => _inner?.Encoding ?? Encoding.UTF8;
+
+        internal string CapturedText => _captured.ToString();
+
+        internal bool Truncated { get; private set; }
+
+        public override void Write(char value)
+        {
+            Capture(stackalloc char[] { value });
+            _inner?.Write(value);
+        }
+
+        public override void Write(string? value)
+        {
+            if (value != null)
+                Capture(value.AsSpan());
+            _inner?.Write(value);
+        }
+
+        public override void Write(char[] buffer, int index, int count)
+        {
+            Capture(buffer.AsSpan(index, count));
+            _inner?.Write(buffer, index, count);
+        }
+
+        public override void Flush()
+        {
+            _inner?.Flush();
+            base.Flush();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _inner?.Dispose();
+            base.Dispose(disposing);
+        }
+
+        private void Capture(ReadOnlySpan<char> value)
+        {
+            var remaining = _maxCapturedChars - _captured.Length;
+            if (remaining <= 0)
+            {
+                if (value.Length > 0)
+                    Truncated = true;
+                return;
+            }
+
+            var take = Math.Min(remaining, value.Length);
+            _captured.Append(value[..take]);
+            if (take < value.Length)
+                Truncated = true;
+        }
+    }
+
 
     private static string FormatHumanSummary(string status, int? batchSize, long elapsedMs, string subRunJson, int exitCode)
     {
