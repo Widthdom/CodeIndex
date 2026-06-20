@@ -49,7 +49,6 @@ public class DbWriter
     private static readonly TimeSpan TransactionStateContentionWaitInterval = TimeSpan.FromMilliseconds(50);
     private const int BatchSize = 500;
     private const int DeleteFilesBatchSize = 500;
-    private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
     private const int TypeScriptModuleSyntaxFallbackMaxBytes = (int)FileIndexer.DefaultMaxFileSizeBytes;
     private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
@@ -889,14 +888,7 @@ public class DbWriter
         DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
 
         using var deleteCmd = _conn.CreateCommand();
-        var parameters = new List<string>(fileIds.Count);
-        for (var i = 0; i < fileIds.Count; i++)
-        {
-            var parameterName = $"@id{i}";
-            parameters.Add(parameterName);
-            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
-        }
-
+        var parameters = SqliteDynamicSql.AddParameters(deleteCmd, "id", fileIds, SqliteType.Integer, "file id delete batch");
         deleteCmd.CommandText = $"DELETE FROM files WHERE id IN ({string.Join(", ", parameters)})";
         deleteCmd.ExecuteNonQuery();
     }
@@ -904,14 +896,7 @@ public class DbWriter
     private void DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(IReadOnlyList<long> fileIds)
     {
         using var deleteCmd = _conn.CreateCommand();
-        var parameters = new List<string>(fileIds.Count);
-        for (var i = 0; i < fileIds.Count; i++)
-        {
-            var parameterName = $"@id{i}";
-            parameters.Add(parameterName);
-            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
-        }
-
+        var parameters = SqliteDynamicSql.AddParameters(deleteCmd, "id", fileIds, SqliteType.Integer, "cross-file reference delete batch");
         var idList = string.Join(", ", parameters);
         deleteCmd.CommandText = $@"
             DELETE FROM symbol_references
@@ -3813,7 +3798,7 @@ public class DbWriter
         if (columnCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(columnCount));
 
-        return Math.Max(1, Math.Min(BatchSize, MaxSqlVariables / columnCount));
+        return Math.Max(1, Math.Min(BatchSize, SqliteDynamicSql.MaxSqlVariables / columnCount));
     }
 
     private void SetReadyBit(int flag)
@@ -3880,15 +3865,8 @@ public class DbWriter
 
     private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
     {
-        var inParams = new List<string>(supportedLanguages.Count);
-        for (int i = 0; i < supportedLanguages.Count; i++)
-        {
-            var paramName = $"@lang{i}";
-            inParams.Add(paramName);
-            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
-        }
-
-        return inParams;
+        var values = supportedLanguages as IReadOnlyList<string> ?? supportedLanguages.ToList();
+        return SqliteDynamicSql.AddParameters(cmd, "lang", values, SqliteType.Text, "supported language filters");
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;
