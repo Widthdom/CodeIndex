@@ -509,6 +509,7 @@ public class PostExtractionHookTests
             finally
             {
                 PostExtractionHookRunner.TypeInspectionLimitForTesting = originalLimit;
+                CollectUnloadedHookAssemblies();
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
