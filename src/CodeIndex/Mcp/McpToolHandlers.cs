@@ -3134,15 +3134,16 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
+            var requestToken = _currentRequestToken.Value;
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
+            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
             var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
             status.MacProfile = macProfile.Profile;
             if (macProfile.Diagnostics.Count > 0)
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (checkWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, requestToken);
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
@@ -6816,13 +6817,35 @@ public partial class McpServer
 
         // 3. Source code leak detection — reject if code is detected
         //    ソースコード漏洩検出 — コードが検出されたら拒否
-        if (SourceCodeDetector.ContainsSourceCode(description))
-            return CreateToolErrorResponse(id, "Description appears to contain source code. Please describe the gap in natural language without including code.");
+        var descriptionDetection = SourceCodeDetector.Detect(description);
+        if (descriptionDetection.ContainsSourceCode)
+            return CreateSourceCodeDetectedErrorResponse(
+                id,
+                "description",
+                descriptionDetection,
+                "Description appears to contain source code. Please describe the gap in natural language without including code.");
 
-        if (context != null && SourceCodeDetector.ContainsSourceCode(context))
-            return CreateToolErrorResponse(id, "Context appears to contain source code. Please describe what you were trying to do without including code.");
-        if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
-            return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
+        if (context != null)
+        {
+            var contextDetection = SourceCodeDetector.Detect(context);
+            if (contextDetection.ContainsSourceCode)
+                return CreateSourceCodeDetectedErrorResponse(
+                    id,
+                    "context",
+                    contextDetection,
+                    "Context appears to contain source code. Please describe what you were trying to do without including code.");
+        }
+
+        if (toolInvocationContext != null)
+        {
+            var invocationDetection = SourceCodeDetector.Detect(toolInvocationContext);
+            if (invocationDetection.ContainsSourceCode)
+                return CreateSourceCodeDetectedErrorResponse(
+                    id,
+                    "toolInvocationContext",
+                    invocationDetection,
+                    "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
+        }
 
         var samplingDecision = ResolveSuggestionSamplingDecision();
         var samplingAttempt = await TrySampleSuggestionMetadataAsync(
@@ -6950,6 +6973,29 @@ public partial class McpServer
         if (evidencePaths is { Length: > 0 })
             payload["evidence_paths"] = new JsonArray(evidencePaths.Select(path => JsonValue.Create(path)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private JsonObject CreateSourceCodeDetectedErrorResponse(
+        JsonNode? id,
+        string field,
+        SourceCodeDetectionResult detection,
+        string message)
+    {
+        var extraData = new JsonObject
+        {
+            ["source_code_rejection"] = new JsonObject
+            {
+                ["field"] = field,
+                ["reason_code"] = detection.ReasonCode ?? "unknown",
+            },
+        };
+        return CreateToolErrorResponse(
+            id,
+            message,
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Describe the gap in natural language without including code.",
+            retrySafe: false,
+            extraData: extraData);
     }
 
     private static string[]? ReadEvidencePaths(JsonNode? node, out string? error)
