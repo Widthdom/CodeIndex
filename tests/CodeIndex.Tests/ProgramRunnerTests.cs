@@ -1054,6 +1054,133 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void UpdateChecker_Check_TransientFailureDoesNotRefreshStaleCache_Issue3822()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var checkedAt = DateTimeOffset.Parse("2025-12-31T00:00:00Z", CultureInfo.InvariantCulture);
+        var originalCache =
+            $$"""{"checked_at":"{{checkedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"v9.9.9"}""";
+        try
+        {
+            File.WriteAllText(cachePath, originalCache);
+
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-02T00:00:00Z", CultureInfo.InvariantCulture),
+                _ => throw new HttpRequestException("secret host detail"));
+
+            Assert.Equal("network_failure", result.Error);
+            Assert.Equal("v9.9.9", result.LatestVersion);
+            Assert.True(result.UpdateAvailable);
+            Assert.False(result.FromCache);
+            Assert.Equal(originalCache, File.ReadAllText(cachePath));
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_NullFetchDoesNotCreateCache_Issue3822()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-02T00:00:00Z", CultureInfo.InvariantCulture),
+                _ => Task.FromResult<string?>(null));
+
+            Assert.Null(result.LatestVersion);
+            Assert.False(result.UpdateAvailable);
+            Assert.False(File.Exists(cachePath));
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_ResolveDefaultCachePath_IgnoresRelativeXdgCacheHome_Issue3822()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DiagnosticsEnvVar);
+            env.Set("XDG_CACHE_HOME", "relative-cache-root");
+            env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
+            var diagnostics = new List<string>();
+            UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
+            try
+            {
+                var path = UpdateChecker.ResolveDefaultCachePath();
+
+                Assert.True(Path.IsPathFullyQualified(path));
+                Assert.DoesNotContain("relative-cache-root", path, StringComparison.Ordinal);
+                var diagnostic = Assert.Single(diagnostics, value => value.Contains("code=cache_root_invalid", StringComparison.Ordinal));
+                Assert.Contains("update_check_cache_diagnostic", diagnostic);
+            }
+            finally
+            {
+                UpdateChecker.CacheDiagnosticSinkForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_RateLimitResponseReportsRetryMetadata_Issue3822()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var now = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
+            var expectedRetryAt = now.UtcDateTime.AddSeconds(90);
+            var previousTimeProvider = UpdateChecker.TimeProvider;
+            UpdateChecker.TimeProvider = new FixedTimeProvider(now);
+            try
+            {
+                using var content = new ByteArrayContent(Encoding.UTF8.GetBytes(
+                    """{"message":"rate limited","token":"secret-token"}"""));
+                var handler = new StaticResponseHandler(content, (HttpStatusCode)429)
+                {
+                    ConfigureResponse = response =>
+                        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                            TimeSpan.FromSeconds(90)),
+                };
+                using var client = new HttpClient(handler)
+                {
+                    Timeout = Timeout.InfiniteTimeSpan,
+                };
+
+                var result = UpdateChecker.Check(
+                    "1.10.0",
+                    cachePath,
+                    now,
+                    token => UpdateChecker.FetchLatestReleaseTagAsync(client, TimeSpan.FromSeconds(1), token));
+
+                Assert.Equal("rate_limited", result.Error);
+                Assert.Equal("rate_limit", result.ErrorCategory);
+                Assert.Contains("429", result.ErrorHint);
+                Assert.Contains("next_retry_at=", result.ErrorHint);
+                Assert.Contains(expectedRetryAt.ToString("O", CultureInfo.InvariantCulture), result.ErrorHint);
+                Assert.DoesNotContain("secret-token", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+                Assert.False(File.Exists(cachePath));
+            }
+            finally
+            {
+                UpdateChecker.TimeProvider = previousTimeProvider;
+                if (File.Exists(cachePath))
+                    File.Delete(cachePath);
+            }
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
     {
         var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
@@ -3305,6 +3432,18 @@ exit 0
         }
     }
 
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _now;
+
+        internal FixedTimeProvider(DateTimeOffset now)
+        {
+            _now = now;
+        }
+
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
     // --- --audit-log flag parsing (#1562) ---
 
     [Fact]
@@ -3459,18 +3598,24 @@ exit 0
     private sealed class StaticResponseHandler : HttpMessageHandler
     {
         private readonly HttpContent _content;
+        private readonly HttpStatusCode _statusCode;
 
         internal HttpRequestMessage? LastRequest { get; private set; }
 
-        internal StaticResponseHandler(HttpContent content)
+        internal Action<HttpResponseMessage>? ConfigureResponse { get; init; }
+
+        internal StaticResponseHandler(HttpContent content, HttpStatusCode statusCode = HttpStatusCode.OK)
         {
             _content = content;
+            _statusCode = statusCode;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+            var response = new HttpResponseMessage(_statusCode) { Content = _content };
+            ConfigureResponse?.Invoke(response);
+            return Task.FromResult(response);
         }
     }
 
