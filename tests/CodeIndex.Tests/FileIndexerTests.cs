@@ -49,6 +49,38 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_DanglingFileSystemEntryScanCapsCandidatesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-cap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            for (var i = 0; i < 5; i++)
+                File.WriteAllText(Path.Combine(tempDir, $"file{i}.cs"), $"public class C{i} {{ }}\n");
+
+            var result = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                maxDanglingFileSystemEntryScanCandidates: 3).ScanFilesDetailed();
+
+            Assert.Equal(5, result.Files.Count);
+            var warning = Assert.Single(
+                result.Errors,
+                error => error.Message.Contains("Dangling filesystem entry scan truncated", StringComparison.Ordinal));
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("Dangling filesystem entry scan truncated after 3 candidate", warning.Message);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void Constructor_CaseProbeAvoidsRootProbeArtifacts_Issue3174()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-indexer-{Guid.NewGuid():N}");

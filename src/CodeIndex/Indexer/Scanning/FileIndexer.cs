@@ -16,6 +16,7 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    internal const int MaxDanglingFileSystemEntryScanCandidates = 4096;
     internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
     internal static Func<string, FileSystemInfo?>? ResolveDirectoryLinkTargetForTesting { get; set; }
 
@@ -473,6 +474,7 @@ public class FileIndexer
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
+    private readonly int _maxDanglingFileSystemEntryScanCandidates;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -1018,7 +1020,8 @@ public class FileIndexer
         long? maxFileSizeBytes,
         Func<string, bool?>? directoryIgnoreCaseProbe,
         Func<string, IEnumerable<string>>? enumerateFiles = null,
-        SymlinkPolicy symlinkPolicy = SymlinkPolicy.None)
+        SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
+        int? maxDanglingFileSystemEntryScanCandidates = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
@@ -1030,6 +1033,9 @@ public class FileIndexer
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;
+        _maxDanglingFileSystemEntryScanCandidates = Math.Max(
+            1,
+            maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(_projectRoot);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
@@ -2528,9 +2534,22 @@ public class FileIndexer
         DirectoryScanState scanState,
         CancellationToken cancellationToken)
     {
+        var candidateLimit = _maxDanglingFileSystemEntryScanCandidates;
+        var candidateCount = 0;
         foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            candidateCount++;
+            if (candidateCount > candidateLimit)
+            {
+                var relativeDir = ToRelativePath(dir);
+                scanState.Errors.Add(new ScanError(
+                    relativeDir,
+                    $"Dangling filesystem entry scan truncated after {candidateLimit:N0} candidate(s); additional dangling symlink diagnostics in this directory may be omitted.",
+                    ScanIssueSeverity.Warning));
+                return;
+            }
+
             var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
             if (!IsReparsePoint(entry) || ReparsePointTargetExists(entry))
                 continue;
