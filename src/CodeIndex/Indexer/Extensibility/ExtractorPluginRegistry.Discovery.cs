@@ -51,9 +51,13 @@ public static partial class ExtractorPluginRegistry
         {
             return Directory.EnumerateFiles(directory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "plugin",
+                "Plugin directory",
+                ex);
+            ReportPluginDirectorySkipped(directory, diagnostic.Message, diagnostic.Category);
             return null;
         }
     }
@@ -69,9 +73,13 @@ public static partial class ExtractorPluginRegistry
             pluginPath = enumerator.Current;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory", "plugin_directory_enumeration_failed");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "plugin",
+                "Plugin directory",
+                ex);
+            ReportPluginDirectorySkipped(directory, diagnostic.Message, diagnostic.Category);
             return false;
         }
     }
@@ -158,9 +166,13 @@ public static partial class ExtractorPluginRegistry
         {
             return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly).GetEnumerator();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "pattern",
+                "Pattern directory",
+                ex);
+            ReportPatternDirectoryRejected(directory, diagnostic.Message, diagnostic.Category);
             return null;
         }
     }
@@ -176,9 +188,13 @@ public static partial class ExtractorPluginRegistry
             patternPath = enumerator.Current;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
-            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "pattern",
+                "Pattern directory",
+                ex);
+            ReportPatternDirectoryRejected(directory, diagnostic.Message, diagnostic.Category);
             return false;
         }
     }

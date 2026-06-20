@@ -32,6 +32,9 @@ public static partial class ExtractorPluginRegistry
     }
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
+        => ReportPatternDirectoryRejected(path, reason, "pattern_directory_rejected");
+
+    private static void ReportPatternDirectoryRejected(string path, string reason, string category)
     {
         Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
@@ -41,7 +44,7 @@ public static partial class ExtractorPluginRegistry
             severity: "error",
             $"Pattern directory skipped: {reason}",
             countsAsSkippedFile: false,
-            category: "pattern_directory_rejected");
+            category: category);
     }
 
     private static void ReportPatternDirectorySkipped(string path, string reason)

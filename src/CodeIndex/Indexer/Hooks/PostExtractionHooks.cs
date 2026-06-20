@@ -214,13 +214,17 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             return Directory.EnumerateFiles(hooksDirectory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "hook",
+                "Hook directory",
+                ex);
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                "Failed to enumerate hook directory.",
-                category: "hook_directory_enumeration_failed");
+                diagnostic.Message,
+                category: diagnostic.Category);
             return null;
         }
     }
@@ -293,13 +297,17 @@ public sealed class PostExtractionHookRunner : IDisposable
             dllPath = enumerator.Current;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
+            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
+                "hook",
+                "Hook directory",
+                ex);
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                "Failed to enumerate hook directory.",
-                category: "hook_directory_enumeration_failed");
+                diagnostic.Message,
+                category: diagnostic.Category);
             return false;
         }
     }
