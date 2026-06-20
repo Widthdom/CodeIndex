@@ -6,8 +6,7 @@ public static partial class ExtractorPluginRegistry
 {
     private static void LoadPluginAssemblies(IEnumerable<string> directories)
     {
-        var pluginPaths = EnumeratePluginAssemblyPaths(directories).ToArray();
-        foreach (var pluginPath in pluginPaths)
+        foreach (var pluginPath in EnumeratePluginAssemblyPaths(directories))
             TryLoadPlugin(pluginPath);
     }
 

@@ -469,6 +469,81 @@ public class ExtractorPluginRegistryTests
         }
     }
 
+    [Fact]
+    public void LoadPatternConfigs_RecordsPatternTimeoutDiagnostic_Issue3821()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_timeout_3821");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "slow.yaml",
+                    "language: \"timeoutdsl\"\nextensions:\n  - extension: \".timeouttoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("timeoutdsl", out var extractor));
+
+                var stderr = ConsoleCapture.CaptureError(() =>
+                {
+                    var symbols = extractor.Extract(
+                        1,
+                        new string('a', 10_000) + "!",
+                        new ExtractionContext("timeoutdsl", Path.Combine(projectRoot, "sample.timeouttoy")));
+
+                    Assert.Empty(symbols);
+                });
+                var diagnostic = Assert.Single(
+                    ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
+                    item => item.Category == "pattern_regex_timeout");
+
+                Assert.Equal("pattern", diagnostic.Kind);
+                Assert.Equal("warning", diagnostic.Severity);
+                Assert.Equal(".cdidx/patterns/slow.yaml", diagnostic.Path);
+                Assert.Contains("timeoutdsl", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("class", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("Pattern extractor", stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigs_SanitizesKindInRegexLengthRejection_Issue3821()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_kind_sanitized_3821");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "long-regex.yaml",
+                    $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"/private/secret/kind\"\n    regex: \"{new string('x', ExtractorPluginRegistry.MaxPatternRegexLength + 1)}\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal("invalid_pattern_config", diagnostic.Category);
+                Assert.Contains("regex for kind", diagnostic.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("/private/secret", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
     private static void WritePatternConfig(string projectRoot, string fileName, string content)
     {
         var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);

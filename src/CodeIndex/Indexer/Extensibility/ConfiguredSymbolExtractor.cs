@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -13,7 +14,7 @@ internal sealed class ConfiguredSymbolExtractor(
     private readonly HashSet<PatternRule> disabledTimeoutPatterns = [];
     private readonly HashSet<string> timeoutWarnings = new(StringComparer.Ordinal);
 
-    internal sealed record PatternRule(string Kind, Regex Regex);
+    internal sealed record PatternRule(string Kind, Regex Regex, string SourcePath = "");
 
     public string Language { get; } = language;
 
@@ -84,7 +85,8 @@ internal sealed class ConfiguredSymbolExtractor(
         if (!shouldReport)
             return;
 
+        ExtractorPluginRegistry.ReportPatternExtractorTimeout(pattern.SourcePath, Language, pattern.Kind);
         CommandErrorWriter.WriteStderr(
-            $"[cdidx] Pattern extractor for language '{Language}' kind '{pattern.Kind}' timed out after {(int)ExtractorPluginRegistry.PatternRegexTimeout.TotalMilliseconds}ms; skipped this pattern.");
+            $"[cdidx] Pattern extractor for language '{DiagnosticSanitizer.ForMessage(Language)}' kind '{DiagnosticSanitizer.ForMessage(pattern.Kind)}' timed out after {(int)ExtractorPluginRegistry.PatternRegexTimeout.TotalMilliseconds}ms; skipped this pattern.");
     }
 }
