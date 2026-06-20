@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -1402,23 +1403,59 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void CreateInstallerProcessStartInfo_UsesArgumentList()
+    public void CreateInstallerProcessStartInfo_UsesExplicitLaunchContract_Issue3685()
     {
         if (OperatingSystem.IsWindows())
             return;
 
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx installer launch {Guid.NewGuid():N}");
+        var script = Path.Combine(root, "install script's path.sh");
         var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
-            "/tmp/install script's path.sh",
-            "v1.27.0",
-            "/opt/cdidx install");
+            script,
+            "v1.27.0-rc.1",
+            "/opt/cdidx install & safe");
 
         Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
         Assert.Equal("bash", Path.GetFileName(startInfo.FileName));
         Assert.NotEqual("bash", startInfo.FileName);
         Assert.False(startInfo.UseShellExecute);
+        Assert.False(startInfo.RedirectStandardOutput);
+        Assert.False(startInfo.RedirectStandardError);
         Assert.Equal(string.Empty, startInfo.Arguments);
-        Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
-        Assert.Equal("/opt/cdidx install", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+        Assert.Equal(Path.GetFullPath(root), startInfo.WorkingDirectory);
+        Assert.Equal([Path.GetFullPath(script), "v1.27.0-rc.1"], startInfo.ArgumentList.ToArray());
+        Assert.Equal("/opt/cdidx install & safe", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+    }
+
+    [Fact]
+    public void RunInstallerProcess_StartFailureReturnsInstallError_Issue3685()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_start_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = Path.Combine(root, "missing-installer-shell"),
+                    UseShellExecute = false,
+                };
+                startInfo.ArgumentList.Add(Path.Combine(root, "install script.sh"));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromSeconds(10)));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("failed to start install.sh for upgrade", stderr);
+                Assert.Contains("rerun `install.sh` manually", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.ComponentModel;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -3292,12 +3293,14 @@ internal static partial class ProgramRunner
 
     internal static ProcessStartInfo CreateInstallerProcessStartInfo(string scriptPath, string releaseTag, string installDir)
     {
+        var fullScriptPath = Path.GetFullPath(scriptPath);
         var startInfo = new ProcessStartInfo
         {
             FileName = ResolveTrustedBashPath(),
             UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(fullScriptPath) ?? string.Empty,
         };
-        startInfo.ArgumentList.Add(scriptPath);
+        startInfo.ArgumentList.Add(fullScriptPath);
         startInfo.ArgumentList.Add(releaseTag);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
@@ -3336,28 +3339,75 @@ internal static partial class ProgramRunner
             startInfo.RedirectStandardError = true;
         }
 
-        using var process = Process.Start(startInfo);
-        if (process == null)
+        Process? process;
+        try
+        {
+            process = Process.Start(startInfo);
+        }
+        catch (Exception ex) when (IsInstallerProcessStartException(ex))
         {
             if (!suppressOutput)
-                CommandErrorWriter.WriteStderr("Error: failed to start install.sh for upgrade.");
+            {
+                CommandErrorWriter.WriteStderr($"Error: failed to start install.sh for upgrade ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+            }
             return InstallerProcessResult.Failure(CommandExitCodes.InstallError);
         }
 
-        var outputDrainTask = suppressOutput
-            ? DrainSuppressedInstallerOutputAsync(process)
-            : Task.FromResult(SuppressedInstallerOutputResult.Empty);
-
-        try
+        if (process == null)
         {
-            var waitTask = process.WaitForExitAsync(cancellationToken);
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
-            var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
-            if (completedTask == waitTask)
+            if (!suppressOutput)
             {
-                timeoutCts.Cancel();
-                waitTask.GetAwaiter().GetResult();
+                CommandErrorWriter.WriteStderr("Error: failed to start install.sh for upgrade.");
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+            }
+            return InstallerProcessResult.Failure(CommandExitCodes.InstallError);
+        }
+
+        using (process)
+        {
+            var outputDrainTask = suppressOutput
+                ? DrainSuppressedInstallerOutputAsync(process)
+                : Task.FromResult(SuppressedInstallerOutputResult.Empty);
+
+            try
+            {
+                var waitTask = process.WaitForExitAsync(cancellationToken);
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
+                var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
+                if (completedTask == waitTask)
+                {
+                    timeoutCts.Cancel();
+                    waitTask.GetAwaiter().GetResult();
+                    var output = outputDrainTask.GetAwaiter().GetResult();
+                    return new InstallerProcessResult(
+                        process.ExitCode,
+                        output.StdoutTail,
+                        output.StderrTail,
+                        output.Truncated);
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                    waitTask.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                TryKillProcessTree(process);
+                if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
+                {
+                    if (!suppressOutput)
+                        CommandErrorWriter.WriteStderr("Error: install.sh was cancelled and did not exit after cancellation.");
+                }
+                else
+                {
+                    outputDrainTask.GetAwaiter().GetResult();
+                }
+                throw;
+            }
+
+            if (process.HasExited)
+            {
                 var output = outputDrainTask.GetAwaiter().GetResult();
                 return new InstallerProcessResult(
                     process.ExitCode,
@@ -3366,57 +3416,37 @@ internal static partial class ProgramRunner
                     output.Truncated);
             }
 
-            if (cancellationToken.IsCancellationRequested)
-                waitTask.GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
             TryKillProcessTree(process);
             if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
             {
                 if (!suppressOutput)
-                    CommandErrorWriter.WriteStderr("Error: install.sh was cancelled and did not exit after cancellation.");
+                    CommandErrorWriter.WriteStderr("Error: install.sh timed out and did not exit after cancellation.");
             }
             else
             {
                 outputDrainTask.GetAwaiter().GetResult();
+                if (!suppressOutput)
+                    CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
             }
-            throw;
-        }
-
-        if (process.HasExited)
-        {
-            var output = outputDrainTask.GetAwaiter().GetResult();
+            if (!suppressOutput)
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+            var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
+                ? outputDrainTask.GetAwaiter().GetResult()
+                : SuppressedInstallerOutputResult.Empty;
             return new InstallerProcessResult(
-                process.ExitCode,
-                output.StdoutTail,
-                output.StderrTail,
-                output.Truncated);
+                CommandExitCodes.InstallError,
+                timeoutOutput.StdoutTail,
+                timeoutOutput.StderrTail,
+                timeoutOutput.Truncated);
         }
-
-        TryKillProcessTree(process);
-        if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
-        {
-            if (!suppressOutput)
-                CommandErrorWriter.WriteStderr("Error: install.sh timed out and did not exit after cancellation.");
-        }
-        else
-        {
-            outputDrainTask.GetAwaiter().GetResult();
-            if (!suppressOutput)
-                CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
-        }
-        if (!suppressOutput)
-            CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
-        var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
-            ? outputDrainTask.GetAwaiter().GetResult()
-            : SuppressedInstallerOutputResult.Empty;
-        return new InstallerProcessResult(
-            CommandExitCodes.InstallError,
-            timeoutOutput.StdoutTail,
-            timeoutOutput.StderrTail,
-            timeoutOutput.Truncated);
     }
+
+    private static bool IsInstallerProcessStartException(Exception ex)
+        => ex is Win32Exception
+            or InvalidOperationException
+            or FileNotFoundException
+            or DirectoryNotFoundException
+            or UnauthorizedAccessException;
 
     private static async Task<SuppressedInstallerOutputResult> DrainSuppressedInstallerOutputAsync(Process process)
     {
