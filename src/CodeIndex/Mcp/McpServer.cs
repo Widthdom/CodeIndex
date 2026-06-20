@@ -3442,7 +3442,7 @@ public partial class McpServer : IDisposable
         => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
 
     internal static bool IsUnsafeDebugEnabled()
-        => string.Equals(CdidxEnvironment.GetEnvironmentVariable(DebugEnvironmentVariable), "unsafe", StringComparison.OrdinalIgnoreCase);
+        => McpEnvironment.IsUnsafeDebugEnabled(DebugEnvironmentVariable);
 
     internal static string FormatDbPathForLog(string dbPath)
     {

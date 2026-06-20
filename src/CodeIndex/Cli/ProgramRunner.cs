@@ -2374,22 +2374,11 @@ internal static partial class ProgramRunner
 
     internal static string? ResolveMcpHttpBearerTokenFromEnvironment()
     {
-        var httpToken = NormalizeMcpToken(Environment.GetEnvironmentVariable(McpHttpTokenEnvVar), McpHttpTokenEnvVar);
+        var httpToken = McpEnvironment.GetOptionalToken(McpHttpTokenEnvVar);
         if (httpToken is not null)
             return httpToken;
 
-        return NormalizeMcpToken(Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar), McpAuthenticatorFactory.AuthTokenEnvVar);
-    }
-
-    private static string? NormalizeMcpToken(string? token, string source)
-    {
-        if (string.IsNullOrEmpty(token))
-            return null;
-
-        if (!McpAuthenticationLimits.IsTokenShapeValid(token))
-            throw new FormatException(McpAuthenticationLimits.FormatTokenShapeError(source));
-
-        return token;
+        return McpEnvironment.GetOptionalToken(McpAuthenticatorFactory.AuthTokenEnvVar);
     }
 
     private static int RunMcpHttp(McpServer server, string listenSpec)

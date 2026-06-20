@@ -2561,6 +2561,52 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void McpEnvironment_InvalidTokenDiagnosticDoesNotEchoValue_Issue3676()
+    {
+        using var env = EnvironmentVariableScope.Capture(McpAuthenticatorFactory.AuthTokenEnvVar);
+        const string invalidToken = "super secret token";
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, invalidToken);
+
+        var ex = Assert.Throws<FormatException>(() => McpEnvironment.GetOptionalToken(McpAuthenticatorFactory.AuthTokenEnvVar));
+
+        Assert.Contains(McpAuthenticatorFactory.AuthTokenEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(invalidToken, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void McpEnvironment_ReadOptInSwitch_ClassifiesSamplingValues_Issue3676()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+
+        env.Set("CDIDX_MCP_SAMPLING", null);
+        Assert.Equal(McpEnvironmentSwitchState.Unset, McpEnvironment.ReadOptInSwitch("CDIDX_MCP_SAMPLING").State);
+
+        env.Set("CDIDX_MCP_SAMPLING", " on ");
+        Assert.True(McpEnvironment.ReadOptInSwitch("CDIDX_MCP_SAMPLING").IsEnabled);
+
+        env.Set("CDIDX_MCP_SAMPLING", "off");
+        Assert.True(McpEnvironment.ReadOptInSwitch("CDIDX_MCP_SAMPLING").IsDisabled);
+
+        env.Set("CDIDX_MCP_SAMPLING", "maybe-with-secret-token");
+        Assert.True(McpEnvironment.ReadOptInSwitch("CDIDX_MCP_SAMPLING").IsInvalid);
+    }
+
+    [Fact]
+    public void McpServer_UnsafeDebugRequiresExactUnsafeValue_Issue3676()
+    {
+        using var env = EnvironmentVariableScope.Capture(McpServer.DebugEnvironmentVariable);
+
+        env.Set(McpServer.DebugEnvironmentVariable, "unsafe");
+        Assert.True(McpServer.IsUnsafeDebugEnabled());
+
+        env.Set(McpServer.DebugEnvironmentVariable, "full");
+        Assert.False(McpServer.IsUnsafeDebugEnabled());
+
+        env.Set(McpServer.DebugEnvironmentVariable, "definitely-not-unsafe");
+        Assert.False(McpServer.IsUnsafeDebugEnabled());
+    }
+
+    [Fact]
     public void TokenAuthenticator_ConfiguredWhitespaceTokenIsRejected_Issue3505()
     {
         var ex = Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator("token "));
@@ -4664,6 +4710,34 @@ public class McpServerTests : IDisposable
                 Assert.Contains(McpToolFilter.AllowEnvVarName, warning);
                 Assert.Contains("unknown MCP tool name", warning);
                 Assert.Contains("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_RedactsTokenLikeUnknownNames_Issue3676()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                const string tokenLikeValue = "0123456789abcdef0123456789abcdef";
+
+                var filter = McpToolFilter.Parse(tokenLikeValue, null);
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when allowlist only names unknown tools");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.AllowEnvVarName, warning);
+                Assert.Contains("<redacted>", warning);
+                Assert.DoesNotContain(tokenLikeValue, warning);
             }
             finally
             {

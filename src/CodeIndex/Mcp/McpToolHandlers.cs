@@ -6918,8 +6918,8 @@ public partial class McpServer
 
     private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
     {
-        var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(raw))
+        var sampling = McpEnvironment.ReadOptInSwitch(SamplingEnabledEnvironmentVariable);
+        if (sampling.State == McpEnvironmentSwitchState.Unset)
         {
             return new SuggestionSamplingDecision(
                 false,
@@ -6927,8 +6927,7 @@ public partial class McpServer
                 $"{SamplingEnabledEnvironmentVariable} is unset; suggestion metadata sampling requires explicit opt-in with true, 1, yes, or on.");
         }
 
-        var value = raw.Trim();
-        if (IsSamplingOptInValue(value))
+        if (sampling.IsEnabled)
         {
             return HasClientCapability("sampling")
                 ? new SuggestionSamplingDecision(true, "enabled", null)
@@ -6938,7 +6937,7 @@ public partial class McpServer
                     "Client did not advertise MCP sampling capability; suggestion metadata sampling skipped.");
         }
 
-        if (IsSamplingOptOutValue(value))
+        if (sampling.IsDisabled)
         {
             return new SuggestionSamplingDecision(
                 false,
@@ -6951,18 +6950,6 @@ public partial class McpServer
             "disabled",
             $"{SamplingEnabledEnvironmentVariable} contains an unrecognized value; suggestion metadata sampling disabled. Use true, 1, yes, or on to enable.");
     }
-
-    private static bool IsSamplingOptInValue(string value)
-        => value.Equals("1", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("on", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsSamplingOptOutValue(string value)
-        => value.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("no", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("off", StringComparison.OrdinalIgnoreCase);
 
     private static void AddSuggestionSamplingDiagnostics(
         JsonObject payload,

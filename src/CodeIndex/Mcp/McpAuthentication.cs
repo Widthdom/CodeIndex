@@ -265,11 +265,9 @@ public static class McpAuthenticatorFactory
 
     public static IMcpAuthenticator FromEnvironment()
     {
-        var token = Environment.GetEnvironmentVariable(AuthTokenEnvVar);
-        if (string.IsNullOrEmpty(token))
+        var token = McpEnvironment.GetOptionalToken(AuthTokenEnvVar);
+        if (token is null)
             return LocalStdioAuthenticator.Instance;
-        if (!McpAuthenticationLimits.IsTokenShapeValid(token))
-            throw new FormatException(McpAuthenticationLimits.FormatTokenShapeError(AuthTokenEnvVar));
         return new TokenMcpAuthenticator(token);
     }
 }

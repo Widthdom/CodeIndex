@@ -2402,6 +2402,8 @@ When both are set, the allowlist wins. `tools/list` only advertises enabled tool
 
 Filter parsing also warns on `stderr` when an allow/deny variable is empty, contains empty CSV entries, or names unknown tools. Unknown names in `CDIDX_MCP_TOOLS_DENY` are ignored after the warning. `CDIDX_MCP_TOOLS_ALLOW` fails closed when it is explicitly set but contains no known tool names, so a typo-only allowlist exposes no tools instead of accidentally falling back to the default surface. Oversized filter values remain rejected with a warning.
 
+MCP security-sensitive environment variables share validation diagnostics. Token variables such as `CDIDX_MCP_AUTH_TOKEN` and `CDIDX_MCP_HTTP_TOKEN` reject whitespace/control/oversized values without echoing the configured value. Tool filter warnings redact secret-shaped unknown names before writing to `stderr`. `CDIDX_MCP_SAMPLING` accepts only `1`, `true`, `yes`, or `on` as opt-in and `0`, `false`, `no`, or `off` as opt-out; anything else fails closed. MCP unsafe debug diagnostics require the exact `CDIDX_DEBUG=unsafe` value and should be used only for local troubleshooting.
+
 #### MCP roots and sampling
 
 `cdidx mcp` advertises roots and sampling support during `initialize`. When the client supports roots, `index` refreshes `roots/list` and rejects paths outside the granted client roots. `suggest_improvement` only calls `sampling/createMessage` when the client advertises sampling and `CDIDX_MCP_SAMPLING` is explicitly opted in with `1`, `true`, `yes`, or `on`; unset, opt-out, and unrecognized values fail closed and return a bounded `sampling_diagnostic` in the tool result. When enabled, sampling extracts an optional one-line title and tag list before storing the raw suggestion. Sampling prompts are byte-bounded, long fields are clamped to one-line summaries, and `toolInvocationContext` is summarized without sending its raw content to the sampling client.
@@ -4900,6 +4902,8 @@ stdio の `cdidx mcp` を信頼度の低いチャネル（転送ソケット、�
 両方指定された場合は allowlist が優先されます。`tools/list` は有効ツールのみ広告し、`initialize` の instructions 文字列も無効化されたツールを推奨しなくなります。トップレベル `tools/call` で無効化された既知ツールを呼び出した場合は、構造化された JSON-RPC エラー `-32601 Tool not enabled: <name>` を返します。`batch_query` 自体は引き続きエンベロープとして成功しますが、無効化ツールの各 slot に `code: -32601` フィールドが `error` 文字列と並んで載るため、クライアントは prose の部分一致ではなく code で分岐できます。typo などサーバーに元から無い名前は引き続き `-32602 Unknown tool` を返すため、オペレータによる無効化と typo を区別できます。比較は大小文字無視。既定は **全ツール有効** なので、オペレータがこれらの変数を設定しない限り既存デプロイへの影響はありません。
 
 filter 解析では、allow / deny 変数が空、CSV 内に空 entry がある、または未知の tool 名を含む場合に `stderr` へ警告します。`CDIDX_MCP_TOOLS_DENY` の未知名は警告後に無視されます。`CDIDX_MCP_TOOLS_ALLOW` は明示的に設定されているのに既知 tool 名が 0 件の場合 fail closed となり、typo だけの allowlist が既定の全公開 surface に戻ることを防ぎます。過大な filter 値は従来通り warning 付きで拒否されます。
+
+MCP の security-sensitive な環境変数は共通の validation 診断を使います。`CDIDX_MCP_AUTH_TOKEN` や `CDIDX_MCP_HTTP_TOKEN` のような token 変数は、空白・制御文字・過大な値を拒否しますが、設定値そのものは診断へ出しません。Tool filter の warning は、secret 風の未知名を `stderr` に書く前に redact します。`CDIDX_MCP_SAMPLING` は `1`、`true`、`yes`、`on` のみを opt-in、`0`、`false`、`no`、`off` のみを opt-out として受け付け、それ以外は fail closed します。MCP の unsafe debug 診断は正確に `CDIDX_DEBUG=unsafe` の場合だけ有効になり、local troubleshooting 専用です。
 
 #### MCP roots と sampling
 
