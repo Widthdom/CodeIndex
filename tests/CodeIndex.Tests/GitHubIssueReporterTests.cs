@@ -912,8 +912,8 @@ public class GitHubIssueReporterTests : IDisposable
             var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
 
             Assert.Null(result.IssueUrl);
-            Assert.Contains("InvalidDataException", result.Error);
-            Assert.Contains("HTTP response body exceeded", result.Error);
+            Assert.Equal("InvalidDataException", result.Error);
+            Assert.DoesNotContain("HTTP response body exceeded", result.Error);
         }
         finally
         {
@@ -951,7 +951,8 @@ public class GitHubIssueReporterTests : IDisposable
 
             Assert.Null(result.IssueUrl);
             Assert.Contains("existing-suggestion lookup failed during search", result.Error);
-            Assert.Contains("HTTP response body exceeded", result.Error);
+            Assert.Contains("InvalidDataException", result.Error);
+            Assert.DoesNotContain("HTTP response body exceeded", result.Error);
             Assert.Equal(1, handler.RequestCount);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
@@ -1025,7 +1026,8 @@ public class GitHubIssueReporterTests : IDisposable
 
             Assert.Null(result.IssueUrl);
             Assert.Contains("existing-suggestion lookup failed during label list", result.Error);
-            Assert.Contains("maximum configured depth", result.Error);
+            Assert.Contains("JsonReaderException", result.Error);
+            Assert.DoesNotContain("maximum configured depth", result.Error);
             Assert.Equal(2, handler.RequestCount);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
@@ -1171,7 +1173,7 @@ public class GitHubIssueReporterTests : IDisposable
 
             Assert.Null(result.IssueUrl);
             Assert.Contains("Json", result.Error);
-            Assert.Contains("maximum configured depth", result.Error);
+            Assert.DoesNotContain("maximum configured depth", result.Error);
         }
         finally
         {
@@ -1429,7 +1431,8 @@ public class GitHubIssueReporterTests : IDisposable
             var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
 
             Assert.Null(result.IssueUrl);
-            Assert.Equal("TaskCanceledException: request timed out", result.Error);
+            Assert.Equal("TaskCanceledException", result.Error);
+            Assert.DoesNotContain("request timed out", result.Error);
         }
         finally
         {
@@ -1524,6 +1527,91 @@ public class GitHubIssueReporterTests : IDisposable
         {
             GitHubIssueReporter.s_httpClientOverride = null;
             GitHubIssueReporter.TimeProvider = TimeProvider.System;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_SearchRateLimitIncludesRetryMetadata_Issue3823()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        var response = new HttpResponseMessage((HttpStatusCode)429)
+        {
+            Content = MakeJsonContent("""{ "message": "rate limited", "token": "secret-value" }"""),
+        };
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues", response);
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/9999" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        var fixedNow = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
+        GitHubIssueReporter.TimeProvider = new ManualTimeProvider(fixedNow);
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during search", result.Error);
+            Assert.Contains("429", result.Error);
+            Assert.Contains("next_retry_at=", result.Error);
+            Assert.Contains(fixedNow.UtcDateTime.AddSeconds(30).ToString("O", CultureInfo.InvariantCulture), result.Error);
+            Assert.DoesNotContain("secret-value", result.Error);
+            Assert.Equal(1, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+            GitHubIssueReporter.TimeProvider = TimeProvider.System;
+        }
+    }
+
+    [Fact]
+    public void TryCreateIssueDetailedAsync_SubmissionExceptionIsSanitized_Issue3823()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var mockClient = new HttpClient(new ThrowingHandler(new HttpRequestException("secret host detail")));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        var originalError = Console.Error;
+        using var capturedError = new StringWriter(CultureInfo.InvariantCulture);
+        try
+        {
+            SuggestionStore.SubmitAttemptResult result;
+            lock (TestConsoleLock.Gate)
+            {
+                Console.SetError(capturedError);
+                try
+                {
+#pragma warning disable xUnit1031
+                    result = GitHubIssueReporter.TryCreateIssueDetailedAsync(
+                            MakeRecordWithKnownHash(),
+                            "1.0.0-test")
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(originalError);
+                }
+            }
+
+            Assert.Null(result.IssueUrl);
+            Assert.Equal("HttpRequestException", result.Error);
+            Assert.Contains("HttpRequestException", capturedError.ToString());
+            Assert.DoesNotContain("secret host detail", capturedError.ToString());
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+            Console.SetError(originalError);
         }
     }
 

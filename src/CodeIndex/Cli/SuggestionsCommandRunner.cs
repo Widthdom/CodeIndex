@@ -16,7 +16,10 @@ internal static class SuggestionsCommandRunner
     internal const int MaxSuggestionIssueDraftBodyLength = 24 * 1024;
     private const string SuggestionOutputTruncationMarker = "\n[truncated]";
 
-    public static int Run(string[] args, JsonSerializerOptions jsonOptions)
+    public static int Run(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
@@ -52,7 +55,7 @@ internal static class SuggestionsCommandRunner
         {
             "list" => RunList(outputRecords, options, jsonOptions),
             "show" => RunShow(records, options, jsonOptions),
-            "export" => RunExport(outputRecords, options, jsonOptions),
+            "export" => RunExport(outputRecords, options, jsonOptions, cancellationToken),
             _ => WriteUsageError($"Unknown suggestions subcommand: {verb}")
         };
     }
@@ -145,7 +148,11 @@ internal static class SuggestionsCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int RunExport(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
+    private static int RunExport(
+        List<SuggestionRecord> records,
+        Options options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
     {
         if (options.ExportFormat == "markdown")
         {
@@ -153,7 +160,7 @@ internal static class SuggestionsCommandRunner
             return CommandExitCodes.Success;
         }
         if (options.ExportFormat == "issue-drafts")
-            return RunIssueDraftExport(records, options, jsonOptions);
+            return RunIssueDraftExport(records, options, jsonOptions, cancellationToken);
 
         var payload = new SuggestionExportJsonResult(
             JsonOutputContract.ApiVersion,
@@ -165,10 +172,21 @@ internal static class SuggestionsCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int RunIssueDraftExport(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
+    private static int RunIssueDraftExport(
+        List<SuggestionRecord> records,
+        Options options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
     {
-        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
-            return WriteUsageError(error!);
+        var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
+                options.OpenIssuesPath,
+                options.OpenIssuesRepository,
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        if (!preflightResult.Loaded)
+            return WriteUsageError(preflightResult.Error!);
+        var preflight = preflightResult.Preflight;
 
         var drafts = records.Select(record => ToIssueDraft(record, preflight)).ToList();
         var payload = new SuggestionIssueDraftExportJsonResult(
@@ -352,14 +370,15 @@ internal static class SuggestionsCommandRunner
         var title = BuildIssueDraftTitle(record);
         var labels = GitHubIssueReporter.BuildIssueLabels(record).ToList();
         var evidencePaths = NormalizeEvidencePaths(record);
-        var duplicateMatches = preflight.FindMatches(title, labels);
+        var body = BuildIssueDraftBody(record, evidencePaths);
+        var duplicateMatches = preflight.FindMatches(title, labels, evidencePaths, body);
         return new SuggestionIssueDraftJsonResult(
             record.Hash,
             ShortId(record.Hash),
             title,
             labels,
             evidencePaths,
-            BuildIssueDraftBody(record, evidencePaths),
+            body,
             new SuggestionIssueDraftSourceJsonResult(
                 record.Category,
                 record.Language,
@@ -872,4 +891,6 @@ internal sealed record SuggestionIssueDraftDuplicateMatchJsonResult(
     [property: JsonPropertyName("labels")] List<string> Labels,
     [property: JsonPropertyName("overlapping_labels")] List<string> OverlappingLabels,
     [property: JsonPropertyName("reason")] string Reason,
-    [property: JsonPropertyName("score")] double Score);
+    [property: JsonPropertyName("score")] double Score,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("signals")] List<string> Signals);

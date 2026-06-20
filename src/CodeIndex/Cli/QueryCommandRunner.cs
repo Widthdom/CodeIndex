@@ -364,7 +364,10 @@ public static partial class QueryCommandRunner
             StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
-    public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunSearch(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
@@ -621,7 +624,7 @@ public static partial class QueryCommandRunner
             }
 
             if (options.OutputFormat == OutputFormatIssueDrafts)
-                return RunSearchRecipeIssueDrafts(options, jsonOptions, exact);
+                return RunSearchRecipeIssueDrafts(options, jsonOptions, exact, cancellationToken);
 
             return RunSearchRecipe(options, jsonOptions, exact);
         }
@@ -745,7 +748,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts)
-            return RunSearchIssueDrafts(options, jsonOptions, exact);
+            return RunSearchIssueDrafts(options, jsonOptions, exact, cancellationToken);
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
@@ -1613,7 +1616,11 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static int RunSearchRecipeIssueDrafts(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    private static int RunSearchRecipeIssueDrafts(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        bool userExact,
+        CancellationToken cancellationToken)
     {
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
@@ -1625,14 +1632,21 @@ public static partial class QueryCommandRunner
         }
         var recipe = selection.Recipe;
         var scope = BuildSearchRecipeScope(recipe, options);
-        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
+        var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
+                options.OpenIssuesPath,
+                options.OpenIssuesRepository,
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        if (!preflightResult.Loaded)
         {
             WriteUsageError(
-                error!,
+                preflightResult.Error!,
                 GetUsageLineOrThrow("search"),
                 "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
             return CommandExitCodes.UsageError;
         }
+        var preflight = preflightResult.Preflight;
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -1659,16 +1673,27 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static int RunSearchIssueDrafts(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact)
+    private static int RunSearchIssueDrafts(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        bool exact,
+        CancellationToken cancellationToken)
     {
-        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
+        var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
+                options.OpenIssuesPath,
+                options.OpenIssuesRepository,
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        if (!preflightResult.Loaded)
         {
             WriteUsageError(
-                error!,
+                preflightResult.Error!,
                 GetUsageLineOrThrow("search"),
                 "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
             return CommandExitCodes.UsageError;
         }
+        var preflight = preflightResult.Preflight;
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -1987,13 +2012,14 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
-        var duplicateMatches = preflight.FindMatches(title, labels);
+        var body = BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, options);
+        var duplicateMatches = preflight.FindMatches(title, labels, evidencePaths, body);
         return new SearchIssueDraftJsonResult(
             $"{recipe.Name}/{queryResult.Name}",
             title,
             labels,
             evidencePaths,
-            BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, options),
+            body,
             new SearchIssueDraftSourceJsonResult(
                 recipe.Name,
                 queryResult.Name,
@@ -2021,13 +2047,14 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
-        var duplicateMatches = preflight.FindMatches(title, labels);
+        var body = BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths);
+        var duplicateMatches = preflight.FindMatches(title, labels, evidencePaths, body);
         return new SearchIssueDraftJsonResult(
             "search/ad-hoc",
             title,
             labels,
             evidencePaths,
-            BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths),
+            body,
             new SearchIssueDraftSourceJsonResult(
                 null,
                 null,
