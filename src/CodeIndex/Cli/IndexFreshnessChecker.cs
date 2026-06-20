@@ -13,7 +13,8 @@ internal static class IndexFreshnessChecker
     internal static IndexFreshnessCheckResult Check(
         DbReader reader,
         string? projectRoot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool? pathCaseSensitive = null)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
         {
@@ -51,7 +52,11 @@ internal static class IndexFreshnessChecker
             HeadChanged = headChanged,
         };
 
-        var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
+        var ignoreCase = pathCaseSensitive.HasValue
+            ? !pathCaseSensitive.Value
+            : GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
+        if (pathCaseSensitive.HasValue)
+            PathCasing.SeedFromWorkspace(projectRoot, ignoreCase);
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
         var indexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
         var scan = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);

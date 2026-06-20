@@ -11,6 +11,7 @@ internal static class CaseSensitivityProbeDirectory
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     internal static Action<string>? DeleteCreatedEmptyDirectoryForTesting { get; set; }
+    internal static Action<CaseSensitivityProbeCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
 
     internal static ProbePathScope CreateProbePathScope(string projectRoot, string prefix)
     {
@@ -44,6 +45,7 @@ internal static class CaseSensitivityProbeDirectory
         private readonly string _dataDirectory;
         private readonly bool _createdProbeDirectory;
         private readonly bool _createdDataDirectory;
+        private readonly List<CaseSensitivityProbeCleanupDiagnostic> _cleanupDiagnostics = [];
         private bool _disposed;
 
         internal ProbePathScope(
@@ -64,6 +66,7 @@ internal static class CaseSensitivityProbeDirectory
 
         internal string ProjectRoot { get; }
         internal string Path { get; }
+        internal IReadOnlyList<CaseSensitivityProbeCleanupDiagnostic> CleanupDiagnostics => _cleanupDiagnostics;
 
         public void Dispose()
         {
@@ -92,13 +95,47 @@ internal static class CaseSensitivityProbeDirectory
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                throw new CaseSensitivityProbeException(
-                    "Failed to clean up filesystem case-sensitivity probe directory.",
-                    ProjectRoot,
-                    ex,
-                    cleanupPath: path);
+                RecordCleanupDiagnostic(path, ex);
             }
         }
+
+        private void RecordCleanupDiagnostic(string path, Exception ex)
+        {
+            var diagnostic = new CaseSensitivityProbeCleanupDiagnostic(
+                RelativePath: FormatCleanupRelativePath(path),
+                ExceptionType: ex.GetType().Name,
+                Message: "Failed to clean up filesystem case-sensitivity probe directory.");
+            _cleanupDiagnostics.Add(diagnostic);
+
+            if (CleanupDiagnosticSinkForTesting is { } sink)
+            {
+                sink(diagnostic);
+                return;
+            }
+
+            Console.Error.WriteLine(
+                $"Warning: {diagnostic.Message} path={diagnostic.RelativePath} exception={diagnostic.ExceptionType}. " +
+                $"Remove stale {DataDirectoryName}/{ProbeDirectoryName} entries when no cdidx process is running.");
+        }
+
+        private string FormatCleanupRelativePath(string path)
+        {
+            try
+            {
+                var relative = System.IO.Path.GetRelativePath(ProjectRoot, path);
+                if (!relative.StartsWith("..", StringComparison.Ordinal) && !System.IO.Path.IsPathRooted(relative))
+                    return NormalizeRelativePath(relative);
+            }
+            catch
+            {
+            }
+
+            return DataDirectoryName + "/" + ProbeDirectoryName;
+        }
+
+        private static string NormalizeRelativePath(string path)
+            => path.Replace(System.IO.Path.DirectorySeparatorChar, '/')
+                .Replace(System.IO.Path.AltDirectorySeparatorChar, '/');
     }
 
     internal readonly record struct ProbeDirectoryScope(
@@ -122,3 +159,8 @@ internal static class CaseSensitivityProbeDirectory
     }
 
 }
+
+internal readonly record struct CaseSensitivityProbeCleanupDiagnostic(
+    string RelativePath,
+    string ExceptionType,
+    string Message);

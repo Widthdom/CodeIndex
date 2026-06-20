@@ -5981,7 +5981,7 @@ public static partial class QueryCommandRunner
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (options.CheckWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, cancellationToken);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, cancellationToken, status.PathCaseSensitive);
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
