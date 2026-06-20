@@ -15,7 +15,10 @@ internal sealed record SymbolExtractionWorkerResult(
     bool TimedOut,
     string? WorkerError,
     long DurationMs,
-    List<SymbolRecord>? Symbols);
+    List<SymbolRecord>? Symbols,
+    int RegexTimeoutCount = 0,
+    List<BoundedRegex.RegexTimeoutDiagnostic>? RegexTimeoutDiagnostics = null,
+    bool RegexTimeoutDiagnosticsTruncated = false);
 
 internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
@@ -141,7 +144,10 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 TimedOut: false,
                 WorkerError: null,
                 DurationMs: stopwatch.ElapsedMilliseconds,
-                Symbols: response.Symbols);
+                Symbols: response.Symbols,
+                RegexTimeoutCount: response.RegexTimeoutCount,
+                RegexTimeoutDiagnostics: response.RegexTimeoutDiagnostics,
+                RegexTimeoutDiagnosticsTruncated: response.RegexTimeoutDiagnosticsTruncated);
         }
     }
 
@@ -583,6 +589,7 @@ internal static class SymbolExtractionWorker
             Console.SetError(capturedError);
             WriteConsoleOutputForTestingIfRequested(options);
             DelayForTestingIfRequested(options, cancellationToken);
+            using var regexTimeouts = BoundedRegex.CaptureTimeouts(request.Lang, "symbol_extraction");
             var symbols = SymbolExtractor.Extract(
                 request.FileId,
                 request.Lang,
@@ -590,7 +597,13 @@ internal static class SymbolExtractionWorker
                 request.FilePath,
                 request.ProjectRoot,
                 cancellationToken);
-            return new WorkerResponse(symbols, null, capturedError.GetCapturedText());
+            return new WorkerResponse(
+                symbols,
+                null,
+                capturedError.GetCapturedText(),
+                regexTimeouts.TimeoutCount,
+                regexTimeouts.Diagnostics.ToList(),
+                regexTimeouts.DiagnosticsTruncated);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -768,7 +781,10 @@ internal static class SymbolExtractionWorker
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,
         string? WorkerError,
-        string? CapturedStderr);
+        string? CapturedStderr,
+        int RegexTimeoutCount = 0,
+        List<BoundedRegex.RegexTimeoutDiagnostic>? RegexTimeoutDiagnostics = null,
+        bool RegexTimeoutDiagnosticsTruncated = false);
 
     private sealed record WorkerOptions(
         int MaxProtocolLineCharacters,

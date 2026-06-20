@@ -611,6 +611,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchIssueDraftExportJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftSourceJsonResult))]
+[JsonSerializable(typeof(IssueDraftTriageMetadataJsonResult))]
 [JsonSerializable(typeof(SearchNextMatchHint))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(SearchTermOccurrence))]

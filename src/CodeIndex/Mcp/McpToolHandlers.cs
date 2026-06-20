@@ -857,15 +857,13 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "maxReferencesPerFile" or "debounce" or
                 "staleAfterSeconds" or
                 "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
             "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
                 "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
                 "rawKinds" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" or
                 "estimateOnly" or "listRecipes" => "boolean",
@@ -5404,6 +5402,15 @@ public partial class McpServer
             Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the maxSymbolsPerFile limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise maxSymbolsPerFile if this is expected.",
         };
 
+    private static FileIssue BuildMcpReferenceCountExceededIssue(string path, int referenceCount, int maxReferencesPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "reference_count_exceeded",
+            Line = 0,
+            Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the maxReferencesPerFile limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise maxReferencesPerFile if this is expected.",
+        };
+
     private static bool TryReadMcpIndexSymlinkPolicy(JsonNode? args, out FileIndexer.SymlinkPolicy symlinkPolicy, out string? error)
     {
         symlinkPolicy = FileIndexer.SymlinkPolicy.None;
@@ -5494,6 +5501,7 @@ public partial class McpServer
         bool rebuild,
         long? maxFileBytes,
         int maxSymbolsPerFile,
+        int maxReferencesPerFile,
         FileIndexer.SymlinkPolicy symlinkPolicy,
         IReadOnlyList<string> includeSymbolKinds,
         IReadOnlyList<string> excludeSymbolKinds,
@@ -5507,6 +5515,7 @@ public partial class McpServer
             ["rebuild"] = rebuild,
             ["maxFileBytes"] = maxFileBytes.HasValue ? JsonValue.Create(maxFileBytes.Value) : null,
             ["maxSymbolsPerFile"] = maxSymbolsPerFile,
+            ["maxReferencesPerFile"] = maxReferencesPerFile,
             ["followSymlinks"] = FormatMcpIndexSymlinkPolicy(symlinkPolicy),
             ["includeSymbolKind"] = ToJsonStringArray(includeSymbolKinds),
             ["excludeSymbolKind"] = ToJsonStringArray(excludeSymbolKinds),
@@ -5587,6 +5596,9 @@ public partial class McpServer
         var maxSymbolsPerFile = args?["maxSymbolsPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
         if (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit)
             return CreateToolErrorResponse(id, $"maxSymbolsPerFile must be between 1 and {IndexCommandRunner.MaxSymbolsPerFileLimit}");
+        var maxReferencesPerFile = args?["maxReferencesPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxReferencesPerFile;
+        if (maxReferencesPerFile <= 0 || maxReferencesPerFile > IndexCommandRunner.MaxReferencesPerFileLimit)
+            return CreateToolErrorResponse(id, $"maxReferencesPerFile must be between 1 and {IndexCommandRunner.MaxReferencesPerFileLimit}");
         if (!TryReadMcpIndexSymlinkPolicy(args, out var symlinkPolicy, out var symlinkPolicyError))
             return CreateToolErrorResponse(id, symlinkPolicyError!);
         var includeSymbolKinds = ReadStringOrCommaSeparatedList(args, "includeSymbolKind");
@@ -5620,6 +5632,7 @@ public partial class McpServer
             rebuild,
             maxFileBytes,
             maxSymbolsPerFile,
+            maxReferencesPerFile,
             symlinkPolicy,
             includeSymbolKinds,
             excludeSymbolKinds,
@@ -5650,7 +5663,8 @@ public partial class McpServer
                 GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value) ?? Path.GetFullPath(projectPath),
                 maxFileBytes,
                 directoryIgnoreCaseProbe: null,
-                symlinkPolicy: symlinkPolicy);
+                symlinkPolicy: symlinkPolicy,
+                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -5755,7 +5769,8 @@ public partial class McpServer
             GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
             maxFileBytes,
             directoryIgnoreCaseProbe: null,
-            symlinkPolicy: symlinkPolicy);
+            symlinkPolicy: symlinkPolicy,
+            generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -5906,7 +5921,9 @@ public partial class McpServer
                     record.Modified,
                     record.Checksum,
                     size: record.Size,
+                    lines: record.Lines,
                     language: record.Lang,
+                    generated: record.Generated,
                     allowReuse: symbolKindFilterMatchesPrior
                         && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
@@ -5916,10 +5933,17 @@ public partial class McpServer
                 if (existingId != null)
                 {
                     if (writer.CountSymbolsForFile(existingId.Value) > maxSymbolsPerFile
-                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded")
+                        || writer.CountReferencesForFile(existingId.Value) > maxReferencesPerFile
+                        || writer.HasIssueForFile(existingId.Value, "reference_count_exceeded"))
                     {
                         existingId = null;
                     }
+                }
+                if (existingId != null
+                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                {
+                    existingId = null;
                 }
                 if (existingId != null)
                 {
@@ -5936,7 +5960,31 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
+                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                if (generatedSuppressionIssue != null)
+                {
+                    writer.InsertChunks(chunks);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    var issues = IndexCommandRunner.AppendIssueIfMissing(
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                        generatedSuppressionIssue);
+                    writer.InsertIssues(fileId, issues);
+                    WriteProjectRootOnce();
+                    writer.ClearBatchInProgress();
+                    txn.Commit();
+                    processed++;
+                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
+                    McpIndexFileCommittedForTesting?.Invoke(record.Path);
+                    continue;
+                }
+                List<SymbolRecord> symbols;
+                FileIssue? symbolRegexTimeoutIssue;
+                using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "symbol_extraction"))
+                {
+                    symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
+                    symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -5944,27 +5992,49 @@ public partial class McpServer
                 if (symbols.Count > maxSymbolsPerFile)
                 {
                     var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
+                    IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                        ? [issue]
+                        : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
                     writer.InsertSymbols([]);
                     writer.InsertReferences([]);
-                    writer.InsertIssues(fileId, [issue]);
+                    writer.InsertIssues(fileId, capIssues);
                 }
                 else
                 {
                     writer.InsertChunks(chunks);
                     writer.InsertSymbols(symbols);
-                    var references = ReferenceExtractor.Extract(
-                        fileId,
-                        record.Lang,
-                        content,
-                        symbols,
-                        record.Path,
-                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                        requestToken);
+                    List<ReferenceRecord> references;
+                    FileIssue? regexTimeoutIssue;
+                    using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
+                    {
+                        references = ReferenceExtractor.Extract(
+                            fileId,
+                            record.Lang,
+                            content,
+                            symbols,
+                            record.Path,
+                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                            requestToken,
+                            maxReferenceCount: maxReferencesPerFile + 1);
+                        regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                    }
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    FileIssue? referenceCapIssue = null;
+                    if (references.Count > maxReferencesPerFile)
+                    {
+                        referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
+                        references = [];
+                    }
                     writer.InsertReferences(references);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    if (symbolRegexTimeoutIssue != null)
+                        issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
+                    if (regexTimeoutIssue != null)
+                        issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
+                    if (referenceCapIssue != null)
+                        issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);
                 }
                 WriteProjectRootOnce();
@@ -5972,23 +6042,24 @@ public partial class McpServer
                 txn.Commit();
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
-            catch (FileIndexer.BinaryFileSkippedException)
+            catch (FileIndexer.BinaryFileSkippedException ex)
             {
                 try
                 {
-                    var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
-                    if (writer.HasFileAtPath(relativePath))
-                    {
-                        using var txn = writer.BeginTransaction();
-                        writer.DeleteFileByPath(relativePath);
-                        WriteProjectRootOnce();
-                        txn.Commit();
-                    }
+                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath);
+                    using var txn = writer.BeginTransaction();
+                    var fileId = writer.UpsertFile(skippedRecord);
+                    writer.InsertChunks([]);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    writer.InsertIssues(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
+                    WriteProjectRootOnce();
+                    txn.Commit();
                 }
-                catch (Exception ex)
+                catch (Exception cleanupEx)
                 {
                     errors++;
-                    failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "delete_skipped_binary"));
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "record_skipped_binary"));
                 }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -7318,6 +7389,8 @@ public partial class McpServer
             {
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 if (record.Lang != "csharp")
+                    continue;
+                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path) != null)
                     continue;
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));

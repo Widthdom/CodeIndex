@@ -50,6 +50,24 @@ public class ChunkSplitterTests
     }
 
     [Fact]
+    public void Split_ManyValidLines_KeepsAllocationBounded()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, 5000).Select(i => $"line {i:D4} value"));
+        _ = ChunkSplitter.Split(1, "warmup\nline\n");
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var chunks = ChunkSplitter.Split(1, content);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(72, chunks.Count);
+        Assert.Equal(1, chunks[0].StartLine);
+        Assert.Equal(80, chunks[0].EndLine);
+        Assert.Equal(4971, chunks[^1].StartLine);
+        Assert.Equal(5000, chunks[^1].EndLine);
+        Assert.True(allocated < 450_000, $"Chunk splitting allocated {allocated} bytes.");
+    }
+
+    [Fact]
     public void Split_EmptyFile_ReturnsNoChunks()
     {
         // Empty content produces no chunks

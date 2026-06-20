@@ -227,7 +227,7 @@ internal static class JvmMethodReferenceExtractor
         if (!seen.Add(dedupeKey))
             return;
 
-        references.Add(new ReferenceRecord
+        ReferenceExtractor.TryAddReference(references, new ReferenceRecord
         {
             FileId = fileId,
             SymbolName = name,

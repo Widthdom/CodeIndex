@@ -337,7 +337,7 @@ public static partial class ReferenceExtractor
                 if (!seen.Add(dedupeKey))
                     continue;
 
-                references.Add(new ReferenceRecord
+                if (!TryAddReference(references, new ReferenceRecord
                 {
                     FileId = reference.FileId,
                     SymbolName = reference.SymbolName,
@@ -348,7 +348,10 @@ public static partial class ReferenceExtractor
                     ContainerKind = reference.ContainerKind,
                     ContainerName = reference.ContainerName,
                     IsSelfReference = reference.IsSelfReference,
-                });
+                }))
+                {
+                    return;
+                }
             }
         }
 
@@ -784,7 +787,7 @@ public static partial class ReferenceExtractor
             return normalized;
         }
 
-        var references = new List<ReferenceRecord>();
+        var references = CreateReferenceList(request.MaxReferenceCount);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         if (language == "csharp")
         {
@@ -839,6 +842,9 @@ public static partial class ReferenceExtractor
 
         for (int i = 0; i < lines.Length; i++)
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             if ((i & 0x3f) == 0)
                 request.CancellationToken.ThrowIfCancellationRequested();
 
@@ -2954,7 +2960,7 @@ public static partial class ReferenceExtractor
             }
         }
 
-        if (language == "csharp")
+        if (!ReferenceLimitReached(references) && language == "csharp")
         {
             CSharpReferenceExtractor.EmitSwitchExpressionTypePatternReferences(
                 lines,
@@ -2981,7 +2987,8 @@ public static partial class ReferenceExtractor
         }
 
         ApplyCSharpUsingAliasReferenceNames(references);
-        EmitCSharpBclRegexWithoutTimeoutReferences(references, seen);
+        if (!ReferenceLimitReached(references))
+            EmitCSharpBclRegexWithoutTimeoutReferences(references, seen);
         MarkMutualRecursionReferences(references);
         return references;
     }

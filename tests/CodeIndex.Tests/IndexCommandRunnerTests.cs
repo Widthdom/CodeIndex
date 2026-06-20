@@ -988,6 +988,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void LoadScanCheckpointDetailed_InvalidPayloads_ReturnsReasonedWarning()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            File.WriteAllText(checkpointPath, """{"Version":999,"GitHead":"abc123","Directories":["src"]}""");
+            var futureVersion = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(futureVersion.Directories);
+            Assert.Contains("future checkpoint version", futureVersion.WarningMessage);
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"old","Directories":["src"]}""");
+            var stale = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(stale.Directories);
+            Assert.Contains("checkpoint GitHead does not match current HEAD", stale.WarningMessage);
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"abc123","Directories":["src"]""");
+            var malformed = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(malformed.Directories);
+            Assert.Contains("malformed checkpoint JSON", malformed.WarningMessage);
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"abc123","Directories":[null]}""");
+            var invalidDirectories = IndexCommandRunner.LoadScanCheckpointDetailed(checkpointPath, "abc123");
+            Assert.Empty(invalidDirectories.Directories);
+            Assert.Contains("Directories contains a null entry", invalidDirectories.WarningMessage);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void LoadScanCheckpoint_JsonDepthOutsideBounds_ReturnsEmpty()
     {
         var projectRoot = CreateTempProject();
@@ -1010,7 +1043,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
+    public void Run_NullByteFile_PersistsNullByteIssueWithoutPartialRows()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1026,16 +1059,50 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("warnings").GetInt32());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            Assert.Equal(0, CountRows(dbPath, "files"));
+            Assert.Equal(1, CountRows(dbPath, "files"));
             Assert.Equal(0, CountRows(dbPath, "chunks"));
             Assert.Equal(0, CountRows(dbPath, "symbols"));
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+            var issue = Assert.Single(ReadFileIssues(dbPath, "null_byte"));
+            Assert.Equal("binary.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("byte offset", issue.Message);
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanJson_ProjectMarkerBudgetWarningIncludesTruncatedWarning()
+    {
+        var projectRoot = CreateTempProject();
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        try
+        {
+            var childDir = Path.Combine(projectRoot, "nested");
+            Directory.CreateDirectory(childDir);
+            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "public class App { }\n");
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting =
+                _ => Enumerable.Repeat(childDir, 8192);
+
+            var (exitCode, json, _) = RunAndCaptureJsonWithStderr([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains(
+                json.GetProperty("warnings").EnumerateArray(),
+                warning =>
+                    warning.GetProperty("message").GetString()!.Contains("Project marker discovery truncated", StringComparison.Ordinal)
+                    && warning.GetProperty("message").GetString()!.Contains("directory budget", StringComparison.Ordinal));
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -1124,6 +1191,111 @@ public class IndexCommandRunnerTests
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void Run_FileAboveMaxReferencesPerFile_FullScanPersistsReferenceCountExceededIssueOnly_Issue3719()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("--max-references-per-file", issue.Message);
+
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, raisedExitCode);
+            Assert.Equal("success", raisedJson.GetProperty("status").GetString());
+            Assert.True(CountRows(dbPath, "symbol_references") > 0);
+            Assert.Empty(reader.GetIssues("reference_count_exceeded"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FileAboveMaxReferencesPerFile_UpdatePersistsReferenceCountExceededIssueOnly_Issue3719()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.True(CountRows(dbPath, "symbol_references") > 0);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", filePath, "--max-references-per-file", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", issue.Path);
+            Assert.Contains("--max-references-per-file", issue.Message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static string BuildDenseReferenceCSharpSource(int callCount)
+    {
+        var calls = string.Join('\n', Enumerable.Range(0, callCount).Select(static _ => "            Target.Ping();"));
+        return $$"""
+namespace DenseReferences;
+
+public static class Target
+{
+    public static void Ping()
+    {
+    }
+}
+
+public sealed class Caller
+{
+    public void Run()
+    {
+{{calls}}
+    }
+}
+""";
     }
 
     [Fact]
@@ -2330,6 +2502,28 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_RejectsFallbackDiscoveryDirectoryTraversalLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_directory_limit");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "A"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "B"));
+            var limits = SolutionProjectResolverLimits.Default with { MaxFallbackDiscoveryDirectories = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("fallback project discovery traversed more than 1 directories", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");
@@ -2708,6 +2902,22 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_MaxReferencesPerFileFlag_ParsesPositiveValue_Issue3719()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-references-per-file", "42"]);
+
+        Assert.Equal(42, options.MaxReferencesPerFile);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxReferencesPerFileInlineFlag_ParsesPositiveValue_Issue3719()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-references-per-file=43"]);
+
+        Assert.Equal(43, options.MaxReferencesPerFile);
+    }
+
+    [Fact]
     public void ParseArgs_SymbolsOnlyFlag_SetsOption()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--symbols-only"]);
@@ -2732,6 +2942,16 @@ public class IndexCommandRunnerTests
 
         Assert.Equal(IndexCommandRunner.DefaultMaxSymbolsPerFile, options.MaxSymbolsPerFile);
         Assert.Contains("--max-symbols-per-file must be less than or equal to 50000", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxReferencesPerFileFlag_RejectsValueAboveMaximum_Issue3719()
+    {
+        var aboveMaximum = $"{IndexCommandRunner.MaxReferencesPerFileLimit + 1}";
+        var options = IndexCommandRunner.ParseArgs([".", $"--max-references-per-file={aboveMaximum}"]);
+
+        Assert.Equal(IndexCommandRunner.DefaultMaxReferencesPerFile, options.MaxReferencesPerFile);
+        Assert.Contains("--max-references-per-file must be less than or equal to 1000000", options.ParseError);
     }
 
     [Fact]
@@ -5832,6 +6052,103 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ConfiguredGeneratedCodePatternsKeepChunksButSkipExtraction()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        var projectRoot = CreateTempProject();
+        try
+        {
+            env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "src/generated/**");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "generated"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "generated", "GeneratedClient.cs"),
+                """
+                public class GeneratedClient
+                {
+                    public string Lookup() => "generated";
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "NormalClient.cs"),
+                """
+                public class NormalClient
+                {
+                    public string Lookup() => "normal";
+                }
+                """);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var generatedCmd = conn.CreateCommand();
+                generatedCmd.CommandText = """
+                    SELECT f.generated,
+                           (SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id AND c.content LIKE '%GeneratedClient%'),
+                           (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id),
+                           (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id),
+                           (SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id AND i.kind = @issueKind)
+                    FROM files f
+                    WHERE f.path = @path
+                    """;
+                generatedCmd.Parameters.AddWithValue("@issueKind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+                generatedCmd.Parameters.AddWithValue("@path", "src/generated/GeneratedClient.cs");
+                using (var reader = generatedCmd.ExecuteReader())
+                {
+                    Assert.True(reader.Read());
+                    Assert.Equal(0, reader.GetInt32(0));
+                    Assert.True(reader.GetInt32(1) > 0);
+                    Assert.Equal(0, reader.GetInt32(2));
+                    Assert.Equal(0, reader.GetInt32(3));
+                    Assert.Equal(1, reader.GetInt32(4));
+                }
+
+                using var normalCmd = conn.CreateCommand();
+                normalCmd.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    WHERE f.path = 'NormalClient.cs'
+                      AND s.name = 'NormalClient'
+                    """;
+                Assert.Equal(1L, (long)normalCmd.ExecuteScalar()!);
+            }
+
+            env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, null);
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "src/generated/GeneratedClient.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var updatedCmd = conn.CreateCommand();
+                updatedCmd.CommandText = """
+                    SELECT f.generated,
+                           (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id AND s.name = 'GeneratedClient'),
+                           (SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id AND i.kind = @issueKind)
+                    FROM files f
+                    WHERE f.path = @path
+                    """;
+                updatedCmd.Parameters.AddWithValue("@issueKind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+                updatedCmd.Parameters.AddWithValue("@path", "src/generated/GeneratedClient.cs");
+                using var reader = updatedCmd.ExecuteReader();
+                Assert.True(reader.Read());
+                Assert.Equal(0, reader.GetInt32(0));
+                Assert.Equal(1, reader.GetInt32(1));
+                Assert.Equal(0, reader.GetInt32(2));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_CsharpStaticInterfaceContractChange_ReindexesImplementers()
     {
         var projectRoot = CreateTempProject();
@@ -6139,7 +6456,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_Rebuild_WhenIndexedFileBecomesBinary_RemovesStaleRow()
+    public void Run_Rebuild_WhenIndexedFileBecomesBinary_PersistsNullByteIssue()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6158,7 +6475,9 @@ public class IndexCommandRunnerTests
             var rebuildExitCode = IndexCommandRunner.Run([projectRoot, "--rebuild", "--yes", "--json"], _jsonOptions);
 
             Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
-            Assert.DoesNotContain("app.py", ReadIndexedPaths(dbPath));
+            Assert.Contains("app.py", ReadIndexedPaths(dbPath));
+            var issue = Assert.Single(ReadFileIssues(dbPath).Where(issue => issue.Path == "app.py" && issue.Kind == "null_byte"));
+            Assert.Contains("byte offset 0", issue.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -7791,9 +8110,14 @@ public class IndexCommandRunnerTests
                 padding.Append(' ', 1024).Append('\n');
             File.WriteAllText(checkpointPath, checkpoint + padding);
 
-            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains(
+                json.GetProperty("warnings").EnumerateArray(),
+                warning =>
+                    warning.GetProperty("file").GetString() == "<scan_checkpoint>"
+                    && warning.GetProperty("message").GetString()!.Contains("file exceeds the scan checkpoint size limit", StringComparison.Ordinal));
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("src/a.cs", indexedPaths);
@@ -11572,6 +11896,32 @@ public class IndexCommandRunnerTests
         return reader.ListFiles(limit: 1000)
             .Select(file => file.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static List<FileIssue> ReadFileIssues(string dbPath)
+    {
+        using var connection = OpenNonPoolingConnection(dbPath);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT f.path, i.kind, i.line, i.message
+            FROM file_issues i
+            JOIN files f ON f.id = i.file_id
+            ORDER BY f.path, i.kind, i.line, i.message
+            """;
+        using var reader = command.ExecuteReader();
+        var issues = new List<FileIssue>();
+        while (reader.Read())
+        {
+            issues.Add(new FileIssue
+            {
+                Path = reader.GetString(0),
+                Kind = reader.GetString(1),
+                Line = reader.GetInt32(2),
+                Message = reader.GetString(3),
+            });
+        }
+        return issues;
     }
 
     private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)

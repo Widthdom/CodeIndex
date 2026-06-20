@@ -20,9 +20,16 @@ internal sealed class IssueDuplicatePreflight
     internal const int MaxOpenIssueBodyLength = 24 * 1024;
     internal const int MaxBodyTokenizationInputLength = 4096;
     internal const int MaxGitHubRepositoryLength = 200;
-    internal const double TitleLabelSimilarityThreshold = 0.45;
+    internal const double LowDuplicateThreshold = 0.35;
+    internal const double DefaultDuplicateThreshold = 0.45;
+    internal const double HighDuplicateThreshold = 0.7;
+    internal const double TitleLabelSimilarityThreshold = DefaultDuplicateThreshold;
     internal const double EvidencePathSimilarityThreshold = 0.34;
     internal const double BodyLabelSimilarityThreshold = 0.35;
+    internal const string LowDuplicateConfidence = "low";
+    internal const string DefaultDuplicateConfidence = "medium";
+    internal const string HighDuplicateConfidence = "high";
+    internal const string CustomDuplicateConfidence = "custom";
     private const int GitHubOpenIssuesPerPage = 100;
     private const int MaxGitHubOpenIssuePages = (MaxOpenIssueCount / GitHubOpenIssuesPerPage) + 1;
     private const string GitHubSourceName = "github";
@@ -140,11 +147,41 @@ internal sealed class IssueDuplicatePreflight
         return await TryLoadFromGitHubAsync(normalizedRepository, cancellationToken).ConfigureAwait(false);
     }
 
+    public static bool TryNormalizeDuplicateConfidence(string value, out string confidence)
+    {
+        confidence = value.Trim().ToLowerInvariant();
+        return confidence is LowDuplicateConfidence or DefaultDuplicateConfidence or HighDuplicateConfidence;
+    }
+
+    public static double ThresholdForDuplicateConfidence(string confidence) => confidence switch
+    {
+        LowDuplicateConfidence => LowDuplicateThreshold,
+        HighDuplicateConfidence => HighDuplicateThreshold,
+        _ => DefaultDuplicateThreshold,
+    };
+
+    public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(string draftTitle, IReadOnlyList<string> draftLabels)
+        => FindMatches(draftTitle, draftLabels, DefaultDuplicateThreshold, null, null);
+
     public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
         string draftTitle,
         IReadOnlyList<string> draftLabels,
-        IReadOnlyList<string>? draftEvidencePaths = null,
-        string? draftBody = null)
+        double minimumScore)
+        => FindMatches(draftTitle, draftLabels, minimumScore, null, null);
+
+    public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
+        string draftTitle,
+        IReadOnlyList<string> draftLabels,
+        IReadOnlyList<string>? draftEvidencePaths,
+        string? draftBody)
+        => FindMatches(draftTitle, draftLabels, DefaultDuplicateThreshold, draftEvidencePaths, draftBody);
+
+    public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
+        string draftTitle,
+        IReadOnlyList<string> draftLabels,
+        double minimumScore,
+        IReadOnlyList<string>? draftEvidencePaths,
+        string? draftBody)
     {
         if (!Checked || _issues.Count == 0)
             return [];
@@ -171,14 +208,15 @@ internal sealed class IssueDuplicatePreflight
             var signals = new List<string>();
             if (normalizedIssueTitle.Length > 0 && normalizedIssueTitle == normalizedDraftTitle)
             {
-                reason = "title_exact";
                 score = 1.0;
+                if (score >= minimumScore)
+                    reason = "title_exact";
                 signals.Add("title_exact");
             }
             else if (overlappingLabels.Count > 0)
             {
                 score = ScoreTitleSimilarity(draftTokens, TokenizeTitle(issue.Title));
-                if (score >= TitleLabelSimilarityThreshold)
+                if (score >= minimumScore)
                 {
                     reason = "title_label_similarity";
                     signals.Add("title_similarity");
@@ -189,8 +227,9 @@ internal sealed class IssueDuplicatePreflight
                     && (normalizedIssueTitle.Contains(normalizedDraftTitle, StringComparison.Ordinal)
                         || normalizedDraftTitle.Contains(normalizedIssueTitle, StringComparison.Ordinal)))
                 {
-                    reason = "title_label_contains";
-                    score = Math.Max(score, TitleLabelSimilarityThreshold);
+                    score = Math.Max(score, DefaultDuplicateThreshold);
+                    if (score >= minimumScore)
+                        reason = "title_label_contains";
                     signals.Add("title_contains");
                     signals.Add("label_overlap");
                 }
@@ -200,19 +239,27 @@ internal sealed class IssueDuplicatePreflight
                     ExtractEvidencePathsFromBody(issue.Body));
                 if (evidenceScore >= EvidencePathSimilarityThreshold)
                 {
-                    reason ??= "evidence_path_overlap";
-                    score = Math.Max(score, 0.65 + Math.Min(0.2, evidenceScore * 0.2));
-                    signals.Add("evidence_path_overlap");
-                    signals.Add("label_overlap");
+                    var evidenceCandidateScore = 0.65 + Math.Min(0.2, evidenceScore * 0.2);
+                    if (evidenceCandidateScore >= minimumScore)
+                    {
+                        reason ??= "evidence_path_overlap";
+                        score = Math.Max(score, evidenceCandidateScore);
+                        signals.Add("evidence_path_overlap");
+                        signals.Add("label_overlap");
+                    }
                 }
 
                 var bodyScore = ScoreTitleSimilarity(draftBodyTokens, TokenizeBody(issue.Body));
                 if (bodyScore >= BodyLabelSimilarityThreshold)
                 {
-                    reason ??= "body_label_similarity";
-                    score = Math.Max(score, 0.5 + Math.Min(0.25, bodyScore * 0.25));
-                    signals.Add("body_similarity");
-                    signals.Add("label_overlap");
+                    var bodyCandidateScore = 0.5 + Math.Min(0.25, bodyScore * 0.25);
+                    if (bodyCandidateScore >= minimumScore)
+                    {
+                        reason ??= "body_label_similarity";
+                        score = Math.Max(score, bodyCandidateScore);
+                        signals.Add("body_similarity");
+                        signals.Add("label_overlap");
+                    }
                 }
             }
 
@@ -666,11 +713,11 @@ internal sealed class IssueDuplicatePreflight
     }
 
     private static string ClassifyConfidence(double score)
-        => score >= 0.75
-            ? "high"
-            : score >= 0.5
-                ? "medium"
-                : "low";
+        => score >= HighDuplicateThreshold
+            ? HighDuplicateConfidence
+            : score >= DefaultDuplicateThreshold
+                ? DefaultDuplicateConfidence
+                : LowDuplicateConfidence;
 
     internal sealed record IssueDuplicatePreflightLoadResult(
         bool Loaded,

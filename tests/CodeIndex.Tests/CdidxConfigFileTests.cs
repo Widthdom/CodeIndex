@@ -26,6 +26,29 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_StopsAtRepositoryBoundary_Issue3826()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var repoRoot = Path.Combine(dir, "repo");
+            var nested = Path.Combine(repoRoot, "src", "app");
+            Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """{ "debug": "1" }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(nested, env.Read);
+
+            Assert.False(result.Loaded);
+            Assert.False(result.Failed);
+            Assert.Null(result.Path);
+            Assert.Empty(result.Settings);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_MaterializesKnownKeysIntoEnvironment()
     {
         var dir = CreateTempDir();
@@ -45,7 +68,8 @@ public class CdidxConfigFileTests
                   "suggestion_max_count": 250,
                   "indexing": {
                     "includeKinds": ["class"],
-                    "excludeKinds": ["test_method", "generated_parser"]
+                    "excludeKinds": ["test_method", "generated_parser"],
+                    "generatedCodePatterns": ["src/generated/**", "*.client.ts"]
                   },
                   "mcp": {
                     "tools": { "allow": ["search", "definition"], "deny": ["index"] },
@@ -69,6 +93,7 @@ public class CdidxConfigFileTests
             Assert.Equal("250", result.Settings["CDIDX_SUGGESTION_MAX_COUNT"]);
             Assert.Equal("class", result.Settings["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("test_method,generated_parser", result.Settings["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
+            Assert.Equal("src/generated/**,*.client.ts", result.Settings[IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable]);
             Assert.Equal("search,definition", result.Settings["CDIDX_MCP_TOOLS_ALLOW"]);
             Assert.Equal("index", result.Settings["CDIDX_MCP_TOOLS_DENY"]);
             Assert.Equal("5", result.Settings[RateLimiterOptions.RpsEnvVar]);

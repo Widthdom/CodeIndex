@@ -579,13 +579,15 @@ public static partial class IndexCommandRunner
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
-                    if (statMatchedId != null)
+                    if (statMatchedId != null
+                        && ExistingFileViolatesExtractionCaps(writer, statMatchedId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
                     {
-                        if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile
-                            || writer.HasIssueForFile(statMatchedId.Value, "symbol_count_exceeded"))
-                        {
-                            statMatchedId = null;
-                        }
+                        statMatchedId = null;
+                    }
+                    if (statMatchedId != null
+                        && ExistingFileGeneratedSuppressionMismatch(writer, statMatchedId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(dbPath)))
+                    {
+                        statMatchedId = null;
                     }
                     if (statMatchedId != null)
                     {
@@ -621,13 +623,15 @@ public static partial class IndexCommandRunner
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
-                    if (existingId != null)
+                    if (existingId != null
+                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
                     {
-                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
-                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
-                        {
-                            existingId = null;
-                        }
+                        existingId = null;
+                    }
+                    if (existingId != null
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                    {
+                        existingId = null;
                     }
                     if (existingId != null)
                     {
@@ -667,22 +671,48 @@ public static partial class IndexCommandRunner
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                     var chunks = ChunkSplitter.Split(fileId, content);
+                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                    if (generatedSuppressionIssue != null)
+                    {
+                        writer.InsertChunks(chunks);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
+                        var generatedIssues = AppendIssueIfMissing(
+                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                            generatedSuppressionIssue);
+                        writer.InsertIssues(fileId, generatedIssues);
+                        currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+                        fileBatchMarked = false;
+                        updated++;
+                        ftsMutated = true;
+                        WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
+                        continue;
+                    }
                     currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                    var symbols = ExtractSymbolsWithStallTimeout(
+                    var symbolExtraction = ExtractSymbolsWithStallTimeout(
                         fileId,
                         record.Lang,
                         content,
                         absPath,
                         Path.GetFullPath(options.ProjectPath!),
+                        record.Path,
                         currentUpdatePath,
                         symbolExtractionWorker,
                         cancellationToken);
+                    var symbols = symbolExtraction.Symbols;
+                    var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
@@ -698,9 +728,12 @@ public static partial class IndexCommandRunner
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
@@ -713,19 +746,38 @@ public static partial class IndexCommandRunner
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "references");
-                    var references = ReferenceExtractor.Extract(
-                        fileId,
-                        record.Lang,
-                        content,
-                        symbols,
-                        record.Path,
-                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                        cancellationToken);
+                    List<ReferenceRecord> references;
+                    FileIssue? referenceRegexTimeoutIssue;
+                    using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
+                    {
+                        references = ReferenceExtractor.Extract(
+                            fileId,
+                            record.Lang,
+                            content,
+                            symbols,
+                            record.Path,
+                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                            cancellationToken,
+                            maxReferenceCount: options.MaxReferencesPerFile + 1);
+                        referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                    }
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    FileIssue? referenceCapIssue = null;
+                    if (references.Count > options.MaxReferencesPerFile)
+                    {
+                        referenceCapIssue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                        references = [];
+                    }
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    if (symbolRegexTimeoutIssue != null)
+                        issues = AppendIssue(issues, symbolRegexTimeoutIssue);
+                    if (referenceRegexTimeoutIssue != null)
+                        issues = AppendIssue(issues, referenceRegexTimeoutIssue);
+                    if (referenceCapIssue != null)
+                        issues = AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                     writer.ClearBatchInProgress();
@@ -742,8 +794,11 @@ public static partial class IndexCommandRunner
                 }
                 catch (Exception ex)
                 {
-                    if (ex is FileIndexer.BinaryFileSkippedException)
+                    if (ex is FileIndexer.BinaryFileSkippedException binaryFile)
                     {
+                        if (fileBatchMarked)
+                            writer.ClearBatchInProgress();
+
                         warnings++;
                         warningList.Add(new CliJsonMessage(relPath, ex.Message));
                         if (!options.Json && !options.Quiet)
@@ -753,22 +808,24 @@ public static partial class IndexCommandRunner
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
 
-                        if (writer.HasFileAtPath(dbPath))
-                        {
-                            DemoteReadinessOnce();
-                            using var deleteTxn = writer.BeginTransaction();
-                            if (writer.DeleteFileByPath(dbPath))
-                            {
-                                WriteProjectRootOnce();
-                                deleteTxn.Commit();
-                                removed++;
-                                ftsMutated = true;
-                            }
-                        }
-                        else
-                        {
-                            skipped++;
-                        }
+                        DemoteReadinessOnce();
+                        writer.MarkBatchInProgress();
+                        using var txn = writer.BeginTransaction();
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        if (projectRootWritten)
+                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        WriteProjectRootOnce();
+                        var fileId = writer.UpsertFile(skippedRecord);
+                        writer.InsertChunks([]);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+
+                        updated++;
+                        ftsMutated = true;
                         continue;
                     }
 

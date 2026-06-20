@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>]";
+    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -35,6 +35,9 @@ internal static class SuggestionsCommandRunner
             CommandErrorWriter.WriteStderr(Usage);
             return CommandExitCodes.UsageError;
         }
+        if ((options.DuplicateConfidenceSpecified || options.DuplicateThresholdSpecified)
+            && (verb != "export" || options.ExportFormat != "issue-drafts"))
+            return WriteUsageError("--duplicate-confidence and --duplicate-threshold can only be used with `suggestions export --format issue-drafts`.");
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.");
         if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
@@ -188,14 +191,16 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError(preflightResult.Error!);
         var preflight = preflightResult.Preflight;
 
-        var drafts = records.Select(record => ToIssueDraft(record, preflight)).ToList();
+        var drafts = records.Select(record => ToIssueDraft(record, preflight, options)).ToList();
         var payload = new SuggestionIssueDraftExportJsonResult(
             JsonOutputContract.ApiVersion,
             drafts.Count,
             new SuggestionIssueDraftPreflightSummaryJsonResult(
                 preflight.Checked,
                 preflight.Source,
-                preflight.OpenIssueCount),
+                preflight.OpenIssueCount,
+                options.DuplicateConfidence,
+                options.DuplicateThreshold),
             drafts);
         Console.WriteLine(JsonSerializer.Serialize(
             payload,
@@ -365,20 +370,28 @@ internal static class SuggestionsCommandRunner
         record.SubmitAttemptCount,
         record.LastSubmitError);
 
-    private static SuggestionIssueDraftJsonResult ToIssueDraft(SuggestionRecord record, IssueDuplicatePreflight preflight)
+    private static SuggestionIssueDraftJsonResult ToIssueDraft(SuggestionRecord record, IssueDuplicatePreflight preflight, Options options)
     {
         var title = BuildIssueDraftTitle(record);
         var labels = GitHubIssueReporter.BuildIssueLabels(record).ToList();
         var evidencePaths = NormalizeEvidencePaths(record);
-        var body = BuildIssueDraftBody(record, evidencePaths);
-        var duplicateMatches = preflight.FindMatches(title, labels, evidencePaths, body);
+        var duplicateProbeTriage = BuildSuggestionIssueDraftTriage(record, evidencePaths, preflight.Checked, 0);
+        var duplicateProbeBody = BuildIssueDraftBody(record, evidencePaths, duplicateProbeTriage);
+        var duplicateMatches = preflight.FindMatches(
+            title,
+            labels,
+            options.DuplicateThreshold,
+            evidencePaths,
+            duplicateProbeBody);
+        var triage = BuildSuggestionIssueDraftTriage(record, evidencePaths, preflight.Checked, duplicateMatches.Count);
         return new SuggestionIssueDraftJsonResult(
             record.Hash,
             ShortId(record.Hash),
             title,
             labels,
             evidencePaths,
-            body,
+            triage,
+            BuildIssueDraftBody(record, evidencePaths, triage),
             new SuggestionIssueDraftSourceJsonResult(
                 record.Category,
                 record.Language,
@@ -389,6 +402,39 @@ internal static class SuggestionsCommandRunner
                 preflight.Checked,
                 duplicateMatches.Count,
                 duplicateMatches));
+    }
+
+    private static IssueDraftTriageMetadataJsonResult BuildSuggestionIssueDraftTriage(
+        SuggestionRecord record,
+        IReadOnlyList<string> evidencePaths,
+        bool duplicatePreflightChecked,
+        int duplicateMatchCount)
+    {
+        var severity = record.Category switch
+        {
+            "crash_report" or "unexpected_error" => "high",
+            "other" => "low",
+            _ => "medium",
+        };
+        var confidence = evidencePaths.Count > 0
+            ? "medium"
+            : !string.IsNullOrWhiteSpace(record.SampledTitle) || !string.IsNullOrWhiteSpace(record.Context)
+                ? "medium"
+                : "low";
+        return new IssueDraftTriageMetadataJsonResult(
+            severity,
+            confidence,
+            evidencePaths.Count,
+            BuildSuggestionIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
+    }
+
+    private static string BuildSuggestionIssueDraftDuplicateGuidance(bool duplicatePreflightChecked, int duplicateMatchCount)
+    {
+        if (!duplicatePreflightChecked)
+            return "Duplicate preflight was not checked; search open issues before filing.";
+        if (duplicateMatchCount > 0)
+            return "Review duplicate_preflight.matches before filing; merge evidence into an existing issue when the same root cause is already tracked.";
+        return "No duplicate candidates were found by preflight; still verify open issues before filing.";
     }
 
     private static string BuildIssueDraftTitle(SuggestionRecord record)
@@ -409,7 +455,10 @@ internal static class SuggestionsCommandRunner
             .Cast<string>()
             .ToList();
 
-    private static string BuildIssueDraftBody(SuggestionRecord record, IReadOnlyList<string> evidencePaths)
+    private static string BuildIssueDraftBody(
+        SuggestionRecord record,
+        IReadOnlyList<string> evidencePaths,
+        IssueDraftTriageMetadataJsonResult triage)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
@@ -432,6 +481,8 @@ internal static class SuggestionsCommandRunner
                 sb.AppendLine($"- {path}");
         }
         sb.AppendLine();
+        AppendSuggestionIssueDraftTriageMetadata(sb, triage);
+        sb.AppendLine();
         sb.AppendLine("## Context");
         sb.AppendLine(record.Context != null
             ? BoundSuggestionOutputValue(GitHubIssueReporter.ScrubInlineCode(record.Context), capTextFields: true)
@@ -453,6 +504,15 @@ internal static class SuggestionsCommandRunner
         if (!string.IsNullOrWhiteSpace(record.ClientVersion) && record.ClientVersion != "unknown")
             sb.AppendLine($"- cdidx_version: `{record.ClientVersion}`");
         return BoundSuggestionOutputValue(sb.ToString().TrimEnd(), MaxSuggestionIssueDraftBodyLength);
+    }
+
+    private static void AppendSuggestionIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
+    {
+        sb.AppendLine("## Triage metadata");
+        sb.AppendLine($"- severity: `{triage.Severity}`");
+        sb.AppendLine($"- confidence: `{triage.Confidence}`");
+        sb.AppendLine($"- evidence_count: `{triage.EvidenceCount}`");
+        sb.AppendLine($"- duplicate_guidance: {triage.DuplicateGuidance}");
     }
 
     private static List<string> NormalizeEvidencePaths(SuggestionRecord record)
@@ -675,6 +735,40 @@ internal static class SuggestionsCommandRunner
                     }
                     options.OpenIssuesRepository = repository;
                     break;
+                case "--duplicate-confidence":
+                    if (!TryReadValue(args, ref i, "--duplicate-confidence", out var duplicateConfidence, out var duplicateConfidenceError))
+                    {
+                        options.Error = duplicateConfidenceError;
+                        return options;
+                    }
+                    if (IssueDuplicatePreflight.TryNormalizeDuplicateConfidence(duplicateConfidence, out var normalizedDuplicateConfidence))
+                    {
+                        options.DuplicateConfidence = normalizedDuplicateConfidence;
+                        options.DuplicateThreshold = IssueDuplicatePreflight.ThresholdForDuplicateConfidence(normalizedDuplicateConfidence);
+                        options.DuplicateConfidenceSpecified = true;
+                    }
+                    else
+                    {
+                        options.Error = $"Error: --duplicate-confidence must be one of low, medium, high; got '{duplicateConfidence}'.";
+                    }
+                    break;
+                case "--duplicate-threshold":
+                    if (!TryReadValue(args, ref i, "--duplicate-threshold", out var duplicateThreshold, out var duplicateThresholdError))
+                    {
+                        options.Error = duplicateThresholdError;
+                        return options;
+                    }
+                    if (TryParseScoreThreshold("--duplicate-threshold", duplicateThreshold, out var parsedDuplicateThreshold, out var parsedDuplicateThresholdError))
+                    {
+                        options.DuplicateThreshold = parsedDuplicateThreshold;
+                        options.DuplicateConfidence = IssueDuplicatePreflight.CustomDuplicateConfidence;
+                        options.DuplicateThresholdSpecified = true;
+                    }
+                    else
+                    {
+                        options.Error = parsedDuplicateThresholdError;
+                    }
+                    break;
                 default:
                     if (arg.StartsWith("--db=", StringComparison.Ordinal))
                         options.DbPath = arg["--db=".Length..];
@@ -715,6 +809,34 @@ internal static class SuggestionsCommandRunner
                         options.OpenIssuesPath = arg["--open-issues=".Length..];
                     else if (arg.StartsWith("--repo=", StringComparison.Ordinal))
                         options.OpenIssuesRepository = arg["--repo=".Length..];
+                    else if (arg.StartsWith("--duplicate-confidence=", StringComparison.Ordinal))
+                    {
+                        var inlineConfidence = arg["--duplicate-confidence=".Length..];
+                        if (IssueDuplicatePreflight.TryNormalizeDuplicateConfidence(inlineConfidence, out var normalizedInlineConfidence))
+                        {
+                            options.DuplicateConfidence = normalizedInlineConfidence;
+                            options.DuplicateThreshold = IssueDuplicatePreflight.ThresholdForDuplicateConfidence(normalizedInlineConfidence);
+                            options.DuplicateConfidenceSpecified = true;
+                        }
+                        else
+                        {
+                            options.Error = $"Error: --duplicate-confidence must be one of low, medium, high; got '{inlineConfidence}'.";
+                        }
+                    }
+                    else if (arg.StartsWith("--duplicate-threshold=", StringComparison.Ordinal))
+                    {
+                        var inlineThreshold = arg["--duplicate-threshold=".Length..];
+                        if (TryParseScoreThreshold("--duplicate-threshold", inlineThreshold, out var parsedInlineThreshold, out var parsedInlineThresholdError))
+                        {
+                            options.DuplicateThreshold = parsedInlineThreshold;
+                            options.DuplicateConfidence = IssueDuplicatePreflight.CustomDuplicateConfidence;
+                            options.DuplicateThresholdSpecified = true;
+                        }
+                        else
+                        {
+                            options.Error = parsedInlineThresholdError;
+                        }
+                    }
                     else if (arg.StartsWith("--since=", StringComparison.Ordinal))
                     {
                         var inlineSince = arg["--since=".Length..];
@@ -742,6 +864,10 @@ internal static class SuggestionsCommandRunner
             options.Error = "Error: --status must be one of all, draft, submitted_pending_triage, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, superseded, submitted, unsubmitted.";
         if (!IsValidExportFormat(options.ExportFormat))
             options.Error = "Error: --format must be one of json, markdown, issue-drafts.";
+        if (options.DuplicateConfidenceSpecified && options.DuplicateThresholdSpecified)
+            options.Error = "Error: --duplicate-confidence and --duplicate-threshold cannot be combined; use the preset or the explicit score threshold.";
+        if ((options.DuplicateConfidenceSpecified || options.DuplicateThresholdSpecified) && options.ExportFormat != "issue-drafts")
+            options.Error = "Error: --duplicate-confidence and --duplicate-threshold can only be used with --format issue-drafts.";
         return options;
     }
 
@@ -757,6 +883,23 @@ internal static class SuggestionsCommandRunner
 
         value = 0;
         error = $"Error: {option} must be a non-negative integer.";
+        return false;
+    }
+
+    private static bool TryParseScoreThreshold(string option, string rawValue, out double value, out string? error)
+    {
+        if (double.TryParse(rawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out value) &&
+            !double.IsNaN(value) &&
+            !double.IsInfinity(value) &&
+            value >= 0 &&
+            value <= 1)
+        {
+            error = null;
+            return true;
+        }
+
+        value = IssueDuplicatePreflight.DefaultDuplicateThreshold;
+        error = $"Error: {option} must be a number between 0 and 1.";
         return false;
     }
 
@@ -789,6 +932,10 @@ internal static class SuggestionsCommandRunner
         public bool OffsetSpecified { get; set; }
         public string? OpenIssuesPath { get; set; }
         public string? OpenIssuesRepository { get; set; }
+        public string DuplicateConfidence { get; set; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
+        public double DuplicateThreshold { get; set; } = IssueDuplicatePreflight.DefaultDuplicateThreshold;
+        public bool DuplicateConfidenceSpecified { get; set; }
+        public bool DuplicateThresholdSpecified { get; set; }
         public DateTimeOffset? Since { get; set; }
         public string? Error { get; set; }
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
@@ -860,7 +1007,15 @@ internal sealed record SuggestionIssueDraftExportJsonResult(
 internal sealed record SuggestionIssueDraftPreflightSummaryJsonResult(
     [property: JsonPropertyName("checked")] bool Checked,
     [property: JsonPropertyName("source")] string? Source,
-    [property: JsonPropertyName("open_issue_count")] int OpenIssueCount);
+    [property: JsonPropertyName("open_issue_count")] int OpenIssueCount,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("minimum_score")] double MinimumScore);
+
+internal sealed record IssueDraftTriageMetadataJsonResult(
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("evidence_count")] int EvidenceCount,
+    [property: JsonPropertyName("duplicate_guidance")] string DuplicateGuidance);
 
 internal sealed record SuggestionIssueDraftJsonResult(
     [property: JsonPropertyName("suggestion_id")] string SuggestionId,
@@ -868,6 +1023,7 @@ internal sealed record SuggestionIssueDraftJsonResult(
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("labels")] List<string> Labels,
     [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
+    [property: JsonPropertyName("triage")] IssueDraftTriageMetadataJsonResult Triage,
     [property: JsonPropertyName("body")] string Body,
     [property: JsonPropertyName("source")] SuggestionIssueDraftSourceJsonResult Source,
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);

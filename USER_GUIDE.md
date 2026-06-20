@@ -454,9 +454,10 @@ cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
-or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
-CR-only line endings, likely non-UTF-8 content, Git LFS pointer placeholders, and
-malformed or truncated Dockerfile JSON-form instruction payloads.
+or symbol names: U+FFFD replacement characters, UTF-16 BOM and BOM-less
+heuristic detections, null bytes, mixed or CR-only line endings, likely non-UTF-8
+content, Git LFS pointer placeholders, and malformed or truncated Dockerfile
+JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
@@ -464,9 +465,9 @@ Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
 default `{ "count": ..., "issues": [...] }` object.
-LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
-not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
-content.
+LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
+not indexed, and their checksum stays tied to the pointer identity until you run
+`git lfs pull` and then `cdidx index .` to index the real file content.
 
 ### Find potentially unused symbols
 
@@ -990,6 +991,13 @@ The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow`.
 
+Machine-readable search exports include enough context for downstream tools to
+triage results without reparsing human text. `--format csv` and `--format tsv`
+emit stable columns for file location, label, query, recipe/query names when
+present, language, visibility, enclosing symbol, and `match_lines`. `--format sarif`
+emits SARIF 2.1.0 with rule metadata/help text, result levels, and
+normalized repository-relative artifact URIs.
+
 Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
 recommended labels, query text, exact-match mode, and false-positive guidance.
@@ -1009,6 +1017,10 @@ Recipe runs support text output, `--json` / `--format json`, `--format compact`,
 and `--format issue-drafts`; `--list-recipes` supports text or JSON. Other
 search export formats and `--json=array` are rejected for recipe modes because
 recipe output is grouped by query or list metadata.
+Recipe JSON and compact output apply `--limit` per query, include a `summary`
+with emitted/truncated counts, and mark truncated child queries with
+`next_cursor`; rerun a single child query as
+`--recipe <recipe>/<query> --cursor <next_cursor>` to page the next result set.
 The MCP `search` tool exposes the same recipe surface with
 `{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
 execution. MCP recipe runs apply the same default source scope as the CLI; pass
@@ -1016,13 +1028,20 @@ execution. MCP recipe runs apply the same default source scope as the CLI; pass
 recipe definitions. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files
 separated by the platform path separator to add configured recipe sources; each
 file may be a recipe array or `{ "recipes": [...] }`, and invalid sources are
-reported as bounded `recipe_source_diagnostics`.
+reported as bounded `recipe_source_diagnostics`. External recipes may declare
+recipe-level `default_scope`, `default_path_patterns`, and
+`default_exclude_paths`; each query may declare `severity`, `path_patterns`, and
+`exclude_paths` to narrow a query independently of the recipe default scope.
 For triage automation, `--format issue-drafts` emits draft issue objects with
-titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
-metadata. `--open-issues <path>` accepts an open-issue JSON list such as
+titles, labels, evidence paths, severity/confidence/evidence-count triage
+metadata, Markdown bodies, and duplicate-preflight metadata. `--open-issues <path>` accepts an open-issue JSON list such as
 `gh issue list --state open --json number,title,labels,url`; when omitted,
-the payload still includes `duplicate_preflight.checked: false`. Draft bodies
-include evidence paths and recipe metadata but not source snippets.
+the payload still includes `duplicate_preflight.checked: false`. Use
+`--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` to
+tune duplicate preflight strictness; the JSON summary reports `confidence` and
+`minimum_score`. Draft bodies include evidence paths and recipe metadata but not
+source snippets. These drafts are triage aids; review duplicate guidance and
+current open issues before filing.
 
 ### Debugging queries
 
@@ -1359,6 +1378,7 @@ same source location.
 | `--offset <n>` | `suggestions list`, `suggestions export` | Skip filtered suggestion records after newest-first ordering before emitting results. |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | Choose export format. JSON is the default, markdown is intended for human triage, and issue-drafts emits issue-ready draft objects. |
 | `--open-issues <path\|github\|github:owner/name>` / `--repo <owner/name>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`; both commands can also fetch live open GitHub issues with `--open-issues github --repo owner/name` or `--open-issues github:owner/name`. Inputs are capped at 8 MiB, 32 JSON nesting levels, 1000 issue entries, 32 labels per issue, and bounded title/URL/label strings. |
+| `--duplicate-confidence <low\|medium\|high>` / `--duplicate-threshold <score>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | Tune duplicate-preflight matching. `low`, `medium`, and `high` map to score thresholds of 0.35, 0.45, and 0.7; `--duplicate-threshold` accepts an explicit 0.0-1.0 score and reports `confidence: "custom"` in the JSON summary. |
 | `--issue-title <title>` / `--issue-label <label>` | `search --format issue-drafts` | Set the title for an ad hoc search draft and add label hints. `--issue-label` can be repeated or comma-separated. |
 | `--check` | `status` | Verify that `.cdidx/codeindex.db` exactly matches the current indexable workspace by comparing DB file paths/checksums against a fresh filesystem scan. Matching indexes exit `0`; stale indexes exit `5`. |
 | `--dry-run` | `index` | Scan files and report what would change without writing to the database |
@@ -1685,7 +1705,7 @@ Run `cdidx status --log-path` to print the active log directory without opening 
 
 ### Project-local configuration file (`.cdidx/config.json` / `.cdidxrc.json`)
 
-You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
+You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes. Discovery stops after checking a directory that contains `.git`, `.hg`, `.svn`, `cdidx.workspace.json`, or `.cdidx-workspace.json`, so a child workspace does not inherit a config file from an unrelated parent.
 
 Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and all detected offending fields; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
 
@@ -1706,7 +1726,8 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
   "suggestion_max_count": 5000,          // → CDIDX_SUGGESTION_MAX_COUNT
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
-    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"],     // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "generatedCodePatterns": ["src/generated/**", "*.client.ts"] // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
   },
   "mcp": {
     "tools": {
@@ -1722,7 +1743,7 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `indexing.generatedCodePatterns`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.generatedCodePatterns` treats matching relative paths or basenames as extraction-suppressed generated-code sources. Matching files remain indexed for normal text search and chunk retrieval because the query-filtered `generated` flag is not set by this option; symbol/reference extraction is skipped and `file_issues` records `generated_code_extraction_skipped`. Patterns with a slash match slash-normalized relative paths, patterns without a slash match basenames, and `*`, `?`, and `**` are supported. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
@@ -2305,7 +2326,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. Scalar values in `args_summary` are bounded before full JSON materialization, so huge numbers and strings cannot inflate diagnostics. |
-| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings, Dockerfile JSON-form diagnostics) |
+| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM/heuristic detection, likely non-UTF8 encodings, Git LFS pointer placeholders, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2424,7 +2445,7 @@ MCP security-sensitive environment variables share validation diagnostics. Token
 
 cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. GitHub submission runs outside the suggestion-store file lock and uses a 10-second timeout by default; set `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<seconds>` to tune that deadline up to 300 seconds. Non-positive, non-numeric, and larger values fall back to the 10-second default. GitHub HTTP calls use .NET's default proxy discovery, but they do not forward OS/default proxy credentials by default; set `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` only when an enterprise proxy explicitly requires those credentials. Local records include lifecycle metadata: `draft`, `submitted_pending_triage`, `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, or `superseded`, plus upstream issue URL/number fields when known. They also persist GitHub submission diagnostics (`last_submit_attempt`, `submit_attempt_count`, `last_submit_error`, and rate-limit `next_retry_at`) so operators can tell whether a suggestion was never attempted, failed transiently, is waiting for a rate-limit window, or was rejected by the API. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, optional natural-language `toolInvocationContext`, and optional repository-relative `evidencePaths` supplied by the caller. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
 
-Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. Use `cdidx suggestions export --format issue-drafts --open-issues open-issues.json` to emit issue-ready drafts with title, labels, evidence paths, body text, and duplicate matches from an open-issues JSON preflight. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts. By default, `suggestions list` and `suggestions export` emit every matching record in newest-first order; pass `--limit <n>` and `--offset <n>` to page or cap large stores. Exported JSON, markdown bundles, and issue-draft bodies cap long description/context/tool-invocation text with a `[truncated]` marker; use `cdidx suggestions show <id>` when you need the full local record body.
+Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. Use `cdidx suggestions export --format issue-drafts --open-issues open-issues.json` to emit issue-ready drafts with title, labels, evidence paths, severity/confidence/evidence-count triage metadata, body text, and duplicate matches from an open-issues JSON preflight. Add `--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` when issue-draft exports need looser or stricter duplicate matching. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts. By default, `suggestions list` and `suggestions export` emit every matching record in newest-first order; pass `--limit <n>` and `--offset <n>` to page or cap large stores. Exported JSON, markdown bundles, and issue-draft bodies cap long description/context/tool-invocation text with a `[truncated]` marker; use `cdidx suggestions show <id>` when you need the full local record body. Treat exported issue drafts as triage aids and review duplicate guidance plus current open issues before filing.
 
 Suggestion history readers can query the local store by lifecycle status, created-at threshold, category, language, or stored-order pages. These query APIs stream records from disk so tools that only need a narrow slice do not have to deserialize the whole suggestions file first.
 
@@ -2962,17 +2983,19 @@ cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
-対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder、Dockerfile の
-JSON-form instruction payload の parse / truncation 診断などです。
+対象は U+FFFD replacement character、UTF-16 BOM と BOM なし heuristic 検出、
+null byte、mixed / CR-only line ending、likely non-UTF-8 content、Git LFS pointer
+placeholder、Dockerfile の JSON-form instruction payload の parse / truncation
+診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
 エンコーディング破損の可能性を agent が区別できます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。pipeline が既定の `{ "count": ..., "issues": [...] }`
 object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
-は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
-実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
+は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
+実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
+の後に `cdidx index .` を再実行してください。
 
 ### 未使用の可能性がある symbols を探す
 
@@ -3516,6 +3539,12 @@ query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cu
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 
+機械可読な search export は、下流ツールが人間向けテキストを再解析せずに triage できる
+文脈を含みます。`--format csv` と `--format tsv` は file location、label、query、
+該当する場合の recipe/query 名、language、visibility、enclosing symbol、`match_lines`
+の安定した列を出力します。`--format sarif` は SARIF 2.1.0 として rule metadata/help text、
+result level、正規化済みの repository-relative artifact URI を出力します。
+
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
 `filesystem-traversal`、`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
@@ -3534,19 +3563,30 @@ recipe run が対応する形式は text output、`--json` / `--format json`、`
 `--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
+recipe の JSON/compact output は `--limit` を query ごとに適用し、emitted/truncated
+count を含む `summary` を出力し、truncated な child query には `next_cursor` を付けます。
+次の result set を取得するには、単一 child query を
+`--recipe <recipe>/<query> --cursor <next_cursor>` として再実行してください。
 MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
 `{"recipe":"risky-code"}` で実行できます。MCP の recipe run も CLI と同じ既定の source
 scope を適用します。docs、tests、changelog、recipe definitions を意図的に audit する場合は
 `{"auditScope":"all"}` を指定してください。`CDIDX_SEARCH_RECIPE_PATHS` に platform path
 separator 区切りの JSON file を指定すると、設定済み recipe source を追加できます。各 file は
 recipe array または `{ "recipes": [...] }` を受け付け、不正な source は bounded な
-`recipe_source_diagnostics` として報告されます。
+`recipe_source_diagnostics` として報告されます。外部 recipe は recipe-level の
+`default_scope`、`default_path_patterns`、`default_exclude_paths` を宣言できます。
+各 query は `severity`、`path_patterns`、`exclude_paths` を宣言でき、recipe の既定 scope
+とは独立して query ごとの対象を狭められます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
-Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
+severity / confidence / evidence-count の triage metadata、Markdown body、
+duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
 のような open issue JSON list を受け取り、未指定の場合も payload には
-`duplicate_preflight.checked: false` が含まれます。draft body は evidence path と
-recipe metadata を含みますが、source snippet は含めません。
+`duplicate_preflight.checked: false` が含まれます。duplicate preflight の厳しさは
+`--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` で調整でき、
+JSON summary には `confidence` と `minimum_score` が出力されます。draft body は evidence path と
+recipe metadata を含みますが、source snippet は含めません。これらの draft は triage aid なので、
+起票前に duplicate guidance と現在の open issue を確認してください。
 
 ### クエリのデバッグ
 
@@ -3880,6 +3920,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--offset <n>` | `suggestions list`, `suggestions export` | filter と新しい順の並び替え後、出力前に指定件数の提案レコードをスキップします。 |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | エクスポート形式を選びます。既定は JSON、markdown は人間の triage 共有向け、issue-drafts は Issue 作成用の draft object を出力します。 |
 | `--open-issues <path\|github\|github:owner/name>` / `--repo <owner/name>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。どちらのコマンドも `--open-issues github --repo owner/name` または `--open-issues github:owner/name` で GitHub の live open issue も取得できます。入力は 8 MiB、JSON ネスト 32 段、issue entry 1000 件、issue ごとの label 32 件、title / URL / label 文字列長の上限に制限されます。 |
+| `--duplicate-confidence <low\|medium\|high>` / `--duplicate-threshold <score>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | duplicate preflight の一致しきい値を調整します。`low`、`medium`、`high` は score threshold 0.35、0.45、0.7 に対応します。`--duplicate-threshold` は明示的な 0.0-1.0 の score を受け取り、JSON summary では `confidence: "custom"` を出力します。 |
 | `--issue-title <title>` / `--issue-label <label>` | `search --format issue-drafts` | ad hoc search draft の title を指定し、label hint を追加します。`--issue-label` は繰り返し指定またはカンマ区切りに対応します。 |
 | `--check` | `status` | DB のファイル path/checksum と現在の index 対象 workspace を比較し、`.cdidx/codeindex.db` が完全一致するか確認。完全一致なら終了コード `0`、stale なら `5` |
 | `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
@@ -4203,7 +4244,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 ### プロジェクト固有の設定ファイル (`.cdidx/config.json` / `.cdidxrc.json`)
 
-シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
+シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。探索は `.git`、`.hg`、`.svn`、`cdidx.workspace.json`、`.cdidx-workspace.json` を含むディレクトリを確認した後で停止するため、子 workspace が無関係な親ディレクトリの設定ファイルを継承しません。
 
 優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと検出できた該当フィールドすべてを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
 
@@ -4224,7 +4265,8 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
   "suggestion_max_count": 5000,          // → CDIDX_SUGGESTION_MAX_COUNT
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
-    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"],     // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "generatedCodePatterns": ["src/generated/**", "*.client.ts"] // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
   },
   "mcp": {
     "tools": {
@@ -4240,7 +4282,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`indexing.generatedCodePatterns`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.generatedCodePatterns` は一致した相対パスまたはベース名を generated-code extraction の抑制対象として扱います。この設定では query filter 用の `generated` flag を立てないため、一致したファイルも通常の全文検索と chunk 取得用には引き続き index されます。symbol/reference 抽出はスキップされ、`file_issues` に `generated_code_extraction_skipped` が記録されます。スラッシュを含む pattern は slash-normalized relative path、スラッシュを含まない pattern は basename に一致し、`*`、`?`、`**` を利用できます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
@@ -4808,7 +4850,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。`args_summary` の scalar 値は full JSON materialization の前に bounded 表示へ変換されるため、巨大な数値や文字列が診断を膨らませません。 |
-| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング、Dockerfile JSON-form 診断）を報告 |
+| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM / heuristic 検出、UTF-8 以外と推定されるエンコーディング、Git LFS pointer placeholder、Dockerfile JSON-form 診断）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
@@ -4927,7 +4969,7 @@ MCP の security-sensitive な環境変数は共通の validation 診断を使�
 
 cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は選択した DB の隣（既定は `.cdidx/suggestions-codeindex.json`）にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。GitHub 送信は suggestion-store のファイルロック外で実行され、既定では 10 秒で timeout します。この deadline は `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<秒>` で最大 300 秒まで調整できます。0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻ります。GitHub HTTP 呼び出しは .NET の既定 proxy 検出を使いますが、既定では OS/default proxy 資格情報を転送しません。企業 proxy が明示的にその資格情報を必要とする場合だけ `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` を設定してください。ローカルレコードには lifecycle metadata として `draft`、`submitted_pending_triage`、`open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded` と、判明している upstream issue URL/番号が保存されます。さらに GitHub 送信診断として `last_submit_attempt`、`submit_attempt_count`、`last_submit_error`、rate-limit 時の `next_retry_at` も永続化されるため、提案が未試行なのか、一時的に失敗したのか、rate-limit window 待ちなのか、API に拒否されたのかを運用者が判断できます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext`、任意のリポジトリ相対 `evidencePaths` が含まれます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
 
-記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。`cdidx suggestions export --format issue-drafts --open-issues open-issues.json` は、title、labels、evidence paths、body text、open issue JSON との重複候補を含む Issue 作成用 draft を出力します。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。既定では `suggestions list` と `suggestions export` は一致した全レコードを新しい順に出力します。大きなストアでは `--limit <n>` と `--offset <n>` でページングまたは出力上限を指定できます。export JSON、markdown bundle、issue draft body は長い description / context / tool-invocation text を `[truncated]` marker 付きで制限します。ローカルレコード本文をすべて確認する場合は `cdidx suggestions show <id>` を使ってください。
+記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。`cdidx suggestions export --format issue-drafts --open-issues open-issues.json` は、title、labels、evidence paths、severity / confidence / evidence-count の triage metadata、body text、open issue JSON との重複候補を含む Issue 作成用 draft を出力します。issue-draft export で重複一致を緩く、または厳しくしたい場合は `--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` を追加します。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。既定では `suggestions list` と `suggestions export` は一致した全レコードを新しい順に出力します。大きなストアでは `--limit <n>` と `--offset <n>` でページングまたは出力上限を指定できます。export JSON、markdown bundle、issue draft body は長い description / context / tool-invocation text を `[truncated]` marker 付きで制限します。ローカルレコード本文をすべて確認する場合は `cdidx suggestions show <id>` を使ってください。出力された issue draft は triage aid として扱い、起票前に duplicate guidance と現在の open issue を確認してください。
 
 提案履歴を読む側は、ライフサイクル状態、作成日時のしきい値、カテゴリ、言語、保存順ページでローカルストアを絞り込めます。これらのクエリ API はディスクからレコードをストリーミングするため、必要な範囲が小さいツールでも suggestions ファイル全体を先にデシリアライズする必要がありません。
 
