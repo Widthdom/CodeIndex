@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
@@ -7,12 +8,32 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    internal const int StructuredDataMaxJsonDepth = 64;
+    internal const int StructuredDataMaxYamlDepth = 64;
+    internal const int StructuredDataMaxSymbols = 4096;
+    internal const int StructuredDataMaxPathLength = 1024;
+    internal const int StructuredDataMaxSignatureLength = 512;
+
+    private static readonly JsonDocumentOptions StructuredJsonDocumentOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip,
+        MaxDepth = StructuredDataMaxJsonDepth,
+    };
+
+    private static readonly JsonReaderOptions StructuredJsonReaderOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip,
+        MaxDepth = StructuredDataMaxJsonDepth,
+    };
+
     private static readonly Regex JsonFallbackPropertyRegex = new(
         @"^\s*""(?<name>(?:\\.|[^""\\])+)""\s*:",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex YamlMappingKeyRegex = new(
-        @"^(?<indent>[ \t]*)(?:-\s*)?(?:""(?<double>(?:[^""]|"""")+)""|'(?<single>(?:[^']|'')+)'|(?<plain>[A-Za-z0-9_.-][A-Za-z0-9_. -]*))\s*:\s*(?<value>.*)$",
+        @"^(?<indent>[ ]*)(?:-\s*)?(?:""(?<double>(?:[^""]|"""")+)""|'(?<single>(?:[^']|'')+)'|(?<plain>[A-Za-z0-9_.-][A-Za-z0-9_. -]*))\s*:\s*(?<value>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly record struct YamlPathFrame(int Indent, string Path);
@@ -25,14 +46,23 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(content, new JsonDocumentOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip,
-            });
+            using var document = JsonDocument.Parse(content, StructuredJsonDocumentOptions);
+            var propertyLines = BuildJsonPropertyLineQueues(content, lineStarts);
 
             if (document.RootElement.ValueKind == JsonValueKind.Object)
-                ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, document.RootElement, parentPath: null, ref searchOffset, symbols);
+            {
+                ExtractJsonObjectSymbols(
+                    fileId,
+                    content,
+                    lines,
+                    lineStarts,
+                    document.RootElement,
+                    parentPath: null,
+                    ref searchOffset,
+                    symbols,
+                    propertyLines);
+            }
+
             return symbols;
         }
         catch (JsonException)
@@ -49,31 +79,43 @@ public static partial class SymbolExtractor
         JsonElement element,
         string? parentPath,
         ref int searchOffset,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        Dictionary<string, Queue<int>> propertyLines)
     {
         foreach (var property in element.EnumerateObject())
         {
+            if (symbols.Count >= StructuredDataMaxSymbols)
+                return;
+
             var name = string.IsNullOrEmpty(parentPath)
                 ? property.Name
                 : parentPath + "." + property.Name;
-            var propertyOffset = FindJsonPropertyOffset(content, property.Name, ref searchOffset);
-            var line = FindLineNumberForOffset(lineStarts, propertyOffset);
+            if (name.Length > StructuredDataMaxPathLength)
+                continue;
+
+            var line = TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
+                ? mappedLine
+                : FindLineNumberForOffset(lineStarts, FindJsonPropertyOffset(content, property.Name, ref searchOffset));
             var kind = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
                 ? "namespace"
                 : "property";
 
-            symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath));
+            if (!TryAddStructuredDataSymbol(fileId, kind, name, line, lines, parentPath, symbols))
+                return;
 
             if (property.Value.ValueKind == JsonValueKind.Object)
             {
-                ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, property.Value, name, ref searchOffset, symbols);
+                ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines);
             }
             else if (property.Value.ValueKind == JsonValueKind.Array)
             {
                 foreach (var item in property.Value.EnumerateArray())
                 {
+                    if (symbols.Count >= StructuredDataMaxSymbols)
+                        return;
+
                     if (item.ValueKind == JsonValueKind.Object)
-                        ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, item, name, ref searchOffset, symbols);
+                        ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, item, name, ref searchOffset, symbols, propertyLines);
                 }
             }
         }
@@ -84,6 +126,9 @@ public static partial class SymbolExtractor
         var symbols = new List<SymbolRecord>();
         for (var i = 0; i < lines.Length; i++)
         {
+            if (symbols.Count >= StructuredDataMaxSymbols)
+                break;
+
             var match = JsonFallbackPropertyRegex.Match(lines[i]);
             if (!match.Success)
                 continue;
@@ -92,7 +137,10 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            symbols.Add(CreateStructuredDataSymbol(fileId, "property", name, i + 1, lines, parentPath: null));
+            if (name.Length > StructuredDataMaxPathLength)
+                continue;
+
+            _ = TryAddStructuredDataSymbol(fileId, "property", name, i + 1, lines, parentPath: null, symbols);
         }
 
         return symbols;
@@ -106,6 +154,9 @@ public static partial class SymbolExtractor
 
         for (var i = 0; i < lines.Length; i++)
         {
+            if (symbols.Count >= StructuredDataMaxSymbols)
+                break;
+
             var line = lines[i];
             if (string.IsNullOrWhiteSpace(line))
                 continue;
@@ -135,11 +186,15 @@ public static partial class SymbolExtractor
 
             var parentPath = stack.Count == 0 ? null : stack[^1].Path;
             var path = string.IsNullOrEmpty(parentPath) ? key : parentPath + "." + key;
+            if (stack.Count >= StructuredDataMaxYamlDepth || path.Length > StructuredDataMaxPathLength)
+                continue;
+
             var value = StripYamlInlineComment(match.Groups["value"].Value).Trim();
             var isContainer = value.Length == 0 || value is "|" or ">" or "|-" or ">-" or "|+" or ">+";
             var kind = isContainer ? "namespace" : "property";
 
-            symbols.Add(CreateStructuredDataSymbol(fileId, kind, path, i + 1, lines, parentPath));
+            if (!TryAddStructuredDataSymbol(fileId, kind, path, i + 1, lines, parentPath, symbols))
+                break;
 
             if (isContainer)
             {
@@ -150,6 +205,22 @@ public static partial class SymbolExtractor
         }
 
         return symbols;
+    }
+
+    private static bool TryAddStructuredDataSymbol(
+        long fileId,
+        string kind,
+        string name,
+        int line,
+        string[] lines,
+        string? parentPath,
+        List<SymbolRecord> symbols)
+    {
+        if (symbols.Count >= StructuredDataMaxSymbols)
+            return false;
+
+        symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath));
+        return true;
     }
 
     private static SymbolRecord CreateStructuredDataSymbol(
@@ -169,11 +240,59 @@ public static partial class SymbolExtractor
             Line = line,
             StartLine = line,
             EndLine = line,
-            Signature = lines.Length == 0 ? null : lines[signatureIndex].Trim(),
+            Signature = lines.Length == 0 ? null : LimitStructuredDataSignature(lines[signatureIndex].Trim()),
             ContainerKind = parentPath == null ? null : "namespace",
             ContainerName = parentPath,
             ContainerQualifiedName = parentPath,
         };
+    }
+
+    private static string LimitStructuredDataSignature(string signature) =>
+        signature.Length <= StructuredDataMaxSignatureLength
+            ? signature
+            : signature[..StructuredDataMaxSignatureLength];
+
+    private static Dictionary<string, Queue<int>> BuildJsonPropertyLineQueues(string content, int[] lineStarts)
+    {
+        var propertyLines = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
+        var bytes = Encoding.UTF8.GetBytes(content);
+        var reader = new Utf8JsonReader(bytes, StructuredJsonReaderOptions);
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName)
+                continue;
+
+            var name = reader.GetString();
+            if (string.IsNullOrEmpty(name))
+                continue;
+
+            var byteOffset = (int)Math.Min(reader.TokenStartIndex, bytes.Length);
+            var charOffset = Encoding.UTF8.GetCharCount(bytes.AsSpan(0, byteOffset));
+            if (!propertyLines.TryGetValue(name, out var lines))
+            {
+                lines = new Queue<int>();
+                propertyLines.Add(name, lines);
+            }
+
+            lines.Enqueue(FindLineNumberForOffset(lineStarts, charOffset));
+        }
+
+        return propertyLines;
+    }
+
+    private static bool TryDequeueJsonPropertyLine(
+        Dictionary<string, Queue<int>> propertyLines,
+        string propertyName,
+        out int line)
+    {
+        if (propertyLines.TryGetValue(propertyName, out var lines) && lines.Count > 0)
+        {
+            line = lines.Dequeue();
+            return true;
+        }
+
+        line = 0;
+        return false;
     }
 
     private static int FindJsonPropertyOffset(string content, string propertyName, ref int searchOffset)

@@ -569,6 +569,46 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_UsesReaderOffsetsForEscapedDuplicateKeys_Issue3808()
+    {
+        const string content = """
+            {
+              "key": 1,
+              "\u006bey": 2
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content)
+            .Where(symbol => symbol.Name == "key")
+            .ToList();
+
+        Assert.Equal([2, 3], symbols.Select(symbol => symbol.Line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_Json_CapsBroadObjects_Issue3808()
+    {
+        var properties = Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+            .Select(i => $"\"p{i}\": {i}");
+        var content = "{" + string.Join(", ", properties) + "}";
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "p" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+    }
+
+    [Fact]
+    public void Extract_Json_CapsStructuredSignatureLength_Issue3808()
+    {
+        var content = "{\"key\":\"" + new string('x', SymbolExtractor.StructuredDataMaxSignatureLength + 80) + "\"}";
+
+        var symbol = Assert.Single(SymbolExtractor.Extract(1, "json", content));
+
+        Assert.True(symbol.Signature!.Length <= SymbolExtractor.StructuredDataMaxSignatureLength);
+    }
+
+    [Fact]
     public void Extract_Yaml_IndexesIndentedConfigurationKeyPaths()
     {
         const string content = """
@@ -597,6 +637,29 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.runs-on");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps.uses");
         Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_Yaml_CapsBroadMappings_Issue3808()
+    {
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+            .Select(i => $"key{i}: value"));
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "key" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+    }
+
+    [Fact]
+    public void Extract_Yaml_DoesNotTreatTabIndentationAsStructure_Issue3808()
+    {
+        const string content = "root:\n\tbad: nope\n  good: yes\n";
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "root.good");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("bad", StringComparison.Ordinal));
     }
 
     [Fact]
