@@ -132,6 +132,44 @@ public class LspServerTests
     }
 
     [Fact]
+    public async Task TryReadMessageAsync_CancellationDuringPendingRead_ThrowsOperationCanceled_Issue3769()
+    {
+        using var stream = new PendingReadStream();
+        using var cts = new CancellationTokenSource();
+
+        var readTask = LspServer.TryReadMessageAsync(stream, cts.Token).AsTask();
+        await stream.WaitForReadAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await readTask);
+    }
+
+    [Fact]
+    public async Task RunAsync_CancellationDuringPendingRead_ThrowsOperationCanceled_Issue3769()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_pending_cancel");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            using var input = new PendingReadStream();
+            using var output = new MemoryStream();
+            using var cts = new CancellationTokenSource();
+
+            var runTask = server.RunAsync(input, output, cts.Token);
+            await input.WaitForReadAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runTask);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Initialize_AdvertisesCoreCapabilities()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_initialize");
@@ -2179,5 +2217,50 @@ public class LspServerTests
         using var db = new DbContext(dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
+    }
+
+    private sealed class PendingReadStream : Stream
+    {
+        private readonly TaskCompletionSource readStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task WaitForReadAsync() => readStarted.Task;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            readStarted.TrySetResult();
+            return new ValueTask<int>(WaitForCancellationAsync(cancellationToken));
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        private static async Task<int> WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
     }
 }

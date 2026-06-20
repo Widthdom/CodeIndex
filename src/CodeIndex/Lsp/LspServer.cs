@@ -118,6 +118,7 @@ internal sealed class LspServer : IDisposable
     private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
     private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
+    internal readonly record struct MessageReadResult(bool Success, string Payload);
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -135,22 +136,29 @@ internal sealed class LspServer : IDisposable
     }
 
     /// <summary>
-    /// Compatibility wrapper that runs without caller cancellation. Prefer the overload that
-    /// accepts <see cref="CancellationToken"/> when the caller has a shutdown or disconnect token.
+    /// Compatibility wrapper that runs without caller cancellation. Prefer <see cref="RunAsync"/>
+    /// when the caller has a shutdown or disconnect token.
     /// caller cancellation を持たない互換 wrapper。shutdown / disconnect token がある場合は
-    /// <see cref="Run(Stream, Stream, CancellationToken)"/> を使う。
+    /// <see cref="RunAsync"/> を使う。
     /// </summary>
-    public int Run(Stream input, Stream output) => Run(input, output, CancellationToken.None);
+    public int Run(Stream input, Stream output) => RunAsync(input, output, CancellationToken.None).GetAwaiter().GetResult();
 
     public int Run(Stream input, Stream output, CancellationToken cancellationToken)
+        => RunAsync(input, output, cancellationToken).GetAwaiter().GetResult();
+
+    public async Task<int> RunAsync(Stream input, Stream output, CancellationToken cancellationToken = default)
     {
-        while (TryReadMessage(input, out var payload, cancellationToken))
+        while (true)
         {
+            var read = await TryReadMessageAsync(input, cancellationToken).ConfigureAwait(false);
+            if (!read.Success)
+                break;
+
             cancellationToken.ThrowIfCancellationRequested();
-            var response = HandleMessage(payload);
+            var response = HandleMessage(read.Payload);
             cancellationToken.ThrowIfCancellationRequested();
             if (response != null)
-                WriteMessage(output, response.ToJsonString(_jsonOptions));
+                await WriteMessageAsync(output, response.ToJsonString(_jsonOptions), cancellationToken).ConfigureAwait(false);
             if (_exitRequested)
                 break;
         }
@@ -1776,17 +1784,25 @@ internal sealed class LspServer : IDisposable
     };
 
     /// <summary>
-    /// Compatibility wrapper that reads without caller cancellation. Prefer the overload that
-    /// accepts <see cref="CancellationToken"/> for cancellable transports.
+    /// Compatibility wrapper that reads without caller cancellation. Prefer <see cref="TryReadMessageAsync"/>
+    /// for cancellable transports.
     /// caller cancellation を持たない互換 wrapper。キャンセル可能な transport では
-    /// token を受け取る overload を使う。
+    /// <see cref="TryReadMessageAsync"/> を使う。
     /// </summary>
     internal static bool TryReadMessage(Stream input, out string payload) =>
         TryReadMessage(input, out payload, CancellationToken.None);
 
     internal static bool TryReadMessage(Stream input, out string payload, CancellationToken cancellationToken)
     {
-        payload = string.Empty;
+        var result = TryReadMessageAsync(input, cancellationToken).AsTask().GetAwaiter().GetResult();
+        payload = result.Payload;
+        return result.Success;
+    }
+
+    internal static async ValueTask<MessageReadResult> TryReadMessageAsync(
+        Stream input,
+        CancellationToken cancellationToken = default)
+    {
         var contentLength = -1;
         var hasContentLength = false;
         var headerCount = 0;
@@ -1794,15 +1810,15 @@ internal sealed class LspServer : IDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var line = ReadAsciiLine(input, cancellationToken);
+            var line = await ReadAsciiLineAsync(input, cancellationToken).ConfigureAwait(false);
             if (line == null)
-                return false;
+                return new MessageReadResult(false, string.Empty);
             if (line.Length == 0)
                 break;
             headerCount++;
             headerBytes += line.Length;
             if (headerCount > MaxLspHeaderCount || headerBytes > MaxLspHeaderBytes)
-                return false;
+                return new MessageReadResult(false, string.Empty);
             var colon = line.IndexOf(':');
             if (colon <= 0)
                 continue;
@@ -1811,12 +1827,12 @@ internal sealed class LspServer : IDisposable
             if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
             {
                 if (hasContentLength)
-                    return false;
+                    return new MessageReadResult(false, string.Empty);
                 if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                     || parsed < 0
                     || parsed > MaxLspFrameBytes)
                 {
-                    return false;
+                    return new MessageReadResult(false, string.Empty);
                 }
 
                 hasContentLength = true;
@@ -1825,7 +1841,7 @@ internal sealed class LspServer : IDisposable
         }
 
         if (contentLength < 0)
-            return false;
+            return new MessageReadResult(false, string.Empty);
 
         var buffer = ArrayPool<byte>.Shared.Rent(contentLength);
         try
@@ -1833,13 +1849,12 @@ internal sealed class LspServer : IDisposable
             var offset = 0;
             while (offset < contentLength)
             {
-                var read = Read(input, buffer, offset, contentLength - offset, cancellationToken);
+                var read = await ReadAsync(input, buffer, offset, contentLength - offset, cancellationToken).ConfigureAwait(false);
                 if (read == 0)
-                    return false;
+                    return new MessageReadResult(false, string.Empty);
                 offset += read;
             }
-            payload = Encoding.UTF8.GetString(buffer, 0, contentLength);
-            return true;
+            return new MessageReadResult(true, Encoding.UTF8.GetString(buffer, 0, contentLength));
         }
         finally
         {
@@ -1856,7 +1871,16 @@ internal sealed class LspServer : IDisposable
         output.Flush();
     }
 
-    private static string? ReadAsciiLine(Stream input, CancellationToken cancellationToken)
+    private static async Task WriteMessageAsync(Stream output, string payload, CancellationToken cancellationToken)
+    {
+        var body = Encoding.UTF8.GetBytes(payload);
+        var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
+        await output.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+        await output.WriteAsync(body, cancellationToken).ConfigureAwait(false);
+        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<string?> ReadAsciiLineAsync(Stream input, CancellationToken cancellationToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(MaxLspHeaderLineBytes + 1);
         var length = 0;
@@ -1864,7 +1888,7 @@ internal sealed class LspServer : IDisposable
         {
             while (true)
             {
-                var read = Read(input, buffer, length, 1, cancellationToken);
+                var read = await ReadAsync(input, buffer, length, 1, cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                     return length == 0 ? null : Encoding.ASCII.GetString(buffer, 0, length);
 
@@ -1887,10 +1911,10 @@ internal sealed class LspServer : IDisposable
         }
     }
 
-    private static int Read(Stream input, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    private static ValueTask<int> ReadAsync(Stream input, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return input.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask().GetAwaiter().GetResult();
+        return input.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
     }
 
     public void Dispose()
