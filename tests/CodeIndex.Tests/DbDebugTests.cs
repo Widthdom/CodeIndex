@@ -430,6 +430,42 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void DumpToStderr_RedactedMode_BoundsAndRedactsExceptionChain_Issue3725()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
+        const string secretPath = "/Users/widthdom/private/project/token.txt";
+        const string secretToken = "0123456789abcdef0123456789abcdef";
+        try
+        {
+            DbDebug.ResetContext();
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT 1 AS id";
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                Assert.True(reader.TrackedRead());
+            }
+
+            Exception exception = new IOException($"failed to read {secretPath} token={secretToken}");
+            for (var i = 0; i < 220; i++)
+                exception = new InvalidOperationException($"outer {i} raw path {secretPath} token={secretToken}", exception);
+
+            var output = CaptureStderr(() => DbDebug.DumpToStderr(exception));
+
+            Assert.Contains(GlobalToolLog.ExceptionChainTruncationMarker, output);
+            Assert.Contains("message=\"invalid_operation\"", output);
+            Assert.DoesNotContain(secretPath, output);
+            Assert.DoesNotContain(secretToken, output);
+        }
+        finally
+        {
+            DbDebug.ResetContext();
+        }
+    }
+
+    [Fact]
     public void DumpToStderr_UnsafeMode_IncludesRawContent()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");

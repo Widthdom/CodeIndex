@@ -352,7 +352,8 @@ public static class DbDebug
             }
             catch (Exception ex)
             {
-                row.Add((name, $"<error: {ex.GetType().Name}: {ex.Message}>"));
+                var message = mode == DebugMode.Unsafe ? ex.Message : DiagnosticRedactor.ClassifyException(ex);
+                row.Add((name, $"<error: {ex.GetType().Name}: {message}>"));
                 (_lastRowReadExceptions ??= new List<Exception>()).Add(ex);
                 (_lastRowReadExceptionChains ??= new List<string>())
                     .Add($"[{name}]\n{GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe)}");
@@ -406,11 +407,15 @@ public static class DbDebug
         }
         var rootCause = GetDeepestExceptionIncludingRowReads(ex);
         if (_lastRowReadExceptionChains is { Count: > 0 })
-            sb.AppendLine($"Root cause: {rootCause.GetType().Name}: {rootCause.Message}");
+        {
+            var message = mode == DebugMode.Unsafe ? rootCause.Message : DiagnosticRedactor.ClassifyException(rootCause);
+            sb.AppendLine($"Root cause: {rootCause.GetType().Name}: {message}");
+        }
         if (mode != DebugMode.Unsafe && ex.StackTrace != null)
         {
             sb.AppendLine("Stack:");
-            sb.AppendLine(ex.StackTrace);
+            foreach (var line in ex.StackTrace.Split('\n'))
+                sb.AppendLine(DiagnosticRedactor.FormatExceptionStackLine(line.TrimEnd('\r')));
         }
         sb.AppendLine("--- END CDIDX_DEBUG ---");
         Console.Error.Write(sb.ToString());
