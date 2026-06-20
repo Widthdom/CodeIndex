@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
@@ -3145,6 +3146,7 @@ public partial class McpServer
             if (status.SqlGraphContractDegradedReason != null)
                 structured["sql_graph_contract_degraded_reason"] = status.SqlGraphContractDegradedReason;
             structured["mcp_session"] = BuildMcpSessionStatus();
+            var rateLimitDiagnostics = RateLimiter.SnapshotDiagnostics();
             structured["mcp"] = new JsonObject
             {
                 ["limits"] = new JsonObject
@@ -3172,7 +3174,13 @@ public partial class McpServer
                     ["enabled"] = RateLimiter.Options.IsEnabled,
                     ["rps"] = RateLimiter.Options.RefillTokensPerSecond,
                     ["burst"] = RateLimiter.Options.BurstCapacity,
+                    ["bucket_count"] = rateLimitDiagnostics.BucketCount,
+                    ["bucket_idle_ttl_seconds"] = rateLimitDiagnostics.BucketIdleTtlSeconds,
+                    ["next_prune_in_ms"] = rateLimitDiagnostics.NextPruneInMs,
+                    ["last_prune_age_ms"] = rateLimitDiagnostics.LastPruneAgeMs.HasValue ? JsonValue.Create(rateLimitDiagnostics.LastPruneAgeMs.Value) : null,
+                    ["last_pruned_bucket_count"] = rateLimitDiagnostics.LastPrunedBucketCount,
                 },
+                ["request_timeouts"] = BuildRequestTimeoutDiagnosticsStatus(),
             };
             var effectiveConfig = includeConfig
                 ? BuildMcpStatusEffectiveConfig(status, staleAfterSeconds, checkWorkspace, runUpdateCheck)
@@ -3417,7 +3425,10 @@ public partial class McpServer
             session["client_info"] = clientInfo;
         }
         if (_clientCapabilities is not null)
+        {
+            session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
             session["client_capabilities"] = _clientCapabilities.DeepClone();
+        }
         if (_clientCapabilitiesTruncationReason is not null)
         {
             session["client_capabilities_truncated"] = true;
@@ -3426,10 +3437,44 @@ public partial class McpServer
                 session["client_capabilities_serialized_bytes"] = serializedBytes;
             session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
             session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
+            if (!session.ContainsKey("client_capabilities_summary"))
+                session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
         }
         if (_auditLog is not null)
             session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
         return session;
+    }
+
+    private JsonObject BuildClientCapabilitiesSummary(JsonNode? capabilities)
+    {
+        var summary = new JsonObject
+        {
+            ["roots"] = _clientSupportsRoots,
+            ["sampling"] = _clientSupportsSampling,
+            ["truncated"] = _clientCapabilitiesTruncationReason is not null,
+            ["truncation_reason"] = _clientCapabilitiesTruncationReason,
+        };
+        if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
+            summary["serialized_bytes"] = serializedBytes;
+        if (capabilities is JsonObject obj)
+        {
+            summary["top_level_count"] = obj.Count;
+            summary["top_level_keys"] = new JsonArray(obj
+                .Select(kv => JsonValue.Create(McpBoundedText.ForDisplay(kv.Key, 64).Text))
+                .Take(20)
+                .ToArray<JsonNode?>());
+            summary["top_level_keys_truncated"] = obj.Count > 20;
+            if (obj["experimental"] is JsonObject experimental)
+            {
+                summary["experimental_count"] = experimental.Count;
+                summary["experimental_keys"] = new JsonArray(experimental
+                    .Select(kv => JsonValue.Create(McpBoundedText.ForDisplay(kv.Key, 64).Text))
+                    .Take(20)
+                    .ToArray<JsonNode?>());
+                summary["experimental_keys_truncated"] = experimental.Count > 20;
+            }
+        }
+        return summary;
     }
 
     private static bool IsAuditLogDegraded(AuditLogSink.AuditLogDiagnostics? diagnostics)
@@ -4603,22 +4648,50 @@ public partial class McpServer
         foreach (var kv in obj)
         {
             var key = McpBoundedText.ForDisplay(kv.Key).Text;
-            var value = kv.Value;
-            string rendered = value switch
-            {
-                null => "null",
-                JsonValue v when v.TryGetValue<string>(out var text) => JsonSerializer.Serialize(McpBoundedText.ForDisplay(text).Text),
-                JsonValue v => McpBoundedText.ForDisplay(v.ToJsonString()).Text,
-                JsonArray arr => $"[{arr.Count}]",
-                JsonObject inner => $"{{{inner.Count}}}",
-                _ => McpBoundedText.ForDisplay(value.ToJsonString()).Text,
-            };
+            var rendered = RenderBatchArgumentSummaryValue(kv.Value);
             parts.Add($"{key}={rendered}");
         }
         var joined = string.Join(", ", parts);
         if (joined.Length > BatchArgsSummaryMaxLength)
             joined = joined.Substring(0, BatchArgsSummaryMaxLength - 1) + "…";
         return joined;
+    }
+
+    private static string RenderBatchArgumentSummaryValue(JsonNode? value)
+    {
+        if (value is null)
+            return "null";
+        if (value is JsonArray arr)
+            return $"[{arr.Count}]";
+        if (value is JsonObject inner)
+            return $"{{{inner.Count}}}";
+        if (value is not JsonValue jsonValue)
+            return "<json>";
+
+        return jsonValue.GetValueKind() switch
+        {
+            JsonValueKind.String => jsonValue.TryGetValue<string>(out var text)
+                ? JsonSerializer.Serialize(McpBoundedText.ForDisplay(text).Text)
+                : "\"<string>\"",
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => "null",
+            JsonValueKind.Number => RenderBatchNumericArgument(jsonValue),
+            _ => "<json>",
+        };
+    }
+
+    private static string RenderBatchNumericArgument(JsonValue value)
+    {
+        if (value.TryGetValue<int>(out var intValue))
+            return intValue.ToString(CultureInfo.InvariantCulture);
+        if (value.TryGetValue<long>(out var longValue))
+            return longValue.ToString(CultureInfo.InvariantCulture);
+        if (value.TryGetValue<decimal>(out var decimalValue))
+            return decimalValue.ToString(CultureInfo.InvariantCulture);
+        if (value.TryGetValue<double>(out var doubleValue) && double.IsFinite(doubleValue))
+            return doubleValue.ToString("R", CultureInfo.InvariantCulture);
+        return "<number>";
     }
 
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
@@ -5729,7 +5802,11 @@ public partial class McpServer
             symbolKindFilterMetaMarkedIncomplete = true;
         }
 
-        static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(IEnumerable<string> paths, string projectRoot, List<string> diagnostics)
+        static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(
+            IEnumerable<string> paths,
+            string projectRoot,
+            List<string> diagnostics,
+            List<McpIndexDiagnostic> structuredDiagnostics)
         {
             long total = 0;
             long skipped = 0;
@@ -5747,6 +5824,13 @@ public partial class McpServer
                     diagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic(
                         "file_size_bytes_skipped",
                         FormatDiagnosticPath(projectRoot, filePath),
+                        ex));
+                    structuredDiagnostics.Add(BuildMcpIndexExceptionDiagnostic(
+                        "file_size_bytes_skipped",
+                        "skipped_file_sizing",
+                        "measure_file_size",
+                        projectRoot,
+                        filePath,
                         ex));
                 }
             }
@@ -5772,6 +5856,7 @@ public partial class McpServer
         }
 
         var indexRunDiagnostics = new List<string>();
+        var mcpIndexDiagnostics = new List<McpIndexDiagnostic>();
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -6030,7 +6115,7 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics);
+            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics);
             writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
             writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -6165,6 +6250,7 @@ public partial class McpServer
             GlobalToolLog.Error(
                 $"mcp_index_file_failures count={failures.Count} first_path={QuoteMcpIndexFailureLogValue(failures[0].Path)} first_error={QuoteMcpIndexFailureLogValue($"{failures[0].ExceptionType}: {failures[0].Message}")}");
         }
+        AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
         if (!sqlGraphContractReadyAfter)
         {
             using var signalReader = new DbReader(writer.Connection);
@@ -6200,6 +6286,126 @@ public partial class McpServer
             message,
             messageTruncated);
     }
+
+    private static McpIndexDiagnostic BuildMcpIndexExceptionDiagnostic(
+        string code,
+        string category,
+        string stage,
+        string projectRoot,
+        string filePath,
+        Exception ex)
+    {
+        var path = SanitizeMcpIndexDiagnosticPath(projectRoot, filePath);
+        var exceptionType = SanitizeMcpIndexFailureToken(ex.GetType().Name, "Exception");
+        var message = SanitizeAndCapMcpIndexFailureMessage(
+            DiagnosticRedactor.FormatExceptionStackLine(ex.Message),
+            out var messageTruncated);
+        return new McpIndexDiagnostic(code, category, path, stage, exceptionType, message, messageTruncated);
+    }
+
+    internal static JsonObject BuildMcpIndexExceptionDiagnosticForTesting(
+        string code,
+        string category,
+        string stage,
+        string projectRoot,
+        string filePath,
+        Exception ex)
+        => BuildMcpIndexDiagnosticJson(BuildMcpIndexExceptionDiagnostic(
+            code,
+            category,
+            stage,
+            projectRoot,
+            filePath,
+            ex));
+
+    private static string SanitizeMcpIndexDiagnosticPath(string projectRoot, string path)
+    {
+        try
+        {
+            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            if (!string.IsNullOrWhiteSpace(relative)
+                && relative != "."
+                && !relative.StartsWith("../", StringComparison.Ordinal)
+                && !Path.IsPathRooted(relative))
+            {
+                return McpBoundedText.ForDisplay(relative, 256).Text;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+        }
+
+        return "<redacted>";
+    }
+
+    private static void AddMcpIndexDiagnostics(
+        JsonObject structured,
+        IReadOnlyList<IndexFileFailure> failures,
+        IReadOnlyList<McpIndexDiagnostic> diagnostics)
+    {
+        var total = failures.Count + diagnostics.Count;
+        if (total == 0)
+            return;
+
+        var categories = new Dictionary<string, int>(StringComparer.Ordinal);
+        var items = new JsonArray();
+        var emitted = 0;
+        foreach (var failure in failures)
+        {
+            var diagnostic = new McpIndexDiagnostic(
+                "recoverable_index_error",
+                "recoverable_index_error",
+                failure.Path,
+                failure.Stage,
+                failure.ExceptionType,
+                failure.Message,
+                failure.MessageTruncated);
+            AddMcpIndexDiagnosticCategory(categories, diagnostic.Category);
+            if (emitted < 50)
+            {
+                items.Add(BuildMcpIndexDiagnosticJson(diagnostic));
+                emitted++;
+            }
+        }
+
+        foreach (var diagnostic in diagnostics)
+        {
+            AddMcpIndexDiagnosticCategory(categories, diagnostic.Category);
+            if (emitted < 50)
+            {
+                items.Add(BuildMcpIndexDiagnosticJson(diagnostic));
+                emitted++;
+            }
+        }
+
+        var categoryJson = new JsonObject();
+        foreach (var entry in categories.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            categoryJson[entry.Key] = entry.Value;
+
+        structured["diagnostics"] = new JsonObject
+        {
+            ["total_count"] = total,
+            ["sample_count"] = emitted,
+            ["truncated"] = total > emitted,
+            ["categories"] = categoryJson,
+            ["items"] = items,
+        };
+    }
+
+    private static void AddMcpIndexDiagnosticCategory(Dictionary<string, int> categories, string category)
+        => categories[category] = categories.TryGetValue(category, out var count) ? count + 1 : 1;
+
+    private static JsonObject BuildMcpIndexDiagnosticJson(McpIndexDiagnostic diagnostic)
+        => new()
+        {
+            ["code"] = diagnostic.Code,
+            ["category"] = diagnostic.Category,
+            ["path"] = diagnostic.Path,
+            ["stage"] = diagnostic.Stage,
+            ["exception_type"] = diagnostic.ExceptionType,
+            ["message"] = diagnostic.Message,
+            ["message_truncated"] = diagnostic.MessageTruncated,
+        };
 
     internal static string BuildSanitizedIndexFileFailureMessageForTesting(string stage, string exceptionType, out bool messageTruncated) =>
         BuildSanitizedIndexFileFailureMessage(stage, exceptionType, out messageTruncated);
@@ -6277,6 +6483,7 @@ public partial class McpServer
     }
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
+    private sealed record McpIndexDiagnostic(string Code, string Category, string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
 
     private async Task<JsonNode> ExecuteBackfillFoldAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
@@ -6483,14 +6690,14 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
         var samplingDecision = ResolveSuggestionSamplingDecision();
-        var sampling = await TrySampleSuggestionMetadataAsync(
+        var samplingAttempt = await TrySampleSuggestionMetadataAsync(
             category,
             language,
             RedactSuggestionSamplingInput(description),
             context == null ? null : RedactSuggestionSamplingInput(context),
             toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext),
             samplingDecision).ConfigureAwait(false);
-        sampling = RedactSuggestionSamplingResult(sampling);
+        var sampling = RedactSuggestionSamplingResult(samplingAttempt.Result);
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
@@ -6576,7 +6783,7 @@ public partial class McpServer
                 dupPayload["upstream_url"] = result.UpstreamUrl;
                 dupPayload["github_issue_url"] = result.UpstreamUrl;
             }
-            AddSuggestionSamplingDiagnostics(dupPayload, samplingDecision, sampling);
+            AddSuggestionSamplingDiagnostics(dupPayload, samplingDecision, sampling, samplingAttempt.Diagnostic);
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
@@ -6593,7 +6800,7 @@ public partial class McpServer
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             ["cdidx_dir"] = cdidxDir,
         };
-        AddSuggestionSamplingDiagnostics(payload, samplingDecision, sampling);
+        AddSuggestionSamplingDiagnostics(payload, samplingDecision, sampling, samplingAttempt.Diagnostic);
         if (result.SubmissionError != null)
             payload["github_submission_error"] = result.SubmissionError;
         if (result.UpstreamUrl != null)
@@ -6676,6 +6883,8 @@ public partial class McpServer
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
 
+    private sealed record SuggestionSamplingAttempt(SuggestionSamplingResult? Result, string? Diagnostic);
+
     private readonly record struct SuggestionSamplingDecision(
         bool ShouldRequestClient,
         string Status,
@@ -6708,7 +6917,7 @@ public partial class McpServer
     private static string? RedactNullableSamplingValue(string? value)
         => value == null ? null : SuggestionStore.RedactSensitiveText(value, out _);
 
-    private async Task<SuggestionSamplingResult?> TrySampleSuggestionMetadataAsync(
+    private async Task<SuggestionSamplingAttempt> TrySampleSuggestionMetadataAsync(
         string category,
         string? language,
         string description,
@@ -6717,7 +6926,7 @@ public partial class McpServer
         SuggestionSamplingDecision samplingDecision)
     {
         if (!samplingDecision.ShouldRequestClient)
-            return null;
+            return new SuggestionSamplingAttempt(null, null);
 
         var prompt = BuildSuggestionSamplingPrompt(category, language, description, context, toolInvocationContext);
 
@@ -6740,34 +6949,68 @@ public partial class McpServer
 
         var text = ExtractSamplingText(result);
         if (string.IsNullOrWhiteSpace(text))
-            return null;
+            return new SuggestionSamplingAttempt(null, null);
         if (text.Length > MaxSamplingResponseTextChars)
-            return null;
+            return new SuggestionSamplingAttempt(
+                null,
+                BuildSamplingRejectionDiagnostic(
+                    $"Sampling response rejected: text length {text.Length.ToString(CultureInfo.InvariantCulture)} exceeds {MaxSamplingResponseTextChars.ToString(CultureInfo.InvariantCulture)} characters."));
         try
         {
             var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { MaxDepth = MaxSamplingResponseJsonDepth });
-            var title = SanitizeSampledTitle(RedactNullableSamplingValue(TryReadStringValue(parsed?["title"])));
-            var tags = parsed?["tags"] is JsonArray tagArray
-                ? tagArray.Select(TryReadStringValue)
-                    .Where(t => !string.IsNullOrWhiteSpace(t))
-                    .Select(RedactNullableSamplingValue)
-                    .Where(t => !string.IsNullOrWhiteSpace(t))
-                    .Select(SanitizeSampledTag)
-                    .Where(t => t != null)
-                    .Cast<string>()
-                    .Distinct(StringComparer.Ordinal)
-                    .Take(6)
-                    .ToArray()
-                : null;
+            if (parsed is not JsonObject obj)
+                return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
+
+            var titleNode = obj["title"];
+            var titleText = TryReadStringValue(titleNode);
+            if (titleNode is not null && titleText is null)
+                return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
+            var title = SanitizeSampledTitle(RedactNullableSamplingValue(titleText));
+
+            var tagsNode = obj["tags"];
+            string[]? tags = null;
+            if (tagsNode is JsonArray tagArray)
+            {
+                var tagList = new List<string>();
+                foreach (var tagNode in tagArray)
+                {
+                    var tagText = TryReadStringValue(tagNode);
+                    if (tagText is null)
+                        return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
+                    if (string.IsNullOrWhiteSpace(tagText))
+                        continue;
+                    var tag = SanitizeSampledTag(RedactNullableSamplingValue(tagText));
+                    if (tag is not null && !tagList.Contains(tag, StringComparer.Ordinal))
+                        tagList.Add(tag);
+                    if (tagList.Count >= 6)
+                        break;
+                }
+                tags = tagList.Count > 0 ? tagList.ToArray() : null;
+            }
+            else if (tagsNode is not null)
+            {
+                return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
+            }
+
             if (title == null && (tags == null || tags.Length == 0))
-                return null;
-            return new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null);
+                return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
+            return new SuggestionSamplingAttempt(new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null), null);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            return new SuggestionSamplingAttempt(
+                null,
+                BuildSamplingRejectionDiagnostic(
+                    $"Sampling response JSON rejected: {JsonFrameParser.FormatExceptionDetail(ex)}."));
         }
     }
+
+    private static string BuildSamplingSchemaRejectionDiagnostic()
+        => BuildSamplingRejectionDiagnostic(
+            "Sampling response schema rejected: expected compact JSON with optional title string and tags array containing strings.");
+
+    private static string BuildSamplingRejectionDiagnostic(string diagnostic)
+        => DiagnosticRedactor.BoundDiagnosticText(diagnostic, 240);
 
     private static string BuildSuggestionSamplingPrompt(
         string category,
@@ -6918,8 +7161,8 @@ public partial class McpServer
 
     private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
     {
-        var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(raw))
+        var sampling = McpEnvironment.ReadOptInSwitch(SamplingEnabledEnvironmentVariable);
+        if (sampling.State == McpEnvironmentSwitchState.Unset)
         {
             return new SuggestionSamplingDecision(
                 false,
@@ -6927,8 +7170,7 @@ public partial class McpServer
                 $"{SamplingEnabledEnvironmentVariable} is unset; suggestion metadata sampling requires explicit opt-in with true, 1, yes, or on.");
         }
 
-        var value = raw.Trim();
-        if (IsSamplingOptInValue(value))
+        if (sampling.IsEnabled)
         {
             return HasClientCapability("sampling")
                 ? new SuggestionSamplingDecision(true, "enabled", null)
@@ -6938,7 +7180,7 @@ public partial class McpServer
                     "Client did not advertise MCP sampling capability; suggestion metadata sampling skipped.");
         }
 
-        if (IsSamplingOptOutValue(value))
+        if (sampling.IsDisabled)
         {
             return new SuggestionSamplingDecision(
                 false,
@@ -6952,25 +7194,20 @@ public partial class McpServer
             $"{SamplingEnabledEnvironmentVariable} contains an unrecognized value; suggestion metadata sampling disabled. Use true, 1, yes, or on to enable.");
     }
 
-    private static bool IsSamplingOptInValue(string value)
-        => value.Equals("1", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("on", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsSamplingOptOutValue(string value)
-        => value.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("no", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("off", StringComparison.OrdinalIgnoreCase);
-
     private static void AddSuggestionSamplingDiagnostics(
         JsonObject payload,
         SuggestionSamplingDecision samplingDecision,
-        SuggestionSamplingResult? sampling)
+        SuggestionSamplingResult? sampling,
+        string? samplingRejectionDiagnostic)
     {
-        payload["sampling_status"] = sampling != null ? "sampled" : samplingDecision.Status;
-        if (samplingDecision.Diagnostic != null)
+        payload["sampling_status"] = sampling != null
+            ? "sampled"
+            : samplingRejectionDiagnostic != null
+                ? "sampling_rejected"
+                : samplingDecision.Status;
+        if (samplingRejectionDiagnostic != null)
+            payload["sampling_diagnostic"] = samplingRejectionDiagnostic;
+        else if (samplingDecision.Diagnostic != null)
             payload["sampling_diagnostic"] = samplingDecision.Diagnostic;
     }
 

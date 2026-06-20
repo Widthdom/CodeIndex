@@ -101,7 +101,7 @@ public sealed class McpToolFilter
                     filtered.Add(name);
             }
             if (filtered.Count == 0)
-                Console.Error.WriteLine($"Warning: {AllowEnvVarName} did not contain any known MCP tool names; failing closed with no tools enabled.");
+                McpEnvironment.WriteWarning(AllowEnvVarName, "did not contain any known MCP tool names; failing closed with no tools enabled.");
             return new McpToolFilter(filtered);
         }
 
@@ -142,7 +142,7 @@ public sealed class McpToolFilter
             return set;
         if (string.IsNullOrWhiteSpace(value))
         {
-            Console.Error.WriteLine($"Warning: {source} is empty; no MCP tool names were provided.");
+            McpEnvironment.WriteWarning(source, "is empty; no MCP tool names were provided.");
             return set;
         }
         if (!ValidateCsvBounds(source, value))
@@ -163,7 +163,7 @@ public sealed class McpToolFilter
             set.Add(trimmed);
         }
         if (emptyEntries > 0)
-            Console.Error.WriteLine($"Warning: {source} ignored {emptyEntries} empty comma-separated entr{(emptyEntries == 1 ? "y" : "ies")}.");
+            McpEnvironment.WriteWarning(source, $"ignored {emptyEntries} empty comma-separated entr{(emptyEntries == 1 ? "y" : "ies")}.");
         return set;
     }
 
@@ -176,26 +176,28 @@ public sealed class McpToolFilter
         if (unknown.Length == 0)
             return;
 
-        var displayed = unknown.Take(MaxToolFilterUnknownNamesReported).ToArray();
+        var displayed = unknown
+            .Take(MaxToolFilterUnknownNamesReported)
+            .Select(McpEnvironment.FormatDiagnosticValue)
+            .ToArray();
         var suffix = unknown.Length > displayed.Length
             ? $", ... ({unknown.Length - displayed.Length} more)"
             : "";
-        Console.Error.WriteLine(
-            $"Warning: {source} ignored {unknown.Length} unknown MCP tool name{(unknown.Length == 1 ? "" : "s")}: {string.Join(", ", displayed)}{suffix}.");
+        McpEnvironment.WriteWarning(source, $"ignored {unknown.Length} unknown MCP tool name{(unknown.Length == 1 ? "" : "s")}: {string.Join(", ", displayed)}{suffix}.");
     }
 
     private static bool ValidateCsvBounds(string source, string value)
     {
         if (value.Length > MaxToolFilterCsvLength)
         {
-            Console.Error.WriteLine($"Warning: {source} is too long ({value.Length} characters; max {MaxToolFilterCsvLength}) and was rejected.");
+            McpEnvironment.WriteWarning(source, $"is too long ({value.Length} characters; max {MaxToolFilterCsvLength}) and was rejected.");
             return false;
         }
 
         var entries = CountCsvEntries(value);
         if (entries > MaxToolFilterCsvEntries)
         {
-            Console.Error.WriteLine($"Warning: {source} accepts at most {MaxToolFilterCsvEntries} comma-separated entries and was rejected.");
+            McpEnvironment.WriteWarning(source, $"accepts at most {MaxToolFilterCsvEntries} comma-separated entries and was rejected.");
             return false;
         }
 

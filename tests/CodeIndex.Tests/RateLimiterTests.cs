@@ -91,6 +91,18 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void StructuralBucketKey_DoesNotCollideOnDelimiter_Issue3816()
+    {
+        var clock = new TestClock();
+        var options = new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search|client", "a").Allowed);
+        Assert.True(limiter.TryAcquire("search", "client|a").Allowed);
+        Assert.Equal(2, limiter.BucketCount);
+    }
+
+    [Fact]
     public void RetryAfterMs_ApproximatesTimeUntilNextToken()
     {
         var clock = new TestClock();
@@ -175,10 +187,20 @@ public class RateLimiterTests
         clock.Now = clock.Now.AddMilliseconds(500);
         Assert.True(limiter.TryAcquire("search", "client-b").Allowed);
         Assert.Equal(2, limiter.BucketCount);
+        var beforePrune = limiter.SnapshotDiagnostics();
+        Assert.Equal(2, beforePrune.BucketCount);
+        Assert.Equal(1.0, beforePrune.BucketIdleTtlSeconds);
+        Assert.InRange(beforePrune.NextPruneInMs, 1, 250);
+        Assert.Equal(0L, beforePrune.LastPruneAgeMs);
+        Assert.Equal(0, beforePrune.LastPrunedBucketCount);
 
         clock.Now = clock.Now.AddSeconds(2);
         Assert.True(limiter.TryAcquire("search", "client-c").Allowed);
         Assert.Equal(1, limiter.BucketCount);
+        var afterPrune = limiter.SnapshotDiagnostics();
+        Assert.Equal(1, afterPrune.BucketCount);
+        Assert.Equal(0L, afterPrune.LastPruneAgeMs);
+        Assert.Equal(2, afterPrune.LastPrunedBucketCount);
     }
 
     [Fact]
