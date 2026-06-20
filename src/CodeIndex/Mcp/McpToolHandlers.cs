@@ -3134,15 +3134,16 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
+            var requestToken = _currentRequestToken.Value;
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
+            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
             var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
             status.MacProfile = macProfile.Profile;
             if (macProfile.Diagnostics.Count > 0)
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (checkWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, requestToken);
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;

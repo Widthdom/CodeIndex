@@ -840,6 +840,38 @@ exit 7
     }
 
     [Fact]
+    public void TryResolveCommit_CanceledTokenStopsGitProcess_Issue3723()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-resolve-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-resolve-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsForAnyCommand(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            Assert.Throws<OperationCanceledException>(
+                () => GitHelper.TryResolveCommit(repoDir, "HEAD", cts.Token));
+        }
+        finally
+        {
+            stopwatch.Stop();
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+
+        Assert.True(
+            stopwatch.Elapsed < GitCancellationWallClockLimit,
+            $"git cancellation should stop before the fake git sleep completes; elapsed={stopwatch.Elapsed}");
+    }
+
+    [Fact]
     public void TryGetHeadCommitResult_ReturnsNoneForUnbornHead()
     {
         var repoDir = CreateGitRepo();

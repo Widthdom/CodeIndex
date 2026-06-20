@@ -233,9 +233,13 @@ public static partial class IndexCommandRunner
         return buffer.ToString();
     }
 
-    private static int? RejectUnresolvedMergeState(string projectRoot, bool json, JsonSerializerOptions jsonOptions)
+    private static int? RejectUnresolvedMergeState(
+        string projectRoot,
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
     {
-        var status = GitHelper.TryGetWorktreeStatus(projectRoot);
+        var status = GitHelper.TryGetWorktreeStatus(projectRoot, cancellationToken);
         if (status == null || status.UnresolvedMergeFiles.Count == 0)
             return null;
 
@@ -742,7 +746,7 @@ public static partial class IndexCommandRunner
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
-        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions, cancellationToken);
         if (unresolvedMergeExitCode != null)
             return unresolvedMergeExitCode.Value;
 
