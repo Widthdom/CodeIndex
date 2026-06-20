@@ -56,6 +56,15 @@ public static partial class IndexCommandRunner
             Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the --max-references-per-file limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise --max-references-per-file if this is expected.",
         };
 
+    internal static FileIssue BuildNullByteIssue(FileIndexer.BinaryFileSkippedException ex) =>
+        new()
+        {
+            Path = ex.RelativePath,
+            Kind = "null_byte",
+            Line = 0,
+            Message = ex.Message,
+        };
+
     internal static FileIssue? BuildRegexTimeoutIssue(string path, BoundedRegex.RegexTimeoutCaptureScope capture)
     {
         if (!capture.HasTimeouts)
@@ -1193,7 +1202,11 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), extractionCancellationToken);
+                            var record = indexer.BuildSkippedFileRecord(filePath);
+                            var issue = BuildNullByteIssue(ex);
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
+                                extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {

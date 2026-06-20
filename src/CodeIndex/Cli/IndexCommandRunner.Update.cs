@@ -783,8 +783,11 @@ public static partial class IndexCommandRunner
                 }
                 catch (Exception ex)
                 {
-                    if (ex is FileIndexer.BinaryFileSkippedException)
+                    if (ex is FileIndexer.BinaryFileSkippedException binaryFile)
                     {
+                        if (fileBatchMarked)
+                            writer.ClearBatchInProgress();
+
                         warnings++;
                         warningList.Add(new CliJsonMessage(relPath, ex.Message));
                         if (!options.Json && !options.Quiet)
@@ -794,22 +797,24 @@ public static partial class IndexCommandRunner
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
 
-                        if (writer.HasFileAtPath(dbPath))
-                        {
-                            DemoteReadinessOnce();
-                            using var deleteTxn = writer.BeginTransaction();
-                            if (writer.DeleteFileByPath(dbPath))
-                            {
-                                WriteProjectRootOnce();
-                                deleteTxn.Commit();
-                                removed++;
-                                ftsMutated = true;
-                            }
-                        }
-                        else
-                        {
-                            skipped++;
-                        }
+                        DemoteReadinessOnce();
+                        writer.MarkBatchInProgress();
+                        using var txn = writer.BeginTransaction();
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        if (projectRootWritten)
+                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        WriteProjectRootOnce();
+                        var fileId = writer.UpsertFile(skippedRecord);
+                        writer.InsertChunks([]);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+
+                        updated++;
+                        ftsMutated = true;
                         continue;
                     }
 

@@ -108,7 +108,10 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (!isUtf16Encoded && TryFindIndexBlockingNullByte(bytes, out var nullByteOffset))
-            throw new FileIndexer.BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
+            throw new FileIndexer.BinaryFileSkippedException(
+                relativePath,
+                nullByteOffset,
+                $"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
 
         if (isUtf16Encoded)
         {

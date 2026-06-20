@@ -4239,7 +4239,14 @@ public class FileIndexer
         out bool hasBom)
         => FileContentLoader.TryDetectUtf16Encoding(rawBytes, allowHeuristic, out bigEndian, out hasBom);
 
-    internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
+    internal sealed class BinaryFileSkippedException(
+        string relativePath,
+        long nullByteOffset,
+        string message) : InvalidOperationException(message)
+    {
+        public string RelativePath { get; } = relativePath;
+        public long NullByteOffset { get; } = nullByteOffset;
+    }
 
     internal sealed class FileTooLargeSkippedException(
         string relativePath,

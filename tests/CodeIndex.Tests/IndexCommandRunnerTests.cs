@@ -6419,7 +6419,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void Run_Rebuild_WhenIndexedFileBecomesBinary_RemovesStaleRow()
+    public void Run_Rebuild_WhenIndexedFileBecomesBinary_PersistsNullByteIssue()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6438,7 +6438,9 @@ public sealed class Caller
             var rebuildExitCode = IndexCommandRunner.Run([projectRoot, "--rebuild", "--yes", "--json"], _jsonOptions);
 
             Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
-            Assert.DoesNotContain("app.py", ReadIndexedPaths(dbPath));
+            Assert.Contains("app.py", ReadIndexedPaths(dbPath));
+            var issue = Assert.Single(ReadFileIssues(dbPath).Where(issue => issue.Path == "app.py" && issue.Kind == "null_byte"));
+            Assert.Contains("byte offset 0", issue.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -11857,6 +11859,32 @@ public sealed class Caller
         return reader.ListFiles(limit: 1000)
             .Select(file => file.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static List<FileIssue> ReadFileIssues(string dbPath)
+    {
+        using var connection = OpenNonPoolingConnection(dbPath);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT f.path, i.kind, i.line, i.message
+            FROM file_issues i
+            JOIN files f ON f.id = i.file_id
+            ORDER BY f.path, i.kind, i.line, i.message
+            """;
+        using var reader = command.ExecuteReader();
+        var issues = new List<FileIssue>();
+        while (reader.Read())
+        {
+            issues.Add(new FileIssue
+            {
+                Path = reader.GetString(0),
+                Kind = reader.GetString(1),
+                Line = reader.GetInt32(2),
+                Message = reader.GetString(3),
+            });
+        }
+        return issues;
     }
 
     private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)

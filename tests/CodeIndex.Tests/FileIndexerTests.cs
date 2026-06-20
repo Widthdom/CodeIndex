@@ -4986,6 +4986,8 @@ public class FileIndexerTests
             var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(() => indexer.BuildRecordWithRawBytes(filePath));
 
             Assert.Contains("NULL byte at byte offset 6", ex.Message, StringComparison.Ordinal);
+            Assert.Equal("binary.cs", ex.RelativePath);
+            Assert.Equal(6, ex.NullByteOffset);
         }
         finally
         {

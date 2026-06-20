@@ -6031,23 +6031,24 @@ public partial class McpServer
                 txn.Commit();
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
-            catch (FileIndexer.BinaryFileSkippedException)
+            catch (FileIndexer.BinaryFileSkippedException ex)
             {
                 try
                 {
-                    var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
-                    if (writer.HasFileAtPath(relativePath))
-                    {
-                        using var txn = writer.BeginTransaction();
-                        writer.DeleteFileByPath(relativePath);
-                        WriteProjectRootOnce();
-                        txn.Commit();
-                    }
+                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath);
+                    using var txn = writer.BeginTransaction();
+                    var fileId = writer.UpsertFile(skippedRecord);
+                    writer.InsertChunks([]);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    writer.InsertIssues(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
+                    WriteProjectRootOnce();
+                    txn.Commit();
                 }
-                catch (Exception ex)
+                catch (Exception cleanupEx)
                 {
                     errors++;
-                    failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "delete_skipped_binary"));
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "record_skipped_binary"));
                 }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
