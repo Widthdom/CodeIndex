@@ -184,6 +184,13 @@
     "page_size": 4096,
     "auto_vacuum": 2
   },
+  "prepared_command_cache": {
+    "count": 0,
+    "capacity": 32,
+    "hit_count": 0,
+    "miss_count": 0,
+    "eviction_count": 0
+  },
   "maintenance_guidance": {
     "wal_state": "ok",
     "wal_threshold_bytes": 67108864,

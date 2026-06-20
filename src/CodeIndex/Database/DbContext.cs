@@ -162,7 +162,9 @@ public class DbContext : IDisposable
     /// ホットパス共有の prepared command LRU キャッシュ。Issue #1566.
     /// </summary>
     internal PreparedCommandCache PreparedCommands
-        => _preparedCommands ??= new PreparedCommandCache(_connection);
+        => _preparedCommands ??= new PreparedCommandCache(
+            _connection,
+            PreparedCommandCache.ReadCapacityFromEnvironment());
 
     public static bool TryValidateExistingCodeIndexDb(
         string dbPath,

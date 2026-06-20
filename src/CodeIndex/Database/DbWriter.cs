@@ -3408,8 +3408,8 @@ public class DbWriter
         cmd.Transaction = _activeTransaction;
         cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
                             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        cmd.Parameters.AddWithValue("@key", key);
-        cmd.Parameters.AddWithValue("@value", (object?)value ?? DBNull.Value);
+        cmd.Parameters.Add("@key", SqliteType.Text).Value = key;
+        cmd.Parameters.Add("@value", SqliteType.Text).Value = (object?)value ?? DBNull.Value;
         cmd.ExecuteNonQuery();
     }
 
