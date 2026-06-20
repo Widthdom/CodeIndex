@@ -373,6 +373,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_SolutionProjectReference_ParticipatesInGraph_Issue3662()
+    {
+        InsertManualReference(
+            "CodeIndex.sln",
+            "solution",
+            "project",
+            "App",
+            "src/App/App.csproj",
+            "project_reference");
+
+        var caller = Assert.Single(_reader.GetCallers("src/App/App.csproj", lang: "solution", exact: true));
+
+        Assert.Equal("CodeIndex.sln", caller.Path);
+        Assert.Equal("App", caller.CallerName);
+        Assert.Equal("src/App/App.csproj", caller.CalleeName);
+        Assert.Equal("project_reference", caller.ReferenceKind);
+    }
+
+    [Fact]
     public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
     {
         using var cmd = CreateSearchReferencesCommandForSql("FetchData");

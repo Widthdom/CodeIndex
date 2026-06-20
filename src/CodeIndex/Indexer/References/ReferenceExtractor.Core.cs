@@ -42,6 +42,9 @@ public static partial class ReferenceExtractor
         var typeScriptTypeAliases = language == "typescript"
             ? TypeScriptReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;
+        if (language == "solution")
+            return ExtractSolutionReferences(fileId, lines);
+
         var swiftTypeAliases = language == "swift"
             ? SwiftReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;
