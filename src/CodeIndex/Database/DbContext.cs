@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -23,6 +24,7 @@ public class DbContext : IDisposable
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
+    private const int MigrationDiagnosticTextLimit = 240;
 
     private static readonly string[] RequiredCodeIndexTables =
     [
@@ -2380,6 +2382,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            _activeMigrationTransaction = null;
             // Migration may have added columns or indexes the schema cache had already
             // resolved as missing; drop the cache so the next DbReader sees the new shape.
             // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
@@ -2451,7 +2454,7 @@ public class DbContext : IDisposable
         var failure = new DbMigrationFailure(
             description,
             exception.SqliteErrorCode,
-            exception.Message,
+            FormatMigrationSqliteMessage(exception),
             BuildMigrationSuggestedAction(exception.SqliteErrorCode));
         LastMigrationFailure = failure;
         EmitMigrationFailureWarning(failure);
@@ -2602,10 +2605,7 @@ public class DbContext : IDisposable
         // 8/10/14 は restricted mount 系の典型シグネチャ。書き込み可能な場所での再実行を案内する。
         if (sqliteErrorCode is 8 or 10 or 14)
         {
-            var dbDir = TryGetDbDirectoryForSuggestion();
-            return dbDir is null
-                ? "Re-run cdidx on writable storage, or grant write access to the database directory (e.g. chmod +w on the .cdidx directory), so the schema migration can complete."
-                : $"Re-run cdidx on writable storage, or grant write access to '{dbDir}' (e.g. chmod +w '{dbDir}'), so the schema migration can complete.";
+            return "Re-run cdidx on writable storage, or grant write access to <db directory> (for example, chmod +w <db directory>), so the schema migration can complete.";
         }
 
         // Unknown SQLite codes — surface the code itself and point at integrity check.
@@ -2613,20 +2613,10 @@ public class DbContext : IDisposable
         return $"Inspect the database with 'sqlite3 <db> \"PRAGMA integrity_check\"' (SQLite error code {sqliteErrorCode}).";
     }
 
-    private string? TryGetDbDirectoryForSuggestion()
-    {
-        try
-        {
-            var dataSource = _connection.DataSource;
-            if (string.IsNullOrEmpty(dataSource)) return null;
-            var fullPath = Path.GetFullPath(dataSource);
-            return Path.GetDirectoryName(fullPath);
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private static string FormatMigrationSqliteMessage(SqliteException exception)
+        => DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(exception.Message, redactPaths: true),
+            MigrationDiagnosticTextLimit);
 
     private static void EmitMigrationFailureWarning(DbMigrationFailure failure)
     {

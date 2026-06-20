@@ -397,6 +397,9 @@ public class LegacySchemaMigrationTests : IDisposable
         Assert.Equal(8, db.LastMigrationFailure.SqliteErrorCode);
         Assert.Contains("writable storage", db.LastMigrationFailure.SuggestedAction, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("chmod", db.LastMigrationFailure.SuggestedAction, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(_dbDir, db.LastMigrationFailure.SuggestedAction, StringComparison.Ordinal);
+        Assert.DoesNotContain(_dbDir, db.LastMigrationFailure.SqliteMessage, StringComparison.Ordinal);
+        Assert.Null(GetActiveMigrationTransaction(db));
 
         // Single stderr line so the diagnostic is hard to miss but does not flood logs.
         // 1 行の stderr 警告。
@@ -405,6 +408,7 @@ public class LegacySchemaMigrationTests : IDisposable
         Assert.Contains("SQLite error 8", stderr, StringComparison.Ordinal);
         Assert.Contains("no such column", stderr, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("writable storage", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(_dbDir, stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -464,6 +468,11 @@ public class LegacySchemaMigrationTests : IDisposable
         var ex = Assert.Throws<SqliteException>(() => failingRead.ExecuteReader());
         Assert.Contains("no such column", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static object? GetActiveMigrationTransaction(DbContext db)
+        => typeof(DbContext)
+            .GetField("_activeMigrationTransaction", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(db);
 
     [Fact]
     public void DbContext_ReadOnlyFilesystem_FallsBackToReadOnlyOpen()
