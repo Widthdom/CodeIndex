@@ -19,6 +19,11 @@ public sealed record ReferenceExtractionResult(
 public static partial class ReferenceExtractor
 {
     private static readonly TimeSpan ExtractionRegexTimeout = TimeSpan.FromSeconds(2);
+    internal const int MaxReferenceLookupSymbols = 50_000;
+    internal const int MaxReferenceLookupLines = 20_000;
+    internal const int MaxReferenceLookupNamesPerLine = 512;
+    internal const int MaxReferenceContainerCandidates = 20_000;
+    internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
     // must be created per extraction call (for example via CreateState helpers) rather than
@@ -1021,37 +1026,85 @@ public static partial class ReferenceExtractor
 
     private static Dictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
+        var namesByLine = new Dictionary<int, HashSet<string>>();
+        var lineBudgetReported = false;
+        var lineNameBudgetReported = false;
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            if (index >= MaxReferenceLookupSymbols)
+            {
+                ReportReferenceLookupBudgetHit(
+                    reportDiagnostic,
+                    "reference_definition_lookup_symbol_budget_exceeded",
+                    $"Reference definition-name lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
+                break;
+            }
 
-        return symbols
-            .GroupBy(symbol => symbol.Line)
-            .ToDictionary(
-                group => group.Key,
-                group =>
+            var symbol = symbols[index];
+            if (!namesByLine.TryGetValue(symbol.Line, out var names))
+            {
+                if (namesByLine.Count >= MaxReferenceLookupLines)
                 {
-                    var names = new HashSet<string>(definitionNamesComparer);
-                    foreach (var symbol in group)
+                    if (!lineBudgetReported)
                     {
-                        names.Add(symbol.Name);
-                        if (language == "sql")
-                        {
-                            SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
-                        }
+                        ReportReferenceLookupBudgetHit(
+                            reportDiagnostic,
+                            "reference_definition_lookup_line_budget_exceeded",
+                            $"Reference definition-name lookup used the first {MaxReferenceLookupLines:N0} definition lines and skipped additional lines.");
+                        lineBudgetReported = true;
                     }
 
-                    return names;
-                });
+                    continue;
+                }
+
+                names = new HashSet<string>(definitionNamesComparer);
+                namesByLine[symbol.Line] = names;
+            }
+
+            if (names.Count >= MaxReferenceLookupNamesPerLine && !names.Contains(symbol.Name))
+            {
+                if (!lineNameBudgetReported)
+                {
+                    ReportReferenceLookupBudgetHit(
+                        reportDiagnostic,
+                        "reference_definition_lookup_line_name_budget_exceeded",
+                        $"Reference definition-name lookup retained at most {MaxReferenceLookupNamesPerLine:N0} names per line and skipped additional names.");
+                    lineNameBudgetReported = true;
+                }
+
+                continue;
+            }
+
+            names.Add(symbol.Name);
+            if (language == "sql")
+                SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
+        }
+
+        return namesByLine;
     }
 
     private static HashSet<string> BuildAllDefinitionNames(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
         var names = new HashSet<string>(GetDefinitionNamesComparer(language));
-        foreach (var symbol in symbols)
+        for (var index = 0; index < symbols.Count; index++)
         {
+            if (index >= MaxReferenceLookupSymbols)
+            {
+                ReportReferenceLookupBudgetHit(
+                    reportDiagnostic,
+                    "reference_all_definition_lookup_symbol_budget_exceeded",
+                    $"Reference all-definition lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
+                break;
+            }
+
+            var symbol = symbols[index];
             names.Add(symbol.Name);
             if (language == "sql")
                 SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
@@ -1065,42 +1118,147 @@ public static partial class ReferenceExtractor
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
-    private static List<SymbolRecord> BuildReferenceContainerCandidates(IReadOnlyList<SymbolRecord> symbols)
-        => symbols
-            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                              (IsFunctionLikeSymbolKind(symbol.Kind) || symbol.Kind == "hook" || symbol.Kind == "accessor" || symbol.Kind == "class"
-                               || symbol.Kind == "struct" || symbol.Kind == "namespace"
-                               || symbol.Kind == "object" || symbol.Kind == "property" || symbol.Kind == "heading" || symbol.Kind == "class_hook"))
-            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-            .ToList();
+    private static List<SymbolRecord> BuildReferenceContainerCandidates(
+        IReadOnlyList<SymbolRecord> symbols,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
+        => BuildBoundedContainerCandidates(
+            symbols,
+            symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
+                      (IsFunctionLikeSymbolKind(symbol.Kind) || symbol.Kind == "hook" || symbol.Kind == "accessor" || symbol.Kind == "class"
+                       || symbol.Kind == "struct" || symbol.Kind == "namespace"
+                       || symbol.Kind == "object" || symbol.Kind == "property" || symbol.Kind == "heading" || symbol.Kind == "class_hook"),
+            "reference_container_candidate_budget_exceeded",
+            "Reference container lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
+            reportDiagnostic);
 
     private static List<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
         => language == "csharp"
-            ? symbols
-                .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
-                                 && symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace")
-                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-                .ToList()
+            ? BuildBoundedContainerCandidates(
+                symbols,
+                symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
+                          && symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace",
+                "reference_csharp_xml_doc_scope_candidate_budget_exceeded",
+                "C# XML documentation scope lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
+                reportDiagnostic)
             : null;
 
-    private static List<SymbolRecord> BuildEnclosingTypeCandidates(IReadOnlyList<SymbolRecord> symbols)
-        => symbols
-            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                             (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"))
-            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-            .ToList();
+    private static List<SymbolRecord> BuildEnclosingTypeCandidates(
+        IReadOnlyList<SymbolRecord> symbols,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
+        => BuildBoundedContainerCandidates(
+            symbols,
+            symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
+                      (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"),
+            "reference_enclosing_type_candidate_budget_exceeded",
+            "Reference enclosing-type lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
+            reportDiagnostic);
 
     private static Dictionary<int, SymbolRecord[]>? BuildSwiftPropertyDefinitionsByLine(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
-        => language == "swift"
-            ? symbols
-                .Where(symbol => symbol.Kind == "property")
-                .GroupBy(symbol => symbol.Line)
-                .ToDictionary(group => group.Key, group => group.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray())
-            : null;
+        IReadOnlyList<SymbolRecord> symbols,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
+    {
+        if (language != "swift")
+            return null;
+
+        var byLine = new Dictionary<int, List<SymbolRecord>>();
+        var lineBudgetReported = false;
+        var perLineBudgetReported = false;
+        for (var index = 0; index < symbols.Count && index < MaxReferenceLookupSymbols; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Kind != "property")
+                continue;
+
+            if (!byLine.TryGetValue(symbol.Line, out var lineSymbols))
+            {
+                if (byLine.Count >= MaxReferenceLookupLines)
+                {
+                    if (!lineBudgetReported)
+                    {
+                        ReportReferenceLookupBudgetHit(
+                            reportDiagnostic,
+                            "reference_swift_property_line_budget_exceeded",
+                            $"Swift property lookup retained at most {MaxReferenceLookupLines:N0} definition lines and skipped additional lines.");
+                        lineBudgetReported = true;
+                    }
+
+                    continue;
+                }
+
+                lineSymbols = [];
+                byLine[symbol.Line] = lineSymbols;
+            }
+
+            if (lineSymbols.Count >= MaxSwiftPropertyDefinitionsPerLine)
+            {
+                if (!perLineBudgetReported)
+                {
+                    ReportReferenceLookupBudgetHit(
+                        reportDiagnostic,
+                        "reference_swift_property_line_name_budget_exceeded",
+                        $"Swift property lookup retained at most {MaxSwiftPropertyDefinitionsPerLine:N0} properties per line and skipped additional properties.");
+                    perLineBudgetReported = true;
+                }
+
+                continue;
+            }
+
+            lineSymbols.Add(symbol);
+        }
+
+        if (symbols.Count > MaxReferenceLookupSymbols)
+        {
+            ReportReferenceLookupBudgetHit(
+                reportDiagnostic,
+                "reference_swift_property_symbol_budget_exceeded",
+                $"Swift property lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
+        }
+
+        return byLine.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray());
+    }
+
+    private static List<SymbolRecord> BuildBoundedContainerCandidates(
+        IReadOnlyList<SymbolRecord> symbols,
+        Func<SymbolRecord, bool> predicate,
+        string diagnosticKind,
+        string diagnosticMessage,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
+    {
+        var candidates = new List<SymbolRecord>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
+        var truncated = false;
+        foreach (var symbol in symbols)
+        {
+            if (!predicate(symbol))
+                continue;
+
+            if (candidates.Count >= MaxReferenceContainerCandidates)
+            {
+                truncated = true;
+                continue;
+            }
+
+            candidates.Add(symbol);
+        }
+
+        if (truncated)
+            ReportReferenceLookupBudgetHit(reportDiagnostic, diagnosticKind, diagnosticMessage);
+
+        return candidates
+            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+            .ToList();
+    }
+
+    private static void ReportReferenceLookupBudgetHit(
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic,
+        string kind,
+        string message)
+        => reportDiagnostic?.Invoke(new ReferenceExtractionDiagnostic(kind, message));
 
     private static void EmitPhpLinePreambleReferences(
         string originalLine,
