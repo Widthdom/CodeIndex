@@ -104,6 +104,7 @@ public static partial class QueryCommandRunner
     private const int SearchEnvelopeMinCandidates = 200;
     private const int SearchEnvelopeOverFetchFactor = 50;
     private const int SearchEnvelopeMaxCandidates = 10_000;
+    private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
     private const string HotspotsGroupedByNameKind = "name_kind";
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
@@ -178,6 +179,7 @@ public static partial class QueryCommandRunner
         "--reject-before",
         "--reject-after",
         "--guard-window",
+        "--guard-scope",
         "--project",
         "--solution",
         "--exclude-path",
@@ -198,7 +200,9 @@ public static partial class QueryCommandRunner
         "--group-by",
         "--unique",
         "--count-by",
+        "--origin",
         "--match-origin",
+        "--exclude-origin",
         "--result-kind",
         "--sample",
         "--per-file-limit",
@@ -963,7 +967,7 @@ public static partial class QueryCommandRunner
 
     private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
-        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
         var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
         var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -1094,7 +1098,7 @@ public static partial class QueryCommandRunner
 
     private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
-        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var rows = BuildSearchDisplayRows(results, options, exact);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
         var groups = BuildSearchGroupedCounts(groupBy, rows);
@@ -1740,7 +1744,8 @@ public static partial class QueryCommandRunner
                 options.Prefix,
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow);
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope);
             var rows = BuildSearchDisplayRows(results, options, exact);
             var queryResult = new SearchRecipeQueryResultJsonResult(
                 "ad-hoc",
@@ -1750,6 +1755,9 @@ public static partial class QueryCommandRunner
                 "Review the evidence paths and surrounding code before filing.",
                 exact,
                 SearchAuditRecipes.DefaultQuerySeverity,
+                [],
+                [],
+                [],
                 [],
                 [],
                 rows.Count,
@@ -1813,8 +1821,9 @@ public static partial class QueryCommandRunner
                 cursor: options.SearchCursor,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
@@ -1829,6 +1838,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
+                [.. recipeQuery.MatchOrigins],
+                [.. recipeQuery.ExcludeOrigins],
+                [.. recipeQuery.ResultKinds],
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -1871,8 +1883,9 @@ public static partial class QueryCommandRunner
                 cursor: options.SearchCursor,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
@@ -1884,6 +1897,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
+                [.. recipeQuery.MatchOrigins],
+                [.. recipeQuery.ExcludeOrigins],
+                [.. recipeQuery.ResultKinds],
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -2072,7 +2088,8 @@ public static partial class QueryCommandRunner
                 options.Prefix,
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow);
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope);
             var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             AttachExactSubstringHint(
@@ -2316,6 +2333,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
             AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
+        if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
+            AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
         AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
@@ -2443,6 +2462,9 @@ public static partial class QueryCommandRunner
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
+            [.. query.MatchOrigins],
+            [.. query.ExcludeOrigins],
+            [.. query.ResultKinds],
             query.ExactSubstring)).ToList());
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
@@ -2450,12 +2472,14 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         bool exact,
         string? queryOverride = null,
-        bool? rawFtsOverride = null)
+        bool? rawFtsOverride = null,
+        SearchAuditRecipeQuery? recipeQuery = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
         var rawFts = rawFtsOverride ?? options.RawFts;
+        var facetFilters = BuildSearchDisplayFacetFilters(options, recipeQuery);
         var effectiveRawFts = rawFts && !exact;
         var queryContext = effectiveRawFts
             ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
@@ -2471,7 +2495,7 @@ public static partial class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
-            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, options);
+            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, facetFilters);
             if (preferredOriginFilterLine.HasValue && !IsLineWithinSnippet(compact, preferredOriginFilterLine.Value))
             {
                 compact = SearchSnippetFormatter.ToCompactResult(
@@ -2490,11 +2514,11 @@ public static partial class QueryCommandRunner
             if (!effectiveRawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
 
-            if (!ApplySearchOriginFilters(compact, options))
+            if (!ApplySearchOriginFilters(compact, facetFilters))
                 continue;
 
             compact.ResultKinds = BuildSearchResultKinds(result, compact, displayQuery);
-            if (!ApplySearchResultKindFilters(compact, options))
+            if (!ApplySearchResultKindFilters(compact, facetFilters))
                 continue;
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
@@ -2526,13 +2550,50 @@ public static partial class QueryCommandRunner
         return rows;
     }
 
-    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, QueryCommandOptions options)
+    private sealed record SearchDisplayFacetFilters(
+        bool ExcludeComments,
+        bool ExcludeStrings,
+        bool ExcludeFixtures,
+        List<string> MatchOrigins,
+        List<string> ExcludeOrigins,
+        List<string> ResultKinds);
+
+    private static SearchDisplayFacetFilters BuildSearchDisplayFacetFilters(QueryCommandOptions options, SearchAuditRecipeQuery? recipeQuery)
+        => new(
+            options.ExcludeComments,
+            options.ExcludeStrings,
+            options.ExcludeFixtures,
+            CombineInclusiveSearchFilters(options.MatchOrigins, recipeQuery?.MatchOrigins),
+            CombineExclusiveSearchFilters(options.ExcludeOrigins, recipeQuery?.ExcludeOrigins),
+            CombineInclusiveSearchFilters(options.ResultKinds, recipeQuery?.ResultKinds));
+
+    private static List<string> CombineInclusiveSearchFilters(IReadOnlyList<string> optionValues, IReadOnlyList<string>? recipeValues)
     {
-        if (!HasSearchOriginFilters(options) || compact.MatchFacets.Count == 0)
+        if (recipeValues is not { Count: > 0 })
+            return [.. optionValues];
+        if (optionValues.Count == 0)
+            return [.. recipeValues];
+
+        var intersected = optionValues
+            .Where(value => recipeValues.Contains(value, StringComparer.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return intersected.Count == 0 ? [SearchFilterNoMatchSentinel] : intersected;
+    }
+
+    private static List<string> CombineExclusiveSearchFilters(IReadOnlyList<string> optionValues, IReadOnlyList<string>? recipeValues)
+        => optionValues
+            .Concat(recipeValues ?? Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, SearchDisplayFacetFilters filters)
+    {
+        if (!HasSearchOriginFilters(filters) || compact.MatchFacets.Count == 0)
             return null;
 
         return compact.MatchFacets
-            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Where(facet => !IsSearchFacetExcluded(facet, filters))
             .Select(facet => (int?)facet.Line)
             .OrderBy(line => line)
             .FirstOrDefault();
@@ -2610,7 +2671,7 @@ public static partial class QueryCommandRunner
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
-        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit);
+        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope);
 
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
     {
@@ -2621,15 +2682,15 @@ public static partial class QueryCommandRunner
             rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
     }
 
-    private static bool ApplySearchOriginFilters(CompactSearchResult compact, QueryCommandOptions options)
+    private static bool ApplySearchOriginFilters(CompactSearchResult compact, SearchDisplayFacetFilters filters)
     {
-        if (!HasSearchOriginFilters(options))
+        if (!HasSearchOriginFilters(filters))
             return true;
         if (compact.MatchFacets.Count == 0)
-            return options.MatchOrigins.Count == 0;
+            return filters.MatchOrigins.Count == 0;
 
         var keptFacets = compact.MatchFacets
-            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Where(facet => !IsSearchFacetExcluded(facet, filters))
             .ToList();
         if (keptFacets.Count == 0)
             return false;
@@ -2674,23 +2735,33 @@ public static partial class QueryCommandRunner
     }
 
     private static bool HasSearchOriginFilters(QueryCommandOptions options)
-        => options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.MatchOrigins.Count > 0 || options.ResultKinds.Count > 0;
+        => HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery: null));
 
-    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, QueryCommandOptions options)
+    private static bool HasSearchOriginFilters(SearchDisplayFacetFilters filters)
+        => filters.ExcludeComments ||
+           filters.ExcludeStrings ||
+           filters.ExcludeFixtures ||
+           filters.MatchOrigins.Count > 0 ||
+           filters.ExcludeOrigins.Count > 0 ||
+           filters.ResultKinds.Count > 0;
+
+    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, SearchDisplayFacetFilters filters)
     {
-        if (options.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
+        if (filters.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
             return true;
-        if (options.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
+        if (filters.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
             return true;
-        if (options.ExcludeFixtures && facet.TestFixture)
+        if (filters.ExcludeFixtures && facet.TestFixture)
             return true;
-        if (options.MatchOrigins.Count > 0 && !options.MatchOrigins.Contains(facet.Origin, StringComparer.Ordinal))
+        if (filters.MatchOrigins.Count > 0 && !filters.MatchOrigins.Contains(facet.Origin, StringComparer.Ordinal))
+            return true;
+        if (filters.ExcludeOrigins.Count > 0 && filters.ExcludeOrigins.Contains(facet.Origin, StringComparer.Ordinal))
             return true;
         return false;
     }
 
-    private static bool ApplySearchResultKindFilters(CompactSearchResult compact, QueryCommandOptions options)
-        => options.ResultKinds.Count == 0 || compact.ResultKinds.Any(kind => options.ResultKinds.Contains(kind, StringComparer.Ordinal));
+    private static bool ApplySearchResultKindFilters(CompactSearchResult compact, SearchDisplayFacetFilters filters)
+        => filters.ResultKinds.Count == 0 || compact.ResultKinds.Any(kind => filters.ResultKinds.Contains(kind, StringComparer.Ordinal));
 
     private static List<string> BuildSearchResultKinds(SearchResult result, CompactSearchResult compact, string query)
     {
@@ -8283,6 +8354,27 @@ public static partial class QueryCommandRunner
         return false;
     }
 
+    private static bool TryNormalizeSearchGuardScope(string value, out SearchGuardScope scope)
+    {
+        switch (value.Trim().ToLowerInvariant().Replace("_", "-"))
+        {
+            case "window":
+                scope = SearchGuardScope.Window;
+                return true;
+            case "same-line":
+            case "sameline":
+                scope = SearchGuardScope.SameLine;
+                return true;
+            default:
+                scope = SearchGuardScope.Window;
+                return false;
+        }
+    }
+
+    private static string FormatSearchGuardScope(SearchGuardScope scope)
+        => scope == SearchGuardScope.SameLine ? "same-line" : "window";
+
+
     public static QueryCommandOptions ParseArgs(
         string[] args,
         bool jsonDefault,
@@ -8340,6 +8432,7 @@ public static partial class QueryCommandRunner
         bool prefix = false;
         var guardFilters = new List<SearchGuardFilter>();
         var guardWindow = DbReader.DefaultSearchGuardWindow;
+        var guardScope = SearchGuardScope.Window;
         bool excludeComments = false;
         bool excludeStrings = false;
         bool excludeFixtures = false;
@@ -8357,6 +8450,7 @@ public static partial class QueryCommandRunner
         string? uniqueBy = null;
         string? countBy = null;
         var matchOrigins = new List<string>();
+        var excludeOrigins = new List<string>();
         var resultKinds = new List<string>();
         List<string>? searchFields = null;
         bool firstPerFile = false;
@@ -8916,6 +9010,18 @@ public static partial class QueryCommandRunner
                         AddParseError(guardWindowError!);
                     }
                     break;
+                case "--guard-scope":
+                    if (TryReadStringOptionValue(args, ref i, "--guard-scope", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var guardScopeValue, out var guardScopeError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--guard-scope", guardScopeValue!);
+                        if (TryNormalizeSearchGuardScope(guardScopeValue!, out var parsedGuardScope))
+                            guardScope = parsedGuardScope;
+                        else
+                            AddParseError($"Error: unsupported --guard-scope value '{ConsoleUi.FormatBoundedValue(guardScopeValue!)}'. Use window or same-line.");
+                    }
+                    else
+                        AddParseError(guardScopeError!);
+                    break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
                     {
@@ -9137,11 +9243,19 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(countByError!);
                     break;
+                case "--origin":
                 case "--match-origin":
-                    if (TryReadStringOptionValue(args, ref i, "--match-origin", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var originValue, out var originError))
-                        AddSearchMatchOrigins(originValue!, matchOrigins, AddParseError);
+                    var originOptionName = normalizedArg;
+                    if (TryReadStringOptionValue(args, ref i, originOptionName, inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var originValue, out var originError))
+                        AddSearchMatchOrigins(originOptionName, originValue!, matchOrigins, AddParseError);
                     else
                         AddParseError(originError!);
+                    break;
+                case "--exclude-origin":
+                    if (TryReadStringOptionValue(args, ref i, "--exclude-origin", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var excludedOriginValue, out var excludedOriginError))
+                        AddSearchMatchOrigins("--exclude-origin", excludedOriginValue!, excludeOrigins, AddParseError);
+                    else
+                        AddParseError(excludedOriginError!);
                     break;
                 case "--result-kind":
                     if (TryReadStringOptionValue(args, ref i, "--result-kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var resultKindValue, out var resultKindError))
@@ -9658,6 +9772,7 @@ public static partial class QueryCommandRunner
             Prefix = prefix,
             GuardFilters = guardFilters,
             GuardWindow = guardWindow,
+            GuardScope = guardScope,
             ExcludeComments = excludeComments,
             ExcludeStrings = excludeStrings,
             ExcludeFixtures = excludeFixtures,
@@ -9671,6 +9786,7 @@ public static partial class QueryCommandRunner
             UniqueBy = uniqueBy,
             CountBy = countBy,
             MatchOrigins = matchOrigins,
+            ExcludeOrigins = excludeOrigins,
             ResultKinds = resultKinds,
             SearchFields = searchFields,
             FirstPerFile = firstPerFile,
@@ -9953,15 +10069,15 @@ public static partial class QueryCommandRunner
         return fields;
     }
 
-    private static void AddSearchMatchOrigins(string rawValue, List<string> origins, Action<string> addParseError)
+    private static void AddSearchMatchOrigins(string optionName, string rawValue, List<string> origins, Action<string> addParseError)
     {
-        if (!ValidateCsvBounds("--match-origin", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
+        if (!ValidateCsvBounds(optionName, rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
             return;
         foreach (var rawOrigin in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (!TryNormalizeSearchMatchOrigin(rawOrigin, out var origin))
             {
-                addParseError($"Error: unsupported --match-origin value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, or unknown.");
+                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, or unknown.");
                 continue;
             }
             if (!origins.Contains(origin, StringComparer.Ordinal))
@@ -13368,6 +13484,7 @@ public sealed class QueryCommandOptions
     public bool Prefix { get; init; }
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
+    public SearchGuardScope GuardScope { get; init; } = SearchGuardScope.Window;
     public bool ExcludeComments { get; init; }
     public bool ExcludeStrings { get; init; }
     public bool ExcludeFixtures { get; init; }
@@ -13381,6 +13498,7 @@ public sealed class QueryCommandOptions
     public string? UniqueBy { get; init; }
     public string? CountBy { get; init; }
     public List<string> MatchOrigins { get; init; } = [];
+    public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
     public List<string>? SearchFields { get; init; }
     public bool FirstPerFile { get; init; }
