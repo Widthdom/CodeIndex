@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Diagnostics;
 using Microsoft.Win32.SafeHandles;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -99,9 +100,9 @@ public static partial class ExtractorPluginRegistry
                             Regex regex;
                             try
                             {
-                                regex = new Regex(
+                                regex = Regex.CreateExtractionRegex(
                                     value,
-                                    RegexOptions.Compiled | RegexOptions.CultureInvariant,
+                                    RegexOptions.Compiled,
                                     PatternRegexTimeout);
                             }
                             catch (ArgumentException)

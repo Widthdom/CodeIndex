@@ -363,6 +363,7 @@ internal static partial class ProgramRunner
 
         buffer.Position = 0;
         using var reader = new StreamReader(buffer, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        // The loop above rejects streams beyond TestExtractorMaxInputBytes before this materializes text.
         content = reader.ReadToEnd();
         return true;
     }

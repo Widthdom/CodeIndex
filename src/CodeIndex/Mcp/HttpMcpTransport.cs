@@ -549,6 +549,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             buffer.Write(scratch, 0, read);
         }
 
+        // ToArray/GetString materializes only after Content-Length and streaming reads have both
+        // enforced _maxRequestBodyBytes.
         return (context.Request.ContentEncoding ?? Encoding.UTF8).GetString(buffer.ToArray());
     }
 
@@ -1184,6 +1186,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
+            // HandleContextAsync calls this only with a body returned by TryReadRequestBodyAsync,
+            // so the full JSON parse is bounded by the HTTP request-body byte limit.
             using var doc = JsonDocument.Parse(body, JsonFrameParser.CreateDocumentOptions(McpServer.MaxJsonDepth));
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
