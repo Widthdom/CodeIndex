@@ -270,6 +270,29 @@ public class McpServerTests : IDisposable
         return server.HandleMessage(request)!;
     }
 
+    private static string BuildDenseReferenceCSharpSource(int callCount)
+    {
+        var calls = string.Join('\n', Enumerable.Range(0, callCount).Select(static _ => "            Target.Ping();"));
+        return $$"""
+namespace DenseReferences;
+
+public static class Target
+{
+    public static void Ping()
+    {
+    }
+}
+
+public sealed class Caller
+{
+    public void Run()
+    {
+{{calls}}
+    }
+}
+""";
+    }
+
     private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -10633,6 +10656,60 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_GeneratedCodePatternCountsProcessedAndSkipsExtraction_Issue3720()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_generated_pattern_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_generated_pattern_{Guid.NewGuid():N}.db");
+        try
+        {
+            env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "generated/**");
+            Directory.CreateDirectory(Path.Combine(fixtureDir, "generated"));
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "generated", "Client.cs"),
+                "public class GeneratedClient { public string Lookup() => \"generated\"; }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("1", verifyDb.GetMetaString(DbContext.LastIndexRunRowsUpsertedMetaKey));
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+            }.ToString();
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT f.generated,
+                       (SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id AND c.content LIKE '%GeneratedClient%'),
+                       (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id),
+                       (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id),
+                       (SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id AND i.kind = @issueKind)
+                FROM files f
+                WHERE f.path = @path
+                """;
+            command.Parameters.AddWithValue("@issueKind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+            command.Parameters.AddWithValue("@path", "generated/Client.cs");
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(0, reader.GetInt32(0));
+            Assert.True(reader.GetInt32(1) > 0);
+            Assert.Equal(0, reader.GetInt32(2));
+            Assert.Equal(0, reader.GetInt32(3));
+            Assert.Equal(1, reader.GetInt32(4));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnknownArgumentName_TruncatesDisplay_Issue3117()
     {
         var argumentName = new string('x', McpBoundedText.MaxDiagnosticDisplayChars + 25);
@@ -11328,6 +11405,97 @@ public class McpServerTests : IDisposable
             if (Directory.Exists(fixtureDir))
                 TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_NullByteFilePersistsNullByteIssue_Issue3835()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_null_byte_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_null_byte_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var prefix = Encoding.UTF8.GetBytes("public class Polluted { public void Run() { } }\n");
+            var bytes = new byte[prefix.Length + 1];
+            Array.Copy(prefix, bytes, prefix.Length);
+            bytes[^1] = 0;
+            File.WriteAllBytes(Path.Combine(fixtureDir, "binary.cs"), bytes);
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("null_byte"));
+            Assert.Equal("binary.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("byte offset", issue.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_MaxReferencesPerFilePersistsReferenceCountExceededIssue_Issue3719()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_reference_cap_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_reference_cap_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(Path.Combine(fixtureDir, "DenseReferences.cs"), BuildDenseReferenceCSharpSource(8));
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir, args => args["maxReferencesPerFile"] = 2);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("maxReferencesPerFile", issue.Message);
+
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT
+                    (SELECT COUNT(*) FROM chunks),
+                    (SELECT COUNT(*) FROM symbols),
+                    (SELECT COUNT(*) FROM symbol_references)
+                """;
+            using var row = command.ExecuteReader();
+            Assert.True(row.Read());
+            Assert.True(row.GetInt64(0) > 0);
+            Assert.True(row.GetInt64(1) > 0);
+            Assert.Equal(0, row.GetInt64(2));
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 

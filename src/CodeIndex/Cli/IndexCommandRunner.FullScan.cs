@@ -47,6 +47,85 @@ public static partial class IndexCommandRunner
             Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the --max-symbols-per-file limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise --max-symbols-per-file if this is expected.",
         };
 
+    private static FileIssue BuildReferenceCountExceededIssue(string path, int referenceCount, int maxReferencesPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "reference_count_exceeded",
+            Line = 0,
+            Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the --max-references-per-file limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise --max-references-per-file if this is expected.",
+        };
+
+    internal static FileIssue BuildNullByteIssue(FileIndexer.BinaryFileSkippedException ex) =>
+        new()
+        {
+            Path = ex.RelativePath,
+            Kind = "null_byte",
+            Line = 0,
+            Message = ex.Message,
+        };
+
+    internal static FileIssue? BuildRegexTimeoutIssue(string path, BoundedRegex.RegexTimeoutCaptureScope capture) =>
+        BuildRegexTimeoutIssue(
+            path,
+            capture.Language,
+            capture.PatternFamily,
+            capture.TimeoutCount,
+            capture.Diagnostics,
+            capture.DiagnosticsTruncated);
+
+    internal static FileIssue? BuildRegexTimeoutIssue(
+        string path,
+        string? language,
+        string patternFamily,
+        int timeoutCount,
+        IReadOnlyList<BoundedRegex.RegexTimeoutDiagnostic> diagnostics,
+        bool diagnosticsTruncated)
+    {
+        if (timeoutCount <= 0)
+            return null;
+
+        var normalizedLanguage = string.IsNullOrWhiteSpace(language) ? "unknown" : language;
+        var samples = diagnostics.Count == 0
+            ? "none"
+            : string.Join(", ", diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Operation}:{diagnostic.PatternHash} len={diagnostic.PatternLength} timeout={diagnostic.TimeoutMs:0.###}ms"));
+        var truncationSuffix = diagnosticsTruncated ? "; additional timeout diagnostics omitted" : string.Empty;
+        return new FileIssue
+        {
+            Path = path,
+            Kind = "regex_timeout",
+            Line = 0,
+            Message = $"Regex timeout fallback occurred during {patternFamily} for language {normalizedLanguage} ({timeoutCount:N0} timeout(s); samples {samples}{truncationSuffix}); extraction used a safe no-match fallback and may be incomplete for this file.",
+        };
+    }
+
+    private static bool ExistingFileViolatesExtractionCaps(DbWriter writer, long fileId, int maxSymbolsPerFile, int maxReferencesPerFile) =>
+        writer.CountSymbolsForFile(fileId) > maxSymbolsPerFile
+        || writer.HasIssueForFile(fileId, "symbol_count_exceeded")
+        || writer.CountReferencesForFile(fileId) > maxReferencesPerFile
+        || writer.HasIssueForFile(fileId, "reference_count_exceeded");
+
+    internal static bool ExistingFileGeneratedSuppressionMismatch(DbWriter writer, long fileId, FileIssue? generatedSuppressionIssue)
+        => writer.HasIssueForFile(fileId, FileIndexer.GeneratedCodeExtractionSkippedIssueKind) != (generatedSuppressionIssue != null);
+
+    internal static IReadOnlyList<FileIssue> AppendIssue(IReadOnlyList<FileIssue> issues, FileIssue issue)
+    {
+        if (issues.Count == 0)
+            return [issue];
+
+        var combined = issues.ToList();
+        combined.Add(issue);
+        return combined;
+    }
+
+    internal static IReadOnlyList<FileIssue> AppendIssueIfMissing(IReadOnlyList<FileIssue> issues, FileIssue issue)
+    {
+        if (issues.Any(existing => string.Equals(existing.Kind, issue.Kind, StringComparison.Ordinal)))
+            return issues;
+        return AppendIssue(issues, issue);
+    }
+
     internal static string FormatIndexPhasePath(string path, string phase) =>
         $"{path} ({phase})";
 
@@ -103,19 +182,26 @@ public static partial class IndexCommandRunner
         throw new IndexExtractionStalledException(filesProcessed, filesTotal, timeout, activePath);
     }
 
-    private static List<SymbolRecord> ExtractSymbolsWithStallTimeout(
+    private sealed record SymbolExtractionResult(List<SymbolRecord> Symbols, FileIssue? RegexTimeoutIssue);
+
+    private static SymbolExtractionResult ExtractSymbolsWithStallTimeout(
         long fileId,
         string? lang,
         string content,
         string filePath,
         string projectRoot,
+        string issuePath,
         string phasePath,
         SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
         var timeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
         if (timeout <= TimeSpan.Zero)
-            return SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+        {
+            using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
+            var symbols = SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+            return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var result = worker.Invoke(fileId, lang, content, filePath, projectRoot, timeout, cancellationToken);
@@ -125,7 +211,14 @@ public static partial class IndexCommandRunner
         if (!result.Success)
             throw new InvalidOperationException(result.WorkerError ?? "isolated symbol extraction worker failed.");
 
-        return result.Symbols ?? [];
+        var regexTimeoutIssue = BuildRegexTimeoutIssue(
+            issuePath,
+            lang,
+            "symbol_extraction",
+            result.RegexTimeoutCount,
+            result.RegexTimeoutDiagnostics ?? [],
+            result.RegexTimeoutDiagnosticsTruncated);
+        return new SymbolExtractionResult(result.Symbols ?? [], regexTimeoutIssue);
     }
 
     private static string CollapseLineBreaks(string value)
@@ -273,66 +366,109 @@ public static partial class IndexCommandRunner
     internal const int MaxScanCheckpointDirectories = 4096;
     internal const int MaxScanCheckpointDirectoryLength = 4096;
 
-    internal static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
+    internal static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead) =>
+        LoadScanCheckpointDetailed(path, currentHead).Directories;
+
+    internal static ScanCheckpointLoadResult LoadScanCheckpointDetailed(string path, string? currentHead)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(currentHead) || !File.Exists(path))
-                return EmptyScanCheckpointDirectories();
+            if (!File.Exists(path))
+                return EmptyScanCheckpointLoadResult();
+            if (string.IsNullOrWhiteSpace(currentHead))
+                return IgnoredScanCheckpoint(path, "current Git HEAD is unavailable");
 
             var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxScanCheckpointBytes, FileShare.ReadWrite);
             if (text is null)
-                return EmptyScanCheckpointDirectories();
+                return IgnoredScanCheckpoint(path, $"file exceeds the scan checkpoint size limit of {MaxScanCheckpointBytes:N0} bytes");
 
             var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(
                 text,
                 new JsonSerializerOptions { MaxDepth = MaxScanCheckpointJsonDepth });
-            if (checkpoint is not { Version: ScanCheckpointVersion }
-                || !string.Equals(checkpoint.GitHead, currentHead, StringComparison.Ordinal)
-                || !TryBuildScanCheckpointDirectories(checkpoint.Directories, out var directories))
-            {
-                return EmptyScanCheckpointDirectories();
-            }
+            if (checkpoint is null)
+                return IgnoredScanCheckpoint(path, "JSON root is null or not a scan checkpoint object");
+            if (checkpoint.Version != ScanCheckpointVersion)
+                return IgnoredScanCheckpoint(path, FormatScanCheckpointVersionMismatch(checkpoint.Version));
+            if (!string.Equals(checkpoint.GitHead, currentHead, StringComparison.Ordinal))
+                return IgnoredScanCheckpoint(path, "checkpoint GitHead does not match current HEAD; checkpoint is stale");
+            if (!TryBuildScanCheckpointDirectories(checkpoint.Directories, out var directories, out var directoryFailureReason))
+                return IgnoredScanCheckpoint(path, directoryFailureReason);
 
-            return directories;
+            return new ScanCheckpointLoadResult(directories, WarningMessage: null);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return EmptyScanCheckpointDirectories();
+            return IgnoredScanCheckpoint(
+                path,
+                $"malformed checkpoint JSON or depth exceeds {MaxScanCheckpointJsonDepth:N0} ({CommandErrorWriter.FormatSanitizedException(ex)})");
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            return EmptyScanCheckpointDirectories();
+            return IgnoredScanCheckpoint(path, $"read failed ({CommandErrorWriter.FormatSanitizedException(ex)})");
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return EmptyScanCheckpointDirectories();
+            return IgnoredScanCheckpoint(path, $"read failed ({CommandErrorWriter.FormatSanitizedException(ex)})");
         }
     }
 
-    private static bool TryBuildScanCheckpointDirectories(IReadOnlyList<string>? rawDirectories, out IReadOnlySet<string> directories)
+    private static string FormatScanCheckpointVersionMismatch(int version) =>
+        version > ScanCheckpointVersion
+            ? $"future checkpoint version {version:N0} exceeds supported version {ScanCheckpointVersion:N0}"
+            : $"unsupported checkpoint version {version:N0}; supported version is {ScanCheckpointVersion:N0}";
+
+    private static ScanCheckpointLoadResult EmptyScanCheckpointLoadResult() =>
+        new(EmptyScanCheckpointDirectories(), WarningMessage: null);
+
+    private static ScanCheckpointLoadResult IgnoredScanCheckpoint(string path, string reason) =>
+        new(
+            EmptyScanCheckpointDirectories(),
+            $"scan checkpoint ignored for {ConsoleUi.FormatBoundedValue(path)}: {reason}; continuing with a full scan.");
+
+    private static bool TryBuildScanCheckpointDirectories(
+        IReadOnlyList<string>? rawDirectories,
+        out IReadOnlySet<string> directories,
+        out string failureReason)
     {
         directories = EmptyScanCheckpointDirectories();
+        failureReason = string.Empty;
         if (rawDirectories is not { Count: > 0 })
+        {
+            failureReason = "Directories must be a non-empty JSON array";
             return false;
+        }
         if (rawDirectories.Count > MaxScanCheckpointDirectories)
+        {
+            failureReason =
+                $"Directories contains {rawDirectories.Count:N0} entries, exceeding the limit of {MaxScanCheckpointDirectories:N0}";
             return false;
+        }
 
         var result = new HashSet<string>(StringComparer.Ordinal);
         foreach (var directory in rawDirectories)
         {
             if (directory is null)
+            {
+                failureReason = "Directories contains a null entry";
                 return false;
+            }
             if (directory.Length == 0)
                 continue;
             if (directory.Length > MaxScanCheckpointDirectoryLength)
+            {
+                failureReason =
+                    $"Directories contains an entry longer than {MaxScanCheckpointDirectoryLength:N0} characters";
                 return false;
+            }
 
             result.Add(directory);
         }
 
         if (result.Count == 0)
+        {
+            failureReason = "Directories contains only empty entries";
             return false;
+        }
 
         directories = result;
         return true;
@@ -459,7 +595,8 @@ public static partial class IndexCommandRunner
         }
 
         var scanCheckpointPath = Path.Combine(projectRoot, ".cdidx", ScanCheckpointFileName);
-        var checkpointedDirectories = LoadScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint);
+        var checkpointLoadResult = LoadScanCheckpointDetailed(scanCheckpointPath, currentHeadForCheckpoint);
+        var checkpointedDirectories = checkpointLoadResult.Directories;
         WriteFullScanJsonLiveness(options, "scanning files...");
         var scanHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "scanning files");
         FileIndexer.ScanFilesResult scanResult;
@@ -492,11 +629,15 @@ public static partial class IndexCommandRunner
         var warningList = warningScanErrors
             .Select(error => new CliJsonMessage(error.Path, error.Message))
             .ToList();
+        if (checkpointLoadResult.WarningMessage != null)
+            warningList.Add(new CliJsonMessage("<scan_checkpoint>", checkpointLoadResult.WarningMessage));
         if (!options.Json && !options.Quiet)
         {
             Console.WriteLine($"  Found {ConsoleUi.Counted(files.Count, "file", format: "N0")}");
             foreach (var error in scanResult.Errors)
                 ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
+            if (checkpointLoadResult.WarningMessage != null)
+                ConsoleUi.PrintWarning(checkpointLoadResult.WarningMessage);
             Console.WriteLine();
         }
 
@@ -1013,29 +1154,50 @@ public static partial class IndexCommandRunner
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
                             IReadOnlyList<FileIssue>? issues = null;
+                            var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                             if (parallelizeExtraction)
                             {
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
+                                if (generatedSuppressionIssue != null)
+                                {
+                                    symbols = [];
+                                    references = [];
+                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    issues = AppendIssueIfMissing(
+                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                                        generatedSuppressionIssue);
+                                    extractionResults.Add(
+                                        FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
+                                        extractionCancellationToken);
+                                    continue;
+                                }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
-                                symbols = ExtractSymbolsWithStallTimeout(
+                                var symbolExtraction = ExtractSymbolsWithStallTimeout(
                                     0,
                                     record.Lang,
                                     content,
                                     filePath,
                                     Path.GetFullPath(options.ProjectPath!),
+                                    record.Path,
                                     activeJsonExtractionPhases[workerIndex],
                                     workerSymbolExtractionWorker,
                                     extractionCancellationToken);
+                                symbols = symbolExtraction.Symbols;
+                                var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
                                 if (symbols.Count > options.MaxSymbolsPerFile)
                                 {
                                     var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                                    IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                                        ? [issue]
+                                        : AppendIssue([symbolRegexTimeoutIssue], issue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, issue.Message, [], [], [], [issue]),
+                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, issue.Message, [], [], [], capIssues),
                                         extractionCancellationToken);
                                     continue;
                                 }
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                                FileIssue? referenceRegexTimeoutIssue = null;
                                 if (options.SymbolsOnly)
                                 {
                                     references = [];
@@ -1043,6 +1205,7 @@ public static partial class IndexCommandRunner
                                 else
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
+                                    using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
                                     references = ReferenceExtractor.Extract(
                                         0,
                                         record.Lang,
@@ -1050,10 +1213,22 @@ public static partial class IndexCommandRunner
                                         symbols,
                                         record.Path,
                                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                        extractionCancellationToken);
+                                        extractionCancellationToken,
+                                        maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                    referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                                if (symbolRegexTimeoutIssue != null)
+                                    issues = AppendIssue(issues, symbolRegexTimeoutIssue);
+                                if (referenceRegexTimeoutIssue != null)
+                                    issues = AppendIssue(issues, referenceRegexTimeoutIssue);
+                                if (references.Count > options.MaxReferencesPerFile)
+                                {
+                                    var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                                    references = [];
+                                    issues = AppendIssue(issues, issue);
+                                }
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
@@ -1065,7 +1240,11 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), extractionCancellationToken);
+                            var record = indexer.BuildSkippedFileRecord(filePath);
+                            var issue = BuildNullByteIssue(ex);
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
+                                extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {
@@ -1202,13 +1381,15 @@ public static partial class IndexCommandRunner
                                 && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                 && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                     }
-                    if (existingId != null)
+                    if (existingId != null
+                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
                     {
-                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
-                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
-                        {
-                            existingId = null;
-                        }
+                        existingId = null;
+                    }
+                    if (existingId != null
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                    {
+                        existingId = null;
                     }
                     if (existingId != null)
                     {
@@ -1245,24 +1426,57 @@ public static partial class IndexCommandRunner
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
                         : ReassignChunkFileIds(item.Chunks, fileId);
+                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                    if (generatedSuppressionIssue != null)
+                    {
+                        writer.InsertChunks(chunks);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        var generatedIssues = AppendIssueIfMissing(
+                            item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang),
+                            generatedSuppressionIssue);
+                        writer.InsertIssues(fileId, generatedIssues);
+                        if (options.Verbose)
+                            WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
+                        currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
+                        WriteProjectRootOnce();
+                        txn.Commit();
+
+                        processed++;
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        ReportJsonIndexProgressIfNeeded();
+                        currentJsonIndexFile = null;
+                        continue;
+                    }
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
+                    SymbolExtractionResult? symbolExtraction = null;
                     var symbols = item.Symbols == null
-                        ? ExtractSymbolsWithStallTimeout(
+                        ? (symbolExtraction = ExtractSymbolsWithStallTimeout(
                             fileId,
                             record.Lang,
                             item.Content!,
                             item.FilePath,
                             Path.GetFullPath(options.ProjectPath!),
+                            record.Path,
                             currentJsonIndexFile,
                             mainSymbolExtractionWorker,
-                            cancellationToken)
+                            cancellationToken)).Symbols
                         : ReassignSymbolFileIds(item.Symbols, fileId);
+                    var symbolRegexTimeoutIssue = symbolExtraction?.RegexTimeoutIssue;
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         if (options.Verbose)
                             WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                         txn.Commit();
@@ -1287,9 +1501,12 @@ public static partial class IndexCommandRunner
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
                         var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                            ? [issue]
+                            : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
-                        writer.InsertIssues(fileId, [issue]);
+                        writer.InsertIssues(fileId, capIssues);
                         if (options.Verbose)
                             WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                         txn.Commit();
@@ -1307,6 +1524,11 @@ public static partial class IndexCommandRunner
                     writer.InsertChunks(chunks);
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
+                    if (symbolRegexTimeoutIssue != null)
+                    {
+                        var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                        item = item with { Issues = AppendIssue(baseIssues, symbolRegexTimeoutIssue) };
+                    }
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
                     IReadOnlyList<ReferenceRecord> references;
                     if (options.SymbolsOnly)
@@ -1315,17 +1537,38 @@ public static partial class IndexCommandRunner
                     }
                     else
                     {
-                        references = item.References == null
-                            ? ReferenceExtractor.Extract(
+                        FileIssue? regexTimeoutIssue = null;
+                        if (item.References == null)
+                        {
+                            using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
+                            references = ReferenceExtractor.Extract(
                                 fileId,
                                 record.Lang,
                                 item.Content!,
                                 symbols,
                                 record.Path,
                                 record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                cancellationToken)
-                            : ReassignReferenceFileIds(item.References, fileId);
+                                cancellationToken,
+                                maxReferenceCount: options.MaxReferencesPerFile + 1);
+                            regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                        }
+                        else
+                        {
+                            references = ReassignReferenceFileIds(item.References, fileId);
+                        }
                         postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
+                        if (regexTimeoutIssue != null)
+                        {
+                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
+                        }
+                        if (references.Count > options.MaxReferencesPerFile)
+                        {
+                            var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                            references = [];
+                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            item = item with { Issues = AppendIssue(baseIssues, issue) };
+                        }
                     }
                     writer.InsertReferences(references, refreshMutualRecursionFlags: false);
                     if (references.Count > 0)

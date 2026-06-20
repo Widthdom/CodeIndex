@@ -49,6 +49,38 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_DanglingFileSystemEntryScanCapsCandidatesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-cap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            for (var i = 0; i < 5; i++)
+                File.WriteAllText(Path.Combine(tempDir, $"file{i}.cs"), $"public class C{i} {{ }}\n");
+
+            var result = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                maxDanglingFileSystemEntryScanCandidates: 3).ScanFilesDetailed();
+
+            Assert.Equal(5, result.Files.Count);
+            var warning = Assert.Single(
+                result.Errors,
+                error => error.Message.Contains("Dangling filesystem entry scan truncated", StringComparison.Ordinal));
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("Dangling filesystem entry scan truncated after 3 candidate", warning.Message);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void Constructor_CaseProbeAvoidsRootProbeArtifacts_Issue3174()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-indexer-{Guid.NewGuid():N}");
@@ -829,6 +861,11 @@ public class FileIndexerTests
 
             Assert.False(result.IsComplete);
             Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+            var warning = Assert.Single(
+                result.Warnings,
+                error => error.Message.Contains("directory budget 1", StringComparison.Ordinal));
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("Project marker discovery truncated", warning.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -908,10 +945,15 @@ public class FileIndexerTests
 
             var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
             var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
+            var cappedResult = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
 
             Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
             Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
             Assert.NotEqual(fullFingerprint, cappedFingerprint);
+            Assert.False(cappedResult.IsComplete);
+            Assert.Contains(
+                cappedResult.Warnings,
+                error => error.Message.Contains("marker file budget 1", StringComparison.Ordinal));
         }
         finally
         {
@@ -1020,6 +1062,8 @@ public class FileIndexerTests
     [InlineData("worker", "#!/usr/bin/python3\nprint('hi')\n", "python")]
     [InlineData("bundle", "#!/usr/bin/env ruby\nputs 'hi'\n", "ruby")]
     [InlineData("cli", "#!/usr/bin/env node\nconsole.log('hi')\n", "javascript")]
+    [InlineData("envsplit", "#!/usr/bin/env -S python -O\nprint('hi')\n", "python")]
+    [InlineData("envquoted", "#!/usr/bin/env -S \"python -O\"\nprint('hi')\n", "python")]
     [InlineData("script", "#!/usr/bin/env pwsh\nWrite-Host hi\n", "powershell")]
     public void DetectLanguage_ExtensionlessShebangScripts_ReturnCorrectLang(string fileName, string content, string expected)
     {
@@ -4079,7 +4123,9 @@ public class FileIndexerTests
                 result.Errors,
                 error => error.Path == "external"
                     && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase));
+                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase)
+                    && error.Message.Contains("<outside project root>", StringComparison.Ordinal)
+                    && !error.Message.Contains(externalDir, StringComparison.Ordinal));
         }
         finally
         {
@@ -4333,7 +4379,8 @@ public class FileIndexerTests
 
             File.WriteAllBytes(Path.Combine(tempDir, nfdPath), [0, 1, 2, 3]);
             Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
-            Assert.False(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
+            Assert.True(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
+            Assert.True(HasFileIssue(dbPath, "Caf\u00e9.cs", "null_byte"));
         }
         finally
         {
@@ -4840,7 +4887,9 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.Null(warning);
+            Assert.NotNull(warning);
+            Assert.Contains("UTF-16LE without BOM", warning, StringComparison.Ordinal);
+            Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
             Assert.Contains("namespace Utf16LeNoBom;", content);
             Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.Unicode.GetBytes(payload)));
         }
@@ -4868,7 +4917,9 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.Null(warning);
+            Assert.NotNull(warning);
+            Assert.Contains("UTF-16BE without BOM", warning, StringComparison.Ordinal);
+            Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
             Assert.Contains("namespace Utf16BeNoBom;", content);
             Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.BigEndianUnicode.GetBytes(payload)));
         }
@@ -4913,9 +4964,36 @@ public class FileIndexerTests
 
         var issues = FileIndexer.ValidateContent("utf16le-nobom.cs", rawBytes, payload);
 
+        var issue = Assert.Single(issues.Where(i => i.Kind == "utf16_heuristic"));
+        Assert.Equal(1, issue.Line);
+        Assert.Contains("UTF-16 LE", issue.Message, StringComparison.Ordinal);
+        Assert.Contains("NUL-byte heuristic", issue.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(issues, i => i.Kind == "utf16_bom");
         Assert.DoesNotContain(issues, i => i.Kind == "null_byte");
         Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+    }
+
+    [Fact]
+    public void BuildRecord_NonUtf16NullByte_ThrowsOffsetDiagnostic()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "binary.cs");
+            File.WriteAllBytes(filePath, [(byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', 0x00]);
+
+            var indexer = new FileIndexer(tempDir);
+            var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(() => indexer.BuildRecordWithRawBytes(filePath));
+
+            Assert.Contains("NULL byte at byte offset 6", ex.Message, StringComparison.Ordinal);
+            Assert.Equal("binary.cs", ex.RelativePath);
+            Assert.Equal(6, ex.NullByteOffset);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
@@ -5138,9 +5216,45 @@ public class FileIndexerTests
 
             Assert.Equal(string.Empty, content);
             Assert.Equal(0, record.Lines);
+            Assert.Equal(FileIndexer.ComputeChecksum(rawBytes), record.Checksum);
+            Assert.NotEqual(FileIndexer.ComputeChecksum(System.Text.Encoding.UTF8.GetBytes(string.Empty)), record.Checksum);
             var issue = Assert.Single(issues, i => i.Kind == "lfs_pointer_skipped");
             Assert.Equal("asset.cs", issue.Path);
             Assert.Equal(1, issue.Line);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_ConfiguredGeneratedPatternBuildsExtractionIssueWithoutGeneratedFlag()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var generatedDir = Path.Combine(tempDir, "src", "generated");
+            Directory.CreateDirectory(generatedDir);
+            var filePath = Path.Combine(generatedDir, "Client.cs");
+            File.WriteAllText(filePath, "public class Client { public string Lookup() => \"ok\"; }\n");
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                generatedCodePatterns: ["src/generated/**"]);
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var issue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+
+            Assert.False(record.Generated);
+            Assert.Equal("src/generated/Client.cs", record.Path);
+            Assert.Contains("public class Client", content, StringComparison.Ordinal);
+            Assert.True(rawBytes.Length > 0);
+            Assert.NotNull(issue);
+            Assert.Equal(FileIndexer.GeneratedCodeExtractionSkippedIssueKind, issue.Kind);
+            Assert.Equal("src/generated/Client.cs", issue.Path);
+            Assert.Contains("symbols and references were skipped", issue.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -5835,6 +5949,22 @@ public class FileIndexerTests
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", filePath);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private static bool HasFileIssue(string dbPath, string filePath, string kind)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT 1
+            FROM file_issues i
+            JOIN files f ON f.id = i.file_id
+            WHERE f.path = @path
+              AND i.kind = @kind
+            """;
+        cmd.Parameters.AddWithValue("@path", filePath);
+        cmd.Parameters.AddWithValue("@kind", kind);
         return cmd.ExecuteScalar() != null;
     }
 }

@@ -224,6 +224,11 @@ internal static class IndexWatchRunner
             args.Add("--max-symbols-per-file");
             args.Add(baseOptions.MaxSymbolsPerFile.ToString(CultureInfo.InvariantCulture));
         }
+        if (baseOptions.MaxReferencesPerFile != IndexCommandRunner.DefaultMaxReferencesPerFile)
+        {
+            args.Add("--max-references-per-file");
+            args.Add(baseOptions.MaxReferencesPerFile.ToString(CultureInfo.InvariantCulture));
+        }
         if (baseOptions.Parallelism != IndexCommandRunner.DefaultIndexParallelism())
         {
             args.Add("--parallelism");

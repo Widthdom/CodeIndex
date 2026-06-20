@@ -14,7 +14,7 @@ public static partial class IndexCommandRunner
     [
         "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
-        "--notify",
+        "--max-references-per-file", "--notify",
         "--parallelism", "--memory-trace", "--follow-symlinks", "--symbols-only",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
@@ -49,6 +49,7 @@ public static partial class IndexCommandRunner
         var notifyMode = ReadCompletionNotificationModeFromEnvironment();
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
         var maxSymbolsPerFile = DefaultMaxSymbolsPerFile;
+        var maxReferencesPerFile = DefaultMaxReferencesPerFile;
         var parallelism = ReadIndexParallelismFromEnvironment();
         var symlinkPolicy = FileIndexer.SymlinkPolicy.None;
         string? easterEgg = null;
@@ -67,6 +68,8 @@ public static partial class IndexCommandRunner
         string? symbolKindFilterError = null;
         var includeSymbolKindsSpecifiedOnCli = false;
         var excludeSymbolKindsSpecifiedOnCli = false;
+        string? generatedCodePatternError = null;
+        var generatedCodePatterns = ReadGeneratedCodePatternsFromEnvironment(ref generatedCodePatternError);
 
         AddSymbolKindFilterValues(
             IncludeSymbolKindsEnvironmentVariable,
@@ -169,6 +172,12 @@ public static partial class IndexCommandRunner
                     break;
                 case var option when option.StartsWith("--max-symbols-per-file=", StringComparison.Ordinal):
                     maxSymbolsPerFile = ParseMaxSymbolsPerFile(option["--max-symbols-per-file=".Length..], maxSymbolsPerFile, "--max-symbols-per-file", ref parseError);
+                    break;
+                case "--max-references-per-file" when i + 1 < args.Length:
+                    maxReferencesPerFile = ParseMaxReferencesPerFile(args[++i], maxReferencesPerFile, "--max-references-per-file", ref parseError);
+                    break;
+                case var option when option.StartsWith("--max-references-per-file=", StringComparison.Ordinal):
+                    maxReferencesPerFile = ParseMaxReferencesPerFile(option["--max-references-per-file=".Length..], maxReferencesPerFile, "--max-references-per-file", ref parseError);
                     break;
                 case "--parallelism" when i + 1 < args.Length:
                     parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism");
@@ -313,7 +322,7 @@ public static partial class IndexCommandRunner
             ProjectFilters = projectFilters,
             SolutionPath = solutionPath,
             ProjectFilterError = projectFilterError,
-            ParseError = parseError,
+            ParseError = parseError ?? generatedCodePatternError,
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
@@ -328,10 +337,41 @@ public static partial class IndexCommandRunner
             NotifyMode = notifyMode,
             MaxFileSizeBytes = maxFileSizeBytes,
             MaxSymbolsPerFile = maxSymbolsPerFile,
+            MaxReferencesPerFile = maxReferencesPerFile,
             Parallelism = parallelism,
             SymlinkPolicy = symlinkPolicy,
             SymbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, symbolKindFilterError),
+            GeneratedCodePatterns = generatedCodePatterns,
         };
+    }
+
+    internal static IReadOnlyList<string> ReadGeneratedCodePatternsFromEnvironment()
+    {
+        string? parseError = null;
+        return ReadGeneratedCodePatternsFromEnvironment(ref parseError);
+    }
+
+    private static IReadOnlyList<string> ReadGeneratedCodePatternsFromEnvironment(ref string? parseError)
+    {
+        var value = CdidxEnvironment.GetEnvironmentVariable(GeneratedCodePatternsEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+        if (!ValidateCsvBounds(GeneratedCodePatternsEnvironmentVariable, value, MaxGeneratedCodePatternCsvLength, MaxGeneratedCodePatternCount, ref parseError))
+            return [];
+
+        var patterns = new List<string>();
+        foreach (var raw in value.Split(',', StringSplitOptions.TrimEntries))
+        {
+            if (raw.Length == 0)
+            {
+                parseError ??= $"{GeneratedCodePatternsEnvironmentVariable} contains an empty generated-code pattern";
+                continue;
+            }
+
+            patterns.Add(raw);
+        }
+
+        return patterns;
     }
 
     private static FileIndexer.SymlinkPolicy ParseSymlinkPolicy(string value, FileIndexer.SymlinkPolicy fallback, ref string? parseError)
@@ -502,6 +542,22 @@ public static partial class IndexCommandRunner
                 return parsed;
 
             parseError ??= $"{source} must be less than or equal to {MaxSymbolsPerFileLimit}";
+            return fallback;
+        }
+
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
+        return fallback;
+    }
+
+    private static int ParseMaxReferencesPerFile(string value, int fallback, string source, ref string? parseError)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed <= MaxReferencesPerFileLimit)
+                return parsed;
+
+            parseError ??= $"{source} must be less than or equal to {MaxReferencesPerFileLimit}";
             return fallback;
         }
 

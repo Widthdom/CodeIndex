@@ -153,6 +153,8 @@ git status --short -- '**/packages.lock.json'
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
+Full-scan resume checkpoints live at `.cdidx/scan-checkpoint.json`. The internal JSON schema is versioned (`Version` is currently `1`) and binds `GitHead` to a bounded `Directories` array; malformed, stale, future-version, oversized, or over-depth payloads are ignored with a bounded warning and a full scan.
+
 Large command and extractor files have a tracked decomposition plan in
 [docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md).
 Use that plan when splitting `QueryCommandRunner`, `SymbolExtractor`,

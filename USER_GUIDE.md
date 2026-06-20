@@ -454,9 +454,10 @@ cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
-or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
-CR-only line endings, likely non-UTF-8 content, Git LFS pointer placeholders, and
-malformed or truncated Dockerfile JSON-form instruction payloads.
+or symbol names: U+FFFD replacement characters, UTF-16 BOM and BOM-less
+heuristic detections, null bytes, mixed or CR-only line endings, likely non-UTF-8
+content, Git LFS pointer placeholders, and malformed or truncated Dockerfile
+JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
@@ -464,9 +465,9 @@ Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
 default `{ "count": ..., "issues": [...] }` object.
-LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
-not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
-content.
+LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
+not indexed, and their checksum stays tied to the pointer identity until you run
+`git lfs pull` and then `cdidx index .` to index the real file content.
 
 ### Find potentially unused symbols
 
@@ -1706,7 +1707,8 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
   "suggestion_max_count": 5000,          // → CDIDX_SUGGESTION_MAX_COUNT
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
-    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"],     // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "generatedCodePatterns": ["src/generated/**", "*.client.ts"] // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
   },
   "mcp": {
     "tools": {
@@ -1722,7 +1724,7 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `indexing.generatedCodePatterns`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.generatedCodePatterns` treats matching relative paths or basenames as extraction-suppressed generated-code sources. Matching files remain indexed for normal text search and chunk retrieval because the query-filtered `generated` flag is not set by this option; symbol/reference extraction is skipped and `file_issues` records `generated_code_extraction_skipped`. Patterns with a slash match slash-normalized relative paths, patterns without a slash match basenames, and `*`, `?`, and `**` are supported. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
@@ -2305,7 +2307,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. Scalar values in `args_summary` are bounded before full JSON materialization, so huge numbers and strings cannot inflate diagnostics. |
-| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings, Dockerfile JSON-form diagnostics) |
+| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM/heuristic detection, likely non-UTF8 encodings, Git LFS pointer placeholders, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2962,17 +2964,19 @@ cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
-対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder、Dockerfile の
-JSON-form instruction payload の parse / truncation 診断などです。
+対象は U+FFFD replacement character、UTF-16 BOM と BOM なし heuristic 検出、
+null byte、mixed / CR-only line ending、likely non-UTF-8 content、Git LFS pointer
+placeholder、Dockerfile の JSON-form instruction payload の parse / truncation
+診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
 エンコーディング破損の可能性を agent が区別できます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。pipeline が既定の `{ "count": ..., "issues": [...] }`
 object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
-は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
-実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
+は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
+実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
+の後に `cdidx index .` を再実行してください。
 
 ### 未使用の可能性がある symbols を探す
 
@@ -4224,7 +4228,8 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
   "suggestion_max_count": 5000,          // → CDIDX_SUGGESTION_MAX_COUNT
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
-    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"],     // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+    "generatedCodePatterns": ["src/generated/**", "*.client.ts"] // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
   },
   "mcp": {
     "tools": {
@@ -4240,7 +4245,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`indexing.generatedCodePatterns`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.generatedCodePatterns` は一致した相対パスまたはベース名を generated-code extraction の抑制対象として扱います。この設定では query filter 用の `generated` flag を立てないため、一致したファイルも通常の全文検索と chunk 取得用には引き続き index されます。symbol/reference 抽出はスキップされ、`file_issues` に `generated_code_extraction_skipped` が記録されます。スラッシュを含む pattern は slash-normalized relative path、スラッシュを含まない pattern は basename に一致し、`*`、`?`、`**` を利用できます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
@@ -4808,7 +4813,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。`args_summary` の scalar 値は full JSON materialization の前に bounded 表示へ変換されるため、巨大な数値や文字列が診断を膨らませません。 |
-| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング、Dockerfile JSON-form 診断）を報告 |
+| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM / heuristic 検出、UTF-8 以外と推定されるエンコーディング、Git LFS pointer placeholder、Dockerfile JSON-form 診断）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |

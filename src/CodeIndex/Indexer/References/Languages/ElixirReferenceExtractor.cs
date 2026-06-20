@@ -89,7 +89,7 @@ internal static class ElixirReferenceExtractor
             if (!seen.Add(key))
                 return;
 
-            references.Add(new ReferenceRecord
+            ReferenceExtractor.TryAddReference(references, new ReferenceRecord
             {
                 FileId = fileId,
                 SymbolName = name,

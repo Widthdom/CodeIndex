@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using BclMatch = System.Text.RegularExpressions.Match;
 using BclRegex = System.Text.RegularExpressions.Regex;
 
@@ -8,6 +11,57 @@ internal sealed class BoundedRegex : BclRegex
 {
     // Keep regex matches bounded, but leave enough scheduler headroom for full-suite CI contention.
     internal static readonly TimeSpan DefaultMatchTimeout = TimeSpan.FromSeconds(2);
+    private const int MaxCapturedTimeoutDiagnostics = 8;
+    private static readonly AsyncLocal<RegexTimeoutCaptureScope?> TimeoutCaptureScope = new();
+
+    internal readonly record struct RegexTimeoutDiagnostic(
+        string Operation,
+        string PatternHash,
+        int PatternLength,
+        double TimeoutMs);
+
+    internal sealed class RegexTimeoutCaptureScope : IDisposable
+    {
+        private readonly RegexTimeoutCaptureScope? _previous;
+        private readonly List<RegexTimeoutDiagnostic> _diagnostics = [];
+
+        internal RegexTimeoutCaptureScope(string? language, string patternFamily)
+        {
+            _previous = TimeoutCaptureScope.Value;
+            Language = string.IsNullOrWhiteSpace(language) ? "unknown" : language;
+            PatternFamily = patternFamily;
+            TimeoutCaptureScope.Value = this;
+        }
+
+        public string Language { get; }
+        public string PatternFamily { get; }
+        public int TimeoutCount { get; private set; }
+        public IReadOnlyList<RegexTimeoutDiagnostic> Diagnostics => _diagnostics;
+        public bool DiagnosticsTruncated => TimeoutCount > _diagnostics.Count;
+        public bool HasTimeouts => TimeoutCount > 0;
+
+        internal void Record(string operation, string pattern, TimeSpan timeout)
+        {
+            TimeoutCount++;
+            if (_diagnostics.Count >= MaxCapturedTimeoutDiagnostics)
+                return;
+
+            _diagnostics.Add(new RegexTimeoutDiagnostic(
+                operation,
+                HashPattern(pattern),
+                pattern.Length,
+                timeout.TotalMilliseconds));
+        }
+
+        public void Dispose()
+        {
+            if (ReferenceEquals(TimeoutCaptureScope.Value, this))
+                TimeoutCaptureScope.Value = _previous;
+        }
+    }
+
+    internal static RegexTimeoutCaptureScope CaptureTimeouts(string? language, string patternFamily) =>
+        new(language, patternFamily);
 
     public BoundedRegex(string pattern)
         : base(pattern, RegexOptions.None, DefaultMatchTimeout)
@@ -37,8 +91,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return BclRegex.Match(input, pattern, options, DefaultMatchTimeout);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("match", pattern, ex);
             return BclMatch.Empty;
         }
     }
@@ -49,8 +104,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return regex.Match(input);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("match", regex.ToString(), ex);
             return BclMatch.Empty;
         }
     }
@@ -66,8 +122,9 @@ internal sealed class BoundedRegex : BclRegex
             _ = matches.Count;
             return matches;
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("matches", pattern, ex);
             return EmptyMatches();
         }
     }
@@ -80,8 +137,9 @@ internal sealed class BoundedRegex : BclRegex
             matches = regex.Matches(input);
             _ = matches.Count;
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("matches", regex.ToString(), ex);
             yield break;
         }
 
@@ -100,8 +158,9 @@ internal sealed class BoundedRegex : BclRegex
             matches = BclRegex.Matches(input, pattern, options, DefaultMatchTimeout);
             _ = matches.Count;
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("matches", pattern, ex);
             yield break;
         }
 
@@ -118,8 +177,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return BclRegex.IsMatch(input, pattern, options, DefaultMatchTimeout);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("is_match", pattern, ex);
             return false;
         }
     }
@@ -133,8 +193,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return BclRegex.Replace(input, pattern, replacement, options, DefaultMatchTimeout);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("replace", pattern, ex);
             return input;
         }
     }
@@ -148,8 +209,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return BclRegex.Replace(input, pattern, evaluator, options, DefaultMatchTimeout);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("replace", pattern, ex);
             return input;
         }
     }
@@ -160,8 +222,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.Match(input);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("match", ToString(), ex);
             return BclMatch.Empty;
         }
     }
@@ -172,8 +235,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.Match(input, startat);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("match", ToString(), ex);
             return BclMatch.Empty;
         }
     }
@@ -184,8 +248,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.Match(input, beginning, length);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("match", ToString(), ex);
             return BclMatch.Empty;
         }
     }
@@ -198,8 +263,9 @@ internal sealed class BoundedRegex : BclRegex
             _ = matches.Count;
             return matches;
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("matches", ToString(), ex);
             return EmptyMatches();
         }
     }
@@ -212,8 +278,9 @@ internal sealed class BoundedRegex : BclRegex
             _ = matches.Count;
             return matches;
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("matches", ToString(), ex);
             return EmptyMatches();
         }
     }
@@ -224,8 +291,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.IsMatch(input);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("is_match", ToString(), ex);
             return false;
         }
     }
@@ -236,8 +304,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.IsMatch(input, startat);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("is_match", ToString(), ex);
             return false;
         }
     }
@@ -248,8 +317,9 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.Replace(input, replacement);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("replace", ToString(), ex);
             return input;
         }
     }
@@ -260,10 +330,20 @@ internal sealed class BoundedRegex : BclRegex
         {
             return base.Replace(input, evaluator);
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException ex)
         {
+            RecordTimeout("replace", ToString(), ex);
             return input;
         }
+    }
+
+    private static void RecordTimeout(string operation, string pattern, RegexMatchTimeoutException ex) =>
+        TimeoutCaptureScope.Value?.Record(operation, pattern, ex.MatchTimeout);
+
+    private static string HashPattern(string pattern)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(pattern));
+        return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
     }
 
     private static MatchCollection EmptyMatches() =>
