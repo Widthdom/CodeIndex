@@ -932,10 +932,13 @@ public partial class McpServer : IDisposable
 
     /// <summary>
     /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when
-    /// the request was a notification or otherwise yields no response). This is the
-    /// transport-neutral seam used by <see cref="IMcpTransport"/> implementations (issue #1558).
+    /// the request was a notification or otherwise yields no response). This synchronous wrapper
+    /// is retained for compatibility tests and legacy in-process callers only; transports and
+    /// request loops should call <see cref="ProcessFrameAsync"/> so cancellation and shutdown can
+    /// flow without sync-over-async blocking (#3770).
     /// 1 フレーム分の MCP JSON-RPC を処理し、ワイヤー応答文字列を返す（通知などで応答なしの場合は null）。
-    /// <see cref="IMcpTransport"/> 実装が共有するトランスポート非依存の合流点 (issue #1558)。
+    /// この同期ラッパは互換テストと legacy in-process 呼び出し専用に残す。transport と request loop は
+    /// sync-over-async blocking を避けるため <see cref="ProcessFrameAsync"/> を await する (#3770)。
     /// </summary>
     internal string? ProcessFrame(string line)
         => ProcessFrameAsync(line).GetAwaiter().GetResult();
@@ -1308,8 +1311,12 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Route a JSON-RPC message to the appropriate handler.
-    /// JSON-RPCメッセージを適切なハンドラにルーティング。
+    /// Route a JSON-RPC message to the appropriate handler. This synchronous wrapper is retained
+    /// for compatibility tests and legacy in-process callers only; transports should prefer
+    /// <see cref="HandleMessageAsync(JsonNode)"/> to avoid sync-over-async dispatch (#3770).
+    /// JSON-RPCメッセージを適切なハンドラにルーティング。この同期ラッパは互換テストと legacy
+    /// in-process 呼び出し専用に残し、transport は sync-over-async dispatch を避けるため
+    /// <see cref="HandleMessageAsync(JsonNode)"/> を優先する (#3770)。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
         => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();

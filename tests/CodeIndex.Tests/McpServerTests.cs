@@ -221,6 +221,23 @@ public class McpServerTests : IDisposable
         Assert.True(document.RootElement.TryGetProperty("result", out _));
     }
 
+    [Fact]
+    public async Task ProcessFrameAsync_MatchesSyncCompatibilityWrapper_Issue3770()
+    {
+        const string frame = """{"jsonrpc":"2.0","id":3770,"method":"tools/list"}""";
+
+        var syncResponse = _server.ProcessFrame(frame);
+        var asyncResponse = await _server.ProcessFrameAsync(frame);
+
+        Assert.NotNull(syncResponse);
+        Assert.NotNull(asyncResponse);
+        using var syncDocument = JsonDocument.Parse(syncResponse);
+        using var asyncDocument = JsonDocument.Parse(asyncResponse);
+        Assert.Equal(
+            syncDocument.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength(),
+            asyncDocument.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength());
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
     {
         var normalized = content.Replace("\r\n", "\n");
