@@ -31,7 +31,7 @@ cdidx mcp                        # Start MCP server for AI tools
 cdidx lsp --db .cdidx/codeindex.db  # Start read-only LSP server for editors
 ```
 
-80 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
+82 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -548,9 +548,11 @@ Use the smallest change that reduces the expensive part of your run.
 | `--files <path...>` | off | Editor/save hooks or known in-place edits | Does not purge old rename/delete paths unless listed |
 | `--commits <id...>` | off | After normal commits | Requires git history but sees rename/delete paths |
 | `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
+| `--dry-run-path-limit <n>` | `100000` | Previewing a very large scan without building unbounded dry-run estimates | Truncated output reports lower-bound totals |
 | `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
 | `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU count, capped at `16` | Full-scan extraction is CPU-bound | Higher values can increase memory and IO pressure |
 | `--watch --debounce <ms>` | `500` ms | Keep an active worktree fresh during editing | Long-running process; incompatible with commit/file scoped refresh flags |
+| `--watch-pending-path-limit <n>` / `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` | `4096` | Watcher sees more distinct changed paths than the default queue keeps | Higher values use more memory before the safe full-rescan fallback |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | Query payloads are too large for AI context | Smaller snippets may hide nearby context |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | Queries or maps are noisy | Over-filtering can hide real matches |
 
@@ -1448,12 +1450,14 @@ same source location.
 | `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
+| `--dry-run-path-limit <n>` | `index` (`--dry-run` only) | Process at most `<n>` dry-run candidate paths before returning truncated estimates. Defaults to `100000`; values above `1000000` are rejected. When the limit is reached, dry-run JSON sets `candidate_paths_truncated: true` and `totals_lower_bound: true`, and reports `candidate_path_limit` plus `candidate_paths_processed`. |
 | `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 4MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
 | `--max-symbols-per-file <n>` | `index` | Skip file content, symbols, and references when one file emits too many symbols. Defaults to `5000`; values above `50000` are rejected. |
 | `--symbols-only` | `index` | Full-scan only. Build chunks, symbols, and issues while skipping reference extraction and graph finalization for a faster first pass. `search`, `definition`, `symbols`, and `map` are available; reference graph commands remain degraded until a normal `cdidx index <projectPath>` run. |
 | `--parallelism <n>` | `index` | Set full-scan extraction worker count. Defaults to CPU count capped at 16, or `CDIDX_INDEX_PARALLELISM` when set. SQLite writes stay single-consumer. |
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
+| `--watch-pending-path-limit <n>` | `index` (watch only) | Set the number of distinct changed paths the watch loop will queue before it reports an overflow and falls back to a full rescan. Defaults to `4096`, honors `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` and `indexing.watchPendingPathLimit`, and rejects values above `262144`. The `watching` and `overflow` JSON events include `watch_pending_path_limit`. |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
@@ -1737,7 +1741,8 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
     "excludeKinds": ["test_method"],     // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
-    "generatedCodePatterns": ["src/generated/**", "*.client.ts"] // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
+    "generatedCodePatterns": ["src/generated/**", "*.client.ts"], // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
+    "watchPendingPathLimit": 8192        // → CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT
   },
   "mcp": {
     "tools": {
@@ -1753,7 +1758,7 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `indexing.generatedCodePatterns`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.generatedCodePatterns` treats matching relative paths or basenames as extraction-suppressed generated-code sources. Matching files remain indexed for normal text search and chunk retrieval because the query-filtered `generated` flag is not set by this option; symbol/reference extraction is skipped and `file_issues` records `generated_code_extraction_skipped`. Patterns with a slash match slash-normalized relative paths, patterns without a slash match basenames, and `*`, `?`, and `**` are supported. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `indexing.generatedCodePatterns`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.watchPendingPathLimit` sets the watch pending-path queue limit and may not exceed 262144; the matching CLI flag and real environment variable override it for one run. `indexing.generatedCodePatterns` treats matching relative paths or basenames as extraction-suppressed generated-code sources. Matching files remain indexed for normal text search and chunk retrieval because the query-filtered `generated` flag is not set by this option; symbol/reference extraction is skipped and `file_issues` records `generated_code_extraction_skipped`. Patterns with a slash match slash-normalized relative paths, patterns without a slash match basenames, and `*`, `?`, and `**` are supported. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
@@ -1856,6 +1861,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | yes |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
+| Solution | `.sln` | yes |
+| Application manifest | `.manifest` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
@@ -1894,6 +1901,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static. `tsconfig.json` / `jsconfig.json` `compilerOptions.baseUrl` and `paths` aliases are resolved to indexed project paths when the target file exists.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. These buckets are searchable text and do not claim symbol or graph extraction.
+- Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ### Language extraction matrix
@@ -1919,6 +1927,7 @@ commands and when to fall back to `search`.
 | GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | none yet | Shader entry points and resource declarations are searchable as symbols; use `search` for data-flow, binding compatibility, and call/reference questions. |
 | Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | none yet | HDL declarations are available to `symbols`, `definition`, `outline`, and symbol-aware `search`; use plain `search` for netlist/reference questions. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
+| Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / Sass / Stylus / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
@@ -2410,7 +2419,7 @@ Security defaults:
 
 - The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
 - Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` to a shared secret. `CDIDX_MCP_HTTP_TOKEN` wins when both are set. When an HTTP bearer secret is configured, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`; HTTP clients do not also need `params.auth.token`.
-- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Leaving the token variable unset, or setting it to the empty string, disables the token gate. Any configured token must be 1-4096 characters and must not contain whitespace or control characters. Supplied HTTP bearer values use the exact bytes after `Bearer ` and are not trimmed before comparison; oversized, whitespace-containing, or control-character-bearing values are rejected before hashing.
+- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Leaving the token variable unset, or setting it to the empty string, disables the token gate. Any configured HTTP bearer token must be 1-4096 characters and must not contain whitespace, control characters, or commas. Supplied HTTP bearer values use the exact bytes after `Bearer ` and are not trimmed before comparison; duplicate or comma-joined `Authorization` headers, oversized values, whitespace-containing values, and control-character-bearing values are rejected before hashing.
 
 The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
 
@@ -3079,9 +3088,11 @@ cdidx index . --duration-format seconds
 | `--files <path...>` | off | editor/save hook や既知の in-place edit | rename/delete 旧 path は明示しない限り purge されない |
 | `--commits <id...>` | off | 通常の commit 後 | git history が必要だが rename/delete paths も扱える |
 | `--changed-between <old> <new>` | off | branch switch 後に両 ref が分かる | 渡した ref の正確さに依存 |
+| `--dry-run-path-limit <n>` | `100000` | 非常に大きい scan を preview し、dry-run estimate を無制限に作らない | truncate された出力は lower-bound totals を報告する |
 | `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | 正当な大きい source file が skip される | DB が大きくなり snippet extraction も遅くなりうる |
 | `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU 数、最大 `16` | フルスキャンの抽出が CPU-bound | 大きくするとメモリと IO の圧力が増えうる |
 | `--watch --debounce <ms>` | `500` ms | 編集中の worktree を live に保つ | long-running process。commit/file scoped refresh flags とは併用不可 |
+| `--watch-pending-path-limit <n>` / `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` | `4096` | watcher が既定 queue を超える数の changed path を検知する | 大きくすると安全な full-rescan fallback 前に使うメモリが増える |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | AI context に対して query payload が大きすぎる | 小さくしすぎると周辺文脈が見えない |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | query / map が noisy | 絞り込みすぎると実 match を隠す |
 
@@ -3997,11 +4008,13 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。 |
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
 | `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
+| `--dry-run-path-limit <n>` | `index`（`--dry-run` 専用） | truncate された estimate を返す前に処理する dry-run candidate path 数を指定する。既定は `100000` で、`1000000` を超える値は拒否される。上限に達した場合、dry-run JSON は `candidate_paths_truncated: true` と `totals_lower_bound: true` を設定し、`candidate_path_limit` と `candidate_paths_processed` も返す。 |
 | `--max-file-bytes <bytes>` | `index` | この実行で使うファイル単位の索引サイズ上限を上書きする。既定は 4MiB、または `CDIDX_MAX_FILE_BYTES` 設定値。値は raw byte 数、または `50M` のような `K` / `M` / `G` 接尾辞を受け付ける。 |
 | `--symbols-only` | `index` | フルスキャン専用。参照抽出と graph finalization を省き、chunks、symbols、issues だけを作ることで初回利用を速くする。`search`、`definition`、`symbols`、`map` は使えるが、reference graph 系コマンドは通常の `cdidx index <projectPath>` を実行するまで degraded のまま。 |
 | `--parallelism <n>` | `index` | フルスキャンの抽出 worker 数を指定する。既定は CPU 数を最大 16 に丸めた値、または `CDIDX_INDEX_PARALLELISM` 設定値。SQLite 書き込みは単一 consumer のまま。 |
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。連続的な差分更新を内蔵しているため `--commits` / `--changed-between` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |
+| `--watch-pending-path-limit <n>` | `index`（`--watch` 専用） | watch loop が overflow を報告して full rescan へ fallback する前に保持する distinct changed path 数を設定する。既定は `4096` で、`CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` と `indexing.watchPendingPathLimit` も使える。`262144` を超える値は拒否される。`watching` と `overflow` の JSON event には `watch_pending_path_limit` が入る。 |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
@@ -4285,7 +4298,8 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
     "excludeKinds": ["test_method"],     // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
-    "generatedCodePatterns": ["src/generated/**", "*.client.ts"] // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
+    "generatedCodePatterns": ["src/generated/**", "*.client.ts"], // → CDIDX_INDEX_GENERATED_CODE_PATTERNS
+    "watchPendingPathLimit": 8192        // → CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT
   },
   "mcp": {
     "tools": {
@@ -4301,7 +4315,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`indexing.generatedCodePatterns`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.generatedCodePatterns` は一致した相対パスまたはベース名を generated-code extraction の抑制対象として扱います。この設定では query filter 用の `generated` flag を立てないため、一致したファイルも通常の全文検索と chunk 取得用には引き続き index されます。symbol/reference 抽出はスキップされ、`file_issues` に `generated_code_extraction_skipped` が記録されます。スラッシュを含む pattern は slash-normalized relative path、スラッシュを含まない pattern は basename に一致し、`*`、`?`、`**` を利用できます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`indexing.generatedCodePatterns`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.watchPendingPathLimit` は watch pending-path queue 上限を設定し、262144 を超えることはできません。対応する CLI flag と実際の環境変数は 1 回の実行でこの値を上書きします。`indexing.generatedCodePatterns` は一致した相対パスまたはベース名を generated-code extraction の抑制対象として扱います。この設定では query filter 用の `generated` flag を立てないため、一致したファイルも通常の全文検索と chunk 取得用には引き続き index されます。symbol/reference 抽出はスキップされ、`file_issues` に `generated_code_extraction_skipped` が記録されます。スラッシュを含む pattern は slash-normalized relative path、スラッシュを含まない pattern は basename に一致し、`*`、`?`、`**` を利用できます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
@@ -4400,6 +4414,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | yes |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
+| ソリューション | `.sln` | yes |
+| アプリケーションマニフェスト | `.manifest` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
@@ -4438,6 +4454,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。`tsconfig.json` / `jsconfig.json` の `compilerOptions.baseUrl` と `paths` alias は、対象ファイルが存在する場合に indexed project path へ解決します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。この bucket は検索可能な text として扱われ、symbol / graph 抽出は主張しません。
+- ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
 ### 言語別 extraction matrix
@@ -4460,6 +4477,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | まだなし | Shader entry point と resource 宣言はシンボルとして検索できます。data-flow、binding compatibility、call/reference の調査には `search` を使ってください。 |
 | Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | まだなし | HDL 宣言は `symbols`、`definition`、`outline`、symbol-aware `search` で使えます。netlist / reference の調査には通常の `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
+| ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / Sass / Stylus / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
@@ -4943,7 +4961,7 @@ HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は�
 
 - listener は既定で loopback アドレス（`127.0.0.1`）のみに bind し、ワイルドカード `+` / `*` は最初から拒否します。
 - 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` または `CDIDX_MCP_AUTH_TOKEN` で共有秘密を指定する必要があります。両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` が優先されます。HTTP bearer secret が設定されている場合、すべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。HTTP クライアントは `params.auth.token` も送る必要はありません。
-- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否します。
+- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。HTTP bearer の設定 token は 1-4096 文字で、空白、制御文字、comma を含められません。受信 token は 4096 文字を超える場合、hash 前に拒否します。重複または comma 結合された `Authorization` ヘッダーも bearer 比較前に拒否します。
 
 stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
 

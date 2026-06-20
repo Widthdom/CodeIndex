@@ -103,6 +103,31 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void HighCardinalityCallers_DoNotGrowBeyondBucketLimit_Issue3780()
+    {
+        var clock = new TestClock();
+        var options = new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 1.0,
+            MaxBucketCount = 2,
+        };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.True(limiter.TryAcquire("search", "client-b").Allowed);
+
+        var denied = limiter.TryAcquire("search", "client-c");
+
+        Assert.False(denied.Allowed);
+        Assert.Equal(RateLimiterOptions.BucketLimitRetryAfterMs, denied.RetryAfterMs);
+        Assert.Equal(2, limiter.BucketCount);
+        var diagnostics = limiter.SnapshotDiagnostics();
+        Assert.Equal(2, diagnostics.MaxBucketCount);
+        Assert.Equal(1, diagnostics.BucketLimitRejectionCount);
+    }
+
+    [Fact]
     public void RetryAfterMs_ApproximatesTimeUntilNextToken()
     {
         var clock = new TestClock();

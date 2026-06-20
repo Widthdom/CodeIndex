@@ -61,7 +61,7 @@ public static partial class SymbolExtractor
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
             "ada" or "d" or "nim" => SystemsLanguageContractVersion,
-            "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
+            "app_manifest" or "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }
@@ -2306,7 +2306,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity", "cuda" })
+          .Concat(new[] { "app_manifest", "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity", "solution", "cuda" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2461,6 +2461,16 @@ public static partial class SymbolExtractor
         if (lang == "msbuild")
         {
             return ExtractMsBuildSymbols(fileId, content, content.Split('\n'));
+        }
+
+        if (lang == "solution")
+        {
+            return ExtractSolutionSymbols(fileId, content.Split('\n'));
+        }
+
+        if (lang == "app_manifest")
+        {
+            return ExtractAppManifestSymbols(fileId, content, content.Split('\n'));
         }
 
         if (lang == "markdown")

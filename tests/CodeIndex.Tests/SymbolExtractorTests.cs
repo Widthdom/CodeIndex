@@ -154,6 +154,75 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Solution_IndexesProjectEntries_Issue3662()
+    {
+        const string content = """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "PythonApp", "tools\PythonApp\PythonApp.pyproj", "{33333333-3333-3333-3333-333333333333}"
+            EndProject
+            Project("{66A26720-8FB5-11D2-AA7E-00C04F688DDE}") = "Solution Items", "Solution Items", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "solution", content);
+        Assert.Equal(2, symbols.Count);
+
+        var project = Assert.Single(symbols, symbol => symbol.Name == "App");
+        Assert.Equal("project", project.Kind);
+        Assert.Equal("csproj", project.SubKind);
+        Assert.Equal(2, project.Line);
+        Assert.Contains(@"src\App\App.csproj", project.Signature, StringComparison.Ordinal);
+
+        var pythonProject = Assert.Single(symbols, symbol => symbol.Name == "PythonApp");
+        Assert.Equal("project", pythonProject.Kind);
+        Assert.Equal("pyproj", pythonProject.SubKind);
+        Assert.Equal(4, pythonProject.Line);
+        Assert.Contains(@"tools\PythonApp\PythonApp.pyproj", pythonProject.Signature, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_AppManifest_IndexesRelevantEntries_Issue3662()
+    {
+        const string content = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
+              <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+                <security>
+                  <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+                    <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+                  </requestedPrivileges>
+                </security>
+              </trustInfo>
+              <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+                <application>
+                  <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+                </application>
+              </compatibility>
+              <application xmlns="urn:schemas-microsoft-com:asm.v3">
+                <windowsSettings>
+                  <longPathAware>true</longPathAware>
+                </windowsSettings>
+              </application>
+            </assembly>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "app_manifest", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "assembly"
+            && symbol.Name == "CodeIndex.App"
+            && symbol.Line == 3);
+        Assert.Contains(symbols, symbol => symbol.Name == "assemblyIdentity.version");
+        Assert.Contains(symbols, symbol => symbol.Name == "requestedExecutionLevel.level");
+        Assert.Contains(symbols, symbol => symbol.Name == "requestedExecutionLevel.uiAccess");
+        Assert.Contains(symbols, symbol => symbol.Name == "supportedOS.{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}");
+        Assert.Contains(symbols, symbol => symbol.Name == "longPathAware");
+    }
+
+    [Fact]
     public void Extract_Cython_DetectsNativeDeclarations_Issue3530()
     {
         const string content = """

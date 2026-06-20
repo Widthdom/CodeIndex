@@ -568,6 +568,8 @@ public class FileIndexerTests
     [InlineData("shader.hlsl", "hlsl")]
     [InlineData("shader.wgsl", "wgsl")]
     [InlineData("shader.metal", "metal")]
+    [InlineData("CodeIndex.sln", "solution")]
+    [InlineData("app.manifest", "app_manifest")]
     [InlineData("cpu.s", "assembly")]
     [InlineData("cpu.S", "assembly")]
     [InlineData("cpu.asm", "assembly")]
@@ -1361,6 +1363,8 @@ public class FileIndexerTests
         Assert.Equal("dependency_lock", map["go.sum"]);
         Assert.Equal("dependency_lock", map["uv.lock"]);
         Assert.Equal("dependency_lock", map["packages.lock.json"]);
+        Assert.Equal("solution", map[".sln"]);
+        Assert.Equal("app_manifest", map[".manifest"]);
         Assert.Equal("assembly", map[".s"]);
         Assert.Equal("assembly", map[".S"]);
 
@@ -3457,6 +3461,44 @@ public class FileIndexerTests
             Assert.Contains("tool", scanResult.NonIndexablePaths);
             Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
             Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_TreatsSolutionAndManifestAsKnownStructuralFiles_Issue3662()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "App.sln"), """
+                Microsoft Visual Studio Solution File, Format Version 12.00
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                EndProject
+                """);
+            File.WriteAllText(Path.Combine(tempDir, "app.manifest"), """
+                <?xml version="1.0" encoding="utf-8"?>
+                <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+                  <assemblyIdentity version="1.0.0.0" name="App" type="win32" />
+                </assembly>
+                """);
+            File.WriteAllText(Path.Combine(tempDir, "data.mystery"), "unknown extension\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var scanResult = indexer.ScanFilesDetailed();
+            var files = scanResult.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Equal(["App.sln", "app.manifest"], files);
+            Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+            Assert.DoesNotContain("App.sln", scanResult.UnknownExtensionFiles);
+            Assert.DoesNotContain("app.manifest", scanResult.UnknownExtensionFiles);
         }
         finally
         {

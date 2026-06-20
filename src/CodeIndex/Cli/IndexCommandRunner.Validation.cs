@@ -156,7 +156,7 @@ public static partial class IndexCommandRunner
             return null;
 
         const string watchConflictSynopsis =
-            "`cdidx index <projectPath> --watch [--debounce <ms>]` "
+            "`cdidx index <projectPath> --watch [--debounce <ms>] [--watch-pending-path-limit <n>]` "
             + "(omit --commits / --changed-between / --files / --dry-run; the initial scan plus continuous watch handles incremental refresh)";
         return WriteCommandError(
             options.Json,

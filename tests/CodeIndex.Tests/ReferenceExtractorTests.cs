@@ -170,6 +170,35 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Solution_IndexesProjectPathReferences_Issue3662()
+    {
+        const string content = """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "PythonApp", "tools\PythonApp\PythonApp.pyproj", "{33333333-3333-3333-3333-333333333333}"
+            EndProject
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "solution", content);
+        var references = ReferenceExtractor.Extract(1, "solution", content, symbols);
+        Assert.Equal(2, references.Count);
+
+        var reference = Assert.Single(references, item => item.SymbolName == "src/App/App.csproj");
+        Assert.Equal("project_reference", reference.ReferenceKind);
+        Assert.Equal("project", reference.ContainerKind);
+        Assert.Equal("App", reference.ContainerName);
+        Assert.Equal(2, reference.Line);
+        Assert.True(reference.Column > 0);
+
+        var pythonReference = Assert.Single(references, item => item.SymbolName == "tools/PythonApp/PythonApp.pyproj");
+        Assert.Equal("project_reference", pythonReference.ReferenceKind);
+        Assert.Equal("project", pythonReference.ContainerKind);
+        Assert.Equal("PythonApp", pythonReference.ContainerName);
+        Assert.Equal(4, pythonReference.Line);
+    }
+
+    [Fact]
     public void Extract_CMake_BuildAutomationReferences()
     {
         const string content = """

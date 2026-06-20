@@ -175,13 +175,15 @@ public partial class DbReader : IDisposable
     // are dependency edges from a lambda body back to an enclosing local and participate in impact.
     // C# generic type arguments are retained only when they are attached to an explicit invocation,
     // so impact can follow `Process<IFoo>(x)` without promoting ordinary type annotations to
-    // call-graph edges (#2062).
+    // call-graph edges (#2062). Solution `project_reference` edges are retained because solution
+    // files are advertised as graph-supported structural metadata (#3662).
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
     // Razor の `razor_event_binding`、React の `consumes_hook`、C++ の `friend` は依存関係 graph query に含める。
     // C# closure の `capture` は lambda 本体から外側 local への依存であり、impact に参加する。
-    // C# generic invocation type arguments are included when tied to an actual call (#2062).
-    internal const string CallGraphReferenceKindsSql = "('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture')";
+    // C# generic invocation type arguments are included when tied to an actual call (#2062)。
+    // solution の `project_reference` は structural metadata として graph 対応を告知しているため含める (#3662)。
+    internal const string CallGraphReferenceKindsSql = "('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')";
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 

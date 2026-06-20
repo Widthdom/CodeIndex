@@ -107,8 +107,14 @@ public sealed class McpToolFilter
 
         var enabled = new HashSet<string>(KnownToolNames, StringComparer.OrdinalIgnoreCase);
         var deny = SplitCsv(denyValue, DenyEnvVarName, out var denySpecified, out var denyInvalid);
-        if (denySpecified && !denyInvalid)
+        if (denySpecified)
         {
+            if (denyInvalid)
+            {
+                McpEnvironment.WriteWarning(DenyEnvVarName, "was rejected; failing closed with no tools enabled.");
+                return new McpToolFilter(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            }
+
             WarnUnknownNames(DenyEnvVarName, deny);
             foreach (var name in deny)
                 enabled.Remove(name);
