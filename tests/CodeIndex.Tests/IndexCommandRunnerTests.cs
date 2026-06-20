@@ -2468,6 +2468,28 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResolveProjects_RejectsFallbackDiscoveryDirectoryTraversalLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_directory_limit");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "A"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "B"));
+            var limits = SolutionProjectResolverLimits.Default with { MaxFallbackDiscoveryDirectories = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("fallback project discovery traversed more than 1 directories", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");

@@ -861,6 +861,11 @@ public class FileIndexerTests
 
             Assert.False(result.IsComplete);
             Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+            var warning = Assert.Single(
+                result.Warnings,
+                error => error.Message.Contains("directory budget 1", StringComparison.Ordinal));
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("Project marker discovery truncated", warning.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -940,10 +945,15 @@ public class FileIndexerTests
 
             var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
             var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
+            var cappedResult = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
 
             Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
             Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
             Assert.NotEqual(fullFingerprint, cappedFingerprint);
+            Assert.False(cappedResult.IsComplete);
+            Assert.Contains(
+                cappedResult.Warnings,
+                error => error.Message.Contains("marker file budget 1", StringComparison.Ordinal));
         }
         finally
         {

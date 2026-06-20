@@ -94,6 +94,7 @@ public class FileIndexer
         public int DirectoriesVisited { get; set; }
         public int MarkerFilesCollected { get; set; }
         public bool Truncated { get; set; }
+        public string TruncationReason { get; set; } = "unknown";
     }
 
     private readonly record struct ProjectMarkerFingerprintDirectory(string Path, IgnoreRuleSet IgnoreRules, bool IsProjectRoot);
@@ -1768,7 +1769,7 @@ public class FileIndexer
         if (traversalState.Truncated)
         {
             projectMarkers.Add(
-                $"__cdidx_project_marker_fingerprint_truncated__:directories={traversalState.DirectoriesVisited};markers={traversalState.MarkerFilesCollected}");
+                $"__cdidx_project_marker_fingerprint_truncated__:reason={traversalState.TruncationReason};directories={traversalState.DirectoriesVisited};markers={traversalState.MarkerFilesCollected}");
         }
 
         projectMarkers.Sort(StringComparer.Ordinal);
@@ -1891,7 +1892,11 @@ public class FileIndexer
 
             if (traversalState.DirectoriesVisited >= maxDirectories)
             {
-                traversalState.Truncated = true;
+                TruncateProjectMarkerTraversal(
+                    traversalState,
+                    errors,
+                    current.Path,
+                    $"directory budget {maxDirectories:N0} exhausted after visiting {traversalState.DirectoriesVisited:N0} directories");
                 return;
             }
 
@@ -1903,7 +1908,11 @@ public class FileIndexer
                 var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, current.IgnoreRules, errors, ref fullyScanned);
                 if (!loadResult.IgnoreRulesAvailable)
                 {
-                    traversalState.Truncated = true;
+                    TruncateProjectMarkerTraversal(
+                        traversalState,
+                        errors,
+                        currentDirectory,
+                        "ignore-rule loading failed");
                     return;
                 }
 
@@ -1916,7 +1925,11 @@ public class FileIndexer
 
                     if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
                     {
-                        traversalState.Truncated = true;
+                        TruncateProjectMarkerTraversal(
+                            traversalState,
+                            errors,
+                            currentDirectory,
+                            $"marker file budget {maxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
                         return;
                     }
 
@@ -1940,7 +1953,11 @@ public class FileIndexer
 
                     if (traversalState.DirectoriesVisited + pendingDirectories.Count >= maxDirectories)
                     {
-                        traversalState.Truncated = true;
+                        TruncateProjectMarkerTraversal(
+                            traversalState,
+                            errors,
+                            currentDirectory,
+                            $"directory budget {maxDirectories:N0} would be exceeded while queuing subdirectories after visiting {traversalState.DirectoriesVisited:N0} directories");
                         return;
                     }
 
@@ -1950,14 +1967,37 @@ public class FileIndexer
             catch (UnauthorizedAccessException)
             {
                 AddProjectMarkerTraversalWarning(errors, currentDirectory, nameof(UnauthorizedAccessException));
-                traversalState.Truncated = true;
+                MarkProjectMarkerTraversalTruncated(
+                    traversalState,
+                    $"traversal failed with {nameof(UnauthorizedAccessException)}");
             }
             catch (IOException)
             {
                 AddProjectMarkerTraversalWarning(errors, currentDirectory, nameof(IOException));
-                traversalState.Truncated = true;
+                MarkProjectMarkerTraversalTruncated(
+                    traversalState,
+                    $"traversal failed with {nameof(IOException)}");
             }
         }
+    }
+
+    private void TruncateProjectMarkerTraversal(
+        ProjectMarkerFingerprintTraversalState traversalState,
+        List<ScanError> errors,
+        string directory,
+        string reason)
+    {
+        MarkProjectMarkerTraversalTruncated(traversalState, reason);
+        AddProjectMarkerBudgetWarning(errors, directory, reason);
+    }
+
+    private static void MarkProjectMarkerTraversalTruncated(
+        ProjectMarkerFingerprintTraversalState traversalState,
+        string reason)
+    {
+        if (!traversalState.Truncated)
+            traversalState.TruncationReason = reason;
+        traversalState.Truncated = true;
     }
 
     private static IEnumerable<string> EnumerateProjectMarkerDirectories(string dir)
@@ -1980,6 +2020,24 @@ public class FileIndexer
         errors.Add(new ScanError(
             relativePath,
             $"Project marker discovery skipped this subtree because it could not be traversed ({exceptionType}).",
+            ScanIssueSeverity.Warning));
+    }
+
+    private void AddProjectMarkerBudgetWarning(List<ScanError> errors, string directory, string reason)
+    {
+        if (errors.Count(static error => error.Message.StartsWith("Project marker discovery truncated", StringComparison.Ordinal))
+            >= MaxProjectMarkerTraversalWarnings)
+        {
+            return;
+        }
+
+        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, directory));
+        if (string.IsNullOrEmpty(relativePath))
+            relativePath = ".";
+
+        errors.Add(new ScanError(
+            relativePath,
+            $"Project marker discovery truncated because {reason}.",
             ScanIssueSeverity.Warning));
     }
 
