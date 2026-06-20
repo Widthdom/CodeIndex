@@ -11,6 +11,27 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunStatus_CanceledToken_RethrowsInsteadOfDatabaseError_Issue3723()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_cancel_issue3723");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions,
+                cancellationToken: cancellation.Token));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_MissingSinceValueShowsPerFlagHint_Issue1507()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(["--since"], _jsonOptions));

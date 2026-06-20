@@ -285,7 +285,7 @@ public static partial class IndexCommandRunner
 
                 db.InitializeSchema();
                 var indexRunDiagnostics = new List<string>();
-                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics);
+                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
                 var indexer = new FileIndexer(
@@ -910,45 +910,6 @@ public static partial class IndexCommandRunner
         return PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
     }
 
-    private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
-    {
-        lang = string.Empty;
-        error = null;
-
-        var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
-        if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
-        {
-            error = "Could not probe file for indexability/language.";
-            return false;
-        }
-
-        if (indexability != FileIndexer.FileProbeStatus.Supported)
-            return false;
-
-        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-        if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-        {
-            error = "Could not probe file for indexability/language.";
-            return false;
-        }
-
-        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
-            return false;
-
-        try
-        {
-            var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
-            lang = record.Lang ?? "unknown";
-            error = warning;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
     // Issue #1509: stamp the Git HEAD commit, branch, and UTC timestamp into
     // codeindex_meta so cross-session staleness ("the DB was indexed at commit X but
     // you're now at Y, N commits ahead") is detectable by `status` / consumers. Only
@@ -985,16 +946,26 @@ public static partial class IndexCommandRunner
         StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
     }
 
-    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit, List<string>? diagnostics)
+    private static void StampCommitScopedFreshHeadMetadata(
+        DbWriter writer,
+        IndexCommandOptions options,
+        string projectRoot,
+        string? currentHeadCommit,
+        List<string>? diagnostics,
+        CancellationToken cancellationToken = default)
     {
         try
         {
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
-                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit))
-                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit))
+                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit, cancellationToken))
+                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit, cancellationToken))
                 ? currentHeadCommit
                 : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -1004,21 +975,29 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static bool GitRefCoversCurrentHead(string projectRoot, string refName, string currentHeadCommit)
+    private static bool GitRefCoversCurrentHead(
+        string projectRoot,
+        string refName,
+        string currentHeadCommit,
+        CancellationToken cancellationToken)
     {
         if (currentHeadCommit.StartsWith(refName, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName);
+        var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName, cancellationToken);
         return string.Equals(resolvedRef, currentHeadCommit, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryChangedBetweenCoversCurrentHead(IndexCommandOptions options, string projectRoot, string currentHeadCommit)
+    private static bool TryChangedBetweenCoversCurrentHead(
+        IndexCommandOptions options,
+        string projectRoot,
+        string currentHeadCommit,
+        CancellationToken cancellationToken)
     {
         if (options.ChangedBetweenRefs.Count != 2)
             return false;
 
-        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit);
+        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit, cancellationToken);
     }
 
     // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so
@@ -1050,12 +1029,16 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static void AddToGitExclude(string projectPath, string dbPath, List<string>? diagnostics)
+    private static void AddToGitExclude(
+        string projectPath,
+        string dbPath,
+        List<string>? diagnostics,
+        CancellationToken cancellationToken)
     {
         try
         {
             var projectRoot = Path.GetFullPath(projectPath);
-            var gitDir = GitHelper.ResolveGitCommonDir(projectRoot);
+            var gitDir = GitHelper.ResolveGitCommonDir(projectRoot, cancellationToken);
             if (gitDir == null) return;
 
             var excludeFile = Path.Combine(gitDir, "info", "exclude");
@@ -1104,6 +1087,10 @@ public static partial class IndexCommandRunner
             sw.WriteLine("# cdidx (CodeIndex) — auto-generated");
             foreach (var pattern in missing)
                 sw.WriteLine(pattern);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

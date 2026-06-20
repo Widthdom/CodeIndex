@@ -209,13 +209,6 @@ internal sealed class IndexLock : IDisposable
         return new IndexLockInfo(pid.Value, started.Value);
     }
 
-    private static string EscapeValue(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return string.Empty;
-        return value.Replace("\\", "\\\\").Replace("\n", "\\n").Replace("\r", "\\r");
-    }
-
     private static string UnescapeValue(string value)
     {
         if (string.IsNullOrEmpty(value))
