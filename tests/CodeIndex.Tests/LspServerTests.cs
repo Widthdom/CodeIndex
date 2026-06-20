@@ -83,8 +83,12 @@ public class LspServerTests
         var bytes = Encoding.UTF8.GetBytes($"Content-Length: {LspServer.MaxLspFrameBytes + 1}\r\n\r\n");
         using var stream = new MemoryStream(bytes);
 
-        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.False(LspServer.TryReadMessage(stream, out var actual, out var diagnostic));
         Assert.Equal(string.Empty, actual);
+        Assert.NotNull(diagnostic);
+        Assert.Equal(LspServer.ReadDiagnosticContentLengthTooLarge, diagnostic.Value.Code);
+        Assert.Equal(LspServer.MaxLspFrameBytes + 1, diagnostic.Value.ContentLength);
+        Assert.Equal(LspServer.MaxLspFrameBytes, diagnostic.Value.MaxContentLength);
     }
 
     [Theory]
@@ -95,8 +99,37 @@ public class LspServerTests
         var bytes = Encoding.UTF8.GetBytes($"Content-Length: {firstLength}\r\nContent-Length: {secondLength}\r\n\r\n{{}}");
         using var stream = new MemoryStream(bytes);
 
-        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.False(LspServer.TryReadMessage(stream, out var actual, out var diagnostic));
         Assert.Equal(string.Empty, actual);
+        Assert.NotNull(diagnostic);
+        Assert.Equal(LspServer.ReadDiagnosticDuplicateContentLength, diagnostic.Value.Code);
+    }
+
+    [Fact]
+    public void TryReadMessage_RejectsNegativeContentLength_Issue3757()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: -1\r\n\r\n"));
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual, out var diagnostic));
+
+        Assert.Equal(string.Empty, actual);
+        Assert.NotNull(diagnostic);
+        Assert.Equal(LspServer.ReadDiagnosticNegativeContentLength, diagnostic.Value.Code);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("abc")]
+    [InlineData("+2")]
+    public void TryReadMessage_RejectsMalformedContentLength_Issue3757(string value)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes($"Content-Length: {value}\r\n\r\n"));
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual, out var diagnostic));
+
+        Assert.Equal(string.Empty, actual);
+        Assert.NotNull(diagnostic);
+        Assert.Equal(LspServer.ReadDiagnosticMalformedContentLength, diagnostic.Value.Code);
     }
 
     [Fact]
@@ -349,6 +382,9 @@ public class LspServerTests
             Assert.NotNull(response);
             Assert.Equal(-32700, response!["error"]!["code"]!.GetValue<int>());
             Assert.Null(response["id"]);
+            var message = response["error"]!["message"]!.GetValue<string>();
+            Assert.Contains("payload_bytes=", message, StringComparison.Ordinal);
+            Assert.Contains($"max_json_depth={LspServer.MaxJsonDepth}", message, StringComparison.Ordinal);
         }
         finally
         {
@@ -670,6 +706,9 @@ public class LspServerTests
             using var parseError = JsonDocument.Parse(parseErrorPayload);
             Assert.Equal(-32700, parseError.RootElement.GetProperty("error").GetProperty("code").GetInt32());
             Assert.Equal(JsonValueKind.Null, parseError.RootElement.GetProperty("id").ValueKind);
+            Assert.Equal(
+                $"Parse error (payload_bytes=1, max_json_depth={LspServer.MaxJsonDepth})",
+                parseError.RootElement.GetProperty("error").GetProperty("message").GetString());
 
             Assert.True(LspServer.TryReadMessage(output, out var initializePayload));
             using var initialize = JsonDocument.Parse(initializePayload);

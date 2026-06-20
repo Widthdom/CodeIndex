@@ -55,6 +55,16 @@ internal sealed class LspServer : IDisposable
     private const string FailurePositionLineMissing = "position_line_missing";
     private const string FailurePositionFileUnreadable = "position_file_unreadable";
     private const string FailureNoTokenAtPosition = "no_token_at_position";
+    internal const string ReadDiagnosticEndOfStream = "end_of_stream";
+    internal const string ReadDiagnosticIncompleteHeader = "incomplete_header";
+    internal const string ReadDiagnosticHeaderLineTooLarge = "header_line_too_large";
+    internal const string ReadDiagnosticHeaderSectionTooLarge = "header_section_too_large";
+    internal const string ReadDiagnosticDuplicateContentLength = "duplicate_content_length";
+    internal const string ReadDiagnosticMalformedContentLength = "malformed_content_length";
+    internal const string ReadDiagnosticNegativeContentLength = "negative_content_length";
+    internal const string ReadDiagnosticContentLengthTooLarge = "content_length_too_large";
+    internal const string ReadDiagnosticMissingContentLength = "missing_content_length";
+    internal const string ReadDiagnosticIncompleteBody = "incomplete_body";
     private static readonly string[] SemanticTokenTypes =
     [
         "namespace",
@@ -118,6 +128,18 @@ internal sealed class LspServer : IDisposable
     private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
     private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
+    internal readonly record struct LspMessageReadDiagnostic(
+        string Code,
+        string Message,
+        int? ContentLength = null,
+        int? MaxContentLength = null);
+    private enum LspHeaderLineReadFailure
+    {
+        None,
+        EndOfStream,
+        IncompleteHeader,
+        LineTooLarge,
+    }
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -167,7 +189,7 @@ internal sealed class LspServer : IDisposable
         }
         catch (JsonException)
         {
-            return Error(null, -32700, "Parse error");
+            return Error(null, -32700, FormatParseErrorMessage(payload));
         }
 
         using (document)
@@ -1775,6 +1797,11 @@ internal sealed class LspServer : IDisposable
         },
     };
 
+    private static string FormatParseErrorMessage(string payload)
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"Parse error (payload_bytes={Encoding.UTF8.GetByteCount(payload)}, max_json_depth={MaxJsonDepth})");
+
     /// <summary>
     /// Compatibility wrapper that reads without caller cancellation. Prefer the overload that
     /// accepts <see cref="CancellationToken"/> for cancellable transports.
@@ -1785,8 +1812,16 @@ internal sealed class LspServer : IDisposable
         TryReadMessage(input, out payload, CancellationToken.None);
 
     internal static bool TryReadMessage(Stream input, out string payload, CancellationToken cancellationToken)
+        => TryReadMessage(input, out payload, out _, cancellationToken);
+
+    internal static bool TryReadMessage(
+        Stream input,
+        out string payload,
+        out LspMessageReadDiagnostic? diagnostic,
+        CancellationToken cancellationToken = default)
     {
         payload = string.Empty;
+        diagnostic = null;
         var contentLength = -1;
         var hasContentLength = false;
         var headerCount = 0;
@@ -1794,15 +1829,23 @@ internal sealed class LspServer : IDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var line = ReadAsciiLine(input, cancellationToken);
+            var line = ReadAsciiLine(input, cancellationToken, out var lineFailure);
             if (line == null)
+            {
+                diagnostic = CreateHeaderReadDiagnostic(lineFailure);
                 return false;
+            }
             if (line.Length == 0)
                 break;
             headerCount++;
             headerBytes += line.Length;
             if (headerCount > MaxLspHeaderCount || headerBytes > MaxLspHeaderBytes)
+            {
+                diagnostic = new LspMessageReadDiagnostic(
+                    ReadDiagnosticHeaderSectionTooLarge,
+                    $"LSP headers exceeded {MaxLspHeaderCount} lines or {MaxLspHeaderBytes} bytes.");
                 return false;
+            }
             var colon = line.IndexOf(':');
             if (colon <= 0)
                 continue;
@@ -1811,11 +1854,36 @@ internal sealed class LspServer : IDisposable
             if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
             {
                 if (hasContentLength)
-                    return false;
-                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
-                    || parsed < 0
-                    || parsed > MaxLspFrameBytes)
                 {
+                    diagnostic = new LspMessageReadDiagnostic(
+                        ReadDiagnosticDuplicateContentLength,
+                        "LSP frame contained more than one Content-Length header.");
+                    return false;
+                }
+
+                if (value.StartsWith("-", StringComparison.Ordinal))
+                {
+                    diagnostic = new LspMessageReadDiagnostic(
+                        ReadDiagnosticNegativeContentLength,
+                        "LSP Content-Length must not be negative.");
+                    return false;
+                }
+
+                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    diagnostic = new LspMessageReadDiagnostic(
+                        ReadDiagnosticMalformedContentLength,
+                        "LSP Content-Length must be a base-10 byte count.");
+                    return false;
+                }
+
+                if (parsed > MaxLspFrameBytes)
+                {
+                    diagnostic = new LspMessageReadDiagnostic(
+                        ReadDiagnosticContentLengthTooLarge,
+                        $"LSP Content-Length exceeded the {MaxLspFrameBytes} byte limit.",
+                        parsed,
+                        MaxLspFrameBytes);
                     return false;
                 }
 
@@ -1825,7 +1893,12 @@ internal sealed class LspServer : IDisposable
         }
 
         if (contentLength < 0)
+        {
+            diagnostic = new LspMessageReadDiagnostic(
+                ReadDiagnosticMissingContentLength,
+                "LSP frame did not include a Content-Length header.");
             return false;
+        }
 
         var buffer = ArrayPool<byte>.Shared.Rent(contentLength);
         try
@@ -1835,7 +1908,14 @@ internal sealed class LspServer : IDisposable
             {
                 var read = Read(input, buffer, offset, contentLength - offset, cancellationToken);
                 if (read == 0)
+                {
+                    diagnostic = new LspMessageReadDiagnostic(
+                        ReadDiagnosticIncompleteBody,
+                        "LSP frame ended before the declared Content-Length body was complete.",
+                        contentLength,
+                        MaxLspFrameBytes);
                     return false;
+                }
                 offset += read;
             }
             payload = Encoding.UTF8.GetString(buffer, 0, contentLength);
@@ -1847,6 +1927,19 @@ internal sealed class LspServer : IDisposable
         }
     }
 
+    private static LspMessageReadDiagnostic CreateHeaderReadDiagnostic(LspHeaderLineReadFailure failure) => failure switch
+    {
+        LspHeaderLineReadFailure.LineTooLarge => new LspMessageReadDiagnostic(
+            ReadDiagnosticHeaderLineTooLarge,
+            $"LSP header line exceeded the {MaxLspHeaderLineBytes} byte limit."),
+        LspHeaderLineReadFailure.IncompleteHeader => new LspMessageReadDiagnostic(
+            ReadDiagnosticIncompleteHeader,
+            "LSP frame ended before the header section was complete."),
+        _ => new LspMessageReadDiagnostic(
+            ReadDiagnosticEndOfStream,
+            "LSP input ended before a frame was available."),
+    };
+
     internal static void WriteMessage(Stream output, string payload)
     {
         var body = Encoding.UTF8.GetBytes(payload);
@@ -1856,8 +1949,12 @@ internal sealed class LspServer : IDisposable
         output.Flush();
     }
 
-    private static string? ReadAsciiLine(Stream input, CancellationToken cancellationToken)
+    private static string? ReadAsciiLine(
+        Stream input,
+        CancellationToken cancellationToken,
+        out LspHeaderLineReadFailure failure)
     {
+        failure = LspHeaderLineReadFailure.None;
         var buffer = ArrayPool<byte>.Shared.Rent(MaxLspHeaderLineBytes + 1);
         var length = 0;
         try
@@ -1866,7 +1963,12 @@ internal sealed class LspServer : IDisposable
             {
                 var read = Read(input, buffer, length, 1, cancellationToken);
                 if (read == 0)
-                    return length == 0 ? null : Encoding.ASCII.GetString(buffer, 0, length);
+                {
+                    failure = length == 0
+                        ? LspHeaderLineReadFailure.EndOfStream
+                        : LspHeaderLineReadFailure.IncompleteHeader;
+                    return null;
+                }
 
                 var value = buffer[length];
                 if (value == '\n')
@@ -1874,7 +1976,10 @@ internal sealed class LspServer : IDisposable
                 if (value != '\r')
                 {
                     if (length >= MaxLspHeaderLineBytes)
+                    {
+                        failure = LspHeaderLineReadFailure.LineTooLarge;
                         return null;
+                    }
                     length++;
                 }
             }

@@ -2204,8 +2204,10 @@ Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
 frame parsing also rejects more than 64 header lines, more than 65536 aggregate
-header bytes, any one header line above 8192 bytes, duplicate `Content-Length`
-headers, or a body above 8388608 bytes before reading the message body.
+header bytes, any one header line above 8192 bytes, duplicate, negative,
+malformed, or body-over-limit `Content-Length` headers, and bodies above
+8388608 bytes before reading the message body. JSON parse errors report only
+sanitized payload-size and max-depth context, not payload text.
 The stdio loop observes the CLI cancellation token while reading headers and
 message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
 instead of waiting for another complete request.
@@ -4755,8 +4757,9 @@ live buffer を先に読むため、未保存の編集内容でも CodeIndex dat
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
 LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
-超える header、8192 bytes を超える単一 header 行、重複した `Content-Length` header、
-8388608 bytes を超える body を拒否します。
+超える header、8192 bytes を超える単一 header 行、重複・負数・不正形式・body 上限超過の
+`Content-Length` header、8388608 bytes を超える body を拒否します。JSON parse error は
+payload 本文ではなく、sanitized された payload size と max depth context だけを報告します。
 stdio loop は header / message body 読み取り中も CLI cancellation token を監視するため、
 Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
