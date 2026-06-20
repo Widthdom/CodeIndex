@@ -899,14 +899,6 @@ public partial class DbReader
         return -1;
     }
 
-    private static string TakeFirstCSharpBaseListEntry(string baseList)
-    {
-        foreach (var entry in EnumerateCSharpBaseListEntries(baseList))
-            return entry;
-
-        return baseList;
-    }
-
     private static IEnumerable<string> EnumerateCSharpBaseListEntries(string baseList)
     {
         var angleDepth = 0;

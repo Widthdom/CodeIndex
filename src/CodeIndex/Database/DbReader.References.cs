@@ -452,19 +452,6 @@ public partial class DbReader
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private static string? NormalizeRustMacroQuery(string? query)
-    {
-        if (query == null)
-            return null;
-
-        var trimmed = query.TrimEnd();
-        if (!trimmed.EndsWith("!", StringComparison.Ordinal))
-            return trimmed;
-
-        var normalized = trimmed[..^1].TrimEnd();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
     private static bool IsBareVerbatimQueryToken(string? value)
     {
         var trimmed = value?.Trim();

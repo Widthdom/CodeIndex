@@ -15,10 +15,6 @@ internal static class XamlReferenceExtractor
         @"\bx:TypeArguments\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly Regex XamlResourceReferenceRegex = new(
-        @"\{(?:StaticResource|StaticResourceExtension|DynamicResource|DynamicResourceExtension)\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private static readonly Regex XamlReferenceRegex = new(
         @"\{x:Reference(?:Extension)?\b(?<content>(?:[^{}]|{[^{}]*})*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

@@ -2422,11 +2422,6 @@ public static partial class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
-    private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)
-    {
-        return regex.Replace(input, static match => match.Length == 0 ? string.Empty : new string(' ', match.Length));
-    }
-
     private static string PrepareLine(string lang, string line)
     {
         var result = line;

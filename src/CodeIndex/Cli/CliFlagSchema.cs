@@ -128,6 +128,7 @@ internal static class CliFlagSchema
     private static readonly string[] SymbolSortCommands = ["symbols"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
+    private static readonly string[] CursorCommands = ["search", "unused"];
     private static readonly string[] AllResultCommands = ["goto", "find"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
@@ -285,7 +286,7 @@ internal static class CliFlagSchema
             new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
-            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search recipes: use production source defaults or include all indexed paths", Commands = Set("search") },
+            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search recipes/Unused: use production source defaults or include all indexed paths", Commands = Set("search", "unused") },
             new() { Name = "--show-excluded", Description = "Search recipes: include effective scope and exclusion diagnostics in recipe output", Commands = Set("search") },
             new() { Name = "--named-query", ValuePlaceholder = "<name>=<query>", Description = "Search: add one named ad hoc batch query", Commands = Set("search") },
             new() { Name = "--open-issues", ValuePlaceholder = "<path|github|github:owner/name>", Description = "Preflight issue drafts against open issue JSON or GitHub open issues", Commands = Set("search", "suggestions") },
@@ -294,7 +295,7 @@ internal static class CliFlagSchema
             new() { Name = "--duplicate-threshold", ValuePlaceholder = "<score>", Description = "Issue-drafts: explicit duplicate-preflight minimum score from 0 to 1", Commands = Set("search", "suggestions") },
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", Commands = Set("search") },
             new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", Commands = Set("search") },
-            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe: pagination cursor returned as next_cursor", Commands = Set("search") },
+            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe or unused pagination cursor returned as next_cursor", Commands = Set(CursorCommands) },
             new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },

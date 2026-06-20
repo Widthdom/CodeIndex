@@ -6,9 +6,6 @@ namespace CodeIndex.Indexer;
 
 internal static class LuaReferenceExtractor
 {
-    private static readonly Regex LuaRequireRegex = new(
-        @"\brequire\s*\(?\s*[""'](?<name>[^""']+)[""']",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex LuaCommandCallRegex = new(
         @"^\s*(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s+(?=[""'{A-Za-z_])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
