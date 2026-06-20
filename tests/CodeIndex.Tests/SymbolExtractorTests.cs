@@ -609,6 +609,27 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_UsesFallbackBeyondParseSizeGuard_Issue3657()
+    {
+        var padding = string.Join(
+            '\n',
+            Enumerable.Repeat(new string(' ', 1024), (SymbolExtractor.StructuredDataMaxJsonParseChars / 1024) + 1));
+        var content = $$"""
+            {
+              "root": {
+                "leaf": "ok"
+              }
+              {{padding}}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "leaf");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "root.leaf");
+    }
+
+    [Fact]
     public void Extract_Yaml_IndexesIndentedConfigurationKeyPaths()
     {
         const string content = """

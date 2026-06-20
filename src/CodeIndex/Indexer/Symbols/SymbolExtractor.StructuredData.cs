@@ -13,6 +13,7 @@ public static partial class SymbolExtractor
     internal const int StructuredDataMaxSymbols = 4096;
     internal const int StructuredDataMaxPathLength = 1024;
     internal const int StructuredDataMaxSignatureLength = 512;
+    internal const int StructuredDataMaxJsonParseChars = 1_000_000;
 
     private static readonly JsonDocumentOptions StructuredJsonDocumentOptions = new()
     {
@@ -40,6 +41,12 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> ExtractJsonSymbols(long fileId, string content, string[] lines)
     {
+        // JsonDocument.Parse builds a full DOM, so large JSON files use the capped line fallback.
+        if (content.Length > StructuredDataMaxJsonParseChars)
+        {
+            return ExtractJsonFallbackSymbols(fileId, lines);
+        }
+
         var symbols = new List<SymbolRecord>();
         var lineStarts = BuildLineStarts(lines);
         var searchOffset = 0;
