@@ -102,6 +102,7 @@ public class DbContext : IDisposable
     private bool _rebuildFtsAfterSchemaMigration;
 
     private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
 
@@ -109,6 +110,12 @@ public class DbContext : IDisposable
     {
         get => ScopedOptimizePragmaExecutedForTesting.Value;
         set => ScopedOptimizePragmaExecutedForTesting.Value = value;
+    }
+
+    internal static Action<SqliteCommand>? PlannerStatisticsCommandCreatedForTesting
+    {
+        get => ScopedPlannerStatisticsCommandCreatedForTesting.Value;
+        set => ScopedPlannerStatisticsCommandCreatedForTesting.Value = value;
     }
 
     internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting
@@ -2723,26 +2730,31 @@ public class DbContext : IDisposable
         }
     }
 
-    internal void RunPlannerStatisticsMaintenance(bool forceAnalyze)
+    internal sealed record PlannerStatisticsMaintenanceFailure(string CommandText, SqliteException Exception);
+
+    internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(bool forceAnalyze)
     {
         if (_isReadOnly)
-            return;
+            return null;
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = forceAnalyze ? "ANALYZE" : "PRAGMA optimize";
         try
         {
+            PlannerStatisticsCommandCreatedForTesting?.Invoke(cmd);
             cmd.ExecuteNonQuery();
             PlannerStatisticsCommandExecutedForTesting?.Invoke(_connection.DataSource, cmd.CommandText);
             if (!forceAnalyze)
                 OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
             _hasWriteWork = false;
+            return null;
         }
-        catch (SqliteException)
+        catch (SqliteException ex)
         {
             // Planner statistics are an index-performance aid. If SQLite rejects ANALYZE /
             // optimize during cleanup (read-only handoff, transient filesystem state), keep
             // the completed index usable instead of converting success into failure.
+            return new PlannerStatisticsMaintenanceFailure(cmd.CommandText, ex);
         }
     }
 

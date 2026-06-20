@@ -6312,6 +6312,12 @@ public partial class McpServer
             writer.ClearBatchInProgress();
             readinessTxn.Commit();
         }
+        if (!scanResult.HadErrors && errors == 0)
+        {
+            var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(forceAnalyze: false);
+            if (plannerMaintenanceFailure != null)
+                IndexCommandRunner.TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         await EmitProgressNotificationAsync(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.").ConfigureAwait(false);
         if (memorySamples != null)
