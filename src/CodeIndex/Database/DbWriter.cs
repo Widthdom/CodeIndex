@@ -69,6 +69,8 @@ public class DbWriter
     private int _transactionDepth;
     private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;
+    private string? _transactionOwnerOperation;
+    private DateTimeOffset _transactionOwnerAcquiredAtUtc;
     private bool? _hasIssueMetadataColumns;
     internal static TimeSpan? TransactionStateContentionTimeoutForTesting { get; set; }
     // Outermost SqliteTransaction currently held open by this writer (null when no
@@ -163,8 +165,14 @@ public class DbWriter
     /// SQLiteはネストされたBEGIN TRANSACTIONをサポートしないため、ネスト時はSAVEPOINTを使用する。
     /// </summary>
     public TransactionScope BeginTransaction()
+        => BeginTransaction(CancellationToken.None, operation: null);
+
+    public TransactionScope BeginTransaction(CancellationToken cancellationToken)
+        => BeginTransaction(cancellationToken, operation: null);
+
+    internal TransactionScope BeginTransaction(CancellationToken cancellationToken, string? operation)
     {
-        var gateLease = EnterTransactionGate();
+        var gateLease = EnterTransactionGate(cancellationToken, operation);
         try
         {
             if (_transactionDepth == 0)
@@ -191,10 +199,14 @@ public class DbWriter
         }
     }
 
-    private TransactionGateLease EnterTransactionGate()
+    private TransactionGateLease EnterTransactionGate(CancellationToken cancellationToken = default, string? operation = null)
     {
+        var timeout = GetTransactionStateContentionTimeout();
+        var stopwatch = Stopwatch.StartNew();
+        var operationLabel = string.IsNullOrWhiteSpace(operation) ? "transaction" : operation.Trim();
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             lock (_transactionStateLock)
             {
                 if (_transactionDepth > 0 &&
@@ -204,7 +216,14 @@ public class DbWriter
                     return TransactionGateLease.None;
             }
 
-            _transactionGate.Wait();
+            var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
+            if (waitMilliseconds <= 0)
+                throw new InvalidOperationException(BuildTransactionGateTimeoutMessage(operationLabel, stopwatch));
+
+            if (!_transactionGate.Wait(waitMilliseconds, cancellationToken))
+                continue;
+
+            var ownsSemaphore = true;
             lock (_transactionStateLock)
             {
                 if (_transactionDepth == 0)
@@ -213,13 +232,17 @@ public class DbWriter
                     var token = Guid.NewGuid();
                     _transactionOwnerThreadId = Environment.CurrentManagedThreadId;
                     _transactionOwnerToken = token;
+                    _transactionOwnerOperation = operationLabel;
+                    _transactionOwnerAcquiredAtUtc = DateTimeOffset.UtcNow;
                     _currentTransactionGateToken.Value = token;
+                    ownsSemaphore = false;
                     return new TransactionGateLease(this, token, previousToken);
                 }
             }
 
-            _transactionGate.Release();
-            WaitForTransactionDepthToClear();
+            if (ownsSemaphore)
+                _transactionGate.Release();
+            WaitForTransactionDepthToClear(cancellationToken, operationLabel);
         }
     }
 
@@ -252,7 +275,7 @@ public class DbWriter
         }
     }
 
-    private void WaitForTransactionDepthToClear()
+    private void WaitForTransactionDepthToClear(CancellationToken cancellationToken, string operation)
     {
         var timeout = GetTransactionStateContentionTimeout();
         var stopwatch = Stopwatch.StartNew();
@@ -260,11 +283,11 @@ public class DbWriter
         {
             while (_transactionDepth > 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
                 if (waitMilliseconds <= 0)
                 {
-                    throw new InvalidOperationException(
-                        $"Timed out waiting for DbWriter transaction gate state to clear; transaction_depth={_transactionDepth}.");
+                    throw new InvalidOperationException(BuildTransactionGateTimeoutMessage(operation, stopwatch));
                 }
 
                 Monitor.Wait(_transactionStateLock, waitMilliseconds);
@@ -287,6 +310,30 @@ public class DbWriter
         return Math.Max(1, (int)Math.Ceiling(wait.TotalMilliseconds));
     }
 
+    private string BuildTransactionGateTimeoutMessage(string operation, Stopwatch stopwatch)
+    {
+        lock (_transactionStateLock)
+        {
+            var heldMs = _transactionOwnerAcquiredAtUtc == default
+                ? 0
+                : Math.Max(0, (long)(DateTimeOffset.UtcNow - _transactionOwnerAcquiredAtUtc).TotalMilliseconds);
+            return "Timed out waiting for DbWriter transaction gate"
+                + $"; waiter_operation={FormatTransactionGateDiagnosticValue(operation)}"
+                + $"; waiter_thread_id={Environment.CurrentManagedThreadId}"
+                + $"; owner_thread_id={_transactionOwnerThreadId}"
+                + $"; owner_operation={FormatTransactionGateDiagnosticValue(_transactionOwnerOperation)}"
+                + $"; transaction_depth={_transactionDepth}"
+                + $"; held_ms={heldMs.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                + $"; waited_ms={((long)stopwatch.Elapsed.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture)}.";
+        }
+    }
+
+    private static string FormatTransactionGateDiagnosticValue(string? value)
+        => ConsoleUi.FormatBoundedValue(string.IsNullOrWhiteSpace(value) ? "unknown" : value)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal);
+
     private void ExitTransactionGate(Guid token, Guid? previousToken)
     {
         lock (_transactionStateLock)
@@ -295,6 +342,8 @@ public class DbWriter
             {
                 _transactionOwnerThreadId = 0;
                 _transactionOwnerToken = Guid.Empty;
+                _transactionOwnerOperation = null;
+                _transactionOwnerAcquiredAtUtc = default;
             }
         }
         if (_currentTransactionGateToken.Value == token)

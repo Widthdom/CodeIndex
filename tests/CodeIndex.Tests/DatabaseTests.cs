@@ -754,6 +754,46 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public async Task BeginTransaction_CancelledWhileGateHeld_ThrowsOperationCanceled_Issue3772()
+    {
+        using var held = _writer.BeginTransaction(CancellationToken.None, "owner operation");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Task.Run(() =>
+        {
+            using var waiting = _writer.BeginTransaction(cts.Token, "cancelled operation");
+        }));
+    }
+
+    [Fact]
+    public async Task BeginTransaction_GateTimeoutReportsOwnerAndWaiterDiagnostics_Issue3772()
+    {
+        var originalTimeout = DbWriter.TransactionStateContentionTimeoutForTesting;
+        DbWriter.TransactionStateContentionTimeoutForTesting = TimeSpan.FromMilliseconds(25);
+        try
+        {
+            using var held = _writer.BeginTransaction(CancellationToken.None, "owner operation");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Task.Run(() =>
+            {
+                using var waiting = _writer.BeginTransaction(CancellationToken.None, "waiting operation");
+            }));
+
+            Assert.Contains("Timed out waiting for DbWriter transaction gate", ex.Message);
+            Assert.Contains("owner_operation=owner operation", ex.Message);
+            Assert.Contains("waiter_operation=waiting operation", ex.Message);
+            Assert.Contains("owner_thread_id=", ex.Message);
+            Assert.Contains("waiter_thread_id=", ex.Message);
+            Assert.Contains("transaction_depth=1", ex.Message);
+        }
+        finally
+        {
+            DbWriter.TransactionStateContentionTimeoutForTesting = originalTimeout;
+        }
+    }
+
+    [Fact]
     public void TransactionScope_SavepointWithoutConnection_ThrowsExplicitInvalidOperation()
     {
         var scopeType = typeof(DbWriter).GetNestedType("TransactionScope")
