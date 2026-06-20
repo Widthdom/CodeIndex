@@ -666,6 +666,7 @@ public static partial class IndexCommandRunner
 
     private static bool IsProjectMarkerFingerprintWarning(FileIndexer.ScanError warning) =>
         warning.Message.StartsWith("Project marker discovery skipped", StringComparison.Ordinal)
+        || warning.Message.StartsWith("Project marker discovery truncated", StringComparison.Ordinal)
         || warning.Message.StartsWith("Skipped .gitmodules", StringComparison.Ordinal);
 
     private static void RestampHotspotFamilyTrustForUpdate(

@@ -1079,6 +1079,36 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScanJson_ProjectMarkerBudgetWarningIncludesTruncatedWarning()
+    {
+        var projectRoot = CreateTempProject();
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        try
+        {
+            var childDir = Path.Combine(projectRoot, "nested");
+            Directory.CreateDirectory(childDir);
+            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "public class App { }\n");
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting =
+                _ => Enumerable.Repeat(childDir, 8192);
+
+            var (exitCode, json, _) = RunAndCaptureJsonWithStderr([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains(
+                json.GetProperty("warnings").EnumerateArray(),
+                warning =>
+                    warning.GetProperty("message").GetString()!.Contains("Project marker discovery truncated", StringComparison.Ordinal)
+                    && warning.GetProperty("message").GetString()!.Contains("directory budget", StringComparison.Ordinal));
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
     {
         var projectRoot = CreateTempProject();
