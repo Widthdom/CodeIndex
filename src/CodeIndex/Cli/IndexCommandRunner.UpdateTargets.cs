@@ -127,7 +127,7 @@ public static partial class IndexCommandRunner
             options.Json && !options.Quiet,
             "cdidx-index",
             phase,
-            Console.Error.WriteLine,
+            ConsoleUi.TryWriteErrorLine,
             detailProvider);
     }
 

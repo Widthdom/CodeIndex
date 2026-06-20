@@ -398,11 +398,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                     continue;
                 }
 
+                // The handler owns a semaphore slot. Do not use the shutdown token as the
+                // scheduling token here, because a pre-canceled Task.Run would skip the
+                // handler's finally block and leak the slot.
+                // handler は semaphore slot を所有する。pre-canceled Task.Run で finally が
+                // 走らず slot が漏れないよう、shutdown token は handler 内だけに渡す。
                 _ = BackgroundTaskObserver.Run(
-                    token => RunHandlerAsync(context, token),
+                    () => RunHandlerAsync(context, cancellationToken),
                     "cdidx-mcp-http",
-                    "request handler",
-                    cancellationToken);
+                    "request handler");
             }
         }
         finally
