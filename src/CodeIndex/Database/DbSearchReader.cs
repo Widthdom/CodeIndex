@@ -109,7 +109,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -166,6 +166,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost)}";
         if (hasGuardFilters)
             sql += " LIMIT @candidateFetchLimit";
@@ -194,6 +195,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@cursorOffset", searchCursorParameter.Offset);
         }
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
         var raw = new List<SearchResult>();
         var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;

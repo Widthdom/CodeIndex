@@ -1681,6 +1681,26 @@ public partial class DbReader : IDisposable
         }
     }
 
+    private static void AppendAdditionalPathIncludeFilters(ref string sql, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
+    {
+        if (pathPatterns == null || pathPatterns.Count == 0)
+            return;
+
+        var ors = new List<string>(pathPatterns.Count);
+        for (int i = 0; i < pathPatterns.Count; i++)
+            ors.Add($"f.path LIKE @{parameterPrefix}{i} ESCAPE '\\'");
+        sql += " AND (" + string.Join(" OR ", ors) + ")";
+    }
+
+    private static void AddPathIncludeFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
+    {
+        if (pathPatterns == null)
+            return;
+
+        for (int i = 0; i < pathPatterns.Count; i++)
+            cmd.Parameters.AddWithValue($"@{parameterPrefix}{i}", BuildPathLikePattern(pathPatterns[i]));
+    }
+
     internal static string BuildPathFiltersSql(string fileAlias, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         var sql = string.Empty;

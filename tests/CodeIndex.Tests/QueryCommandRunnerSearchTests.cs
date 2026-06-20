@@ -1308,6 +1308,19 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(query.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "docs/**");
             Assert.Contains(query.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "docs/private/**");
             Assert.Equal("docs/public.md", result.GetProperty("path").GetString());
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/other.md", "markdown", "BoundaryNeedle in another public doc.\n");
+
+            var (userPathExitCode, userPathStdout, userPathStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "query-scoped", "--db", dbPath, "--json", "--limit", "10", "--path", "docs/public.md"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, userPathExitCode);
+            Assert.Equal(string.Empty, userPathStderr);
+            using var userPathDocument = ParseJsonOutput(userPathStdout);
+            var userPathQuery = Assert.Single(userPathDocument.RootElement.GetProperty("queries").EnumerateArray());
+            var userPathResult = Assert.Single(userPathQuery.GetProperty("results").EnumerateArray());
+            Assert.Equal("docs/public.md", userPathResult.GetProperty("path").GetString());
         }
         finally
         {

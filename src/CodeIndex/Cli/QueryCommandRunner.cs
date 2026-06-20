@@ -1782,7 +1782,8 @@ public static partial class QueryCommandRunner
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
                 guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow);
+                guardWindow: options.GuardWindow,
+                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
@@ -1839,7 +1840,8 @@ public static partial class QueryCommandRunner
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
                 guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow);
+                guardWindow: options.GuardWindow,
+                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
@@ -1989,6 +1991,11 @@ public static partial class QueryCommandRunner
             .ThenBy(file => file.Path, StringComparer.Ordinal)
             .Take(10)
             .ToList();
+
+    private static IReadOnlyList<string>? GetSearchRecipeRequiredPathPatterns(QueryCommandOptions options, SearchAuditRecipeQuery recipeQuery)
+        => options.PathPatterns.Count > 0 && recipeQuery.PathPatterns.Count > 0
+            ? options.PathPatterns
+            : null;
 
     private static int FetchLimitForSearchEnvelope(int limit)
     {
