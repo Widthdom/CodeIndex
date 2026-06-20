@@ -568,6 +568,31 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointJsonSuccessKeepsDiagnosticsArray_Issue3812()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_json_contract_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+
+            var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "contract", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            var diagnostics = json.GetProperty("diagnostics");
+            Assert.Equal(JsonValueKind.Array, diagnostics.ValueKind);
+            Assert.Equal(0, diagnostics.GetArrayLength());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");

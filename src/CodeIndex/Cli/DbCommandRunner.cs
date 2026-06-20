@@ -342,7 +342,7 @@ public static class DbCommandRunner
                         result.Files,
                         result.FilesTruncated,
                         CheckpointFileInspectLimit,
-                        result.Diagnostics.Count > 0 ? result.Diagnostics : null),
+                        result.Diagnostics),
                     CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
             }
             else
