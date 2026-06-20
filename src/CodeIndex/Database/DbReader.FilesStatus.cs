@@ -912,6 +912,7 @@ public partial class DbReader
         JournalMode = ExecuteScalarString("PRAGMA journal_mode"),
         Synchronous = NormalizeSynchronousMode(ExecuteScalarString("PRAGMA synchronous")),
         WalAutocheckpoint = ExecuteNullableLong("PRAGMA wal_autocheckpoint"),
+        BusyTimeoutMs = ExecuteNullableLong("PRAGMA busy_timeout"),
         PageCount = ExecuteNullableLong("PRAGMA page_count"),
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),

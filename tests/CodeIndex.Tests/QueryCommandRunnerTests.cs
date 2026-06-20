@@ -569,6 +569,39 @@ public partial class QueryCommandRunnerTests
             Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
             Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
             Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, settings.GetProperty("busy_timeout_ms").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusJson_ReportsConfiguredBusyTimeout_Issue3767()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_busy_timeout_3767");
+        using var env = EnvironmentVariableScope.Capture(
+            DbContext.BusyTimeoutEnvironmentVariable);
+        env.Set(DbContext.BusyTimeoutEnvironmentVariable, "12345");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var settings = document.RootElement.GetProperty("db_pragma_settings");
+            Assert.Equal(12345, settings.GetProperty("busy_timeout_ms").GetInt64());
         }
         finally
         {

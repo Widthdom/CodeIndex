@@ -1278,6 +1278,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("wal", pragmas.GetProperty("journal_mode").GetString());
             Assert.Equal(DbContext.DefaultSynchronousMode, pragmas.GetProperty("synchronous").GetString());
             Assert.Equal(DbContext.DefaultWalAutocheckpointPages, pragmas.GetProperty("wal_autocheckpoint").GetInt32());
+            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, pragmas.GetProperty("busy_timeout_ms").GetInt32());
         }
         finally
         {

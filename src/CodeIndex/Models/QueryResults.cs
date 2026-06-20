@@ -1246,6 +1246,8 @@ public class StatusDbPragmaSettings
     public string? JournalMode { get; set; }
     public string? Synchronous { get; set; }
     public long? WalAutocheckpoint { get; set; }
+    [JsonPropertyName("busy_timeout_ms")]
+    public long? BusyTimeoutMs { get; set; }
     public long? PageCount { get; set; }
     public long? FreelistCount { get; set; }
     public long? PageSize { get; set; }

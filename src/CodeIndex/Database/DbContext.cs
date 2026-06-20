@@ -19,6 +19,7 @@ public class DbContext : IDisposable
     public const long MaxMmapSizeBytes = 1073741824;
     public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
+    public const string BusyTimeoutEnvironmentVariable = "CDIDX_SQLITE_BUSY_TIMEOUT_MS";
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -291,7 +292,7 @@ public class DbContext : IDisposable
                     _connection = new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
                     cancellationToken.ThrowIfCancellationRequested();
                     _connection.Open();
-                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyBusyTimeoutPragma();
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
@@ -327,7 +328,7 @@ public class DbContext : IDisposable
                 static connection => connection.Open(),
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
-            Execute("PRAGMA busy_timeout=5000");
+            ApplyBusyTimeoutPragma();
             ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
             EnsureWritableUserVersionSupported(dbPath);
@@ -367,7 +368,7 @@ public class DbContext : IDisposable
                         static connection => connection.Open(),
                         dbPath: dbPath,
                         cancellationToken: cancellationToken);
-                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyBusyTimeoutPragma();
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     EnsureWritableUserVersionSupported(dbPath);
@@ -425,7 +426,7 @@ public class DbContext : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         _connection = OpenReadOnly(dbPath);
-        Execute("PRAGMA busy_timeout=5000");
+        ApplyBusyTimeoutPragma();
         ApplyConnectionPerformancePragmas();
         RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
         _isReadOnly = true;
@@ -644,6 +645,12 @@ public class DbContext : IDisposable
             TryGetWalFileSize());
 
     private long ReadAutoVacuumMode() => ReadPragmaLong("auto_vacuum");
+
+    private void ApplyBusyTimeoutPragma()
+    {
+        var busyTimeoutMs = DbPragmaPolicy.ReadBusyTimeoutMs(BusyTimeoutEnvironmentVariable);
+        Execute($"PRAGMA busy_timeout={busyTimeoutMs}");
+    }
 
     private long? TryGetDatabaseFileSize()
     {
