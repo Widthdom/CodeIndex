@@ -11098,6 +11098,17 @@ public class McpServerTests : IDisposable
             Assert.False(failure["message_truncated"]!.GetValue<bool>());
             Assert.DoesNotContain(fixtureDir, failure["message"]!.GetValue<string>());
             Assert.DoesNotContain("\n", failure["message"]!.GetValue<string>());
+            var diagnostics = structured["diagnostics"]!;
+            Assert.Equal(1, diagnostics["total_count"]!.GetValue<int>());
+            Assert.False(diagnostics["truncated"]!.GetValue<bool>());
+            Assert.Equal(1, diagnostics["categories"]!["recoverable_index_error"]!.GetValue<int>());
+            var diagnostic = Assert.Single(diagnostics["items"]!.AsArray());
+            Assert.Equal("recoverable_index_error", diagnostic!["code"]!.GetValue<string>());
+            Assert.Equal("recoverable_index_error", diagnostic["category"]!.GetValue<string>());
+            Assert.Equal(".gitignore", diagnostic["path"]!.GetValue<string>());
+            Assert.Equal("scan", diagnostic["stage"]!.GetValue<string>());
+            Assert.Equal(nameof(FileIndexer.ScanError), diagnostic["exception_type"]!.GetValue<string>());
+            Assert.DoesNotContain(fixtureDir, diagnostic["message"]!.GetValue<string>());
 
             using var failedDb = new DbContext(dbPath);
             var failedUserVersion = failedDb.GetUserVersion();
@@ -11111,6 +11122,33 @@ public class McpServerTests : IDisposable
                 Directory.Delete(fixtureDir, recursive: true);
             DeleteFileRobust(dbPath);
         }
+    }
+
+    [Fact]
+    public void BuildMcpIndexExceptionDiagnostic_RedactsSkippedSizingPathsAndMessages_Issue3695()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_diag_root_{Guid.NewGuid():N}");
+        var filePath = Path.Combine(projectRoot, "src", "Hidden.cs");
+        var secret = "0123456789abcdef0123456789abcdef";
+        var ex = new UnauthorizedAccessException($"denied {filePath} token={secret}");
+
+        var diagnostic = McpServer.BuildMcpIndexExceptionDiagnosticForTesting(
+            "file_size_bytes_skipped",
+            "skipped_file_sizing",
+            "measure_file_size",
+            projectRoot,
+            filePath,
+            ex);
+
+        Assert.Equal("file_size_bytes_skipped", diagnostic["code"]!.GetValue<string>());
+        Assert.Equal("skipped_file_sizing", diagnostic["category"]!.GetValue<string>());
+        Assert.Equal("src/Hidden.cs", diagnostic["path"]!.GetValue<string>());
+        Assert.Equal("measure_file_size", diagnostic["stage"]!.GetValue<string>());
+        Assert.Equal(nameof(UnauthorizedAccessException), diagnostic["exception_type"]!.GetValue<string>());
+        var message = diagnostic["message"]!.GetValue<string>();
+        Assert.DoesNotContain(projectRoot, message, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, message, StringComparison.Ordinal);
+        Assert.Contains("<redacted>", message, StringComparison.Ordinal);
     }
 
     [Fact]

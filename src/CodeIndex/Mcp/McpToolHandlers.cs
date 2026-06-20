@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
@@ -5729,7 +5730,11 @@ public partial class McpServer
             symbolKindFilterMetaMarkedIncomplete = true;
         }
 
-        static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(IEnumerable<string> paths, string projectRoot, List<string> diagnostics)
+        static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(
+            IEnumerable<string> paths,
+            string projectRoot,
+            List<string> diagnostics,
+            List<McpIndexDiagnostic> structuredDiagnostics)
         {
             long total = 0;
             long skipped = 0;
@@ -5747,6 +5752,13 @@ public partial class McpServer
                     diagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic(
                         "file_size_bytes_skipped",
                         FormatDiagnosticPath(projectRoot, filePath),
+                        ex));
+                    structuredDiagnostics.Add(BuildMcpIndexExceptionDiagnostic(
+                        "file_size_bytes_skipped",
+                        "skipped_file_sizing",
+                        "measure_file_size",
+                        projectRoot,
+                        filePath,
                         ex));
                 }
             }
@@ -5772,6 +5784,7 @@ public partial class McpServer
         }
 
         var indexRunDiagnostics = new List<string>();
+        var mcpIndexDiagnostics = new List<McpIndexDiagnostic>();
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -6030,7 +6043,7 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics);
+            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics);
             writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
             writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -6165,6 +6178,7 @@ public partial class McpServer
             GlobalToolLog.Error(
                 $"mcp_index_file_failures count={failures.Count} first_path={QuoteMcpIndexFailureLogValue(failures[0].Path)} first_error={QuoteMcpIndexFailureLogValue($"{failures[0].ExceptionType}: {failures[0].Message}")}");
         }
+        AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
         if (!sqlGraphContractReadyAfter)
         {
             using var signalReader = new DbReader(writer.Connection);
@@ -6200,6 +6214,126 @@ public partial class McpServer
             message,
             messageTruncated);
     }
+
+    private static McpIndexDiagnostic BuildMcpIndexExceptionDiagnostic(
+        string code,
+        string category,
+        string stage,
+        string projectRoot,
+        string filePath,
+        Exception ex)
+    {
+        var path = SanitizeMcpIndexDiagnosticPath(projectRoot, filePath);
+        var exceptionType = SanitizeMcpIndexFailureToken(ex.GetType().Name, "Exception");
+        var message = SanitizeAndCapMcpIndexFailureMessage(
+            DiagnosticRedactor.FormatExceptionStackLine(ex.Message),
+            out var messageTruncated);
+        return new McpIndexDiagnostic(code, category, path, stage, exceptionType, message, messageTruncated);
+    }
+
+    internal static JsonObject BuildMcpIndexExceptionDiagnosticForTesting(
+        string code,
+        string category,
+        string stage,
+        string projectRoot,
+        string filePath,
+        Exception ex)
+        => BuildMcpIndexDiagnosticJson(BuildMcpIndexExceptionDiagnostic(
+            code,
+            category,
+            stage,
+            projectRoot,
+            filePath,
+            ex));
+
+    private static string SanitizeMcpIndexDiagnosticPath(string projectRoot, string path)
+    {
+        try
+        {
+            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            if (!string.IsNullOrWhiteSpace(relative)
+                && relative != "."
+                && !relative.StartsWith("../", StringComparison.Ordinal)
+                && !Path.IsPathRooted(relative))
+            {
+                return McpBoundedText.ForDisplay(relative, 256).Text;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+        }
+
+        return "<redacted>";
+    }
+
+    private static void AddMcpIndexDiagnostics(
+        JsonObject structured,
+        IReadOnlyList<IndexFileFailure> failures,
+        IReadOnlyList<McpIndexDiagnostic> diagnostics)
+    {
+        var total = failures.Count + diagnostics.Count;
+        if (total == 0)
+            return;
+
+        var categories = new Dictionary<string, int>(StringComparer.Ordinal);
+        var items = new JsonArray();
+        var emitted = 0;
+        foreach (var failure in failures)
+        {
+            var diagnostic = new McpIndexDiagnostic(
+                "recoverable_index_error",
+                "recoverable_index_error",
+                failure.Path,
+                failure.Stage,
+                failure.ExceptionType,
+                failure.Message,
+                failure.MessageTruncated);
+            AddMcpIndexDiagnosticCategory(categories, diagnostic.Category);
+            if (emitted < 50)
+            {
+                items.Add(BuildMcpIndexDiagnosticJson(diagnostic));
+                emitted++;
+            }
+        }
+
+        foreach (var diagnostic in diagnostics)
+        {
+            AddMcpIndexDiagnosticCategory(categories, diagnostic.Category);
+            if (emitted < 50)
+            {
+                items.Add(BuildMcpIndexDiagnosticJson(diagnostic));
+                emitted++;
+            }
+        }
+
+        var categoryJson = new JsonObject();
+        foreach (var entry in categories.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            categoryJson[entry.Key] = entry.Value;
+
+        structured["diagnostics"] = new JsonObject
+        {
+            ["total_count"] = total,
+            ["sample_count"] = emitted,
+            ["truncated"] = total > emitted,
+            ["categories"] = categoryJson,
+            ["items"] = items,
+        };
+    }
+
+    private static void AddMcpIndexDiagnosticCategory(Dictionary<string, int> categories, string category)
+        => categories[category] = categories.TryGetValue(category, out var count) ? count + 1 : 1;
+
+    private static JsonObject BuildMcpIndexDiagnosticJson(McpIndexDiagnostic diagnostic)
+        => new()
+        {
+            ["code"] = diagnostic.Code,
+            ["category"] = diagnostic.Category,
+            ["path"] = diagnostic.Path,
+            ["stage"] = diagnostic.Stage,
+            ["exception_type"] = diagnostic.ExceptionType,
+            ["message"] = diagnostic.Message,
+            ["message_truncated"] = diagnostic.MessageTruncated,
+        };
 
     internal static string BuildSanitizedIndexFileFailureMessageForTesting(string stage, string exceptionType, out bool messageTruncated) =>
         BuildSanitizedIndexFileFailureMessage(stage, exceptionType, out messageTruncated);
@@ -6277,6 +6411,7 @@ public partial class McpServer
     }
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
+    private sealed record McpIndexDiagnostic(string Code, string Category, string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
 
     private async Task<JsonNode> ExecuteBackfillFoldAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
