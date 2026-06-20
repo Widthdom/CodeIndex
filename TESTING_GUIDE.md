@@ -52,6 +52,8 @@ The test project mirrors the production areas closely.
   exercise watch-loop startup and shutdown under redirected console output. These tests wait for the watch start line before cancelling and always cancel/drain the dedicated watch task before restoring `Console.Out` / `Console.Error`; do not replace that synchronization with fixed sleeps because full-suite load can delay the long-running task startup.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
+- `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
+  are broad runaway guards for known large symbol-extraction fixtures. Keep their budgets generous enough for full-suite load; tighten them only with focused optimization evidence, not as benchmark thresholds.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson`
@@ -262,6 +264,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   リダイレクトした console 出力の下で watch loop の起動と停止を検証する。これらのテストは watch start 行を待ってからキャンセルし、`Console.Out` / `Console.Error` を戻す前に専用 watch task を必ず cancel/drain する。full suite の負荷で long-running task の起動が遅れることがあるため、この同期を固定 sleep に戻さないこと。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
+- `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
+  は既知の大きな symbol extraction fixture に対する広めの runaway guard です。full suite の負荷に耐えるよう budget は十分広く保ち、benchmark 閾値としてではなく、焦点を絞った最適化根拠がある場合にだけ締めてください。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson`
