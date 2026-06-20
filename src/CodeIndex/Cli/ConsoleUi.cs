@@ -247,9 +247,9 @@ public static class ConsoleUi
         try
         {
             if (value == null)
-                Console.Error.WriteLine();
+                CommandErrorWriter.WriteStderr();
             else
-                Console.Error.WriteLine(value);
+                CommandErrorWriter.WriteStderr(value);
         }
         catch (ObjectDisposedException)
         {
@@ -592,7 +592,7 @@ public static class ConsoleUi
         lock (TerminalLock)
         {
             ClearProgressLineCore();
-            Console.Error.WriteLine($"  [WARN] {message}");
+            CommandErrorWriter.WriteStderr($"  [WARN] {message}");
             Console.Error.Flush();
             Console.Out.Flush();
         }
@@ -1401,7 +1401,7 @@ public static class ConsoleUi
         }
         catch (ArgumentOutOfRangeException)
         {
-            Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
+            CommandErrorWriter.WriteStderr($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
             return false;
         }
     }
@@ -2359,7 +2359,7 @@ public static class ConsoleUi
         if (_traceWidthDetectionFailures && !_widthDetectionTraceWritten)
         {
             var suffix = exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})";
-            Console.Error.WriteLine($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
+            CommandErrorWriter.WriteStderr($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
             _widthDetectionTraceWritten = true;
         }
 

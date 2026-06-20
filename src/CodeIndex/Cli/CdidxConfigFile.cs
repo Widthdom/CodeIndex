@@ -529,7 +529,7 @@ internal static class CdidxConfigFile
         var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name));
         if (result.Failed)
         {
-            Console.Error.WriteLine(result.Error);
+            CommandErrorWriter.WriteStderr(result.Error);
             return CommandExitCodes.UsageError;
         }
 

@@ -338,7 +338,7 @@ public class DbContext : IDisposable
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
             if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
-                Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+                CommandErrorWriter.WriteStderr($"Warning: WAL mode not enabled (got '{journalMode}')");
             ExecuteSynchronousPragmaWithFallback(Execute);
             Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
             ApplyPrivateDatabaseFileModes(dbPath);
@@ -376,7 +376,7 @@ public class DbContext : IDisposable
                     ApplyPrivateDatabaseFileModes(dbPath);
                     var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
                     if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
-                        Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+                        CommandErrorWriter.WriteStderr($"Warning: WAL mode not enabled (got '{journalMode}')");
                     ExecuteSynchronousPragmaWithFallback(Execute);
                     Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
                     ApplyPrivateDatabaseFileModes(dbPath);
@@ -549,7 +549,7 @@ public class DbContext : IDisposable
         var raw = GetMetaString(BatchInProgressMetaKey);
         if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
+            CommandErrorWriter.WriteStderr("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
             if (!_isReadOnly)
                 Execute("PRAGMA user_version = 0");
         }
@@ -2292,7 +2292,7 @@ public class DbContext : IDisposable
         Execute("PRAGMA foreign_keys=ON");
         var fkResult = ExecuteScalar("PRAGMA foreign_keys");
         if (fkResult != "1")
-            Console.Error.WriteLine("Warning: foreign_keys pragma not enabled");
+            CommandErrorWriter.WriteStderr("Warning: foreign_keys pragma not enabled");
     }
 
     /// <summary>
@@ -2617,7 +2617,7 @@ public class DbContext : IDisposable
         // Single line so the next read attempt only sees one clear "migration partial" record
         // even if multiple commands share the same process / log stream.
         // 1 行に集約し、後続 read エラーと混在しても拾いやすい形にする。
-        Console.Error.WriteLine(
+        CommandErrorWriter.WriteStderr(
             $"Warning: cdidx schema migration step \"{failure.Step}\" failed " +
             $"(SQLite error {failure.SqliteErrorCode}: {failure.SqliteMessage.TrimEnd('.')}). " +
             "Subsequent read queries may fail with 'no such column' until the migration completes. " +

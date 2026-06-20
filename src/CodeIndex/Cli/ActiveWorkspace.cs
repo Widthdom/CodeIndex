@@ -247,5 +247,5 @@ internal static class ActiveWorkspace
     };
 
     private static void WriteLoadWarning(string source, string reason)
-        => Console.Error.WriteLine($"[cdidx] Ignoring active workspace {source}: {ConsoleUi.FormatBoundedValue(reason)}. Hint: inspect or reset the active workspace configuration.");
+        => CommandErrorWriter.WriteStderr($"[cdidx] Ignoring active workspace {source}: {ConsoleUi.FormatBoundedValue(reason)}. Hint: inspect or reset the active workspace configuration.");
 }

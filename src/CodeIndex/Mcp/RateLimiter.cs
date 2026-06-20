@@ -270,7 +270,7 @@ internal sealed class RateLimiterOptions
     public static RateLimiterOptions FromEnvironment(Func<string, string?>? envReader = null, Action<string>? warningSink = null)
     {
         envReader ??= CdidxEnvironment.GetEnvironmentVariable;
-        warningSink ??= Console.Error.WriteLine;
+        warningSink ??= CommandErrorWriter.WriteStderr;
 
         var rpsRaw = envReader(RpsEnvVar);
         if (string.IsNullOrWhiteSpace(rpsRaw))

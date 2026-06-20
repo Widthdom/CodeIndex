@@ -7354,7 +7354,7 @@ public partial class McpServer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"Warning: failed to delete .cdidx writable probe {ConsoleUi.FormatBoundedValue(probePath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete .cdidx writable probe {ConsoleUi.FormatBoundedValue(probePath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 

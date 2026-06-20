@@ -292,6 +292,31 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void IsEnabled_InvalidDebugValue_RedactsThroughSharedStderrSink_Issue3683()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        const string secret = "fedcba9876543210fedcba9876543210";
+        env.Set("CDIDX_DEBUG", $"password={secret}");
+        try
+        {
+            DbDebug.ResetForTesting();
+            using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+
+            Assert.False(DbDebug.IsEnabled);
+
+            var stdout = capture.Out!.ToString()!;
+            var stderr = capture.Error!.ToString()!;
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("CDIDX_DEBUG value 'password=<redacted>' is not recognized", stderr);
+            Assert.DoesNotContain(secret, stderr);
+        }
+        finally
+        {
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
     public void IsEnabled_InvalidDebugValue_RedactsPathAndUrlValue_Issue3403()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");

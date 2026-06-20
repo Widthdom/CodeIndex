@@ -1120,7 +1120,7 @@ internal static class ExportImportCommandRunner
             }
             catch (Exception rollbackEx) when (IsRecoverableReplacementException(rollbackEx))
             {
-                Console.Error.WriteLine($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
             }
 
             throw new IOException("import database replacement failed; rolled back the previous destination database when possible.", ex);
@@ -1213,7 +1213,7 @@ internal static class ExportImportCommandRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             if (!string.IsNullOrWhiteSpace(cleanupDescription))
-                Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
@@ -1229,7 +1229,7 @@ internal static class ExportImportCommandRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             if (!string.IsNullOrWhiteSpace(cleanupDescription))
-                Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 

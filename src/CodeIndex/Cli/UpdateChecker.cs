@@ -446,7 +446,7 @@ internal static class UpdateChecker
         if (sink != null)
             sink(message);
         else
-            Console.Error.WriteLine(message);
+            CommandErrorWriter.WriteStderr(message);
     }
 
     private static bool ShouldEmitCacheDiagnostics()
