@@ -118,10 +118,10 @@ public class ConsoleUiTests
 
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
-        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--symbols-only] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>]", output);
+        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--symbols-only] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>] [--watch-pending-path-limit <n>]]", output);
         Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]", output);
-        Assert.Contains("cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
-        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
+        Assert.Contains("cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]", output);
+        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]", output);
         Assert.Contains("cdidx optimize [--db <path>] [--json]", output);
         Assert.Contains("cdidx license", output);
