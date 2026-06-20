@@ -32,6 +32,9 @@ internal sealed class IndexLock : IDisposable
 
     internal static Action<string> DeleteFileForTesting { get; set; } = File.Delete;
     internal static Action<LockCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
+    private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
     private IndexLock(FileStream stream, string lockPath, string infoPath)
     {
@@ -102,7 +105,7 @@ internal sealed class IndexLock : IDisposable
         {
             var info = new IndexLockInfo(
                 Pid: Environment.ProcessId,
-                StartedAt: DateTime.UtcNow);
+                StartedAt: GetUtcNow());
             DataDirectorySecurity.WritePrivateText(infoPath, SerializeInfo(info), Encoding.UTF8);
         }
         catch (Exception)

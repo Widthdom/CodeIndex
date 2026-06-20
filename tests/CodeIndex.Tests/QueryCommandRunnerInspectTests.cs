@@ -229,6 +229,193 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseBodyLineCountAlias_MapsToBodyLines_Issue3665()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--body-line-count=3"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.IncludeBody);
+        Assert.Equal(3, options.BodyLines);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunInspect_KindFilterJson_FiltersDefinitions_Issue3666()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_kind_filter_3666");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/target.py",
+                "python",
+                """
+                class Target:
+                    pass
+
+                def Target():
+                    return 1
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Target", "--db", dbPath, "--json", "--lang", "python", "--kind", "class", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definitions = document.RootElement.GetProperty("definitions").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(definitions);
+            Assert.Equal("class", definitions[0].GetProperty("kind").GetString());
+            Assert.Equal("Target", definitions[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonPrioritizesSourceDefinitionsOverTests_Issue3666()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_source_priority_3666");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/RunImportTests.cs",
+                "csharp",
+                """
+                public class RunImportTests
+                {
+                    public void RunImport() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/RunImport.cs",
+                "csharp",
+                """
+                public class ImportService
+                {
+                    public void RunImport() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["RunImport", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definitions = document.RootElement.GetProperty("definitions").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(definitions.Count >= 2);
+            Assert.Equal("src/RunImport.cs", definitions[0].GetProperty("path").GetString());
+            Assert.Contains(definitions, definition => definition.GetProperty("path").GetString() == "tests/RunImportTests.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_LineRangeJson_IncludesSourceExcerpt_Issue3786()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_source_excerpt_3786");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--line", "5", "--context", "1", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var sourceExcerpt = document.RootElement.GetProperty("source_excerpt");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/Target.cs", sourceExcerpt.GetProperty("path").GetString());
+            Assert.Equal(4, sourceExcerpt.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, sourceExcerpt.GetProperty("end_line").GetInt32());
+            Assert.Equal(4, sourceExcerpt.GetProperty("requested_start_line").GetInt32());
+            Assert.Equal(6, sourceExcerpt.GetProperty("requested_end_line").GetInt32());
+            Assert.Contains("return 42;", sourceExcerpt.GetProperty("content").GetString(), StringComparison.Ordinal);
+            Assert.False(sourceExcerpt.GetProperty("content_truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_PathLineJson_WorksWithoutSymbolQuery_Issue3786()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_path_line_3786");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["--db", dbPath, "--json", "--path", "src/Target.cs", "--line", "5"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var sourceExcerpt = root.GetProperty("source_excerpt");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/Target.cs:5", root.GetProperty("query").GetString());
+            Assert.Empty(root.GetProperty("definitions").EnumerateArray());
+            Assert.Equal("src/Target.cs", sourceExcerpt.GetProperty("path").GetString());
+            Assert.Equal(5, sourceExcerpt.GetProperty("start_line").GetInt32());
+            Assert.Equal(5, sourceExcerpt.GetProperty("end_line").GetInt32());
+            Assert.Contains("return 42;", sourceExcerpt.GetProperty("content").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_FormatCompact_ActsLikeCompactJson_Issue3446()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_format_compact");

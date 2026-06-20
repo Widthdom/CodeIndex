@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using CodeIndex.Models;
 
@@ -8,20 +7,24 @@ namespace CodeIndex.Cli;
 internal static class UpdateChecker
 {
     internal const string DisableEnvVar = "CDIDX_DISABLE_UPDATE_CHECK";
+    internal const string DiagnosticsEnvVar = "CDIDX_UPDATE_CHECK_DIAGNOSTICS";
     private const string LatestReleaseUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest";
     private const string ReleasesUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases?per_page=20";
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
     internal const int MaxLatestReleaseJsonDepth = 16;
     internal const int MaxUpdateCheckCacheBytes = 8 * 1024;
     internal const int MaxUpdateCheckCacheJsonDepth = 8;
+    internal const int MaxUpdateCheckCacheRootLength = 4096;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(2);
+    internal static TimeProvider TimeProvider { get; set; } = System.TimeProvider.System;
+    internal static Action<string>? CacheDiagnosticSinkForTesting { get; set; }
 
     internal static string? GetNewerReleaseHint(string currentVersion, CancellationToken cancellationToken = default)
         => GetNewerReleaseHint(
             currentVersion,
             ResolveDefaultCachePath(),
-            DateTimeOffset.UtcNow,
+            TimeProvider.GetUtcNow(),
             FetchLatestReleaseTagAsync,
             cancellationToken);
 
@@ -29,7 +32,7 @@ internal static class UpdateChecker
         => Check(
             currentVersion,
             ResolveDefaultCachePath(),
-            DateTimeOffset.UtcNow,
+            TimeProvider.GetUtcNow(),
             FetchLatestReleaseTagAsync,
             cancellationToken);
 
@@ -52,11 +55,15 @@ internal static class UpdateChecker
 
         if (!fromCache)
         {
+            string? fetchedLatestTag = null;
             try
             {
-                latestTag = fetchLatestReleaseTagAsync(cancellationToken)
+                fetchedLatestTag = fetchLatestReleaseTagAsync(cancellationToken)
                     .GetAwaiter()
                     .GetResult();
+                latestTag = string.IsNullOrWhiteSpace(fetchedLatestTag)
+                    ? cache?.LatestTag
+                    : fetchedLatestTag;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -71,7 +78,8 @@ internal static class UpdateChecker
                 errorHint = failure.Hint;
             }
 
-            TryWriteCache(cachePath, new UpdateCheckCache(now, latestTag));
+            if (!string.IsNullOrWhiteSpace(fetchedLatestTag))
+                TryWriteCache(cachePath, new UpdateCheckCache(now, fetchedLatestTag));
         }
 
         return new UpdateCheckResult(
@@ -96,6 +104,14 @@ internal static class UpdateChecker
 
     internal static UpdateCheckFailure ClassifyFailure(Exception ex)
     {
+        if (ex is UpdateCheckRateLimitException rateLimit)
+        {
+            return new(
+                "rate_limited",
+                "rate_limit",
+                $"GitHub release API rate limit reached; retry after {rateLimit.NextRetryAt:O}. {rateLimit.Detail}");
+        }
+
         if (ex is OperationCanceledException or TimeoutException)
         {
             return new(
@@ -149,11 +165,15 @@ internal static class UpdateChecker
             return null;
 
         string? latestTag = null;
+        string? fetchedLatestTag = null;
         try
         {
-            latestTag = fetchLatestReleaseTagAsync(cancellationToken)
+            fetchedLatestTag = fetchLatestReleaseTagAsync(cancellationToken)
                 .GetAwaiter()
                 .GetResult();
+            latestTag = string.IsNullOrWhiteSpace(fetchedLatestTag)
+                ? cache?.LatestTag
+                : fetchedLatestTag;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -164,7 +184,8 @@ internal static class UpdateChecker
             latestTag = cache?.LatestTag;
         }
 
-        TryWriteCache(cachePath, new UpdateCheckCache(now, latestTag));
+        if (!string.IsNullOrWhiteSpace(fetchedLatestTag))
+            TryWriteCache(cachePath, new UpdateCheckCache(now, fetchedLatestTag));
         return IsNewerRelease(latestTag, currentVersion) ? FormatHint(latestTag!) : null;
     }
 
@@ -189,7 +210,7 @@ internal static class UpdateChecker
 
     private static async Task<string?> FetchLatestReleaseTagAsync(CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var client = GitHubHttpClientFactory.CreateDefaultHttpClient(RequestTimeout);
         return await FetchLatestReleaseTagAsync(client, RequestTimeout, cancellationToken).ConfigureAwait(false);
     }
 
@@ -201,15 +222,17 @@ internal static class UpdateChecker
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCts.CancelAfter(timeout);
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUrl);
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("cdidx", ConsoleUi.LoadVersion()));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
 
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             requestCts.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
+        {
+            await ThrowIfRateLimitedAsync(response, requestCts.Token).ConfigureAwait(false);
             return null;
+        }
 
         return await ReadLatestReleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
     }
@@ -222,17 +245,35 @@ internal static class UpdateChecker
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCts.CancelAfter(timeout);
         using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("cdidx", ConsoleUi.LoadVersion()));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
 
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             requestCts.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
+        {
+            await ThrowIfRateLimitedAsync(response, requestCts.Token).ConfigureAwait(false);
             return null;
+        }
 
         return await ReadLatestPrereleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+    }
+
+    private static async Task ThrowIfRateLimitedAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        var nextRetryAt = GitHubIssueReporter.GetRateLimitRetryAt(
+            response,
+            TimeProvider.GetUtcNow().UtcDateTime);
+        if (nextRetryAt is null)
+            return;
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var errorBody = await GitHubIssueReporter.ReadBoundedApiErrorBodyAsync(stream, cancellationToken)
+            .ConfigureAwait(false);
+        throw new UpdateCheckRateLimitException(
+            nextRetryAt.Value,
+            GitHubIssueReporter.BuildRateLimitErrorDetail((int)response.StatusCode, errorBody, nextRetryAt.Value));
     }
 
     internal static async Task<string?> ReadLatestReleaseTagAsync(HttpContent content, CancellationToken cancellationToken)
@@ -283,19 +324,55 @@ internal static class UpdateChecker
         return null;
     }
 
-    private static string ResolveDefaultCachePath()
+    internal static string ResolveDefaultCachePath()
     {
         var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var root = !string.IsNullOrWhiteSpace(xdgCacheHome)
-            ? Path.Combine(xdgCacheHome, "cdidx")
-            : !string.IsNullOrWhiteSpace(home)
-                ? Path.Combine(home, ".cache", "cdidx")
-                : !string.IsNullOrWhiteSpace(localAppData)
-                    ? Path.Combine(localAppData, "cdidx")
-                    : Path.Combine(Path.GetTempPath(), "cdidx", "cache");
+
+        if (TryResolveCacheRoot(xdgCacheHome, "XDG_CACHE_HOME", out var xdgRoot))
+            return Path.Combine(xdgRoot, "cdidx", "update-check.json");
+
+        if (TryResolveCacheRoot(home, "user profile", out var homeRoot))
+            return Path.Combine(homeRoot, ".cache", "cdidx", "update-check.json");
+
+        if (TryResolveCacheRoot(localAppData, "local application data", out var localAppDataRoot))
+            return Path.Combine(localAppDataRoot, "cdidx", "update-check.json");
+
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "cache"));
         return Path.Combine(root, "update-check.json");
+    }
+
+    private static bool TryResolveCacheRoot(string? value, string source, out string root)
+    {
+        root = string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        if (value.Length > MaxUpdateCheckCacheRootLength
+            || value.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(value))
+        {
+            ReportCacheDiagnostic(
+                "cache_root_invalid",
+                value,
+                new InvalidOperationException($"{source} must be a fully qualified cache root without control characters."));
+            return false;
+        }
+
+        try
+        {
+            root = Path.GetFullPath(value);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or IOException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            ReportCacheDiagnostic("cache_root_invalid", value, ex);
+            return false;
+        }
     }
 
     private static UpdateCheckCache? ReadCache(string cachePath)
@@ -328,8 +405,9 @@ internal static class UpdateChecker
                 : null;
             return new UpdateCheckCache(checkedAt, latestTag);
         }
-        catch
+        catch (Exception ex)
         {
+            ReportCacheDiagnostic("cache_read_failed", cachePath, ex);
             return null;
         }
     }
@@ -349,9 +427,35 @@ internal static class UpdateChecker
             };
             AtomicFileWriter.WriteJson(cachePath, payload, applyFileMode: DataDirectorySecurity.ApplyPrivateFileMode);
         }
-        catch
+        catch (Exception ex)
         {
+            ReportCacheDiagnostic("cache_write_failed", cachePath, ex);
         }
+    }
+
+    private static void ReportCacheDiagnostic(string code, string cachePath, Exception ex)
+    {
+        if (!ShouldEmitCacheDiagnostics())
+            return;
+
+        var message =
+            $"update_check_cache_diagnostic code={code} " +
+            $"path={ConsoleUi.FormatBoundedValue(cachePath)} " +
+            $"error={CommandErrorWriter.FormatSanitizedException(ex)}";
+        var sink = CacheDiagnosticSinkForTesting;
+        if (sink != null)
+            sink(message);
+        else
+            Console.Error.WriteLine(message);
+    }
+
+    private static bool ShouldEmitCacheDiagnostics()
+    {
+        var value = Environment.GetEnvironmentVariable(DiagnosticsEnvVar)?.Trim();
+        return value is not null
+            && (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryParseVersion(string value, out Version version)
@@ -370,4 +474,18 @@ internal static class UpdateChecker
     private sealed record UpdateCheckCache(DateTimeOffset CheckedAt, string? LatestTag);
 
     internal readonly record struct UpdateCheckFailure(string Code, string Category, string Hint);
+
+    private sealed class UpdateCheckRateLimitException : HttpRequestException
+    {
+        internal UpdateCheckRateLimitException(DateTime nextRetryAt, string detail)
+            : base("GitHub release API rate limit response.")
+        {
+            NextRetryAt = nextRetryAt;
+            Detail = detail;
+        }
+
+        internal DateTime NextRetryAt { get; }
+
+        internal string Detail { get; }
+    }
 }

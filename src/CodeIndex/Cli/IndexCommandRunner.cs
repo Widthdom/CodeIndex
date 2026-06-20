@@ -54,6 +54,9 @@ public static partial class IndexCommandRunner
     internal static Action<string>? DeleteScanCheckpointForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
+    private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
         Run(indexArgs, jsonOptions, cancellationForTesting: null);
@@ -107,7 +110,7 @@ public static partial class IndexCommandRunner
         var dbResolution = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath, options.DataDir);
         var dbPath = dbResolution.DbPath;
         var stopwatch = Stopwatch.StartNew();
-        var runStartedAtUtc = DateTime.UtcNow;
+        var runStartedAtUtc = GetUtcNow();
         var isUpdateMode = IsUpdateMode(options);
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
 
@@ -927,7 +930,7 @@ public static partial class IndexCommandRunner
             var headSha = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
             var headBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
             var timestamp = headSha != null
-                ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+                ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                 : null;
             writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
             writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);

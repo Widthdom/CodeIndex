@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -171,6 +172,103 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         Assert.Contains("--open-issues github requires --repo", error);
     }
 
+    [Fact]
+    public async Task TryLoadAsync_GitHubSourcePropagatesCallerCancellation_Issue3823()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex", cts.Token));
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubRateLimitIncludesRetryMetadata_Issue3823()
+    {
+        var fixedNow = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
+        var previousTimeProvider = GitHubIssueReporter.TimeProvider;
+        GitHubIssueReporter.TimeProvider = new ManualTimeProvider(fixedNow);
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new SingleResponseHandler(_ =>
+        {
+            var response = new HttpResponseMessage((HttpStatusCode)429)
+            {
+                Content = new StringContent("""{"message":"rate limited","token":"secret-value"}""", Encoding.UTF8, "application/json"),
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(45));
+            return response;
+        }));
+        try
+        {
+            var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+            Assert.False(result.Loaded);
+            Assert.Contains("429", result.Error);
+            Assert.Contains("next_retry_at=", result.Error);
+            Assert.Contains(fixedNow.UtcDateTime.AddSeconds(45).ToString("O", System.Globalization.CultureInfo.InvariantCulture), result.Error);
+            Assert.DoesNotContain("secret-value", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.TimeProvider = previousTimeProvider;
+        }
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubFetchExceptionIsSanitized_Issue3823()
+    {
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new ThrowingOpenIssuesHandler(
+            new HttpRequestException("secret host detail")));
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.Contains("HttpRequestException", result.Error);
+        Assert.DoesNotContain("secret host detail", result.Error);
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubInternalCancellationIsSanitized_Issue3823()
+    {
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new ThrowingOpenIssuesHandler(
+            new OperationCanceledException("secret timeout detail")));
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.Contains("OperationCanceledException", result.Error);
+        Assert.DoesNotContain("secret timeout detail", result.Error);
+    }
+
+    [Fact]
+    public void FindMatches_UsesEvidenceAndBodySignals_Issue3823()
+    {
+        var path = WriteOpenIssuesJson(
+            """
+            [
+              {
+                "number": 3823,
+                "title": "Different issue title",
+                "labels": [{"name": "enhancement"}],
+                "url": "https://example.test/issues/3823",
+                "body": "## Evidence paths\n- src/CodeIndex/Cli/IssueDuplicatePreflight.cs\n\nretry diagnostics cancellation duplicate preflight github"
+              }
+            ]
+            """);
+
+        var loaded = IssueDuplicatePreflight.TryLoad(path, out var preflight, out var error);
+
+        Assert.True(loaded, error);
+        var match = Assert.Single(preflight.FindMatches(
+            "Unrelated title",
+            ["enhancement"],
+            ["src/CodeIndex/Cli/IssueDuplicatePreflight.cs"],
+            "retry diagnostics cancellation duplicate preflight github"));
+        Assert.Equal("evidence_path_overlap", match.Reason);
+        Assert.Equal("high", match.Confidence);
+        Assert.Contains("evidence_path_overlap", match.Signals);
+        Assert.Contains("body_similarity", match.Signals);
+    }
+
     private string WriteOpenIssuesJson(string json)
     {
         var path = Path.Combine(_tempDir, "open-issues.json");
@@ -233,6 +331,18 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private sealed class SingleResponseHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(responseFactory(request));
+    }
+
+    private sealed class ThrowingOpenIssuesHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromException<HttpResponseMessage>(exception);
     }
 
     private sealed record RecordedOpenIssuesRequest(

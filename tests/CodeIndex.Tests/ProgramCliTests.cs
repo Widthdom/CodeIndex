@@ -1279,7 +1279,8 @@ public class ProgramCliTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("could not read --open-issues file", stderr);
-        Assert.Contains("maximum configured depth", stderr);
+        Assert.Contains("JsonReaderException", stderr);
+        Assert.DoesNotContain("maximum configured depth", stderr);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, IReadOnlyDictionary<string, string?>? environment = null)
