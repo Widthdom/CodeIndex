@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
@@ -292,6 +293,66 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void PluginAssemblyPathIdentity_FollowsPathCasingPolicy_Issue3790()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_path_casing_3790");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                var pluginPath = Path.Combine(projectRoot, "Plugin.dll");
+                var caseVariant = Path.Combine(projectRoot, "plugin.dll");
+
+                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
+                Assert.False(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
+
+                ExtractorPluginRegistry.ResetForTests();
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => false;
+
+                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
+                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = originalProbe;
+                PathCasing.ResetCacheForTests();
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.TypeInspectionLimitForTesting = 1;
+
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal("plugin", diagnostic.Kind);
+                Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("plugin_type_limit_exceeded", diagnostic.Category);
+                Assert.Contains("too many loadable types", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPatternConfigs_BoundsDiagnosticsAndCountsSkippedFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_diagnostics");
@@ -460,6 +521,81 @@ public class ExtractorPluginRegistryTests
 
                 Assert.Contains("extension scalar is too long", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains((ExtractorPluginRegistry.MaxPatternExtensionLength + 1).ToString(), diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigs_RecordsPatternTimeoutDiagnostic_Issue3821()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_timeout_3821");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "slow.yaml",
+                    "language: \"timeoutdsl\"\nextensions:\n  - extension: \".timeouttoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("timeoutdsl", out var extractor));
+
+                var stderr = ConsoleCapture.CaptureError(() =>
+                {
+                    var symbols = extractor.Extract(
+                        1,
+                        new string('a', 10_000) + "!",
+                        new ExtractionContext("timeoutdsl", Path.Combine(projectRoot, "sample.timeouttoy")));
+
+                    Assert.Empty(symbols);
+                });
+                var diagnostic = Assert.Single(
+                    ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
+                    item => item.Category == "pattern_regex_timeout");
+
+                Assert.Equal("pattern", diagnostic.Kind);
+                Assert.Equal("warning", diagnostic.Severity);
+                Assert.Equal(".cdidx/patterns/slow.yaml", diagnostic.Path);
+                Assert.Contains("timeoutdsl", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("class", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("Pattern extractor", stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigs_SanitizesKindInRegexLengthRejection_Issue3821()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_kind_sanitized_3821");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "long-regex.yaml",
+                    $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"/private/secret/kind\"\n    regex: \"{new string('x', ExtractorPluginRegistry.MaxPatternRegexLength + 1)}\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal("invalid_pattern_config", diagnostic.Category);
+                Assert.Contains("regex for kind", diagnostic.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("/private/secret", diagnostic.Message, StringComparison.Ordinal);
             }
             finally
             {

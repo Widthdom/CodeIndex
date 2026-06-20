@@ -504,6 +504,72 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void WorkerProtocol_RejectsExcessiveJsonProperties_Issue3759()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                WorkerProtocolJsonValidator.MaxJsonPropertiesForTesting = 1;
+                using var input = new StringReader("{\"FileId\":0,\"Lang\":\"csharp\"}\n");
+                using var output = new StringWriter();
+                using var error = new StringWriter();
+
+                var handled = SymbolExtractionWorker.TryRunCommand(
+                    [SymbolExtractionWorker.CommandName],
+                    input,
+                    output,
+                    error,
+                    out var exitCode);
+
+                Assert.True(handled);
+                Assert.Equal(0, exitCode);
+                Assert.Equal(string.Empty, error.ToString());
+                using var document = JsonDocument.Parse(output.ToString());
+                var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+                Assert.Equal("worker_protocol_error: json_property_limit_exceeded", workerError);
+            }
+            finally
+            {
+                WorkerProtocolJsonValidator.MaxJsonPropertiesForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkerProtocol_RejectsOversizedJsonStrings_Issue3759()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                WorkerProtocolJsonValidator.MaxStringCharactersForTesting = 4;
+                using var input = new StringReader("{\"Callback\":\"OnSymbolsExtracted\"}\n");
+                using var output = new StringWriter();
+                using var error = new StringWriter();
+
+                var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+                    [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+                    input,
+                    output,
+                    error,
+                    out var exitCode);
+
+                Assert.True(handled);
+                Assert.Equal(0, exitCode);
+                Assert.Equal(string.Empty, error.ToString());
+                using var document = JsonDocument.Parse(output.ToString());
+                var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+                Assert.Equal("worker_protocol_error: json_string_length_exceeded", workerError);
+            }
+            finally
+            {
+                WorkerProtocolJsonValidator.MaxStringCharactersForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
@@ -526,6 +592,30 @@ public class IndexCommandRunnerTests
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void IsolatedWorkers_StartInfo_ScrubsEnvironmentByAllowlist_Issue3759()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_TEST_WORKER_ALLOWLIST_3759",
+                "CDIDX_SECRET_WORKER_3759");
+            env.Set("CDIDX_TEST_WORKER_ALLOWLIST_3759", "allowed");
+            env.Set("CDIDX_SECRET_WORKER_3759", "secret");
+            var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+            var created = SymbolExtractionWorker.TryCreateStartInfo(
+                currentProcessPath,
+                runnerAssemblyPath: string.Empty,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal("allowed", startInfo.Environment["CDIDX_TEST_WORKER_ALLOWLIST_3759"]);
+            Assert.False(startInfo.Environment.ContainsKey("CDIDX_SECRET_WORKER_3759"));
+        }
     }
 
     [Fact]

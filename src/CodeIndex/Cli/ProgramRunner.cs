@@ -27,7 +27,7 @@ internal static partial class ProgramRunner
     private const string ReleaseAssetUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/download/{0}/{1}";
     private const string ReleasePageUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/tag/{0}";
     private const string InstallerScriptAssetName = "install.sh";
-    private const string UpgradeInstallerTempDirectoryPrefix = "cdidx-install-";
+    private const string UpgradeInstallerDirectoryPrefix = "cdidx-install-";
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
@@ -3071,7 +3071,7 @@ internal static partial class ProgramRunner
         string? scriptPath = null;
         try
         {
-            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory(UpgradeInstallerTempDirectoryPrefix).FullName;
+            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory(UpgradeInstallerDirectoryPrefix).FullName;
             scriptPath = Path.Combine(scriptDirectory, "install.sh");
             using (var client = UpgradeHttpClientFactory())
             {
@@ -3557,82 +3557,92 @@ internal static partial class ProgramRunner
     {
         try
         {
-            if (!TryValidateUpgradeInstallerDirectoryCleanupTarget(scriptDirectory, out var fullDirectory, out var failureReason))
+            if (!TryValidateUpgradeInstallerDirectoryCleanupTarget(scriptDirectory, out var fullPath, out var validationFailure))
             {
-                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({failureReason}).");
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({validationFailure}).");
                 return;
             }
 
-            var directoryInfo = new DirectoryInfo(fullDirectory);
-            directoryInfo.Refresh();
-            if (!directoryInfo.Exists)
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
                 return;
 
-            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
+            if (!TryValidateUpgradeInstallerDirectoryCleanupTarget(fullPath, out fullPath, out validationFailure))
             {
-                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} (target is a symbolic link or reparse point).");
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({validationFailure}).");
                 return;
             }
 
             if (DeleteUpgradeInstallerDirectoryForTesting != null)
-                DeleteUpgradeInstallerDirectoryForTesting(fullDirectory);
+                DeleteUpgradeInstallerDirectoryForTesting(fullPath);
             else
-                Directory.Delete(LongPath.EnsureWindowsPrefix(fullDirectory), recursive: true);
+                Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
         }
-        catch (Exception ex) when (IsUpgradeInstallerCleanupException(ex))
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
-            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
     internal static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
-        string scriptDirectory,
-        out string fullDirectory,
+        string path,
+        out string fullPath,
         out string failureReason)
     {
-        fullDirectory = string.Empty;
+        fullPath = string.Empty;
         failureReason = string.Empty;
         try
         {
-            fullDirectory = NormalizeDirectoryBoundaryPath(Path.GetFullPath(scriptDirectory));
-            var tempRoot = NormalizeDirectoryBoundaryPath(Path.GetFullPath(Path.GetTempPath()));
-            if (string.Equals(fullDirectory, tempRoot, InstallDirectoryPathComparison)
-                || !IsPathEqualOrChildNoProbe(tempRoot, fullDirectory))
+            fullPath = NormalizeCleanupBoundaryPath(Path.GetFullPath(path));
+            var tempRoot = NormalizeCleanupBoundaryPath(Path.GetTempPath());
+            if (string.Equals(fullPath, tempRoot, PathCasing.ComparisonFor(tempRoot))
+                || !PathCasing.IsPathEqualOrParent(tempRoot, fullPath))
             {
-                failureReason = "target is outside the expected temporary root";
+                failureReason = "target is outside the expected cleanup root";
                 return false;
             }
 
-            if (!Path.GetFileName(fullDirectory).StartsWith(UpgradeInstallerTempDirectoryPrefix, StringComparison.Ordinal))
+            if (!Path.GetFileName(fullPath).StartsWith(UpgradeInstallerDirectoryPrefix, StringComparison.Ordinal))
             {
-                failureReason = "target name does not match the expected upgrade installer temporary-directory prefix";
+                failureReason = "target name does not match the expected upgrade temporary-directory prefix";
                 return false;
             }
 
-            var directoryInfo = new DirectoryInfo(fullDirectory);
-            directoryInfo.Refresh();
-            if (directoryInfo.Exists
-                && ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(directoryInfo.LinkTarget)))
+            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
+            if (Directory.Exists(longPath))
             {
-                failureReason = "target is a symbolic link or reparse point";
+                var directoryInfo = new DirectoryInfo(fullPath);
+                directoryInfo.Refresh();
+                var attributes = directoryInfo.Attributes;
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
+                    || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
+                {
+                    failureReason = "target is a symbolic link, reparse point, or device";
+                    return false;
+                }
+            }
+            else if (File.Exists(longPath))
+            {
+                failureReason = "target is not a directory";
                 return false;
             }
 
             return true;
         }
-        catch (Exception ex) when (IsUpgradeInstallerCleanupException(ex))
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
         {
             failureReason = "target path is invalid";
             return false;
         }
     }
 
-    private static bool IsUpgradeInstallerCleanupException(Exception ex)
-        => ex is IOException
-            or UnauthorizedAccessException
-            or ArgumentException
-            or NotSupportedException
-            or PathTooLongException;
+    private static string NormalizeCleanupBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(
         UpdateCheckResult result,

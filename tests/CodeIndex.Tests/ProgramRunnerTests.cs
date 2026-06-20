@@ -1914,7 +1914,7 @@ exit 7
     }
 
     [Fact]
-    public void RunUpgrade_InstallerDirectoryCleanupFailure_EmitsWarning_Issue3659()
+    public void RunUpgrade_InstallerDirectoryCleanupFailure_EmitsWarning_Issue3732()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1956,7 +1956,7 @@ exit 7
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 using var doc = JsonDocument.Parse(stdout);
                 Assert.True(doc.RootElement.GetProperty("install_succeeded").GetBoolean());
-                Assert.Contains("Warning: failed to delete upgrade installer directory", stderr);
+                Assert.Contains("Warning: failed to delete upgrade installer temporary directory", stderr);
                 Assert.Contains("IOException", stderr);
                 Assert.NotNull(cleanupDirectory);
                 Assert.True(Directory.Exists(cleanupDirectory));
@@ -2164,7 +2164,7 @@ exit 7
             out var failureReason);
 
         Assert.False(valid);
-        Assert.Contains("outside the expected temporary root", failureReason, StringComparison.Ordinal);
+        Assert.Contains("outside the expected cleanup root", failureReason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2178,7 +2178,7 @@ exit 7
             out var failureReason);
 
         Assert.False(valid);
-        Assert.Contains("expected upgrade installer temporary-directory prefix", failureReason, StringComparison.Ordinal);
+        Assert.Contains("expected upgrade temporary-directory prefix", failureReason, StringComparison.Ordinal);
     }
 
     [Fact]
