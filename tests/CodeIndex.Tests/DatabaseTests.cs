@@ -337,6 +337,63 @@ public class DatabaseTests : IDisposable
         Assert.Contains("Unknown symbol kind", ex.Message);
     }
 
+    [Fact]
+    public void InsertChunks_CancelledBeforeBatch_ThrowsOperationCanceled_Issue3738()
+    {
+        var fileId = UpsertTestFile("src/cancel-chunk.cs", checksum: "cancel-chunk");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "class CancelChunk { }",
+            },
+        ], cts.Token));
+    }
+
+    [Fact]
+    public void InsertReferences_ReportsProgressCheckpoints_Issue3738()
+    {
+        var fileId = UpsertTestFile("src/progress-reference.cs", checksum: "progress-reference");
+        var checkpoints = new List<DbWriter.DbWriterBatchProgress>();
+        DbWriter.BatchProgressCheckpointForTesting = checkpoints.Add;
+        try
+        {
+            _writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "Target",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = "Target();",
+                },
+            ], CancellationToken.None);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = null;
+        }
+
+        Assert.Contains(checkpoints, checkpoint =>
+            checkpoint.Operation == "insert_references"
+            && checkpoint.RowsProcessed == 0
+            && checkpoint.RowsTotal == 1);
+        Assert.Contains(checkpoints, checkpoint =>
+            checkpoint.Operation == "insert_references"
+            && checkpoint.RowsProcessed == 1
+            && checkpoint.RowsTotal == 1);
+        Assert.Contains(checkpoints, checkpoint => checkpoint.Operation == "upsert_reference_lines");
+    }
+
     [Theory]
     [InlineData("annotation")]
     [InlineData("bcl_regex_without_timeout")]
