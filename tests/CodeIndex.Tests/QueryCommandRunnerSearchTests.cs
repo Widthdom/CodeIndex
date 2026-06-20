@@ -11,6 +11,38 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunSearch_GroupByFileCountStreamsFileCounts_Issue3741()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_file_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "Needle();\nNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "Needle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--exact-substring", "--group-by", "file", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            Assert.Equal(2, root.GetProperty("files").GetInt32());
+            var groups = root.GetProperty("groups").EnumerateArray().ToArray();
+            Assert.Equal("src/a.cs", groups[0].GetProperty("file").GetString());
+            Assert.Equal(1, groups[0].GetProperty("count").GetInt32());
+            Assert.Equal("src/b.cs", groups[1].GetProperty("file").GetString());
+            Assert.Equal(1, groups[1].GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonIncludesMatchOrigins_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_match_origins");

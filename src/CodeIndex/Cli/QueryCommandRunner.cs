@@ -975,6 +975,43 @@ public static partial class QueryCommandRunner
 
     private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
+        if (options.GroupBy == "file" && !HasSearchOriginFilters(options))
+        {
+            var fileGroups = reader.CountSearchResultsByFile(options.Query!, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, options.GuardScope);
+            var totalCount = fileGroups.Sum(group => group.Count);
+            var fileCountGroups = fileGroups
+                .Select(group => new SearchGroupedCountItemJsonResult(
+                    group.Path,
+                    group.Count,
+                    group.Path,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null))
+                .ToList();
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new SearchGroupedCountJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        options.Query!,
+                        options.GroupBy!,
+                        totalCount,
+                        fileGroups.Count,
+                        fileCountGroups),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+            }
+            else
+            {
+                WriteSearchGroupedCounts(options.GroupBy!, fileCountGroups, totalCount, fileGroups.Count);
+                WriteExactSubstringHintIfNeeded(exactSubstringHint);
+            }
+
+            return CommandExitCodes.Success;
+        }
+
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
         var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
