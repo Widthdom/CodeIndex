@@ -26,7 +26,6 @@ public class ExtensionDiscoveryDiagnosticClassifierTests
             exception);
 
         Assert.Equal(expectedCategory, diagnostic.Category);
-        Assert.StartsWith("Test directory skipped:", diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains(exceptionType.Name, diagnostic.Message, StringComparison.Ordinal);
         Assert.True(diagnostic.Message.Length < 240, diagnostic.Message);
     }

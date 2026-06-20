@@ -33,7 +33,7 @@ internal static class ExtensionDiscoveryDiagnosticClassifier
         var exceptionCategory = SafeDiagnosticFormatter.FormatExceptionCategory(category, ex);
         return new ExtensionDiscoveryDiagnostic(
             category,
-            $"{surfaceLabel} skipped: {reason} ({exceptionCategory})");
+            $"{reason} ({exceptionCategory})");
     }
 }
 

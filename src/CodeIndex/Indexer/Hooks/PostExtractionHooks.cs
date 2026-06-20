@@ -223,7 +223,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                diagnostic.Message,
+                $"Hook directory skipped: {diagnostic.Message}.",
                 category: diagnostic.Category);
             return null;
         }
@@ -306,7 +306,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                diagnostic.Message,
+                $"Hook directory skipped: {diagnostic.Message}.",
                 category: diagnostic.Category);
             return false;
         }
