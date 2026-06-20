@@ -874,45 +874,6 @@ public static partial class IndexCommandRunner
         return PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
     }
 
-    private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
-    {
-        lang = string.Empty;
-        error = null;
-
-        var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
-        if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
-        {
-            error = "Could not probe file for indexability/language.";
-            return false;
-        }
-
-        if (indexability != FileIndexer.FileProbeStatus.Supported)
-            return false;
-
-        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-        if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-        {
-            error = "Could not probe file for indexability/language.";
-            return false;
-        }
-
-        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
-            return false;
-
-        try
-        {
-            var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
-            lang = record.Lang ?? "unknown";
-            error = warning;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
     // Issue #1509: stamp the Git HEAD commit, branch, and UTC timestamp into
     // codeindex_meta so cross-session staleness ("the DB was indexed at commit X but
     // you're now at Y, N commits ahead") is detectable by `status` / consumers. Only
