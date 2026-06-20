@@ -96,19 +96,29 @@ public static class ChunkSplitter
         // 既存の issues 経路で観測できる。Closes #1542.
         if (HasOversizeLine(content))
             return [];
-        // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
-        var lines = content.EndsWith('\n')
-            ? content[..^1].Split('\n')
-            : content.Split('\n');
+        // Track line start offsets instead of materializing every line string. Large
+        // source files can still be valid and under the file-size cap, and chunking
+        // should only allocate the persisted chunk bodies rather than a duplicate
+        // full-file string[] plus per-chunk slice arrays. A trailing newline is not
+        // treated as an extra phantom line, matching the previous Split('\n') path.
+        // 各行の string 配列を作らず、行開始 offset だけを保持する。大きな source file
+        // でも file-size 上限内なら有効なため、chunking では永続化する chunk 本文以外に
+        // ファイル全体分の string[] や chunk ごとの slice 配列を作らない。末尾改行を
+        // 余分な空行として扱わない点は従来の Split('\n') 経路と同じ。
+        var lineStarts = GetLineStartOffsets(content);
         var chunks = new List<ChunkRecord>();
         int step = ChunkSize - Overlap;
         int chunkIndex = 0;
+        var effectiveContentLength = content.EndsWith('\n') ? content.Length - 1 : content.Length;
 
-        for (int start = 0; start < lines.Length; start += step)
+        for (int start = 0; start < lineStarts.Count; start += step)
         {
-            int end = Math.Min(start + ChunkSize, lines.Length);
-            var chunkLines = lines[start..end];
-            var chunkContent = string.Join('\n', chunkLines);
+            int end = Math.Min(start + ChunkSize, lineStarts.Count);
+            var startOffset = lineStarts[start];
+            var endOffset = end < lineStarts.Count
+                ? lineStarts[end] - 1
+                : effectiveContentLength;
+            var chunkContent = content.Substring(startOffset, endOffset - startOffset);
 
             chunks.Add(new ChunkRecord
             {
@@ -122,10 +132,22 @@ public static class ChunkSplitter
             chunkIndex++;
 
             // Stop if we've reached the end / 末尾に到達したら終了
-            if (end >= lines.Length)
+            if (end >= lineStarts.Count)
                 break;
         }
 
         return chunks;
+    }
+
+    private static List<int> GetLineStartOffsets(string content)
+    {
+        var lineStarts = new List<int> { 0 };
+        for (var i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n' && i + 1 < content.Length)
+                lineStarts.Add(i + 1);
+        }
+
+        return lineStarts;
     }
 }
