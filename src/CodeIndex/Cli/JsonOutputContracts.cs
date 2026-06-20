@@ -84,7 +84,8 @@ internal sealed record DbCheckpointJsonResult(
     [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
     [property: JsonPropertyName("files")] List<string> Files,
     [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false,
-    [property: JsonPropertyName("file_limit")] int FileLimit = 0);
+    [property: JsonPropertyName("file_limit")] int FileLimit = 0,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
 
 internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -106,7 +107,37 @@ internal sealed record DbRestoreJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
-    [property: JsonPropertyName("backup_path")] string BackupPath);
+    [property: JsonPropertyName("backup_path")] string BackupPath,
+    [property: JsonPropertyName("message")] string? Message = null,
+    [property: JsonPropertyName("error_code")] string? ErrorCode = null,
+    [property: JsonPropertyName("hint")] string? Hint = null,
+    [property: JsonPropertyName("rollback_failed")] bool RollbackFailed = false,
+    [property: JsonPropertyName("rollback_failure")] DbDiagnosticJsonResult? RollbackFailure = null);
+
+internal sealed record DbRestoreBackupEntryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("backup_path")] string BackupPath,
+    [property: JsonPropertyName("created_at_utc")] string CreatedAtUtc,
+    [property: JsonPropertyName("bytes")] long Bytes,
+    [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false);
+
+internal sealed record DbRestoreBackupListJsonResult(
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("backups")] List<DbRestoreBackupEntryJsonResult> Backups,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("backup_limit")] int BackupLimit = 0,
+    [property: JsonPropertyName("file_limit")] int FileLimit = 0,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
+
+internal sealed record DbRestoreBackupPruneJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("keep")] int Keep,
+    [property: JsonPropertyName("deleted")] int Deleted,
+    [property: JsonPropertyName("retained")] int Retained,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("backup_limit")] int BackupLimit = 0,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
 
 internal sealed record DbSchemaEntryJsonResult(
     [property: JsonPropertyName("type")] string Type,
@@ -492,6 +523,9 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DbDiagnosticJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DbPruneJsonResult))]
+[JsonSerializable(typeof(DbRestoreBackupEntryJsonResult))]
+[JsonSerializable(typeof(DbRestoreBackupListJsonResult))]
+[JsonSerializable(typeof(DbRestoreBackupPruneJsonResult))]
 [JsonSerializable(typeof(DbRestoreJsonResult))]
 [JsonSerializable(typeof(DbSchemaEntryJsonResult))]
 [JsonSerializable(typeof(DbSchemaJsonResult))]
