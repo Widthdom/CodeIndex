@@ -338,6 +338,7 @@ public class IndexWatchRunnerTests
             MaxFileSizeBytes = 4096,
             MaxSymbolsPerFile = 42,
             Parallelism = parallelism,
+            WatchPendingPathLimit = 1234,
             SymlinkPolicy = FileIndexer.SymlinkPolicy.All,
             SymbolKindFilter = SymbolKindFilter.Create(["class", "function"], ["test.method"], parseError: null),
         };
@@ -366,6 +367,7 @@ public class IndexWatchRunnerTests
         Assert.Equal("overflow", doc.RootElement.GetProperty("status").GetString());
         Assert.Equal("incremental", doc.RootElement.GetProperty("phase").GetString());
         Assert.Equal("buffer full", doc.RootElement.GetProperty("overflow_reason").GetString());
+        Assert.Equal(1234, doc.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
         var recovery = doc.RootElement.GetProperty("recovery_command");
         Assert.Equal("cdidx", recovery.GetProperty("command").GetString());
         var args = recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()).ToList();
@@ -461,6 +463,7 @@ public class IndexWatchRunnerTests
                 Json = true,
                 Watch = true,
                 WatchDebounceMs = 50,
+                WatchPendingPathLimit = 123,
             };
 
             using var cts = new CancellationTokenSource();
@@ -509,6 +512,12 @@ public class IndexWatchRunnerTests
                 .ToList();
             Assert.Contains("watching", statuses);
             Assert.Contains("stopped", statuses);
+
+            var watchingLine = capturedOut
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .First(line => line.Contains("\"status\":\"watching\"", StringComparison.Ordinal));
+            using var watchStarted = JsonDocument.Parse(watchingLine);
+            Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
         }
         finally
         {
@@ -537,6 +546,7 @@ public class IndexWatchRunnerTests
                 Json = false,
                 Watch = true,
                 WatchDebounceMs = 50,
+                WatchPendingPathLimit = 123,
             };
 
             using var cts = new CancellationTokenSource();
@@ -577,6 +587,7 @@ public class IndexWatchRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("[watch] Watching", capturedErr);
             Assert.Contains("debounce 50 ms", capturedErr);
+            Assert.Contains("pending path limit 123", capturedErr);
             Assert.Contains("[watch] Stopped.", capturedErr);
         }
         finally
