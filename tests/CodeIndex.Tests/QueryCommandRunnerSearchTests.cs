@@ -6289,6 +6289,48 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_OriginAliasAndExcludeOriginFilterExactSubstring_Issue3680()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_origin_exclude_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/code.cs",
+                "csharp",
+                """
+                public class Demo
+                {
+                    void Run()
+                    {
+                        Directory.Delete(path);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment.cs", "csharp", "// Directory.Delete(path) only in a comment\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/string.cs", "csharp", "var text = \"Directory.Delete(path)\";\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Directory.Delete", "--db", dbPath, "--exact-substring", "--origin", "code", "--exclude-origin", "comment,string_literal", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.Contains("code", row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+            Assert.DoesNotContain("comment", row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+            Assert.DoesNotContain("string_literal", row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_CountByOriginReturnsAggregatedJson_Issue3729()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_count_by_origin");

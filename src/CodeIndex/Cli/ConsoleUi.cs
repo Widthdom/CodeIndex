@@ -1043,6 +1043,8 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-comments         search only: suppress comment-only matches");
         Console.WriteLine("  --exclude-strings          search only: suppress string, regex, and help-text matches");
         Console.WriteLine("  --exclude-fixtures         search only: suppress fixture-only matches in tests");
+        WriteHelpLine("  --origin/--match-origin <origin> search only: keep only matches from selected origins (code, comment, string_literal, regex_literal, help_text, unknown; repeatable or comma-separated)");
+        WriteHelpLine("  --exclude-origin <origin>  search only: drop matches from selected origins while keeping other origins in the same result");
         Console.WriteLine("  --include-generated        Include generated files in query results");
         Console.WriteLine("  --snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");

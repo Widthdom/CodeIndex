@@ -804,6 +804,9 @@ internal sealed record SearchAuditRecipeQuery(
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
+    public List<string> MatchOrigins { get; init; } = [];
+    public List<string> ExcludeOrigins { get; init; } = [];
+    public List<string> ResultKinds { get; init; } = [];
 }
 
 internal sealed record SearchRecipeListJsonResult(
