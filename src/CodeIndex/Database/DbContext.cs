@@ -187,15 +187,40 @@ public class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         CancellationToken cancellationToken = default)
+        => TryValidateExistingCodeIndexDb(
+            dbPath,
+            requireWritable: true,
+            requireSupportedUserVersion: false,
+            out message,
+            out isNotFound,
+            out _,
+            cancellationToken);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        bool requireWritable,
+        bool requireSupportedUserVersion,
+        out string message,
+        out bool isNotFound,
+        out bool isSchemaTooNew,
+        CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
             var builder = new SqliteConnectionStringBuilder
             {
                 DataSource = openTarget,
-                Mode = SqliteOpenMode.ReadWrite,
+                Mode = requireWritable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
             };
             return new SqliteConnection(builder.ConnectionString);
-        }, static connection => connection.Open(), null, out message, out isNotFound, cancellationToken);
+        },
+        static connection => connection.Open(),
+        null,
+        requireWritable,
+        requireSupportedUserVersion,
+        out message,
+        out isNotFound,
+        out isSchemaTooNew,
+        cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
         string dbPath,
@@ -205,9 +230,33 @@ public class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         CancellationToken cancellationToken = default)
+        => TryValidateExistingCodeIndexDb(
+            dbPath,
+            createConnection,
+            openConnection,
+            sleep,
+            requireWritable: true,
+            requireSupportedUserVersion: false,
+            out message,
+            out isNotFound,
+            out _,
+            cancellationToken);
+
+    private static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        Func<string, SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep,
+        bool requireWritable,
+        bool requireSupportedUserVersion,
+        out string message,
+        out bool isNotFound,
+        out bool isSchemaTooNew,
+        CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
+        isSchemaTooNew = false;
         cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
@@ -216,7 +265,7 @@ public class DbContext : IDisposable
             return false;
         }
 
-        if (SqliteFileUri.StartsWithFileScheme(dbPath) && SqliteFileUri.RequestsReadOnly(dbPath))
+        if (requireWritable && SqliteFileUri.StartsWithFileScheme(dbPath) && SqliteFileUri.RequestsReadOnly(dbPath))
         {
             message = $"database must be writable: {dbPath}";
             return false;
@@ -260,6 +309,19 @@ public class DbContext : IDisposable
             {
                 message = $"database is not an existing CodeIndex DB: {dbPath}";
                 return false;
+            }
+
+            if (requireSupportedUserVersion)
+            {
+                cmd.CommandText = "PRAGMA user_version";
+                var userVersion = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+                var unknownBits = userVersion & ~CurrentSchemaVersion;
+                if (unknownBits != 0)
+                {
+                    isSchemaTooNew = true;
+                    message = $"database was written by a newer cdidx schema stamp (user_version {userVersion}); this binary supports up to {CurrentSchemaVersion}: {dbPath}";
+                    return false;
+                }
             }
 
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";

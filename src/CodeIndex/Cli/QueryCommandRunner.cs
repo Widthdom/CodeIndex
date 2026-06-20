@@ -6828,6 +6828,9 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
+                return workspaceDbExitCode;
+
             var reverse = cmdArgs.Any(a => a == "--reverse");
             var results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
             var cycleCandidates = options.DependencyCycles
@@ -7247,6 +7250,41 @@ public static partial class QueryCommandRunner
         CommandErrorWriter.WriteStderr($"Error: deps --workspace-db accepts at most {maxAdditional} distinct additional databases ({MaxWorkspaceDependencyDatabaseCount} total including --db), which is {MaxWorkspaceDependencyDatabasePairCount} ordered cross-database pairs; got {additionalCount} additional ({memberDbs.Count} total, {pairCount} pairs).");
         CommandErrorWriter.WriteStderr("Hint: pass fewer --workspace-db values or run deps separately for smaller workspace member groups.");
         return true;
+    }
+
+    private static bool TryWriteInvalidWorkspaceDependencyDatabaseError(QueryCommandOptions options, out int exitCode)
+    {
+        exitCode = CommandExitCodes.Success;
+        if (options.WorkspaceDbPaths.Count == 0)
+            return false;
+
+        foreach (var dbPath in BuildWorkspaceDependencyDatabaseList(options).Skip(1))
+        {
+            if (DbContext.TryValidateExistingCodeIndexDb(
+                    dbPath,
+                    requireWritable: false,
+                    requireSupportedUserVersion: true,
+                    out var validationMessage,
+                    out var isNotFound,
+                    out var isSchemaTooNew))
+                continue;
+
+            var errorCode = isNotFound
+                ? CommandErrorCodes.DbNotFound
+                : isSchemaTooNew
+                    ? CommandErrorCodes.SchemaTooNew
+                    : CommandErrorCodes.DbError;
+            CommandErrorWriter.WriteStderr($"Error [{errorCode}]: attached workspace database cannot be used for cross-database dependency query: {validationMessage}");
+            CommandErrorWriter.WriteStderr(isNotFound
+                ? "Hint: pass an existing CodeIndex database to `--workspace-db`, or run `cdidx index <workspacePath>` for that workspace member first."
+                : isSchemaTooNew
+                    ? "Hint: run the query with a current cdidx binary, or rebuild that workspace member database with this cdidx version before using `--workspace-db`."
+                    : "Hint: pass only CodeIndex databases created by `cdidx index` to `--workspace-db`; remove stale, empty, or unrelated SQLite files from the workspace database list.");
+            exitCode = CommandExitCodes.DatabaseError;
+            return true;
+        }
+
+        return false;
     }
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
