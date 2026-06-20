@@ -2179,22 +2179,7 @@ public class DbWriter
                     return false;
                 }
 
-                // Inline the SetReadyBit body. SetReadyBit opens its own BEGIN IMMEDIATE
-                // when not already in a DbWriter-tracked transaction, but our raw
-                // BEGIN IMMEDIATE above is not tracked in _transactionDepth, so a direct
-                // SetReadyBit call would attempt a nested BEGIN IMMEDIATE and fail.
-                // SetReadyBit は _transactionDepth ベースでしか外側 transaction を見ないため、
-                // 生 BEGIN IMMEDIATE 内では呼べない。内容を inline 展開する。
-                int current;
-                using (var read = _conn.CreateCommand())
-                {
-                    read.CommandText = "PRAGMA user_version";
-                    var raw = read.ExecuteScalar();
-                    current = raw is long l ? (int)l : (raw is int i ? i : 0);
-                }
-                int next = current | DbContext.FoldReadyFlag;
-                if (next != current)
-                    Execute($"PRAGMA user_version = {next}");
+                ApplyReadyBitToUserVersion(DbContext.FoldReadyFlag, ownTransaction ? null : _activeTransaction);
 
                 SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
@@ -3855,17 +3840,7 @@ public class DbWriter
             var transaction = ownTransaction ? null : _activeTransaction;
             try
             {
-                int current;
-                using (var read = _conn.CreateCommand())
-                {
-                    read.Transaction = transaction;
-                    read.CommandText = "PRAGMA user_version";
-                    var raw = read.ExecuteScalar();
-                    current = raw is long l ? (int)l : (raw is int i ? i : 0);
-                }
-                int next = current | flag;
-                if (next != current)
-                    Execute($"PRAGMA user_version = {next}", transaction);
+                ApplyReadyBitToUserVersion(flag, transaction);
                 if (ownTransaction)
                 {
                     Execute("COMMIT");
@@ -3885,6 +3860,22 @@ public class DbWriter
         {
             gateLease.Dispose();
         }
+    }
+
+    private void ApplyReadyBitToUserVersion(int flag, SqliteTransaction? transaction)
+    {
+        int current;
+        using (var read = _conn.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = "PRAGMA user_version";
+            var raw = read.ExecuteScalar();
+            current = raw is long l ? (int)l : (raw is int i ? i : 0);
+        }
+
+        int next = current | flag;
+        if (next != current)
+            Execute($"PRAGMA user_version = {next}", transaction);
     }
 
     private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
