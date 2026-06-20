@@ -1433,6 +1433,12 @@ public static class DbCommandRunner
             if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
                 return;
 
+            if (!TryValidateTemporaryDirectoryCleanupTarget(fullPath, safeRoot, expectedNamePrefix, out fullPath, out validationFailure))
+            {
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                return;
+            }
+
             if (DeleteTemporaryDirectoryForTesting != null)
                 DeleteTemporaryDirectoryForTesting(fullPath);
             else
@@ -1467,6 +1473,22 @@ public static class DbCommandRunner
             if (!Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
             {
                 failureReason = "target name does not match the expected temporary-directory prefix";
+                return false;
+            }
+
+            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
+            if (Directory.Exists(longPath))
+            {
+                var attributes = File.GetAttributes(longPath);
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+                {
+                    failureReason = "target is not a regular temporary directory";
+                    return false;
+                }
+            }
+            else if (File.Exists(longPath))
+            {
+                failureReason = "target is not a directory";
                 return false;
             }
 

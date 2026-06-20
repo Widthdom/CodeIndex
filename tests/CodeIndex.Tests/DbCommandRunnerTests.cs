@@ -702,6 +702,45 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void TryDeleteTemporaryDirectory_RejectsReparseCleanupTarget_Issue3732()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_reparse_{Guid.NewGuid():N}");
+        var safeRoot = Path.Combine(root, "safe");
+        var outsideTarget = Path.Combine(root, "outside-target");
+        var cleanupTarget = Path.Combine(safeRoot, ".tmp-linked");
+        try
+        {
+            Directory.CreateDirectory(safeRoot);
+            Directory.CreateDirectory(outsideTarget);
+            File.WriteAllText(Path.Combine(outsideTarget, "sentinel.txt"), "keep");
+            Directory.CreateSymbolicLink(cleanupTarget, outsideTarget);
+
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                DbCommandRunner.TryDeleteTemporaryDirectory(
+                    cleanupTarget,
+                    "test temporary directory",
+                    safeRoot,
+                    ".tmp-");
+                return 0;
+            });
+
+            Assert.True(Directory.Exists(outsideTarget));
+            Assert.True(Directory.Exists(cleanupTarget));
+            Assert.Contains("skipped deleting test temporary directory", stderr);
+            Assert.Contains("not a regular temporary directory", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
