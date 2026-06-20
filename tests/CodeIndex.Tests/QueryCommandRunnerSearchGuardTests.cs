@@ -348,6 +348,9 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var row = Assert.Single(document.RootElement.EnumerateArray());
             Assert.Equal("src/GuardBudgetNeedle.cs", row.GetProperty("path").GetString());
+            var diagnostic = Assert.Single(row.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal("search_guard_candidates_truncated", diagnostic.GetProperty("code").GetString());
+            Assert.Equal(200, diagnostic.GetProperty("limit").GetInt32());
         }
         finally
         {

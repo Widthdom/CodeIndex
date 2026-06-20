@@ -25,6 +25,11 @@ public partial class DbReader
     private const int MinGuardedSearchCandidates = 200;
     private const int GuardedSearchOverFetchFactor = 50;
     private const int MaxSearchGuardLineWindowCacheEntries = 256;
+    private const int MaxSearchDedupTrackedFiles = 4096;
+    private const int MaxSearchDedupMatchLinesPerFile = 8192;
+    private const int MaxSearchDedupIntervalsPerFile = 4096;
+    private const string SearchGuardCandidatesTruncatedDiagnosticCode = "search_guard_candidates_truncated";
+    private const string SearchDedupStateTruncatedDiagnosticCode = "search_dedup_state_truncated";
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each literal term or phrase.
@@ -198,14 +203,17 @@ public partial class DbReader
         AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
         var raw = new List<SearchResult>();
+        var guardMatchContext = hasGuardFilters ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang) : null;
+        var guardLineWindowCache = hasGuardFilters ? new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>() : null;
         var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;
+        var guardCandidateLimitReached = false;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 nextOffset++;
-                raw.Add(new SearchResult
+                var result = new SearchResult
                 {
                     Path = reader.GetString(0),
                     Lang = GetNullableString(reader, 1),
@@ -216,7 +224,20 @@ public partial class DbReader
                     Visibility = GetNullableString(reader, 6),
                     ChunkId = reader.GetInt64(7),
                     NextOffset = nextOffset,
-                });
+                };
+                if (!hasGuardFilters)
+                {
+                    raw.Add(result);
+                    continue;
+                }
+
+                if (nextOffset > guardedCandidateLimit)
+                {
+                    guardCandidateLimitReached = true;
+                    continue;
+                }
+
+                raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
             }
         }
         catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
@@ -224,19 +245,22 @@ public partial class DbReader
             throw new FtsQuerySyntaxException(ex.Message, ex);
         }
 
-        var guardCandidateLimitReached = hasGuardFilters && raw.Count > guardedCandidateLimit;
-        if (guardCandidateLimitReached)
-            raw.RemoveRange(guardedCandidateLimit, raw.Count - guardedCandidateLimit);
-
-        if (hasGuardFilters)
-            raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow, guardScope);
-
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
             throw new SearchGuardCandidateLimitException(guardedCandidateLimit, guardedRequestedLimit, cursor?.Offset ?? 0);
 
-        AttachSearchEnclosingSymbols(results, searchMatchLineContext);
-        return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
+        var pagedResults = hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
+        if (guardCandidateLimitReached && pagedResults.Count > 0)
+        {
+            AddSearchDiagnostic(
+                pagedResults[0],
+                SearchGuardCandidatesTruncatedDiagnosticCode,
+                $"Guard filtering inspected the first {guardedCandidateLimit} ranked candidates before pagination; narrow the query or add path/lang filters if later matches are needed.",
+                limit: guardedCandidateLimit);
+        }
+
+        AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
+        return pagedResults;
     }
 
     private static int GetGuardedSearchCandidateLimit(int limit, SearchCursor? cursor)
@@ -578,6 +602,7 @@ public partial class DbReader
                 Visibility = result.Visibility,
                 GuardEvidence = guardEvidence.Count == 0 ? null : guardEvidence,
                 GuardChecks = guardChecks.Count == 0 ? null : guardChecks,
+                Diagnostics = result.Diagnostics,
                 ChunkId = result.ChunkId,
                 NextOffset = result.NextOffset,
             });
@@ -1382,6 +1407,17 @@ public partial class DbReader
     {
         if (!keptIntervals.TryGetValue(result.Path, out var intervals))
         {
+            if (keptIntervals.Count >= MaxSearchDedupTrackedFiles)
+            {
+                AddSearchDiagnostic(
+                    result,
+                    SearchDedupStateTruncatedDiagnosticCode,
+                    $"Search deduplication reached the tracked-file budget ({MaxSearchDedupTrackedFiles}); this result was kept without adding more file state.",
+                    result.Path,
+                    MaxSearchDedupTrackedFiles);
+                return true;
+            }
+
             intervals = new IntervalSet();
             keptIntervals[result.Path] = intervals;
         }
@@ -1397,6 +1433,17 @@ public partial class DbReader
         {
             if (!keptMatchLines.TryGetValue(result.Path, out var lines))
             {
+                if (keptMatchLines.Count >= MaxSearchDedupTrackedFiles)
+                {
+                    AddSearchDiagnostic(
+                        result,
+                        SearchDedupStateTruncatedDiagnosticCode,
+                        $"Search deduplication reached the tracked-file budget ({MaxSearchDedupTrackedFiles}) for match lines; this result was kept without adding more line state.",
+                        result.Path,
+                        MaxSearchDedupTrackedFiles);
+                    return true;
+                }
+
                 lines = [];
                 keptMatchLines[result.Path] = lines;
             }
@@ -1404,15 +1451,55 @@ public partial class DbReader
             var added = false;
             foreach (var line in matchLines)
             {
-                if (lines.Add(line))
+                if (lines.Contains(line))
+                    continue;
+                if (lines.Count >= MaxSearchDedupMatchLinesPerFile)
+                {
+                    AddSearchDiagnostic(
+                        result,
+                        SearchDedupStateTruncatedDiagnosticCode,
+                        $"Search deduplication reached the per-file match-line budget ({MaxSearchDedupMatchLinesPerFile}); this result was kept without adding more line state.",
+                        result.Path,
+                        MaxSearchDedupMatchLinesPerFile);
                     added = true;
+                    break;
+                }
+
+                lines.Add(line);
+                added = true;
             }
 
             if (!added)
                 return false;
         }
 
-        return intervals.AddIfAddsCoverage(result.StartLine, result.EndLine);
+        var addsCoverage = intervals.AddIfAddsCoverage(result.StartLine, result.EndLine, MaxSearchDedupIntervalsPerFile, out var intervalStateTruncated);
+        if (intervalStateTruncated)
+        {
+            AddSearchDiagnostic(
+                result,
+                SearchDedupStateTruncatedDiagnosticCode,
+                $"Search deduplication reached the per-file interval budget ({MaxSearchDedupIntervalsPerFile}); this result was kept without adding more interval state.",
+                result.Path,
+                MaxSearchDedupIntervalsPerFile);
+        }
+
+        return addsCoverage;
+    }
+
+    private static void AddSearchDiagnostic(SearchResult result, string code, string message, string? path = null, int? limit = null)
+    {
+        result.Diagnostics ??= [];
+        if (result.Diagnostics.Any(diagnostic => string.Equals(diagnostic.Code, code, StringComparison.Ordinal)))
+            return;
+
+        result.Diagnostics.Add(new SearchDiagnostic
+        {
+            Code = code,
+            Message = message,
+            Path = path,
+            Limit = limit,
+        });
     }
 
     private sealed class IntervalSet
@@ -1444,8 +1531,9 @@ public partial class DbReader
             return false;
         }
 
-        public bool AddIfAddsCoverage(int start, int end)
+        public bool AddIfAddsCoverage(int start, int end, int maxIntervals, out bool stateTruncated)
         {
+            stateTruncated = false;
             if (end < start)
                 (start, end) = (end, start);
 
@@ -1481,6 +1569,12 @@ public partial class DbReader
 
             if (removeCount > 0)
                 _intervals.RemoveRange(firstMergeIndex, removeCount);
+
+            if (_intervals.Count >= maxIntervals)
+            {
+                stateTruncated = true;
+                return true;
+            }
 
             _intervals.Insert(firstMergeIndex, (mergeStart, mergeEnd));
             return true;

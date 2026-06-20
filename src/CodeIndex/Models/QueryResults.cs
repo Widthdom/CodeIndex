@@ -34,10 +34,22 @@ public class SearchResult
     public List<SearchGuardEvidence>? GuardEvidence { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardCheck>? GuardChecks { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchDiagnostic>? Diagnostics { get; set; }
     [JsonIgnore]
     public long ChunkId { get; set; }
     [JsonIgnore]
     public int NextOffset { get; set; }
+}
+
+public sealed class SearchDiagnostic
+{
+    public string Code { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Path { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Limit { get; set; }
 }
 
 public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
