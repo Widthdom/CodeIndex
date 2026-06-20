@@ -36,14 +36,20 @@ internal static class ExportImportCommandRunner
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]";
 
     public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
+        => RunExport(args, jsonOptions, appVersion, CancellationToken.None);
+
+    public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion, CancellationToken cancellationToken)
     {
         if (args.Length > 0 && args[0] == "ctags")
             return RunExportCtags(args[1..], jsonOptions);
 
-        return RunExportArchive(args, jsonOptions, appVersion);
+        return RunExportArchive(args, jsonOptions, appVersion, cancellationToken);
     }
 
     public static int RunImport(string[] args, JsonSerializerOptions jsonOptions)
+        => RunImport(args, jsonOptions, CancellationToken.None);
+
+    public static int RunImport(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         string? archivePath = null;
         string? dbPath = null;
@@ -103,6 +109,7 @@ internal static class ExportImportCommandRunner
         var phase = PhaseOpenArchive;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (dryRun)
             {
                 tempDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("codeindex-import-").FullName;
@@ -116,12 +123,13 @@ internal static class ExportImportCommandRunner
 
             using (var archive = ZipFile.OpenRead(archivePath))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 AddImportValidationPhase(validationPhases, PhaseOpenArchive);
                 phase = PhaseManifest;
                 var manifestEntry = archive.GetEntry(ManifestEntryName);
                 if (manifestEntry == null)
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_missing", "archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
-                if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError))
+                if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError, cancellationToken))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_invalid", $"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_incompatible", $"archive manifest is invalid: {manifestHeaderError}.", "re-export from a compatible CodeIndex database.", ImportUsage);
@@ -135,23 +143,24 @@ internal static class ExportImportCommandRunner
                 if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
                     return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_too_large", sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", ImportUsage);
 
-                ExtractDatabaseEntryToFile(dbEntry, tempPath);
+                ExtractDatabaseEntryToFile(dbEntry, tempPath, cancellationToken);
                 AddImportValidationPhase(validationPhases, PhaseDatabaseEntry);
 
                 phase = PhaseSha256;
-                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase))
+                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase, cancellationToken))
                     return WriteImportError(wantsJson, jsonOptions, manifestValidationPhase, "import_manifest_mismatch", $"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
                 AddImportValidationPhase(validationPhases, PhaseSha256);
             }
 
             phase = PhaseSqliteValidate;
-            if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _))
+            if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _, cancellationToken: cancellationToken))
                 return WriteImportError(wantsJson, jsonOptions, PhaseSqliteValidate, "import_database_invalid", $"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
             AddImportValidationPhase(validationPhases, PhaseSqliteValidate);
             SqliteConnection.ClearAllPools();
 
             if (prunePaths)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 phase = PhasePrunePaths;
                 RewriteImportedProjectRoot(tempPath, importTargetProjectRoot);
                 AddImportValidationPhase(validationPhases, PhasePrunePaths);
@@ -196,7 +205,7 @@ internal static class ExportImportCommandRunner
             }
 
             phase = PhaseReplaceDb;
-            ReplaceImportedDatabase(tempPath, fullDbPath);
+            ReplaceImportedDatabase(tempPath, fullDbPath, cancellationToken);
             if (wantsJson)
             {
                 var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
@@ -224,6 +233,30 @@ internal static class ExportImportCommandRunner
             }
             return CommandExitCodes.Success;
         }
+        catch (OperationCanceledException)
+        {
+            return WriteImportError(
+                wantsJson,
+                jsonOptions,
+                phase,
+                CommandErrorCodes.Interrupted,
+                "import cancelled before it could complete.",
+                "retry `cdidx import` after the cancelling operation completes.",
+                ImportUsage,
+                CommandExitCodes.CancelledBySignal);
+        }
+        catch (ImportReplacementException ex)
+        {
+            return WriteImportError(
+                wantsJson,
+                jsonOptions,
+                PhaseReplaceDb,
+                "import_replacement_failed",
+                $"import failed ({CommandErrorWriter.FormatSanitizedException(ex.InnerException ?? ex)}).",
+                "check destination database permissions and inspect diagnostics for residual replacement state.",
+                ImportUsage,
+                diagnostics: ex.Diagnostics);
+        }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
         {
             return WriteImportError(wantsJson, jsonOptions, phase, "import_failed", $"import failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the archive path and destination database permissions.", ImportUsage);
@@ -240,7 +273,7 @@ internal static class ExportImportCommandRunner
         }
     }
 
-    private static int RunExportArchive(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
+    private static int RunExportArchive(string[] args, JsonSerializerOptions jsonOptions, string appVersion, CancellationToken cancellationToken)
     {
         string? outputPath = null;
         string? dbPath = null;
@@ -291,6 +324,7 @@ internal static class ExportImportCommandRunner
         var phase = PhaseWriteArchive;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             snapshotDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("codeindex-export-").FullName;
             snapshotPath = Path.Combine(snapshotDirectory, "codeindex.db");
             var outputDirectory = Path.GetDirectoryName(fullOutputPath);
@@ -298,24 +332,37 @@ internal static class ExportImportCommandRunner
                 Directory.CreateDirectory(outputDirectory);
 
             phase = PhaseSqliteValidate;
-            CreateDatabaseSnapshot(normalizedDbPath, snapshotPath);
+            CreateDatabaseSnapshot(normalizedDbPath, snapshotPath, cancellationToken);
             ExportManifest manifest;
             using (var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath)))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 snapshotConnection.Open();
-                manifest = BuildManifest(snapshotConnection, appVersion);
+                manifest = BuildManifest(snapshotConnection, appVersion, cancellationToken);
             }
             SqliteConnection.ClearAllPools();
             phase = PhaseSha256;
-            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
+            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath, cancellationToken) };
             phase = PhaseWriteArchive;
-            WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions);
+            WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions, cancellationToken);
 
             if (wantsJson)
                 Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", fullOutputPath, fullSourceDbPath), jsonOptions));
             else
                 Console.WriteLine($"Exported CodeIndex archive to {fullOutputPath}");
             return CommandExitCodes.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            return WriteExportError(
+                wantsJson,
+                jsonOptions,
+                phase,
+                CommandErrorCodes.Interrupted,
+                "export cancelled before it could complete.",
+                "retry `cdidx export` after the cancelling operation completes.",
+                "cdidx export <archive> [--db <path>] [--json]",
+                CommandExitCodes.CancelledBySignal);
         }
         catch (Exception ex)
         {
@@ -567,12 +614,14 @@ internal static class ExportImportCommandRunner
             .Append(SanitizeCtagsField(value));
     }
 
-    private static ExportManifest BuildManifest(SqliteConnection connection, string appVersion)
+    private static ExportManifest BuildManifest(SqliteConnection connection, string appVersion, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var userVersion = ReadSqliteUserVersion(connection);
         var projectRoot = ReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
         var indexedHead = ReadMetaString(connection, DbContext.IndexedHeadShaMetaKey);
         var unknownExtensionFiles = ReadUnknownExtensionFileSample(connection);
+        cancellationToken.ThrowIfCancellationRequested();
         return new ExportManifest(
             "1",
             appVersion,
@@ -580,10 +629,10 @@ internal static class ExportImportCommandRunner
             projectRoot,
             indexedHead,
             string.Empty,
-            FileCount: ReadTableCount(connection, "files"),
-            ChunkCount: ReadTableCount(connection, "chunks"),
-            SymbolCount: ReadTableCount(connection, "symbols"),
-            ReferenceCount: ReadTableCount(connection, "symbol_references"),
+            FileCount: ReadTableCount(connection, "files", cancellationToken),
+            ChunkCount: ReadTableCount(connection, "chunks", cancellationToken),
+            SymbolCount: ReadTableCount(connection, "symbols", cancellationToken),
+            ReferenceCount: ReadTableCount(connection, "symbol_references", cancellationToken),
             GraphReady: (userVersion & DbContext.GraphReadyFlag) != 0,
             IssuesReady: (userVersion & DbContext.IssuesReadyFlag) != 0,
             FoldReady: (userVersion & DbContext.FoldReadyFlag) != 0,
@@ -612,19 +661,23 @@ internal static class ExportImportCommandRunner
     }
 
     internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions)
+        => WriteExportArchiveFile(outputPath, snapshotPath, manifest, jsonOptions, CancellationToken.None);
+
+    internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var fullOutputPath = Path.GetFullPath(outputPath);
         AtomicFileWriter.Write(
             fullOutputPath,
             stream =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
                 AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
                 var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
                 dbEntry.LastWriteTime = DeterministicZipTimestamp;
                 using var source = File.OpenRead(snapshotPath);
                 using var target = dbEntry.Open();
-                source.CopyTo(target);
+                CopyToWithLimit(source, target, long.MaxValue, DatabaseEntryName, cancellationToken);
             });
     }
 
@@ -647,12 +700,18 @@ internal static class ExportImportCommandRunner
     }
 
     private static string ComputeSha256(string path)
+        => ComputeSha256(path, CancellationToken.None);
+
+    private static string ComputeSha256(string path, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        cancellationToken.ThrowIfCancellationRequested();
+        return hash;
     }
 
-    private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message)
+    private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message, CancellationToken cancellationToken)
     {
         if (!TryValidateManifestEntrySize(manifestEntry, out message))
         {
@@ -662,10 +721,12 @@ internal static class ExportImportCommandRunner
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var stream = manifestEntry.Open();
             using var manifestBytes = new MemoryStream((int)Math.Min(Math.Max(manifestEntry.Length, 0), MaxImportManifestBytes));
-            CopyToWithLimit(stream, manifestBytes, MaxImportManifestBytes, ManifestEntryName);
+            CopyToWithLimit(stream, manifestBytes, MaxImportManifestBytes, ManifestEntryName, cancellationToken);
             manifestBytes.Position = 0;
+            cancellationToken.ThrowIfCancellationRequested();
             var parsedManifest = JsonSerializer.Deserialize<ExportManifest>(manifestBytes, CreateImportManifestJsonOptions(jsonOptions));
             if (parsedManifest == null)
             {
@@ -810,10 +871,10 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message, out string phase)
+    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message, out string phase, CancellationToken cancellationToken)
     {
         phase = PhaseSha256;
-        var actualSha256 = ComputeSha256(dbPath);
+        var actualSha256 = ComputeSha256(dbPath, cancellationToken);
         if (!string.Equals(manifest.DatabaseSha256, actualSha256, StringComparison.OrdinalIgnoreCase))
         {
             message = "database_sha256 does not match codeindex.db";
@@ -824,13 +885,14 @@ internal static class ExportImportCommandRunner
         int actualUserVersion;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var connection = new SqliteConnection(CreateUnpooledConnectionString(dbPath));
             connection.Open();
             actualUserVersion = ReadSqliteUserVersion(connection);
-            if (!TryValidateManifestCount(manifest.FileCount, connection, "files", "file_count", out message)
-                || !TryValidateManifestCount(manifest.ChunkCount, connection, "chunks", "chunk_count", out message)
-                || !TryValidateManifestCount(manifest.SymbolCount, connection, "symbols", "symbol_count", out message)
-                || !TryValidateManifestCount(manifest.ReferenceCount, connection, "symbol_references", "reference_count", out message))
+            if (!TryValidateManifestCount(manifest.FileCount, connection, "files", "file_count", out message, cancellationToken)
+                || !TryValidateManifestCount(manifest.ChunkCount, connection, "chunks", "chunk_count", out message, cancellationToken)
+                || !TryValidateManifestCount(manifest.SymbolCount, connection, "symbols", "symbol_count", out message, cancellationToken)
+                || !TryValidateManifestCount(manifest.ReferenceCount, connection, "symbol_references", "reference_count", out message, cancellationToken))
             {
                 return false;
             }
@@ -859,7 +921,7 @@ internal static class ExportImportCommandRunner
         return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    private static bool TryValidateManifestCount(long? expected, SqliteConnection connection, string tableName, string fieldName, out string message)
+    private static bool TryValidateManifestCount(long? expected, SqliteConnection connection, string tableName, string fieldName, out string message, CancellationToken cancellationToken)
     {
         if (expected == null)
         {
@@ -867,7 +929,7 @@ internal static class ExportImportCommandRunner
             return true;
         }
 
-        var actual = ReadTableCount(connection, tableName);
+        var actual = ReadTableCount(connection, tableName, cancellationToken);
         if (actual != expected.Value)
         {
             message = $"manifest {fieldName} `{expected.Value}` does not match codeindex.db {tableName} count `{actual}`";
@@ -903,7 +965,11 @@ internal static class ExportImportCommandRunner
     }
 
     private static long ReadTableCount(SqliteConnection connection, string tableName)
+        => ReadTableCount(connection, tableName, CancellationToken.None);
+
+    private static long ReadTableCount(SqliteConnection connection, string tableName, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = tableName switch
         {
@@ -913,7 +979,9 @@ internal static class ExportImportCommandRunner
             "symbol_references" => "SELECT COUNT(*) FROM symbol_references",
             _ => throw new ArgumentOutOfRangeException(nameof(tableName), tableName, "Unsupported manifest count table."),
         };
-        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        var count = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        cancellationToken.ThrowIfCancellationRequested();
+        return count;
     }
 
     private static string? ReadMetaString(SqliteConnection connection, string key)
@@ -1017,28 +1085,38 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath)
+    private static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var source = dbEntry.Open();
         using var target = File.Open(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        CopyToWithLimit(source, target, MaxImportDatabaseBytes);
+        CopyToWithLimit(source, target, MaxImportDatabaseBytes, cancellationToken);
     }
 
     internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
         => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName);
 
+    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes, CancellationToken cancellationToken)
+        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
+
     private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName)
+        => CopyToWithLimit(source, target, maxBytes, entryName, CancellationToken.None);
+
+    private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName, CancellationToken cancellationToken)
     {
         var buffer = new byte[ImportCopyBufferSize];
         long totalBytes = 0;
         int bytesRead;
+        cancellationToken.ThrowIfCancellationRequested();
         while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (totalBytes > maxBytes - bytesRead)
                 throw new InvalidDataException($"archive {entryName} exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
 
             target.Write(buffer, 0, bytesRead);
             totalBytes += bytesRead;
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         return totalBytes;
@@ -1079,13 +1157,19 @@ internal static class ExportImportCommandRunner
             : prefix;
 
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
+        => CreateDatabaseSnapshot(sourceDbPath, snapshotPath, CancellationToken.None);
+
+    internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
         using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
         source.Open();
         destination.Open();
         DataDirectorySecurity.ApplyPrivateFileMode(snapshotPath);
+        cancellationToken.ThrowIfCancellationRequested();
         source.BackupDatabase(destination);
+        cancellationToken.ThrowIfCancellationRequested();
         DataDirectorySecurity.ApplyPrivateFileMode(snapshotPath);
     }
 
@@ -1101,7 +1185,11 @@ internal static class ExportImportCommandRunner
         }.ConnectionString;
 
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
+        => ReplaceImportedDatabase(tempPath, fullDbPath, CancellationToken.None);
+
+    internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var dbBackupPath = MoveExistingReplacementFileToBackup(fullDbPath);
         var sidecarBackups = new List<ReplacementBackup>(capacity: 2);
         try
@@ -1109,10 +1197,12 @@ internal static class ExportImportCommandRunner
             AddReplacementBackup(sidecarBackups, fullDbPath + "-wal");
             AddReplacementBackup(sidecarBackups, fullDbPath + "-shm");
 
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(tempPath, fullDbPath, overwrite: false);
+            cancellationToken.ThrowIfCancellationRequested();
             ApplyImportedDatabasePrivateFileMode(fullDbPath);
         }
-        catch (Exception ex) when (IsRecoverableReplacementException(ex))
+        catch (OperationCanceledException)
         {
             try
             {
@@ -1120,16 +1210,70 @@ internal static class ExportImportCommandRunner
             }
             catch (Exception rollbackEx) when (IsRecoverableReplacementException(rollbackEx))
             {
+                CommandErrorWriter.WriteStderr($"Warning: failed to roll back cancelled imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+            }
+
+            throw;
+        }
+        catch (Exception ex) when (IsRecoverableReplacementException(ex))
+        {
+            Exception? rollbackFailure = null;
+            try
+            {
+                RollBackImportedDatabaseReplacement(fullDbPath, dbBackupPath, sidecarBackups);
+            }
+            catch (Exception rollbackEx) when (IsRecoverableReplacementException(rollbackEx))
+            {
+                rollbackFailure = rollbackEx;
                 CommandErrorWriter.WriteStderr($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
             }
 
-            throw new IOException("import database replacement failed; rolled back the previous destination database when possible.", ex);
+            throw new ImportReplacementException(
+                "import database replacement failed; rolled back the previous destination database when possible.",
+                ex,
+                BuildReplacementDiagnostics(tempPath, fullDbPath, dbBackupPath, sidecarBackups, rollbackFailure));
         }
 
         DeleteReplacementBackup(dbBackupPath, "import replaced database backup");
         foreach (var backup in sidecarBackups)
             DeleteReplacementBackup(backup.BackupPath, "import replaced database sidecar backup", DeleteSqliteSidecarForTesting);
     }
+
+    private static IReadOnlyList<ExportImportDiagnosticResult> BuildReplacementDiagnostics(
+        string tempPath,
+        string fullDbPath,
+        string? dbBackupPath,
+        IReadOnlyList<ReplacementBackup> sidecarBackups,
+        Exception? rollbackFailure)
+    {
+        var diagnostics = new List<ExportImportDiagnosticResult>
+        {
+            CreateResidualStateDiagnostic("import_replace_destination_state", "destination database", fullDbPath),
+            CreateResidualStateDiagnostic("import_replace_staged_state", "staged import database", tempPath),
+        };
+
+        if (dbBackupPath != null)
+            diagnostics.Add(CreateResidualStateDiagnostic("import_replace_backup_state", "destination database backup", dbBackupPath));
+
+        foreach (var backup in sidecarBackups)
+            diagnostics.Add(CreateResidualStateDiagnostic("import_replace_sidecar_backup_state", "destination sidecar backup", backup.BackupPath));
+
+        if (rollbackFailure != null)
+        {
+            diagnostics.Add(new ExportImportDiagnosticResult(
+                "import_replace_rollback_failed",
+                $"Rollback failed while restoring the previous destination database ({CommandErrorWriter.FormatSanitizedException(rollbackFailure)}).",
+                ConsoleUi.FormatBoundedValue(fullDbPath)));
+        }
+
+        return diagnostics;
+    }
+
+    private static ExportImportDiagnosticResult CreateResidualStateDiagnostic(string code, string description, string path)
+        => new(
+            code,
+            $"{description} exists after replacement failure: {(File.Exists(path) ? "true" : "false")}.",
+            ConsoleUi.FormatBoundedValue(path));
 
     private static void ApplyImportedDatabasePrivateFileMode(string fullDbPath)
     {
@@ -1333,8 +1477,10 @@ internal static class ExportImportCommandRunner
         string errorCode,
         string message,
         string hint,
-        string usage)
-        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage);
+        string usage,
+        int exitCode = CommandExitCodes.UsageError,
+        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics = null)
+        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage, exitCode, diagnostics);
 
     private static int WriteExportError(
         bool json,
@@ -1343,8 +1489,10 @@ internal static class ExportImportCommandRunner
         string errorCode,
         string message,
         string hint,
-        string usage)
-        => WriteStructuredError(json, jsonOptions, ExportCommandName, phase, errorCode, message, hint, usage);
+        string usage,
+        int exitCode = CommandExitCodes.UsageError,
+        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics = null)
+        => WriteStructuredError(json, jsonOptions, ExportCommandName, phase, errorCode, message, hint, usage, exitCode, diagnostics);
 
     private static int WriteStructuredError(
         bool json,
@@ -1354,17 +1502,19 @@ internal static class ExportImportCommandRunner
         string errorCode,
         string message,
         string hint,
-        string usage)
+        string usage,
+        int exitCode,
+        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics)
     {
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage),
+                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage, diagnostics),
                 CliJsonSerializerContextFactory.Create(jsonOptions).ExportImportErrorResult));
-            return CommandExitCodes.UsageError;
+            return exitCode;
         }
 
-        return WriteError(message, hint, usage);
+        return CommandErrorWriter.Write(message, exitCode, hint, usage);
     }
 
     private static void AddImportValidationPhase(
@@ -1437,7 +1587,16 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("error_code")] string ErrorCode,
         [property: JsonPropertyName("message")] string Message,
         [property: JsonPropertyName("hint")] string Hint,
-        [property: JsonPropertyName("usage")] string Usage);
+        [property: JsonPropertyName("usage")] string Usage,
+        [property: JsonPropertyName("diagnostics")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        IReadOnlyList<ExportImportDiagnosticResult>? Diagnostics = null);
+    internal sealed record ExportImportDiagnosticResult(
+        [property: JsonPropertyName("code")] string Code,
+        [property: JsonPropertyName("message")] string Message,
+        [property: JsonPropertyName("path")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? Path = null);
     internal sealed record ImportValidationPhaseResult(
         [property: JsonPropertyName("phase")] string Phase,
         [property: JsonPropertyName("status")] string Status,
@@ -1499,4 +1658,15 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_sample_count")] int? UnknownExtensionFileSampleCount = null,
         [property: JsonPropertyName("unknown_extension_file_sample_limit")] int? UnknownExtensionFileSampleLimit = null,
         [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null);
+
+    private sealed class ImportReplacementException : IOException
+    {
+        internal ImportReplacementException(string message, Exception innerException, IReadOnlyList<ExportImportDiagnosticResult> diagnostics)
+            : base(message, innerException)
+        {
+            Diagnostics = diagnostics;
+        }
+
+        internal IReadOnlyList<ExportImportDiagnosticResult> Diagnostics { get; }
+    }
 }
