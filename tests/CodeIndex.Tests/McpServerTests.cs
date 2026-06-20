@@ -1639,6 +1639,43 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResourcesRead_DecodesSpaceOnce_Issue3789()
+    {
+        InsertIndexedFile("src/space file.cs", "csharp", "public class SpaceFile { }");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/space%20file.cs"}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var content = response["result"]!["contents"]!.AsArray().Single()!;
+        Assert.Equal("cdidx://file/src/space%20file.cs", content["uri"]!.GetValue<string>());
+        Assert.Contains("SpaceFile", content["text"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("cdidx://file/src%2fapp.cs")]
+    [InlineData("cdidx://file/src%5capp.cs")]
+    [InlineData("cdidx://file/src/%2e%2e/app.cs")]
+    public void ResourcesRead_RejectsEncodedPathBoundaries_Issue3789(string uri)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = uri,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.StartsWith("Invalid resource uri:", response["error"]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ResourcesRead_NonStringUri_ReturnsInvalidParams()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":42}}""")!;

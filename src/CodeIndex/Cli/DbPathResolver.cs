@@ -243,28 +243,9 @@ public static class DbPathResolver
             if (!SqliteFileUri.TryGetPathBeforeQuery(dbPath, out var trimmed, out var boundsError))
                 throw boundsError ?? new FormatException("Invalid SQLite file URI.");
 
-            if (ContainsInvalidPercentEscape(trimmed))
-                throw new FormatException("Invalid percent escape in SQLite file URI.");
-
-            if (!trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-            {
-                var relativePath = Uri.UnescapeDataString(trimmed["file:".Length..]);
-                normalizedDbPath = string.IsNullOrWhiteSpace(relativePath)
-                    ? dbPath
-                    : Path.GetFullPath(relativePath);
-                return true;
-            }
-
-            var uri = new Uri(trimmed);
-            if (!uri.IsFile)
-                return true;
-
-            var localPath = uri.LocalPath;
-            normalizedDbPath = string.IsNullOrWhiteSpace(localPath)
-                ? dbPath
-                : Path.IsPathRooted(localPath)
-                    ? localPath
-                    : Path.GetFullPath(localPath);
+            if (!PathUriNormalizer.TryNormalizeFileUriPath(trimmed, out var normalizedUriPath, out var uriPathError))
+                throw new FormatException(uriPathError ?? "Invalid SQLite file URI path.");
+            normalizedDbPath = normalizedUriPath;
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or UriFormatException)
@@ -456,27 +437,6 @@ public static class DbPathResolver
 
     private static bool IsUnderDirectory(string parentDirectory, string candidatePath)
         => PathCasing.IsPathEqualOrParent(parentDirectory, candidatePath);
-
-    private static bool ContainsInvalidPercentEscape(string value)
-    {
-        for (var i = 0; i < value.Length; i++)
-        {
-            if (value[i] != '%')
-                continue;
-
-            if (i + 2 >= value.Length || !IsHexDigit(value[i + 1]) || !IsHexDigit(value[i + 2]))
-                return true;
-
-            i += 2;
-        }
-
-        return false;
-    }
-
-    private static bool IsHexDigit(char value) =>
-        value is >= '0' and <= '9'
-            or >= 'a' and <= 'f'
-            or >= 'A' and <= 'F';
 
     private static List<IndexedFileSample> TryReadIndexedFileSamples(string dbPath)
     {
