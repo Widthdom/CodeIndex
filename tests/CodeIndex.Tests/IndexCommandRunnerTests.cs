@@ -3396,10 +3396,11 @@ public sealed class Caller
 
         var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "src/foo.cs", captured);
 
-        Assert.Equal("  [ERR ] src/foo.cs: simulated indexing failure", line);
+        Assert.Equal("  [ERR ] src/foo.cs: InvalidOperationException", line);
         Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain(captured.StackTrace!, line);
         Assert.DoesNotContain("FormatPerFileErrorLine_OmitsStackTrace", line);
+        Assert.DoesNotContain("simulated indexing failure", line);
         Assert.DoesNotContain(typeof(InvalidOperationException).FullName!, line);
     }
 
@@ -3417,7 +3418,9 @@ public sealed class Caller
 
         Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain("\r", line);
-        Assert.Equal("  [ERR ] weird  path.cs: first line at Internal.Type.Method() in /home/secret.cs:42", line);
+        Assert.Equal("  [ERR ] weird  path.cs: InvalidOperationException", line);
+        Assert.DoesNotContain("first line", line);
+        Assert.DoesNotContain("/home/secret.cs", line);
     }
 
     [Fact]

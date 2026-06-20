@@ -2022,13 +2022,13 @@ public sealed class Caller
         var result = response["result"]!;
         Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
         var text = result["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Project filter could not be resolved", text, StringComparison.Ordinal);
+        Assert.Contains("Project filter could not be resolved: InvalidOperationException", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Tool 'search' failed", text, StringComparison.Ordinal);
-        Assert.DoesNotContain(nameof(InvalidOperationException), text, StringComparison.Ordinal);
+        Assert.DoesNotContain("DefinitelyMissingProject3160", text, StringComparison.Ordinal);
         var structured = result["structuredContent"]!;
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
         Assert.Equal("project", structured["parameter"]!.GetValue<string>());
-        Assert.Contains("DefinitelyMissingProject3160", structured["diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("InvalidOperationException", structured["diagnostic"]!.GetValue<string>());
     }
 
     [Fact]
