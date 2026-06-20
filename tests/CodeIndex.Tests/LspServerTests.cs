@@ -1068,6 +1068,56 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_CapsMaterializationBeforeSorting_Issue3758()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_materialization");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "materialization.cs");
+            var source = new StringBuilder("class MaterializationBudget\n{\n");
+            for (var i = 0; i < LspServer.MaxDocumentSymbolMaterialization + 25; i++)
+                source.Append("    void Method").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append("() { }\n");
+            source.Append("}\n");
+
+            File.WriteAllText(sourcePath, source.ToString());
+            TestProjectHelper.InsertIndexedFile(dbPath, "materialization.cs", "csharp", source.ToString());
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3758,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            using var activity = new Activity("lsp-document-symbol-test").Start();
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var roots = response!["result"]!.AsArray();
+            var root = Assert.Single(roots);
+            Assert.Equal("MaterializationBudget", root!["name"]!.GetValue<string>());
+            var children = root["children"]!.AsArray();
+            Assert.True(children.Count < LspServer.MaxDocumentSymbolMaterialization);
+            Assert.Equal("Method0000", children[0]!["name"]!.GetValue<string>());
+            Assert.Equal("Method0001", children[1]!["name"]!.GetValue<string>());
+            Assert.Equal("Method0002", children[2]!["name"]!.GetValue<string>());
+            Assert.Equal(LspServer.MaxDocumentSymbolMaterialization, GetActivityTag(activity, "lsp.document_symbols.materialized_count"));
+            Assert.Equal(true, GetActivityTag(activity, "lsp.document_symbols.materialization_truncated"));
+            Assert.Equal(roots.Count, GetActivityTag(activity, "lsp.document_symbols.returned_root_count"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_RejectsNonStringTextDocumentUri_Issue3203()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_uri_type");
@@ -2088,6 +2138,9 @@ public class LspServerTests
             }
         }
     }
+
+    private static object? GetActivityTag(Activity activity, string key) =>
+        activity.TagObjects.FirstOrDefault(tag => tag.Key == key).Value;
 
     private static string BuildNestedLspRequest(int nestedObjectCount)
     {

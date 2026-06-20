@@ -27,6 +27,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxJsonDepth = 32;
     internal const int MaxRequestIdStringChars = 256;
     internal const int MaxDocumentSymbols = 1000;
+    internal const int MaxDocumentSymbolMaterialization = MaxDocumentSymbols;
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal const int MaxPositionLineChars = 16 * 1024;
@@ -574,13 +575,22 @@ internal sealed class LspServer : IDisposable
         if (indexedPath == null)
             return [];
 
-        var symbols = _reader.SearchSymbols((string?)null, MaxDocumentSymbols, pathPatterns: [indexedPath])
+        var candidates = _reader.SearchSymbols((string?)null, MaxDocumentSymbolMaterialization + 1, pathPatterns: [indexedPath]);
+        var materializationTruncated = candidates.Count > MaxDocumentSymbolMaterialization;
+        var materializedCount = Math.Min(candidates.Count, MaxDocumentSymbolMaterialization);
+        Activity.Current?.SetTag("lsp.document_symbols.materialized_count", materializedCount);
+        Activity.Current?.SetTag("lsp.document_symbols.materialization_truncated", materializationTruncated);
+
+        var symbols = candidates
+            .Take(MaxDocumentSymbolMaterialization)
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
             .ThenBy(s => s.ContainerName == null ? 0 : 1)
             .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
-        return BuildDocumentSymbolTree(symbols);
+        var roots = BuildDocumentSymbolTree(symbols);
+        Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", roots.Count);
+        return roots;
     }
 
     private JsonArray BuildDocumentSymbolTree(IReadOnlyList<SymbolResult> symbols)
