@@ -59,6 +59,18 @@ internal static class IndexWatchRunner
         string projectRoot,
         string resolvedDbPath,
         CancellationToken cancellationToken)
+        // Preserve the existing synchronous CLI/test entry point while the watch loop itself
+        // runs through RunCoreAsync so cancellation does not block on Task.Delay.
+        => RunCoreAsync(baseOptions, jsonOptions, projectRoot, resolvedDbPath, cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+
+    internal static async Task<int> RunCoreAsync(
+        IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
+        string projectRoot,
+        string resolvedDbPath,
+        CancellationToken cancellationToken)
     {
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
         var maxPendingPaths = baseOptions.WatchPendingPathLimit;
@@ -134,7 +146,7 @@ internal static class IndexWatchRunner
             {
                 try
                 {
-                    Task.Delay(PollIntervalMs, cancellationToken).GetAwaiter().GetResult();
+                    await Task.Delay(PollIntervalMs, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

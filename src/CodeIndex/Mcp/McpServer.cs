@@ -971,6 +971,8 @@ public partial class McpServer : IDisposable
     /// <see cref="IMcpTransport"/> 実装が共有するトランスポート非依存の合流点 (issue #1558)。
     /// </summary>
     internal string? ProcessFrame(string line)
+        // Synchronous callers are compatibility entry points for tests and non-async hosts;
+        // transport loops use ProcessFrameAsync directly so request handling stays async.
         => ProcessFrameAsync(line).GetAwaiter().GetResult();
 
     internal async Task<string?> ProcessFrameAsync(string line)
@@ -1345,6 +1347,8 @@ public partial class McpServer : IDisposable
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
+        // Keep this sync wrapper for existing in-process callers; async transports call
+        // HandleMessageAsync so server loops do not need a sync-over-async bridge.
         => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
 
     internal Task<JsonNode?> HandleMessageAsync(JsonNode request)

@@ -107,6 +107,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             }
 
             stopwatch.Stop();
+            // WaitForTask already proved the async read completed within the worker budget;
+            // GetResult only observes that completed protocol response on this sync API.
             var responseJson = responseTask.GetAwaiter().GetResult();
             if (responseJson == null)
             {
