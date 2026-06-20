@@ -1509,7 +1509,7 @@ public partial class McpServer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            var diagnostic = McpBoundedText.ForDisplay(ex.Message);
+            var diagnostic = FormatMcpCaughtExceptionDiagnostic(ex);
             var error = new JsonObject
             {
                 ["message"] = $"Project filter could not be resolved: {diagnostic.Text}",
@@ -1715,7 +1715,20 @@ public partial class McpServer
         => $"literal search query is too long; maximum is {DbReader.MaxLiteralSearchQueryLength} characters. Split generated input into smaller queries.";
 
     private static string FormatSearchGuardCandidateLimitError(SearchGuardCandidateLimitException ex)
-        => $"guarded search is too broad: inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}). Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.";
+        => $"guarded search is too broad: {FormatSearchGuardCandidateLimitDetail(ex)} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.";
+
+    private static string FormatSearchRecipeGuardCandidateLimitError(string recipeName, string queryName, SearchGuardCandidateLimitException ex)
+    {
+        var recipeDisplay = McpBoundedText.ForDisplay(recipeName).Text;
+        var queryDisplay = McpBoundedText.ForDisplay(queryName).Text;
+        return $"guarded search is too broad for recipe '{recipeDisplay}' query '{queryDisplay}': {FormatSearchGuardCandidateLimitDetail(ex)} Narrow the search with more specific path/lang filters or guards.";
+    }
+
+    private static string FormatSearchGuardCandidateLimitDetail(SearchGuardCandidateLimitException ex)
+        => $"inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}).";
+
+    private static BoundedMcpText FormatMcpCaughtExceptionDiagnostic(Exception ex)
+        => McpBoundedText.ForDisplay(CommandErrorWriter.FormatSanitizedException(ex));
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
@@ -1980,13 +1993,13 @@ public partial class McpServer
                         guardWindow: guardWindow,
                         guardScope: guardScope);
                 }
-                catch (SearchQueryLimitException ex)
+                catch (SearchQueryLimitException)
                 {
-                    return CreateToolErrorResponse(id, ex.Message);
+                    return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
                 }
                 catch (SearchGuardCandidateLimitException ex)
                 {
-                    return CreateToolErrorResponse(id, $"guarded search is too broad for recipe '{recipe.Name}' query '{recipeQuery.Name}': {ex.Message} Narrow the search with more specific path/lang filters or guards.");
+                    return CreateToolErrorResponse(id, FormatSearchRecipeGuardCandidateLimitError(recipe.Name, recipeQuery.Name, ex));
                 }
 
                 var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
