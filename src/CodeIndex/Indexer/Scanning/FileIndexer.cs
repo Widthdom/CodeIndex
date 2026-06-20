@@ -1109,8 +1109,7 @@ public class FileIndexer
 
             using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
             var probePath = probe.Path;
-            var prefixedProbePath = LongPath.EnsureWindowsPrefix(probePath);
-            File.WriteAllText(prefixedProbePath, string.Empty);
+            FileWriteProbe.WriteEmptyFile(probePath);
             try
             {
                 if (TryCreateCaseVariant(probePath, out var probeVariant))
@@ -1118,8 +1117,7 @@ public class FileIndexer
             }
             finally
             {
-                if (File.Exists(prefixedProbePath))
-                    File.Delete(prefixedProbePath);
+                FileWriteProbe.DeleteFileIfExists(probePath);
             }
 
             throw new CaseSensitivityProbeException(

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -343,9 +344,7 @@ internal static class GlobalToolLog
         {
             DataDirectorySecurity.CreateSensitiveDirectory(directory);
             var probePath = Path.Combine(directory, $".cdidx-write-probe-{Guid.NewGuid():N}.tmp");
-            File.WriteAllText(probePath, string.Empty, Encoding.UTF8);
-            File.Delete(probePath);
-            return true;
+            return FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
