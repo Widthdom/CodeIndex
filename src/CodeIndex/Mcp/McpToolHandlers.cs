@@ -23,6 +23,7 @@ public partial class McpServer
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     internal const int MaxBatchQuerySize = 10;
+    private const int BatchQueryIncrementalEstimatePaddingBytes = 512;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = QueryCommandRunner.MaxQueryPathFilterCount;
@@ -3958,17 +3959,15 @@ public partial class McpServer
 
         bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, string? slotId, bool successfulSlot = false, bool failedSlot = false)
         {
-            var candidateResults = CloneJsonArray(resultsArray);
-            candidateResults.Add(entry.DeepClone());
             var candidateSuccessCount = successCount + (successfulSlot ? 1 : 0);
             var candidateFailureCount = failureCount + (failedSlot ? 1 : 0);
             var candidateExecutedCount = candidateSuccessCount + candidateFailureCount;
-            var candidateSummary = candidateFailureCount == 0
-                ? $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms (all succeeded)."
-                : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
-            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
-                GetBatchFailureScope(queries.Count, candidateSuccessCount, candidateFailureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
-                responseByteLimit, candidateResults, truncated: false, truncatedQueries, adjustments);
+            var candidateBytes = EstimateBatchAppendBytes(
+                estimatedResponseBytes,
+                entry,
+                candidateExecutedCount,
+                candidateSuccessCount,
+                candidateFailureCount);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
@@ -4618,19 +4617,45 @@ public partial class McpServer
         return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload), responseByteLimit);
     }
 
+    private int EstimateBatchAppendBytes(int currentEstimateBytes, JsonObject entry, int executedCount, int successCount, int failureCount)
+    {
+        var entryBytes = EstimateJsonUtf8Bytes(entry);
+        var digitGrowth = CountDecimalDigits(executedCount) + CountDecimalDigits(successCount) + CountDecimalDigits(failureCount);
+        return SaturatingAdd(
+            currentEstimateBytes,
+            entryBytes,
+            BatchQueryIncrementalEstimatePaddingBytes,
+            digitGrowth);
+    }
+
+    private static int CountDecimalDigits(int value)
+    {
+        var digits = 1;
+        while (value >= 10)
+        {
+            value /= 10;
+            digits++;
+        }
+        return digits;
+    }
+
+    private static int SaturatingAdd(params int[] values)
+    {
+        var total = 0L;
+        foreach (var value in values)
+        {
+            total += value;
+            if (total >= int.MaxValue)
+                return int.MaxValue;
+        }
+        return (int)total;
+    }
+
     private static string GetBatchFailureScope(int submittedCount, int successCount, int failureCount, int? cascadeStartedAtIndex)
     {
         if (cascadeStartedAtIndex.HasValue && cascadeStartedAtIndex.Value < submittedCount)
             return "cascading";
         return failureCount == 0 ? "none" : "isolated";
-    }
-
-    private static JsonArray CloneJsonArray(JsonArray source)
-    {
-        var clone = new JsonArray();
-        foreach (var item in source)
-            clone.Add(item?.DeepClone());
-        return clone;
     }
 
     /// <summary>
