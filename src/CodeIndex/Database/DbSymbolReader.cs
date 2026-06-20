@@ -3602,6 +3602,7 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
+            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility),
         };
     }
 
@@ -3755,6 +3756,7 @@ public partial class DbReader
                 UnusedBucket = classification.Bucket,
                 UnusedConfidence = classification.Confidence,
                 UnusedReason = classification.Reason,
+                UnusedReasonTags = BuildUnusedReasonTags(isPublicOrExported, isReflectionOrConfigSuspect, visibility),
             });
         }
 
@@ -4988,6 +4990,20 @@ public partial class DbReader
             UnusedBucketMaybeNonPublic,
             "low",
             "non-public symbol with no indexed references");
+    }
+
+    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    {
+        var tags = new List<string> { "no_indexed_references" };
+        if (isReflectionOrConfigSuspect)
+            tags.Add("reflection_or_config_suspect");
+        if (isPublicOrExported)
+            tags.Add("public_or_exported");
+        else if (IsPrivateLikeVisibility(visibility))
+            tags.Add("private_or_file_local");
+        else
+            tags.Add("non_public");
+        return tags;
     }
 
     private static bool IsPrivateLikeVisibility(string? visibility)

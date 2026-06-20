@@ -432,6 +432,14 @@ public static partial class QueryCommandRunner
                 "Use `--recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>` to fetch the next page for one child query.");
             return CommandExitCodes.UsageError;
         }
+        if (options.UnusedCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for search must be a search pagination cursor returned by recipe search.",
+                GetUsageLineOrThrow("search"),
+                "Use `--cursor <next_cursor>` only with `--recipe`; `unused:<offset>` cursors are for `cdidx unused`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.AuditScopeExplicit && options.RecipeName == null)
         {
             WriteUsageError(
@@ -2364,6 +2372,9 @@ public static partial class QueryCommandRunner
     private static string FormatSearchCursor(SearchResult result)
         => string.Create(CultureInfo.InvariantCulture, $"{result.Score:R}:{result.ChunkId}:{result.NextOffset}");
 
+    private static string FormatUnusedCursor(int offset)
+        => string.Create(CultureInfo.InvariantCulture, $"unused:{offset}");
+
     private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
     {
         cursor = default;
@@ -2380,6 +2391,16 @@ public static partial class QueryCommandRunner
 
         cursor = new SearchCursor(score, chunkId, offset);
         return true;
+    }
+
+    private static bool TryParseUnusedCursor(string value, out int offset)
+    {
+        offset = 0;
+        const string prefix = "unused:";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
+            && offset >= 0;
     }
 
     private static string QuoteReplayShellArg(string arg)
@@ -7713,6 +7734,22 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
+        if (options.SearchCursor.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                GetUsageLineOrThrow("unused"),
+                "Use the `next_cursor` value from `cdidx unused --json`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.UnusedCursorOffset.HasValue && options.CountOnly)
+        {
+            WriteUsageError(
+                "--cursor cannot be used with `unused --count`.",
+                GetUsageLineOrThrow("unused"),
+                "Remove `--count` to page unused results.");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -7775,8 +7812,10 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetUnusedSymbols(
-                options.Limit,
+            var pageOffset = options.UnusedCursorOffset ?? 0;
+            var fetchLimit = GetUnusedFetchLimit(options.Limit, pageOffset);
+            var fetchedResults = reader.GetUnusedSymbols(
+                fetchLimit,
                 options.Kind,
                 options.Lang,
                 options.PathPatterns,
@@ -7786,6 +7825,13 @@ public static partial class QueryCommandRunner
                 excludeVisibilityFilters: options.ExcludeVisibilityFilters,
                 bucketFilter: options.UnusedBucket,
                 minConfidence: options.MinUnusedConfidence);
+            var results = fetchedResults
+                .Skip(pageOffset)
+                .Take(options.Limit)
+                .ToList();
+            var nextCursor = fetchedResults.Count > pageOffset + options.Limit
+                ? FormatUnusedCursor(pageOffset + options.Limit)
+                : null;
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(
@@ -7803,7 +7849,8 @@ public static partial class QueryCommandRunner
                         sqlGraphSignal,
                         reader._hasReferencesTable,
                         jsonOptions,
-                        options));
+                        options,
+                        nextCursor: nextCursor));
                 }
                 else
                 {
@@ -7819,7 +7866,7 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, byBucket: byBucket));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, byBucket: byBucket, nextCursor: nextCursor));
             }
             else
             {
@@ -7844,6 +7891,8 @@ public static partial class QueryCommandRunner
                     .Where(bucketCounts.ContainsKey)
                     .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
                 Console.Error.WriteLine($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
+                if (nextCursor != null)
+                    Console.Error.WriteLine($"next_cursor={nextCursor}");
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
@@ -7886,6 +7935,12 @@ public static partial class QueryCommandRunner
             ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
             ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
         };
+    }
+
+    private static int GetUnusedFetchLimit(int pageLimit, int pageOffset)
+    {
+        var requested = (long)Math.Max(pageLimit, 1) + Math.Max(pageOffset, 0) + 1;
+        return requested > int.MaxValue ? int.MaxValue : (int)requested;
     }
 
     internal static JsonObject BuildUnusedRepresentativeSymbolsJson(IEnumerable<UnusedSymbolResult> results)
@@ -7955,7 +8010,7 @@ public static partial class QueryCommandRunner
         _ => "Unknown unused-symbol bucket.",
     };
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, bool byBucket = false)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, bool byBucket = false, string? nextCursor = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -7967,6 +8022,8 @@ public static partial class QueryCommandRunner
             ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
         };
+        if (nextCursor != null)
+            payload["next_cursor"] = nextCursor;
         if (queryOptions?.Compact == true)
         {
             payload["compact"] = true;
@@ -8435,6 +8492,7 @@ public static partial class QueryCommandRunner
         string? issueTitle = null;
         var issueLabels = new List<string>();
         SearchCursor? searchCursor = null;
+        int? unusedCursorOffset = null;
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
@@ -8878,8 +8936,10 @@ public static partial class QueryCommandRunner
                         WarnIfDuplicateSingleValueOption("--cursor", cursorValue!);
                         if (TryParseSearchCursor(cursorValue!, out var parsedCursor))
                             searchCursor = parsedCursor;
+                        else if (TryParseUnusedCursor(cursorValue!, out var parsedUnusedCursorOffset))
+                            unusedCursorOffset = parsedUnusedCursorOffset;
                         else
-                            AddParseError("Error: --cursor must be a search pagination cursor returned as `next_cursor` by a previous recipe search response.");
+                            AddParseError("Error: --cursor must be a search pagination cursor or an unused pagination cursor returned as `next_cursor`.");
                     }
                     else
                     {
@@ -9742,6 +9802,7 @@ public static partial class QueryCommandRunner
             IssueTitle = issueTitle,
             IssueLabels = issueLabels,
             SearchCursor = searchCursor,
+            UnusedCursorOffset = unusedCursorOffset,
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
@@ -11573,6 +11634,11 @@ public static partial class QueryCommandRunner
             query["bucket"] = options.UnusedBucket;
         if (options.MinUnusedConfidence != null)
             query["min_confidence"] = options.MinUnusedConfidence;
+        if (options.UnusedCursorOffset.HasValue)
+        {
+            query["cursor"] = FormatUnusedCursor(options.UnusedCursorOffset.Value);
+            query["offset"] = options.UnusedCursorOffset.Value;
+        }
         if (options.RankMode != ReferenceRankMode.Weighted)
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.SymbolSortMode != SymbolSortMode.Name)
@@ -13438,6 +13504,7 @@ public sealed class QueryCommandOptions
     public string? IssueTitle { get; init; }
     public List<string> IssueLabels { get; init; } = [];
     public SearchCursor? SearchCursor { get; init; }
+    public int? UnusedCursorOffset { get; init; }
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];

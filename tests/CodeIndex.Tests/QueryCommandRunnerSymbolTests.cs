@@ -978,14 +978,61 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
             Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
+            Assert.Contains(symbols[0].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "no_indexed_references");
+            Assert.Contains(symbols[0].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "private_or_file_local");
             Assert.Equal("PathResolver", symbols[2].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[2].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[2].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "public_or_exported");
             Assert.Equal("ConnectionString", symbols[3].GetProperty("name").GetString());
             Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[3].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "reflection_or_config_suspect");
             Assert.Equal("ApplyConfiguration", symbols[7].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_JsonPaginatesWithUnusedCursor_Issue3691()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "2"],
+                _jsonOptions));
+            using var firstDocument = ParseJsonOutput(firstStdout);
+            var firstJson = firstDocument.RootElement;
+            var firstSymbols = firstJson.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            Assert.Equal(2, firstJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:2", firstJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("Hidden", firstSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("InternalOnly", firstSymbols[1].GetProperty("name").GetString());
+
+            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "2", "--cursor", "unused:2"],
+                _jsonOptions));
+            using var secondDocument = ParseJsonOutput(secondStdout);
+            var secondJson = secondDocument.RootElement;
+            var secondSymbols = secondJson.GetProperty("symbols");
+            var secondQuery = secondJson.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, secondStderr);
+            Assert.Equal(2, secondJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:4", secondJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("unused:2", secondQuery.GetProperty("cursor").GetString());
+            Assert.Equal(2, secondQuery.GetProperty("offset").GetInt32());
+            Assert.Equal("PathResolver", secondSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("ConnectionString", secondSymbols[1].GetProperty("name").GetString());
         }
         finally
         {
