@@ -13,7 +13,7 @@ internal static class BackgroundTaskObserver
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return Observe(Task.Run(action, CancellationToken.None), component, operation, warningWriter);
+        return Run(_ => action(), component, operation, CancellationToken.None, warningWriter);
     }
 
     internal static Task Run(
@@ -25,7 +25,7 @@ internal static class BackgroundTaskObserver
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return Observe(Task.Run(() => action(cancellationToken), CancellationToken.None), component, operation, warningWriter);
+        return Observe(Task.Run(() => action(cancellationToken), cancellationToken), component, operation, warningWriter);
     }
 
     internal static Task Observe(
