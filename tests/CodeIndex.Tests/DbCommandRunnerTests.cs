@@ -931,8 +931,10 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("primary restore failure", stderr);
-            Assert.Contains("failed to roll back database restore", stderr);
+            Assert.Contains("failed to restore database checkpoint", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.DoesNotContain("primary restore failure", stderr);
+            Assert.Contains("Failed to roll back database restore", stderr);
             var backupPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
             Assert.True(File.Exists(Path.Combine(backupPath, "codeindex.db")));
             Assert.True(Directory.Exists(dbPath));
@@ -1205,7 +1207,9 @@ public class DbCommandRunnerTests
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
-            Assert.Contains("not a regular file", stderr);
+            Assert.Contains("failed to restore database checkpoint", stderr);
+            Assert.Contains("InvalidOperationException", stderr);
+            Assert.DoesNotContain("not a regular file", stderr);
             Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
         }
         finally
