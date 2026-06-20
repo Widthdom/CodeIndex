@@ -1,3 +1,4 @@
+using CodeIndex;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -18,6 +19,8 @@ internal static class SearchAuditRecipes
     private const int MaxExternalFalsePositiveGuidanceLength = 512;
     private const int MaxExternalLabelCount = 16;
     private const int MaxExternalLabelLength = 64;
+    private const int MaxExternalPathPatternCount = 32;
+    private const int MaxExternalPathPatternLength = 256;
     private const int MaxRecipeDiagnosticCount = 64;
     private const int MaxRecipeDiagnosticLength = 512;
     private static readonly string[] DefaultSourcePathPatterns = ["src/**"];
@@ -318,14 +321,14 @@ internal static class SearchAuditRecipes
 
         foreach (var sourcePath in ReadConfiguredRecipeSourcePaths(diagnostics))
         {
-            if (!TryLoadExternalRecipes(sourcePath, diagnostics, out var externalRecipes))
+            if (!TryLoadExternalRecipes(sourcePath.Path, sourcePath.Label, diagnostics, out var externalRecipes))
                 continue;
 
             foreach (var recipe in externalRecipes)
             {
                 if (!knownNames.Add(recipe.Name))
                 {
-                    AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' defines duplicate recipe '{recipe.Name}'; keeping the first definition.");
+                    AddDiagnostic(diagnostics, $"{sourcePath.Label} defines duplicate recipe '{recipe.Name}'; keeping the first definition.");
                     continue;
                 }
 
@@ -343,13 +346,13 @@ internal static class SearchAuditRecipes
         return recipe != null;
     }
 
-    private static List<string> ReadConfiguredRecipeSourcePaths(List<string> diagnostics)
+    private static List<RecipeSourcePath> ReadConfiguredRecipeSourcePaths(List<string> diagnostics)
     {
         var raw = Environment.GetEnvironmentVariable(RecipePathsEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return [];
 
-        var paths = new List<string>();
+        var paths = new List<RecipeSourcePath>();
         foreach (var part in raw.Split(Path.PathSeparator, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
             if (paths.Count >= MaxRecipeSourceFiles)
@@ -358,13 +361,13 @@ internal static class SearchAuditRecipes
                 break;
             }
 
-            paths.Add(part);
+            paths.Add(new RecipeSourcePath(part, $"recipe source #{paths.Count + 1}"));
         }
 
         return paths;
     }
 
-    private static bool TryLoadExternalRecipes(string sourcePath, List<string> diagnostics, out List<SearchAuditRecipe> recipes)
+    private static bool TryLoadExternalRecipes(string sourcePath, string sourceLabel, List<string> diagnostics, out List<SearchAuditRecipe> recipes)
     {
         recipes = [];
         string fullPath;
@@ -374,13 +377,13 @@ internal static class SearchAuditRecipes
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' is not a valid path: {ex.Message}");
+            AddDiagnostic(diagnostics, $"{sourceLabel} is not a valid path ({SafeDiagnosticFormatter.FormatExceptionCategory("invalid_recipe_path", ex)}).");
             return false;
         }
 
         if (!File.Exists(fullPath))
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' does not exist.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} does not exist.");
             return false;
         }
 
@@ -389,7 +392,7 @@ internal static class SearchAuditRecipes
             var info = new FileInfo(fullPath);
             if (info.Length > MaxRecipeSourceBytes)
             {
-                AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' is too large ({info.Length} bytes; max {MaxRecipeSourceBytes}).");
+                AddDiagnostic(diagnostics, $"{sourceLabel} is too large ({info.Length} bytes; max {MaxRecipeSourceBytes}).");
                 return false;
             }
 
@@ -399,30 +402,30 @@ internal static class SearchAuditRecipes
             var recipeArray = root as JsonArray ?? root?["recipes"] as JsonArray;
             if (recipeArray is null)
             {
-                AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' must be a JSON array or an object with a 'recipes' array.");
+                AddDiagnostic(diagnostics, $"{sourceLabel} must be a JSON array or an object with a 'recipes' array.");
                 return false;
             }
 
             for (var i = 0; i < recipeArray.Count && i < MaxExternalRecipesPerFile; i++)
             {
-                if (TryParseRecipe(recipeArray[i], sourcePath, i, diagnostics, out var recipe))
+                if (TryParseRecipe(recipeArray[i], sourceLabel, i, diagnostics, out var recipe))
                     recipes.Add(recipe);
             }
 
             if (recipeArray.Count > MaxExternalRecipesPerFile)
-                AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' has more than {MaxExternalRecipesPerFile} recipes; extra entries are ignored.");
+                AddDiagnostic(diagnostics, $"{sourceLabel} has more than {MaxExternalRecipesPerFile} recipes; extra entries are ignored.");
             return true;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' could not be loaded: {ex.Message}");
+            AddDiagnostic(diagnostics, $"{sourceLabel} could not be loaded ({SafeDiagnosticFormatter.FormatExceptionCategory("recipe_load", ex)}).");
             return false;
         }
     }
 
     private static bool TryParseRecipe(
         JsonNode? node,
-        string sourcePath,
+        string sourceLabel,
         int recipeIndex,
         List<string> diagnostics,
         out SearchAuditRecipe recipe)
@@ -430,44 +433,52 @@ internal static class SearchAuditRecipes
         recipe = null!;
         if (node is not JsonObject obj)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe #{recipeIndex + 1} must be an object.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe #{recipeIndex + 1} must be an object.");
             return false;
         }
 
-        if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourcePath, recipeIndex, diagnostics, out var name)
-            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourcePath, recipeIndex, diagnostics, out var description))
+        if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourceLabel, recipeIndex, diagnostics, out var name)
+            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourceLabel, recipeIndex, diagnostics, out var description)
+            || !TryReadOptionalScope(obj, sourceLabel, recipeIndex, name, diagnostics, out var defaultScope)
+            || !TryReadPathPatterns(obj, "defaultPathPatterns", "default_path_patterns", sourceLabel, recipeIndex, name, diagnostics, out var defaultPathPatterns)
+            || !TryReadPathPatterns(obj, "defaultExcludePaths", "default_exclude_paths", sourceLabel, recipeIndex, name, diagnostics, out var defaultExcludePaths))
         {
             return false;
         }
 
         if (obj["queries"] is not JsonArray queryArray)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{name}' must include a 'queries' array.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{name}' must include a 'queries' array.");
             return false;
         }
 
         var queries = new List<SearchAuditRecipeQuery>();
         for (var i = 0; i < queryArray.Count && i < MaxExternalQueriesPerRecipe; i++)
         {
-            if (TryParseRecipeQuery(queryArray[i], sourcePath, name, i, diagnostics, out var query))
+            if (TryParseRecipeQuery(queryArray[i], sourceLabel, name, i, diagnostics, out var query))
                 queries.Add(query);
         }
 
         if (queryArray.Count > MaxExternalQueriesPerRecipe)
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{name}' has more than {MaxExternalQueriesPerRecipe} queries; extra entries are ignored.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{name}' has more than {MaxExternalQueriesPerRecipe} queries; extra entries are ignored.");
         if (queries.Count == 0)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{name}' has no valid queries and was ignored.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{name}' has no valid queries and was ignored.");
             return false;
         }
 
-        recipe = new SearchAuditRecipe(name, description, queries);
+        recipe = new SearchAuditRecipe(name, description, queries)
+        {
+            DefaultScope = defaultScope,
+            DefaultPathPatterns = defaultPathPatterns,
+            DefaultExcludePaths = defaultExcludePaths
+        };
         return true;
     }
 
     private static bool TryParseRecipeQuery(
         JsonNode? node,
-        string sourcePath,
+        string sourceLabel,
         string recipeName,
         int queryIndex,
         List<string> diagnostics,
@@ -476,18 +487,18 @@ internal static class SearchAuditRecipes
         query = null!;
         if (node is not JsonObject obj)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{recipeName}' query #{queryIndex + 1} must be an object.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query #{queryIndex + 1} must be an object.");
             return false;
         }
 
-        if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourcePath, queryIndex, diagnostics, out var name)
-            || !TryReadRequiredString(obj, "query", QueryLimits.MaxQueryLength, sourcePath, queryIndex, diagnostics, out var queryText)
-            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourcePath, queryIndex, diagnostics, out var description))
+        if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourceLabel, queryIndex, diagnostics, out var name)
+            || !TryReadRequiredString(obj, "query", QueryLimits.MaxQueryLength, sourceLabel, queryIndex, diagnostics, out var queryText)
+            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourceLabel, queryIndex, diagnostics, out var description))
         {
             return false;
         }
 
-        var labels = ReadLabels(obj, sourcePath, recipeName, name, diagnostics);
+        var labels = ReadLabels(obj, sourceLabel, recipeName, name, diagnostics);
         var falsePositiveGuidance = TryReadString(obj["falsePositiveGuidance"] ?? obj["false_positive_guidance"], out var guidance)
             && !string.IsNullOrWhiteSpace(guidance)
             ? guidance.Trim()
@@ -506,7 +517,7 @@ internal static class SearchAuditRecipes
         JsonObject obj,
         string propertyName,
         int maxLength,
-        string sourcePath,
+        string sourceLabel,
         int itemIndex,
         List<string> diagnostics,
         out string value)
@@ -514,7 +525,7 @@ internal static class SearchAuditRecipes
         value = string.Empty;
         if (!TryReadString(obj[propertyName], out var raw) || string.IsNullOrWhiteSpace(raw))
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' item #{itemIndex + 1} must include a non-empty '{propertyName}' string.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} item #{itemIndex + 1} must include a non-empty '{propertyName}' string.");
             return false;
         }
 
@@ -522,14 +533,98 @@ internal static class SearchAuditRecipes
         if (value.Length <= maxLength)
             return true;
 
-        AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' item #{itemIndex + 1} field '{propertyName}' exceeds {maxLength} characters.");
+        AddDiagnostic(diagnostics, $"{sourceLabel} item #{itemIndex + 1} field '{propertyName}' exceeds {maxLength} characters.");
         value = string.Empty;
         return false;
     }
 
+    private static bool TryReadOptionalScope(
+        JsonObject obj,
+        string sourceLabel,
+        int recipeIndex,
+        string recipeName,
+        List<string> diagnostics,
+        out string scope)
+    {
+        scope = DefaultAuditScope;
+        var node = obj["defaultScope"] ?? obj["default_scope"];
+        if (node is null)
+            return true;
+
+        if (!TryReadString(node, out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' item #{recipeIndex + 1} has an invalid default scope.");
+            return false;
+        }
+
+        var normalized = raw.Trim().ToLowerInvariant();
+        if (StringComparer.Ordinal.Equals(normalized, DefaultAuditScope) || StringComparer.Ordinal.Equals(normalized, AllAuditScope))
+        {
+            scope = normalized;
+            return true;
+        }
+
+        AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' item #{recipeIndex + 1} has unsupported default scope '{normalized}'.");
+        return false;
+    }
+
+    private static bool TryReadPathPatterns(
+        JsonObject obj,
+        string camelCasePropertyName,
+        string snakeCasePropertyName,
+        string sourceLabel,
+        int recipeIndex,
+        string recipeName,
+        List<string> diagnostics,
+        out List<string> patterns)
+    {
+        patterns = [];
+        var node = obj[camelCasePropertyName] ?? obj[snakeCasePropertyName];
+        if (node is null)
+            return true;
+
+        if (node is not JsonArray array)
+        {
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' item #{recipeIndex + 1} field '{snakeCasePropertyName}' must be an array.");
+            return false;
+        }
+
+        if (array.Count > MaxExternalPathPatternCount)
+        {
+            AddDiagnostic(
+                diagnostics,
+                $"{sourceLabel} recipe '{recipeName}' item #{recipeIndex + 1} field '{snakeCasePropertyName}' has more than {MaxExternalPathPatternCount} entries.");
+            return false;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (!TryReadString(array[i], out var raw) || string.IsNullOrWhiteSpace(raw))
+            {
+                AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' item #{recipeIndex + 1} field '{snakeCasePropertyName}' has an invalid entry.");
+                return false;
+            }
+
+            var pattern = raw.Trim();
+            if (pattern.Length > MaxExternalPathPatternLength)
+            {
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' item #{recipeIndex + 1} field '{snakeCasePropertyName}' entry exceeds {MaxExternalPathPatternLength} characters.");
+                return false;
+            }
+
+            if (seen.Add(pattern))
+                patterns.Add(pattern);
+        }
+
+        return true;
+    }
+
     private static List<string> ReadLabels(
         JsonObject obj,
-        string sourcePath,
+        string sourceLabel,
         string recipeName,
         string queryName,
         List<string> diagnostics)
@@ -539,7 +634,7 @@ internal static class SearchAuditRecipes
             return [];
         if (labelsNode is not JsonArray labelArray)
         {
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{recipeName}' query '{queryName}' labels must be an array.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' labels must be an array.");
             return [];
         }
 
@@ -557,7 +652,7 @@ internal static class SearchAuditRecipes
         }
 
         if (labelArray.Count > MaxExternalLabelCount)
-            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{recipeName}' query '{queryName}' has more than {MaxExternalLabelCount} labels; extra entries are ignored.");
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' has more than {MaxExternalLabelCount} labels; extra entries are ignored.");
         return labels;
     }
 
@@ -606,6 +701,8 @@ internal static class SearchAuditRecipes
             return false;
         }
     }
+
+    private sealed record RecipeSourcePath(string Path, string Label);
 }
 
 internal sealed record SearchAuditRecipeRegistry(

@@ -1101,6 +1101,121 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-term-broad");
     }
 
+    [Fact]
+    public void RunSearch_ExternalRecipeDefaultsApplyToScope_Issue3807()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_defaults_3807");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var recipePath = Path.Combine(projectRoot, "external-recipes.json");
+            File.WriteAllText(
+                recipePath,
+                """
+                {
+                  "recipes": [
+                    {
+                      "name": "local-defaults",
+                      "description": "Exercise external defaults.",
+                      "default_scope": "source",
+                      "default_path_patterns": ["docs/**"],
+                      "default_exclude_paths": ["docs/private/**"],
+                      "queries": [
+                        {
+                          "name": "config-needle",
+                          "query": "ConfigNeedle",
+                          "description": "Find the configured marker.",
+                          "recommended_labels": ["audit"],
+                          "false_positive_guidance": "Review surrounding context."
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { string Value = \"ConfigNeedle\"; }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/public.md", "markdown", "ConfigNeedle in public docs.\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/private/secret.md", "markdown", "ConfigNeedle in private docs.\n");
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var (listExitCode, listStdout, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes", "--json"],
+                _jsonOptions));
+            var (runExitCode, runStdout, runStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "local-defaults", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, listStderr);
+            using var listDocument = ParseJsonOutput(listStdout);
+            var recipe = listDocument.RootElement
+                .GetProperty("recipes")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "local-defaults");
+            Assert.Equal("source", recipe.GetProperty("default_scope").GetString());
+            Assert.Contains(recipe.GetProperty("default_path_patterns").EnumerateArray(), path => path.GetString() == "docs/**");
+            Assert.Contains(recipe.GetProperty("default_exclude_paths").EnumerateArray(), path => path.GetString() == "docs/private/**");
+
+            Assert.Equal(CommandExitCodes.Success, runExitCode);
+            Assert.Equal(string.Empty, runStderr);
+            using var runDocument = ParseJsonOutput(runStdout);
+            var root = runDocument.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+            Assert.Equal("docs/public.md", result.GetProperty("path").GetString());
+            Assert.Contains(root.GetProperty("scope").GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "docs/**");
+            Assert.Contains(root.GetProperty("scope").GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "docs/private/**");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExternalRecipeDuplicateDiagnosticsHideRawSourcePath_Issue3807()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_diagnostics_3807");
+        try
+        {
+            var recipePath = Path.Combine(projectRoot, "secret-recipe-path-3807.json");
+            File.WriteAllText(
+                recipePath,
+                """
+                [
+                  {
+                    "name": "risky-code",
+                    "description": "Duplicate a built-in recipe.",
+                    "queries": [
+                      {
+                        "name": "duplicate-query",
+                        "query": "DuplicateNeedle",
+                        "description": "Find a duplicate marker."
+                      }
+                    ]
+                  }
+                ]
+                """);
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var registry = SearchAuditRecipes.Load();
+
+            var diagnostic = Assert.Single(registry.Diagnostics);
+            Assert.Equal("recipe source #1 defines duplicate recipe 'risky-code'; keeping the first definition.", diagnostic);
+            Assert.DoesNotContain(recipePath, diagnostic, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-recipe-path", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("csv")]
