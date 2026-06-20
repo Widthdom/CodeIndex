@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Win32.SafeHandles;
@@ -1089,7 +1090,7 @@ public class FileIndexer
         if (explicitMaxFileSizeBytes is > 0 and <= int.MaxValue)
             return explicitMaxFileSizeBytes.Value;
 
-        var envValue = Environment.GetEnvironmentVariable(MaxFileSizeEnvironmentVariable);
+        var envValue = CdidxEnvironment.GetEnvironmentVariable(MaxFileSizeEnvironmentVariable);
         return TryParseMaxFileSizeBytes(envValue, out var envBytes)
             ? envBytes
             : DefaultMaxFileSizeBytes;

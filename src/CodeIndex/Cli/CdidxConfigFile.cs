@@ -88,7 +88,7 @@ internal static class CdidxConfigFile
     /// validation errors. No-op when `CDIDX_DISABLE_CONFIG_FILE=1` is set.
     /// </summary>
     internal static LoadResult Load(string startingDirectory)
-        => Load(startingDirectory, Environment.GetEnvironmentVariable);
+        => Load(startingDirectory, CdidxEnvironment.GetEnvironmentVariable);
 
     internal static LoadResult Load(
         string startingDirectory,

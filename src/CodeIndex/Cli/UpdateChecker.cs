@@ -201,7 +201,7 @@ internal static class UpdateChecker
 
     internal static bool IsDisabled()
     {
-        var value = Environment.GetEnvironmentVariable(DisableEnvVar);
+        var value = CdidxEnvironment.GetEnvironmentVariable(DisableEnvVar);
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -326,7 +326,7 @@ internal static class UpdateChecker
 
     internal static string ResolveDefaultCachePath()
     {
-        var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        var xdgCacheHome = CdidxEnvironment.GetEnvironmentVariable("XDG_CACHE_HOME");
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
@@ -451,7 +451,7 @@ internal static class UpdateChecker
 
     private static bool ShouldEmitCacheDiagnostics()
     {
-        var value = Environment.GetEnvironmentVariable(DiagnosticsEnvVar)?.Trim();
+        var value = CdidxEnvironment.GetEnvironmentVariable(DiagnosticsEnvVar)?.Trim();
         return value is not null
             && (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)

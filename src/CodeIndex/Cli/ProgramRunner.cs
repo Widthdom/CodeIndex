@@ -1007,7 +1007,7 @@ internal static partial class ProgramRunner
 
     private static bool IsTruthyEnvironmentVariable(string name)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = CdidxEnvironment.GetEnvironmentVariable(name);
         return value != null
                && !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
                && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)
