@@ -113,6 +113,7 @@ public class FileIndexer
     private const int MaxGitmodulesBytes = 256 * 1024;
     private const int MaxGitmodulesLines = 4096;
     private const int MaxGitmodulesLineChars = 16 * 1024;
+    internal const int MaxGitmodulesSubmodulePaths = 1024;
     private const int MaxProjectMarkerTraversalWarnings = 32;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private static readonly JsonDocumentOptions DockerfileJsonFormIssueDocumentOptions = new()
@@ -3257,6 +3258,7 @@ public class FileIndexer
                 }
             }
 
+            var submodulePathCount = 0;
             foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
             {
                 string absolute;
@@ -3277,10 +3279,22 @@ public class FileIndexer
                     continue;
                 }
 
-                submodulePaths.Add(relativeToProject);
-                var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                for (var i = 1; i < segments.Length; i++)
-                    ancestorPaths.Add(string.Join('/', segments, 0, i));
+                if (submodulePathCount >= MaxGitmodulesSubmodulePaths)
+                {
+                    warnings.Add(new ScanError(
+                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        $"Stopped parsing .gitmodules submodule paths after {MaxGitmodulesSubmodulePaths} entries.",
+                        ScanIssueSeverity.Warning));
+                    break;
+                }
+
+                submodulePathCount++;
+                if (submodulePaths.Add(relativeToProject))
+                {
+                    var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    for (var i = 1; i < segments.Length; i++)
+                        ancestorPaths.Add(string.Join('/', segments, 0, i));
+                }
             }
         }
         catch (IOException ex)
@@ -3370,10 +3384,7 @@ public class FileIndexer
             if (!string.Equals(key, "path", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var value = line[(equalsIndex + 1)..].Trim();
-            var commentIndex = value.IndexOfAny(['#', ';']);
-            if (commentIndex >= 0)
-                value = value[..commentIndex].Trim();
+            var value = StripGitmodulesInlineComment(line[(equalsIndex + 1)..]);
             if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
                 value = value[1..^1];
             if (value.Length == 0)
@@ -3383,6 +3394,38 @@ public class FileIndexer
 
             yield return value;
         }
+    }
+
+    private static string StripGitmodulesInlineComment(string value)
+    {
+        var inQuotes = false;
+        var escaping = false;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (escaping)
+            {
+                escaping = false;
+                continue;
+            }
+
+            if (inQuotes && ch == '\\')
+            {
+                escaping = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (!inQuotes && ch is '#' or ';')
+                return value[..i].Trim();
+        }
+
+        return value.Trim();
     }
 
     internal static string NormalizeIgnorePath(string path)

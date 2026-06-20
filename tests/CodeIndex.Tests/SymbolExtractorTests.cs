@@ -19284,6 +19284,30 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_TsconfigWarningSanitizesConfigPath_Issue3819()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_sanitize_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", "{ invalid json");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@/components/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+            Assert.Contains("Skipped TypeScript path alias config tsconfig.json", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot.Replace('\\', '/'), stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Extract_TypeScript_UnreadableTsconfigSkipsPathAliasesWithReadFailedWarning_Issue3438()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_unreadable_symbols");

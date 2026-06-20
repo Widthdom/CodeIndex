@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Indexer;
 
@@ -20,11 +21,13 @@ internal static class LanguageMapOverrides
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromPathsForTesting(
         IEnumerable<string> configPaths,
         Action<string>? reportWarning = null)
-        => LoadEffectiveMapFromPaths(configPaths, reportWarning);
+        => LoadEffectiveMapFromPaths(
+            configPaths,
+            reportWarning == null ? null : (message, _) => reportWarning(message));
 
     private static IReadOnlyDictionary<string, string> LoadEffectiveMapFromPaths(
         IEnumerable<string> configPaths,
-        Action<string>? reportWarning)
+        Action<string, string?>? reportWarning)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in configPaths)
@@ -66,14 +69,16 @@ internal static class LanguageMapOverrides
     private static void LoadInto(
         string path,
         Dictionary<string, string> target,
-        Action<string>? reportWarning)
+        Action<string, string?>? reportWarning)
     {
         if (!File.Exists(path))
             return;
 
         if (!TryReadBoundedUtf8Lines(path, out var lines, out var skippedReason))
         {
-            reportWarning?.Invoke($"Skipped language-map override file {path} because {skippedReason}.");
+            reportWarning?.Invoke(
+                $"Skipped language-map override file {DiagnosticSanitizer.ForPath(path)} because {DiagnosticSanitizer.ForMessage(skippedReason)}.",
+                $"{path}\n{skippedReason}");
             return;
         }
 
@@ -95,7 +100,9 @@ internal static class LanguageMapOverrides
             {
                 if (entryCount >= MaxOverrideEntries)
                 {
-                    reportWarning?.Invoke($"Ignored remaining language-map override entries in {path} because the loaded entry count exceeds {MaxOverrideEntries}.");
+                    reportWarning?.Invoke(
+                        $"Ignored remaining language-map override entries in {DiagnosticSanitizer.ForPath(path)} because the loaded entry count exceeds {MaxOverrideEntries}.",
+                        $"{path}\nentry-count");
                     return;
                 }
 
@@ -120,11 +127,11 @@ internal static class LanguageMapOverrides
         return success;
     }
 
-    private static void ReportWarningOnce(string message)
+    private static void ReportWarningOnce(string message, string? dedupeKey)
     {
         lock (WarningLock)
         {
-            if (!ReportedWarnings.Add(message))
+            if (!ReportedWarnings.Add(dedupeKey ?? message))
                 return;
         }
 
