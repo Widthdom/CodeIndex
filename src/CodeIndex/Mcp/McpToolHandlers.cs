@@ -622,6 +622,29 @@ public partial class McpServer
         return null;
     }
 
+    private JsonNode? TryReadSearchGuardScope(JsonNode? id, JsonNode? args, out SearchGuardScope guardScope)
+    {
+        guardScope = SearchGuardScope.Window;
+        var node = args?["guardScope"];
+        if (node is null)
+            return null;
+        if (node is not JsonValue value || !value.TryGetValue<string>(out var rawScope))
+            return CreateToolErrorResponse(id, "'guardScope' must be a string: window or same-line.");
+
+        switch (rawScope.Trim().ToLowerInvariant().Replace("_", "-"))
+        {
+            case "window":
+                guardScope = SearchGuardScope.Window;
+                return null;
+            case "same-line":
+            case "sameline":
+                guardScope = SearchGuardScope.SameLine;
+                return null;
+            default:
+                return CreateToolErrorResponse(id, $"'guardScope' must be window or same-line; got '{rawScope}'.");
+        }
+    }
+
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
         foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility", "includeSymbolKind", "excludeSymbolKind", "commits", "changedBetween", "files" })
@@ -870,7 +893,7 @@ public partial class McpServer
             "project" or "capability" or "scopes" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
                 "commits" or "changedBetween" or "files" or
                 "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
-            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
+            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or "guardScope" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
                 "followSymlinks" or "recipe" or "auditScope" => "string",
@@ -1163,6 +1186,25 @@ public partial class McpServer
         }
 
         return histogram;
+    }
+
+    private static bool MatchesRecipeFacetMetadata(CompactSearchResult result, SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.MatchOrigins.Count > 0 &&
+            !result.MatchOrigins.Any(origin => recipeQuery.MatchOrigins.Contains(origin, StringComparer.Ordinal)))
+        {
+            return false;
+        }
+
+        if (recipeQuery.ExcludeOrigins.Count > 0 &&
+            result.MatchOrigins.Count > 0 &&
+            result.MatchOrigins.All(origin => recipeQuery.ExcludeOrigins.Contains(origin, StringComparer.Ordinal)))
+        {
+            return false;
+        }
+
+        return recipeQuery.ResultKinds.Count == 0 ||
+               result.ResultKinds.Any(kind => recipeQuery.ResultKinds.Contains(kind, StringComparer.Ordinal));
     }
 
     private JsonObject BuildCountOnlyPayload<T>(int count, int? total, bool truncated, IEnumerable<T> histogramSource, Func<T, string?> pathSelector)
@@ -1733,6 +1775,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
         if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
             return guardError;
+        if (TryReadSearchGuardScope(id, args, out var guardScope) is JsonNode guardScopeError)
+            return guardScopeError;
         var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
         if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
             return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
@@ -1745,7 +1789,7 @@ public partial class McpServer
                 List<SearchResult> countResults;
                 try
                 {
-                    countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
+                    countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
                 }
                 catch (SearchQueryLimitException)
                 {
@@ -1774,7 +1818,7 @@ public partial class McpServer
             List<SearchResult> results;
             try
             {
-                results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
+                results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
             }
             catch (SearchQueryLimitException)
             {
@@ -1904,6 +1948,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "'cursor' is not supported for recipe execution.");
         if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
             return guardError;
+        if (TryReadSearchGuardScope(id, args, out var guardScope) is JsonNode guardScopeError)
+            return guardScopeError;
         var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
         if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
             return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
@@ -1931,7 +1977,8 @@ public partial class McpServer
                         exact,
                         false,
                         guardFilters: guardFilters,
-                        guardWindow: guardWindow);
+                        guardWindow: guardWindow,
+                        guardScope: guardScope);
                 }
                 catch (SearchQueryLimitException ex)
                 {
@@ -1945,6 +1992,7 @@ public partial class McpServer
                 var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
                 var compactResults = SearchSnippetFormatter
                     .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
+                    .Where(result => MatchesRecipeFacetMetadata(result, recipeQuery))
                     .ToList();
                 var truncated = TrimToRequestedLimit(compactResults, limit);
                 foreach (var compact in compactResults)
@@ -1958,6 +2006,9 @@ public partial class McpServer
                     ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
                     ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
                     ["exact_substring"] = exact,
+                    ["match_origins"] = ToJsonArray(recipeQuery.MatchOrigins),
+                    ["exclude_origins"] = ToJsonArray(recipeQuery.ExcludeOrigins),
+                    ["result_kinds"] = ToJsonArray(recipeQuery.ResultKinds),
                     ["count"] = compactResults.Count,
                     ["top_files"] = BuildTopFileHistogram(compactResults, result => result.Path),
                     ["truncated"] = truncated,
