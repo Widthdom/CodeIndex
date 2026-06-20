@@ -26,6 +26,29 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_StopsAtRepositoryBoundary_Issue3826()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var repoRoot = Path.Combine(dir, "repo");
+            var nested = Path.Combine(repoRoot, "src", "app");
+            Directory.CreateDirectory(Path.Combine(repoRoot, ".git"));
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """{ "debug": "1" }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(nested, env.Read);
+
+            Assert.False(result.Loaded);
+            Assert.False(result.Failed);
+            Assert.Null(result.Path);
+            Assert.Empty(result.Settings);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_MaterializesKnownKeysIntoEnvironment()
     {
         var dir = CreateTempDir();

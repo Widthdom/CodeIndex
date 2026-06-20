@@ -64,6 +64,12 @@ internal static class CdidxConfigFile
     private static readonly IReadOnlyList<string> KnownMcpKeys = new[] { "tools", "rate_limit" };
     private static readonly IReadOnlyList<string> KnownMcpToolsKeys = new[] { "allow", "deny" };
     private static readonly IReadOnlyList<string> KnownMcpRateLimitKeys = new[] { "rps", "burst", "bucket_idle_seconds" };
+    private static readonly IReadOnlyList<string> ConfigDiscoveryBoundaryDirectories = new[] { ".git", ".hg", ".svn" };
+    private static readonly IReadOnlyList<string> ConfigDiscoveryBoundaryFiles = new[]
+    {
+        WorkspaceManifestLoader.FileName,
+        WorkspaceManifestLoader.DotFileName,
+    };
 
     internal sealed record LoadResult(string? Path, string? Error)
     {
@@ -473,9 +479,30 @@ internal static class CdidxConfigFile
             var candidate = Path.Combine(current.FullName, FileName);
             if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
                 return candidate;
+            if (IsConfigDiscoveryBoundary(current))
+                break;
             current = current.Parent;
         }
         return null;
+    }
+
+    private static bool IsConfigDiscoveryBoundary(DirectoryInfo directory)
+    {
+        foreach (var directoryName in ConfigDiscoveryBoundaryDirectories)
+        {
+            var path = Path.Combine(directory.FullName, directoryName);
+            if (Directory.Exists(LongPath.EnsureWindowsPrefix(path)))
+                return true;
+        }
+
+        foreach (var fileName in ConfigDiscoveryBoundaryFiles)
+        {
+            var path = Path.Combine(directory.FullName, fileName);
+            if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+                return true;
+        }
+
+        return false;
     }
 
     private static string ResolveConfigWorkspaceRoot(string configPath)

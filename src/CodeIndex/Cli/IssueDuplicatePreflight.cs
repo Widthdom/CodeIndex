@@ -18,6 +18,13 @@ internal sealed class IssueDuplicatePreflight
     internal const int MaxOpenIssueNumberLength = 32;
     internal const int MaxTitleTokenizationInputLength = MaxOpenIssueTitleLength;
     internal const int MaxGitHubRepositoryLength = 200;
+    internal const double LowDuplicateThreshold = 0.35;
+    internal const double DefaultDuplicateThreshold = 0.45;
+    internal const double HighDuplicateThreshold = 0.7;
+    internal const string LowDuplicateConfidence = "low";
+    internal const string DefaultDuplicateConfidence = "medium";
+    internal const string HighDuplicateConfidence = "high";
+    internal const string CustomDuplicateConfidence = "custom";
     private const int GitHubOpenIssuesPerPage = 100;
     private const int MaxGitHubOpenIssuePages = (MaxOpenIssueCount / GitHubOpenIssuesPerPage) + 1;
     private const string GitHubSourceName = "github";
@@ -129,7 +136,26 @@ internal sealed class IssueDuplicatePreflight
         return TryLoadFromGitHub(normalizedRepository, out preflight, out error);
     }
 
+    public static bool TryNormalizeDuplicateConfidence(string value, out string confidence)
+    {
+        confidence = value.Trim().ToLowerInvariant();
+        return confidence is LowDuplicateConfidence or DefaultDuplicateConfidence or HighDuplicateConfidence;
+    }
+
+    public static double ThresholdForDuplicateConfidence(string confidence) => confidence switch
+    {
+        LowDuplicateConfidence => LowDuplicateThreshold,
+        HighDuplicateConfidence => HighDuplicateThreshold,
+        _ => DefaultDuplicateThreshold,
+    };
+
     public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(string draftTitle, IReadOnlyList<string> draftLabels)
+        => FindMatches(draftTitle, draftLabels, DefaultDuplicateThreshold);
+
+    public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(
+        string draftTitle,
+        IReadOnlyList<string> draftLabels,
+        double minimumScore)
     {
         if (!Checked || _issues.Count == 0)
             return [];
@@ -153,13 +179,14 @@ internal sealed class IssueDuplicatePreflight
             string? reason = null;
             if (normalizedIssueTitle.Length > 0 && normalizedIssueTitle == normalizedDraftTitle)
             {
-                reason = "title_exact";
                 score = 1.0;
+                if (score >= minimumScore)
+                    reason = "title_exact";
             }
             else if (overlappingLabels.Count > 0)
             {
                 score = ScoreTitleSimilarity(draftTokens, TokenizeTitle(issue.Title));
-                if (score >= 0.45)
+                if (score >= minimumScore)
                 {
                     reason = "title_label_similarity";
                 }
@@ -168,8 +195,9 @@ internal sealed class IssueDuplicatePreflight
                     && (normalizedIssueTitle.Contains(normalizedDraftTitle, StringComparison.Ordinal)
                         || normalizedDraftTitle.Contains(normalizedIssueTitle, StringComparison.Ordinal)))
                 {
-                    reason = "title_label_contains";
-                    score = Math.Max(score, 0.45);
+                    score = Math.Max(score, DefaultDuplicateThreshold);
+                    if (score >= minimumScore)
+                        reason = "title_label_contains";
                 }
             }
 
