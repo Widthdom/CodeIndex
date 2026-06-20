@@ -1521,6 +1521,53 @@ exit 0
     }
 
     [Fact]
+    public void RunInstallerProcessDetailed_SuppressedFailureCapturesBoundedTail_Issue3831()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_tail_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+i=0
+while [ "$i" -lt 700 ]; do
+  printf 'stdout-tail-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i"
+  printf 'stderr-tail-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 7
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var result = ProgramRunner.RunInstallerProcessDetailed(
+                    startInfo,
+                    TimeSpan.FromSeconds(10),
+                    suppressOutput: true);
+
+                Assert.Equal(7, result.ExitCode);
+                Assert.True(result.OutputTruncated);
+                Assert.True(result.StdoutTail!.Length <= ProgramRunner.InstallerSuppressedOutputTailChars);
+                Assert.True(result.StderrTail!.Length <= ProgramRunner.InstallerSuppressedOutputTailChars);
+                Assert.Contains("stdout-tail-0699", result.StdoutTail);
+                Assert.Contains("stderr-tail-0699", result.StderrTail);
+                Assert.DoesNotContain("stdout-tail-0000", result.StdoutTail);
+                Assert.DoesNotContain("stderr-tail-0000", result.StderrTail);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
     public void RunUpgrade_JsonPreparationFailure_UsesInstallError_Issue3373()
     {
         if (OperatingSystem.IsWindows())
@@ -1696,6 +1743,69 @@ exit 0
     }
 
     [Fact]
+    public void RunUpgrade_JsonInstallerFailureIncludesSuppressedOutputTail_Issue3831()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = """
+#!/bin/sh
+i=0
+while [ "$i" -lt 700 ]; do
+  printf 'json-stdout-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i"
+  printf 'json-stderr-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 7
+""";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(7, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.True(root.GetProperty("install_attempted").GetBoolean());
+                Assert.False(root.GetProperty("install_succeeded").GetBoolean());
+                Assert.Equal(7, root.GetProperty("install_exit_code").GetInt32());
+                Assert.Equal("installer_exit_code_7", root.GetProperty("error").GetString());
+                Assert.True(root.GetProperty("installer_output_truncated").GetBoolean());
+                Assert.Contains("json-stdout-0699", root.GetProperty("installer_stdout_tail").GetString(), StringComparison.Ordinal);
+                Assert.Contains("json-stderr-0699", root.GetProperty("installer_stderr_tail").GetString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("json-stdout-0000", root.GetProperty("installer_stdout_tail").GetString(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void RunUpgrade_InstallerScriptCleanupFailure_EmitsWarning_Issue3372()
     {
         if (OperatingSystem.IsWindows())
@@ -1797,6 +1907,55 @@ exit 0
             Assert.Equal("explicit_version", root.GetProperty("selection_source").GetString());
             Assert.True(root.GetProperty("include_prerelease").GetBoolean());
             Assert.False(root.GetProperty("install_attempted").GetBoolean());
+            Assert.Equal("same_release_sha256_manifest", root.GetProperty("installer_verification").GetString());
+            Assert.Contains("same GitHub release asset namespace", root.GetProperty("installer_trust_boundary").GetString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("v1.2.3", true)]
+    [InlineData("1.2.3", false)]
+    [InlineData("v1.2.3-rc.1", true)]
+    [InlineData("v1.2", false)]
+    [InlineData("v1.2.3/evil", false)]
+    [InlineData("v1.2.3+build", false)]
+    public void IsValidUpgradeReleaseTag_ConstrainShape_Issue3831(string releaseTag, bool expected)
+    {
+        Assert.Equal(expected, ProgramRunner.IsValidUpgradeReleaseTag(releaseTag));
+    }
+
+    [Fact]
+    public void RunUpgrade_InvalidExplicitVersion_ReturnsUsageError_Issue3831()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["upgrade", "--check-only", "--version", "release/test"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains("vX.Y.Z", stderr);
+        }
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_FilePathReportsDiagnostic_Issue3831()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_file_{Guid.NewGuid():N}");
+        try
+        {
+            File.WriteAllText(path, "");
+
+            var writable = ProgramRunner.TryCheckInstallDirectoryWritable(path, out var diagnostic);
+
+            Assert.False(writable);
+            Assert.Equal("IOException", diagnostic);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
         }
     }
 

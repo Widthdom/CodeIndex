@@ -57,7 +57,13 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("handoff_command")] string? HandoffCommand,
     [property: JsonPropertyName("handoff_url")] string? HandoffUrl,
     [property: JsonPropertyName("handoff_asset")] string? HandoffAsset,
-    [property: JsonPropertyName("handoff_asset_url")] string? HandoffAssetUrl);
+    [property: JsonPropertyName("handoff_asset_url")] string? HandoffAssetUrl,
+    [property: JsonPropertyName("installer_verification")] string? InstallerVerification,
+    [property: JsonPropertyName("installer_trust_boundary")] string? InstallerTrustBoundary,
+    [property: JsonPropertyName("installer_stdout_tail")] string? InstallerStdoutTail,
+    [property: JsonPropertyName("installer_stderr_tail")] string? InstallerStderrTail,
+    [property: JsonPropertyName("installer_output_truncated")] bool? InstallerOutputTruncated,
+    [property: JsonPropertyName("install_directory_error")] string? InstallDirectoryError);
 
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
