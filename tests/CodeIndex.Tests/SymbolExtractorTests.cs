@@ -47,6 +47,25 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void BuiltInSymbolRegexes_UseBoundedRegexInstances_Issue3661()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(SymbolExtractor).Assembly.GetTypes().Where(IsSymbolRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var unboundedInstances = regexes
+            .Where(item => item.Regex is not BoundedRegex)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            unboundedInstances.Count == 0,
+            "Built-in symbol regex tables must use BoundedRegex instances: " + string.Join(", ", unboundedInstances));
+    }
+
+    [Fact]
     public void BuiltInSymbolRegexes_UseDefaultBacktrackingPolicy_Issue3479()
     {
         var regexes = EnumerateStaticRegexValues(
