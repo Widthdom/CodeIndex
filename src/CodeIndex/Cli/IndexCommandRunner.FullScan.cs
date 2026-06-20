@@ -81,6 +81,9 @@ public static partial class IndexCommandRunner
         || writer.CountReferencesForFile(fileId) > maxReferencesPerFile
         || writer.HasIssueForFile(fileId, "reference_count_exceeded");
 
+    internal static bool ExistingFileGeneratedSuppressionMismatch(DbWriter writer, long fileId, FileIssue? generatedSuppressionIssue)
+        => writer.HasIssueForFile(fileId, FileIndexer.GeneratedCodeExtractionSkippedIssueKind) != (generatedSuppressionIssue != null);
+
     internal static IReadOnlyList<FileIssue> AppendIssue(IReadOnlyList<FileIssue> issues, FileIssue issue)
     {
         if (issues.Count == 0)
@@ -89,6 +92,13 @@ public static partial class IndexCommandRunner
         var combined = issues.ToList();
         combined.Add(issue);
         return combined;
+    }
+
+    internal static IReadOnlyList<FileIssue> AppendIssueIfMissing(IReadOnlyList<FileIssue> issues, FileIssue issue)
+    {
+        if (issues.Any(existing => string.Equals(existing.Kind, issue.Kind, StringComparison.Ordinal)))
+            return issues;
+        return AppendIssue(issues, issue);
     }
 
     internal static string FormatIndexPhasePath(string path, string phase) =>
@@ -1105,10 +1115,24 @@ public static partial class IndexCommandRunner
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
                             IReadOnlyList<FileIssue>? issues = null;
+                            var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                             if (parallelizeExtraction)
                             {
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
+                                if (generatedSuppressionIssue != null)
+                                {
+                                    symbols = [];
+                                    references = [];
+                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    issues = AppendIssueIfMissing(
+                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                                        generatedSuppressionIssue);
+                                    extractionResults.Add(
+                                        FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
+                                        extractionCancellationToken);
+                                    continue;
+                                }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
                                 symbols = ExtractSymbolsWithStallTimeout(
                                     0,
@@ -1310,6 +1334,11 @@ public static partial class IndexCommandRunner
                     {
                         existingId = null;
                     }
+                    if (existingId != null
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                    {
+                        existingId = null;
+                    }
                     if (existingId != null)
                     {
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
@@ -1345,6 +1374,33 @@ public static partial class IndexCommandRunner
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
                         : ReassignChunkFileIds(item.Chunks, fileId);
+                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                    if (generatedSuppressionIssue != null)
+                    {
+                        writer.InsertChunks(chunks);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        var generatedIssues = AppendIssueIfMissing(
+                            item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang),
+                            generatedSuppressionIssue);
+                        writer.InsertIssues(fileId, generatedIssues);
+                        if (options.Verbose)
+                            WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
+                        currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
+                        WriteProjectRootOnce();
+                        txn.Commit();
+
+                        processed++;
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        ReportJsonIndexProgressIfNeeded();
+                        currentJsonIndexFile = null;
+                        continue;
+                    }
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
                         ? ExtractSymbolsWithStallTimeout(

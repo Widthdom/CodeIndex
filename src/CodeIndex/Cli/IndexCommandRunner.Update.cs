@@ -584,6 +584,11 @@ public static partial class IndexCommandRunner
                     {
                         statMatchedId = null;
                     }
+                    if (statMatchedId != null
+                        && ExistingFileGeneratedSuppressionMismatch(writer, statMatchedId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(dbPath)))
+                    {
+                        statMatchedId = null;
+                    }
                     if (statMatchedId != null)
                     {
                         skipped++;
@@ -620,6 +625,11 @@ public static partial class IndexCommandRunner
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                     if (existingId != null
                         && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
+                    {
+                        existingId = null;
+                    }
+                    if (existingId != null
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
                     {
                         existingId = null;
                     }
@@ -661,6 +671,26 @@ public static partial class IndexCommandRunner
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                     var chunks = ChunkSplitter.Split(fileId, content);
+                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                    if (generatedSuppressionIssue != null)
+                    {
+                        writer.InsertChunks(chunks);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
+                        var generatedIssues = AppendIssueIfMissing(
+                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                            generatedSuppressionIssue);
+                        writer.InsertIssues(fileId, generatedIssues);
+                        currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+                        fileBatchMarked = false;
+                        updated++;
+                        ftsMutated = true;
+                        WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
+                        continue;
+                    }
                     currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
                     var symbols = ExtractSymbolsWithStallTimeout(
                         fileId,

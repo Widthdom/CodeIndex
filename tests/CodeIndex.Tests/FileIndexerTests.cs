@@ -5226,6 +5226,40 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_ConfiguredGeneratedPatternMarksGeneratedAndBuildsExtractionIssue()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var generatedDir = Path.Combine(tempDir, "src", "generated");
+            Directory.CreateDirectory(generatedDir);
+            var filePath = Path.Combine(generatedDir, "Client.cs");
+            File.WriteAllText(filePath, "public class Client { public string Lookup() => \"ok\"; }\n");
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                generatedCodePatterns: ["src/generated/**"]);
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var issue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+
+            Assert.True(record.Generated);
+            Assert.Equal("src/generated/Client.cs", record.Path);
+            Assert.Contains("public class Client", content, StringComparison.Ordinal);
+            Assert.True(rawBytes.Length > 0);
+            Assert.NotNull(issue);
+            Assert.Equal(FileIndexer.GeneratedCodeExtractionSkippedIssueKind, issue.Kind);
+            Assert.Equal("src/generated/Client.cs", issue.Path);
+            Assert.Contains("symbols and references were skipped", issue.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_GitLfsVersionLineWithoutPointerShapePreservesContent()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

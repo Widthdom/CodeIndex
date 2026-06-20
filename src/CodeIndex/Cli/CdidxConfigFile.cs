@@ -56,7 +56,7 @@ internal static class CdidxConfigFile
         "mcp",
     };
 
-    private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds" };
+    private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds", "generatedCodePatterns" };
     private static readonly IReadOnlyList<string> KnownSearchKeys = new[] { "limit", "snippet_lines", "max_line_width" };
     private static readonly IReadOnlyList<string> KnownOutputKeys = new[] { "format", "locale" };
     private static readonly IReadOnlyList<string> KnownGraphKeys = new[] { "max_hops" };
@@ -276,6 +276,14 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else if (value!.Length > 0)
                 pending.Add((IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
+        }
+
+        if (indexing.TryGetProperty("generatedCodePatterns", out var generatedCodePatterns))
+        {
+            if (!TryReadStringArray(generatedCodePatterns, "indexing.generatedCodePatterns", path, out var value, out var err))
+                errors.Add(err!);
+            else if (value!.Length > 0)
+                pending.Add((IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, string.Join(",", value)));
         }
     }
 

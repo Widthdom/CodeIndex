@@ -476,6 +476,7 @@ public class FileIndexer
     private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
     private readonly int _maxDanglingFileSystemEntryScanCandidates;
+    private readonly GeneratedCodePatternMatcher _generatedCodePatterns;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -1009,8 +1010,13 @@ public class FileIndexer
     {
     }
 
-    public FileIndexer(string projectRoot, bool ignoreCase, string? ignoreRuleRoot, long? maxFileSizeBytes = null)
-        : this(projectRoot, ignoreCase, ignoreRuleRoot, maxFileSizeBytes, directoryIgnoreCaseProbe: null)
+    public FileIndexer(
+        string projectRoot,
+        bool ignoreCase,
+        string? ignoreRuleRoot,
+        long? maxFileSizeBytes = null,
+        IReadOnlyList<string>? generatedCodePatterns = null)
+        : this(projectRoot, ignoreCase, ignoreRuleRoot, maxFileSizeBytes, directoryIgnoreCaseProbe: null, generatedCodePatterns: generatedCodePatterns)
     {
     }
 
@@ -1022,7 +1028,8 @@ public class FileIndexer
         Func<string, bool?>? directoryIgnoreCaseProbe,
         Func<string, IEnumerable<string>>? enumerateFiles = null,
         SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
-        int? maxDanglingFileSystemEntryScanCandidates = null)
+        int? maxDanglingFileSystemEntryScanCandidates = null,
+        IReadOnlyList<string>? generatedCodePatterns = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
@@ -1037,6 +1044,7 @@ public class FileIndexer
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(
             1,
             maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
+        _generatedCodePatterns = GeneratedCodePatternMatcher.FromPatterns(generatedCodePatterns, ignoreCase);
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(_projectRoot);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
@@ -3476,7 +3484,8 @@ public class FileIndexer
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
             Modified = loaded.ModifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content)
+                || IsConfiguredGeneratedCodeFile(normalizedRelativePath),
         };
 
         return (record, loaded.Content, loaded.RawBytes, loaded.Warning);
@@ -3499,7 +3508,8 @@ public class FileIndexer
             Lines = 0,
             Checksum = null,
             Modified = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
-            Generated = HasGeneratedCodeFileName(normalizedRelativePath),
+            Generated = HasGeneratedCodeFileName(normalizedRelativePath)
+                || IsConfiguredGeneratedCodeFile(normalizedRelativePath),
         };
     }
 
@@ -3560,6 +3570,24 @@ public class FileIndexer
 
     internal static bool IsGeneratedCodeFile(string relativePath, string content)
         => HasGeneratedCodeFileName(relativePath) || HasGeneratedCodeHeader(content);
+
+    internal const string GeneratedCodeExtractionSkippedIssueKind = "generated_code_extraction_skipped";
+
+    internal bool IsConfiguredGeneratedCodeFile(string relativePath)
+        => _generatedCodePatterns.TryMatch(relativePath, out _);
+
+    internal FileIssue? BuildGeneratedCodeExtractionSkippedIssue(string relativePath)
+        => _generatedCodePatterns.TryMatch(relativePath, out _)
+            ? new FileIssue
+            {
+                Path = relativePath,
+                Kind = GeneratedCodeExtractionSkippedIssueKind,
+                Line = 0,
+                Message = "Generated-code extraction suppressed by project configuration; file content and chunks were indexed, but symbols and references were skipped.",
+                Origin = "generated_code_pattern",
+                Severity = FileIssue.SeverityInfo,
+            }
+            : null;
 
     internal static int CountPhysicalLines(string content)
     {

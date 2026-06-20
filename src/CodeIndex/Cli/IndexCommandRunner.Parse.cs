@@ -68,6 +68,8 @@ public static partial class IndexCommandRunner
         string? symbolKindFilterError = null;
         var includeSymbolKindsSpecifiedOnCli = false;
         var excludeSymbolKindsSpecifiedOnCli = false;
+        string? generatedCodePatternError = null;
+        var generatedCodePatterns = ReadGeneratedCodePatternsFromEnvironment(ref generatedCodePatternError);
 
         AddSymbolKindFilterValues(
             IncludeSymbolKindsEnvironmentVariable,
@@ -320,7 +322,7 @@ public static partial class IndexCommandRunner
             ProjectFilters = projectFilters,
             SolutionPath = solutionPath,
             ProjectFilterError = projectFilterError,
-            ParseError = parseError,
+            ParseError = parseError ?? generatedCodePatternError,
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
@@ -339,7 +341,37 @@ public static partial class IndexCommandRunner
             Parallelism = parallelism,
             SymlinkPolicy = symlinkPolicy,
             SymbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, symbolKindFilterError),
+            GeneratedCodePatterns = generatedCodePatterns,
         };
+    }
+
+    internal static IReadOnlyList<string> ReadGeneratedCodePatternsFromEnvironment()
+    {
+        string? parseError = null;
+        return ReadGeneratedCodePatternsFromEnvironment(ref parseError);
+    }
+
+    private static IReadOnlyList<string> ReadGeneratedCodePatternsFromEnvironment(ref string? parseError)
+    {
+        var value = CdidxEnvironment.GetEnvironmentVariable(GeneratedCodePatternsEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+        if (!ValidateCsvBounds(GeneratedCodePatternsEnvironmentVariable, value, MaxGeneratedCodePatternCsvLength, MaxGeneratedCodePatternCount, ref parseError))
+            return [];
+
+        var patterns = new List<string>();
+        foreach (var raw in value.Split(',', StringSplitOptions.TrimEntries))
+        {
+            if (raw.Length == 0)
+            {
+                parseError ??= $"{GeneratedCodePatternsEnvironmentVariable} contains an empty generated-code pattern";
+                continue;
+            }
+
+            patterns.Add(raw);
+        }
+
+        return patterns;
     }
 
     private static FileIndexer.SymlinkPolicy ParseSymlinkPolicy(string value, FileIndexer.SymlinkPolicy fallback, ref string? parseError)

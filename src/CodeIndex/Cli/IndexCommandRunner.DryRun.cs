@@ -20,7 +20,14 @@ public static partial class IndexCommandRunner
         CancellationToken cancellationToken)
     {
         var projectPath = options.ProjectPath!;
-        var dryIndexer = new FileIndexer(projectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
+        var dryIndexer = new FileIndexer(
+            projectPath,
+            ignoreCase,
+            ignoreRuleRoot,
+            options.MaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: options.SymlinkPolicy,
+            generatedCodePatterns: options.GeneratedCodePatterns);
         IReadOnlyList<string> dryCandidates;
         IReadOnlyList<string> dryDeleteCandidates;
         bool authoritativeFullScan;

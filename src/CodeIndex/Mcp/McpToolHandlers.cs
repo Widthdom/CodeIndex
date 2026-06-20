@@ -5592,7 +5592,8 @@ public partial class McpServer
                 GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value) ?? Path.GetFullPath(projectPath),
                 maxFileBytes,
                 directoryIgnoreCaseProbe: null,
-                symlinkPolicy: symlinkPolicy);
+                symlinkPolicy: symlinkPolicy,
+                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -5697,7 +5698,8 @@ public partial class McpServer
             GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
             maxFileBytes,
             directoryIgnoreCaseProbe: null,
-            symlinkPolicy: symlinkPolicy);
+            symlinkPolicy: symlinkPolicy,
+            generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -5836,7 +5838,9 @@ public partial class McpServer
                     record.Modified,
                     record.Checksum,
                     size: record.Size,
+                    lines: record.Lines,
                     language: record.Lang,
+                    generated: record.Generated,
                     allowReuse: symbolKindFilterMatchesPrior
                         && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
@@ -5853,6 +5857,11 @@ public partial class McpServer
                         existingId = null;
                     }
                 }
+                if (existingId != null
+                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                {
+                    existingId = null;
+                }
                 if (existingId != null)
                 {
                     skipped++;
@@ -5868,6 +5877,22 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
+                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                if (generatedSuppressionIssue != null)
+                {
+                    writer.InsertChunks(chunks);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    var issues = IndexCommandRunner.AppendIssueIfMissing(
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                        generatedSuppressionIssue);
+                    writer.InsertIssues(fileId, issues);
+                    WriteProjectRootOnce();
+                    writer.ClearBatchInProgress();
+                    txn.Commit();
+                    McpIndexFileCommittedForTesting?.Invoke(record.Path);
+                    continue;
+                }
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
@@ -7114,6 +7139,8 @@ public partial class McpServer
             {
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 if (record.Lang != "csharp")
+                    continue;
+                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path) != null)
                     continue;
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));

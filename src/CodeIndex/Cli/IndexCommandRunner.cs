@@ -19,12 +19,15 @@ public static partial class IndexCommandRunner
 {
     internal const string IncludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_INCLUDE_SYMBOL_KINDS";
     internal const string ExcludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS";
+    internal const string GeneratedCodePatternsEnvironmentVariable = "CDIDX_INDEX_GENERATED_CODE_PATTERNS";
     internal const int DefaultMaxSymbolsPerFile = 5000;
     internal const int MaxSymbolsPerFileLimit = 50_000;
     internal const int DefaultMaxReferencesPerFile = 100_000;
     internal const int MaxReferencesPerFileLimit = 1_000_000;
     internal const int MaxCommitRefCount = 64;
     internal const int MaxCommitRefLength = 256;
+    internal const int MaxGeneratedCodePatternCsvLength = 32_768;
+    internal const int MaxGeneratedCodePatternCount = 128;
     internal const int MaxGitExcludeBytes = 256 * 1024;
     internal const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int MaxIndexRunDiagnosticLength = 512;
@@ -281,7 +284,14 @@ public static partial class IndexCommandRunner
                 AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics);
 
                 var writer = new DbWriter(db);
-                var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
+                var indexer = new FileIndexer(
+                    options.ProjectPath,
+                    ignoreCase,
+                    ignoreRuleRoot,
+                    options.MaxFileSizeBytes,
+                    directoryIgnoreCaseProbe: null,
+                    symlinkPolicy: options.SymlinkPolicy,
+                    generatedCodePatterns: options.GeneratedCodePatterns);
                 var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, indexCancellation.Token);
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
@@ -1094,6 +1104,8 @@ public static partial class IndexCommandRunner
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 if (record.Lang != "csharp")
                     continue;
+                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path) != null)
+                    continue;
 
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
@@ -1603,6 +1615,7 @@ public sealed class IndexCommandOptions
     public bool MemoryTrace { get; init; }
     public FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; } = FileIndexer.SymlinkPolicy.None;
     public SymbolKindFilter SymbolKindFilter { get; init; } = SymbolKindFilter.Empty;
+    public IReadOnlyList<string> GeneratedCodePatterns { get; init; } = [];
 }
 
 public sealed class SymbolKindFilter

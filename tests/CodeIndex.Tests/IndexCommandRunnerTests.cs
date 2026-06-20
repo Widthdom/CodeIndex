@@ -6015,6 +6015,103 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_FullScan_ConfiguredGeneratedCodePatternsKeepChunksButSkipExtraction()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        var projectRoot = CreateTempProject();
+        try
+        {
+            env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "src/generated/**");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "generated"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "generated", "GeneratedClient.cs"),
+                """
+                public class GeneratedClient
+                {
+                    public string Lookup() => "generated";
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "NormalClient.cs"),
+                """
+                public class NormalClient
+                {
+                    public string Lookup() => "normal";
+                }
+                """);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var generatedCmd = conn.CreateCommand();
+                generatedCmd.CommandText = """
+                    SELECT f.generated,
+                           (SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id AND c.content LIKE '%GeneratedClient%'),
+                           (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id),
+                           (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id),
+                           (SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id AND i.kind = @issueKind)
+                    FROM files f
+                    WHERE f.path = @path
+                    """;
+                generatedCmd.Parameters.AddWithValue("@issueKind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+                generatedCmd.Parameters.AddWithValue("@path", "src/generated/GeneratedClient.cs");
+                using (var reader = generatedCmd.ExecuteReader())
+                {
+                    Assert.True(reader.Read());
+                    Assert.Equal(1, reader.GetInt32(0));
+                    Assert.True(reader.GetInt32(1) > 0);
+                    Assert.Equal(0, reader.GetInt32(2));
+                    Assert.Equal(0, reader.GetInt32(3));
+                    Assert.Equal(1, reader.GetInt32(4));
+                }
+
+                using var normalCmd = conn.CreateCommand();
+                normalCmd.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    WHERE f.path = 'NormalClient.cs'
+                      AND s.name = 'NormalClient'
+                    """;
+                Assert.Equal(1L, (long)normalCmd.ExecuteScalar()!);
+            }
+
+            env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, null);
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--files", "src/generated/GeneratedClient.cs", "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var updatedCmd = conn.CreateCommand();
+                updatedCmd.CommandText = """
+                    SELECT f.generated,
+                           (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id AND s.name = 'GeneratedClient'),
+                           (SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id AND i.kind = @issueKind)
+                    FROM files f
+                    WHERE f.path = @path
+                    """;
+                updatedCmd.Parameters.AddWithValue("@issueKind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+                updatedCmd.Parameters.AddWithValue("@path", "src/generated/GeneratedClient.cs");
+                using var reader = updatedCmd.ExecuteReader();
+                Assert.True(reader.Read());
+                Assert.Equal(0, reader.GetInt32(0));
+                Assert.Equal(1, reader.GetInt32(1));
+                Assert.Equal(0, reader.GetInt32(2));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_CsharpStaticInterfaceContractChange_ReindexesImplementers()
     {
         var projectRoot = CreateTempProject();
