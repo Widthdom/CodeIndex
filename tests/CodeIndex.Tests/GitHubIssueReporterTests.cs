@@ -1391,6 +1391,22 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildApiErrorDetail_BoundsRedactedJsonSerialization_Issue3740()
+    {
+        var secret = "value-that-must-not-leak";
+        var errorBody = "{\"token\":\"" + secret + "\",\"message\":\"" + new string('\u6f22', 1200) + "\"}";
+        Assert.True(Encoding.UTF8.GetByteCount(errorBody) <= GitHubIssueReporter.MaxGitHubApiErrorBodyBytes);
+
+        var detail = GitHubIssueReporter.BuildApiErrorDetail(500, errorBody);
+
+        Assert.True(
+            detail.Length <= "500: ".Length + 500,
+            detail.Length.ToString(CultureInfo.InvariantCulture));
+        Assert.StartsWith("500: {\"token\":\"[redacted]\",\"message\":\"", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, detail);
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_UserCancellation_Propagates()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
