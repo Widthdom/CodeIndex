@@ -270,6 +270,29 @@ public class McpServerTests : IDisposable
         return server.HandleMessage(request)!;
     }
 
+    private static string BuildDenseReferenceCSharpSource(int callCount)
+    {
+        var calls = string.Join('\n', Enumerable.Range(0, callCount).Select(static _ => "            Target.Ping();"));
+        return $$"""
+namespace DenseReferences;
+
+public static class Target
+{
+    public static void Ping()
+    {
+    }
+}
+
+public sealed class Caller
+{
+    public void Run()
+    {
+{{calls}}
+    }
+}
+""";
+    }
+
     private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -11430,6 +11453,49 @@ public class McpServerTests : IDisposable
             if (Directory.Exists(fixtureDir))
                 TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_MaxReferencesPerFilePersistsReferenceCountExceededIssue_Issue3719()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_reference_cap_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_reference_cap_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(Path.Combine(fixtureDir, "DenseReferences.cs"), BuildDenseReferenceCSharpSource(8));
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir, args => args["maxReferencesPerFile"] = 2);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("maxReferencesPerFile", issue.Message);
+
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT
+                    (SELECT COUNT(*) FROM chunks),
+                    (SELECT COUNT(*) FROM symbols),
+                    (SELECT COUNT(*) FROM symbol_references)
+                """;
+            using var row = command.ExecuteReader();
+            Assert.True(row.Read());
+            Assert.True(row.GetInt64(0) > 0);
+            Assert.True(row.GetInt64(1) > 0);
+            Assert.Equal(0, row.GetInt64(2));
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
