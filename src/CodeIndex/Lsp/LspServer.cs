@@ -17,12 +17,15 @@ internal sealed class LspServer : IDisposable
     internal const int MaxWorkspaceSymbols = 1000;
     private const int MaxWorkspaceFolders = 32;
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
+    internal const int MaxLspResponseFrameBytes = MaxLspFrameBytes;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxLspHeaderCount = 64;
     internal const int MaxLspHeaderBytes = 64 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
+    internal const int MaxLiveDocumentBytes = 16 * 1024 * 1024;
     internal const int MaxPooledPayloadBufferBytes = 1024 * 1024;
     internal const int MaxLiveDocuments = 64;
+    internal const int MaxContentChangesPerNotification = 64;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxLspRequestIdRawBytes = 4 * 1024;
     internal const int MaxJsonDepth = 32;
@@ -124,7 +127,12 @@ internal sealed class LspServer : IDisposable
     private bool _exitRequestedBeforeShutdown;
     private readonly List<string> _workspaceFolders = [];
     private readonly Dictionary<string, string> _liveDocuments;
+    private readonly Dictionary<string, int> _liveDocumentByteCounts;
     private readonly List<string> _liveDocumentOrder = [];
+    private long _liveDocumentBytes;
+    private long _liveDocumentEvictionCount;
+    private long _liveDocumentEvictedBytes;
+    private long _contentChangeEntriesDropped;
 
     private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
@@ -175,9 +183,18 @@ internal sealed class LspServer : IDisposable
             _pathStringComparison == StringComparison.OrdinalIgnoreCase
                 ? StringComparer.OrdinalIgnoreCase
                 : StringComparer.Ordinal);
+        _liveDocumentByteCounts = new Dictionary<string, int>(_liveDocuments.Comparer);
         if (_projectRoot != null)
             _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
     }
+
+    internal long LiveDocumentBytesForTests => _liveDocumentBytes;
+
+    internal long LiveDocumentEvictionCountForTests => _liveDocumentEvictionCount;
+
+    internal long LiveDocumentEvictedBytesForTests => _liveDocumentEvictedBytes;
+
+    internal long ContentChangeEntriesDroppedForTests => _contentChangeEntriesDropped;
 
     /// <summary>
     /// Compatibility wrapper that runs without caller cancellation. Prefer the overload that
@@ -195,7 +212,7 @@ internal sealed class LspServer : IDisposable
             var response = HandleMessage(payload);
             cancellationToken.ThrowIfCancellationRequested();
             if (response != null)
-                WriteMessage(output, response.ToJsonString(_jsonOptions));
+                WriteResponseMessage(output, response);
             if (_exitRequested)
                 break;
         }
@@ -469,8 +486,18 @@ internal sealed class LspServer : IDisposable
             return null;
 
         string? latestText = null;
-        foreach (var change in changes.EnumerateArray())
+        var changeCount = changes.GetArrayLength();
+        var startIndex = 0;
+        if (changeCount > MaxContentChangesPerNotification)
         {
+            startIndex = changeCount - MaxContentChangesPerNotification;
+            _contentChangeEntriesDropped += startIndex;
+            Activity.Current?.SetTag("lsp.content_changes.dropped", _contentChangeEntriesDropped);
+        }
+
+        for (var i = startIndex; i < changeCount; i++)
+        {
+            var change = changes[i];
             if (change.ValueKind == JsonValueKind.Object
                 && change.TryGetProperty("text", out var textElement)
                 && textElement.ValueKind == JsonValueKind.String)
@@ -497,39 +524,55 @@ internal sealed class LspServer : IDisposable
         if (!TryGetLiveDocumentKeyFromUri(uri, out var key))
             return;
 
-        if (Encoding.UTF8.GetByteCount(text) > MaxPositionDocumentBytes)
+        var textBytes = Encoding.UTF8.GetByteCount(text);
+        if (textBytes > MaxPositionDocumentBytes || textBytes > MaxLiveDocumentBytes)
         {
             RemoveLiveDocument(key);
             return;
         }
 
-        EnsureLiveDocumentCapacity(key);
+        if (!_liveDocuments.ContainsKey(key))
+            _liveDocumentOrder.Add(key);
+        else if (_liveDocumentByteCounts.TryGetValue(key, out var previousBytes))
+            _liveDocumentBytes = Math.Max(0, _liveDocumentBytes - previousBytes);
+
         _liveDocuments[key] = text;
+        _liveDocumentByteCounts[key] = textBytes;
+        _liveDocumentBytes += textBytes;
+        EnsureLiveDocumentCapacity();
+        Activity.Current?.SetTag("lsp.live_documents.bytes", _liveDocumentBytes);
+        Activity.Current?.SetTag("lsp.live_documents.eviction_count", _liveDocumentEvictionCount);
     }
 
-    private void EnsureLiveDocumentCapacity(string key)
+    private void EnsureLiveDocumentCapacity()
     {
-        if (_liveDocuments.ContainsKey(key))
-            return;
-
-        while (_liveDocuments.Count >= MaxLiveDocuments && _liveDocumentOrder.Count > 0)
+        while ((_liveDocuments.Count > MaxLiveDocuments || _liveDocumentBytes > MaxLiveDocumentBytes)
+            && _liveDocumentOrder.Count > 0)
         {
             var oldestKey = _liveDocumentOrder[0];
-            _liveDocumentOrder.RemoveAt(0);
-            _liveDocuments.Remove(oldestKey);
+            RemoveLiveDocument(oldestKey, recordEviction: true);
         }
 
-        if (_liveDocuments.Count >= MaxLiveDocuments)
+        if (_liveDocuments.Count > MaxLiveDocuments || _liveDocumentBytes > MaxLiveDocumentBytes)
         {
             _liveDocuments.Clear();
+            _liveDocumentByteCounts.Clear();
             _liveDocumentOrder.Clear();
+            _liveDocumentBytes = 0;
         }
-
-        _liveDocumentOrder.Add(key);
     }
 
-    private void RemoveLiveDocument(string key)
+    private void RemoveLiveDocument(string key, bool recordEviction = false)
     {
+        if (_liveDocumentByteCounts.Remove(key, out var bytes))
+        {
+            _liveDocumentBytes = Math.Max(0, _liveDocumentBytes - bytes);
+            if (recordEviction)
+            {
+                _liveDocumentEvictionCount++;
+                _liveDocumentEvictedBytes += bytes;
+            }
+        }
         _liveDocuments.Remove(key);
         _liveDocumentOrder.RemoveAll(existing => string.Equals(existing, key, _pathStringComparison));
     }
@@ -800,10 +843,11 @@ internal sealed class LspServer : IDisposable
         if (!TryResolveIndexedDocument(root, out var document))
             return new JsonObject { ["data"] = new JsonArray() };
 
+        var lineCache = new Dictionary<int, string?>();
         var symbols = GetDocumentSymbols(document.IndexedPath, MaxSemanticTokenItems)
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol.Name))
             .Take(MaxSemanticTokenItems)
-            .Select(symbol => BuildSemanticToken(document, symbol))
+            .Select(symbol => BuildSemanticToken(document, symbol, lineCache))
             .Where(token => token.HasValue)
             .Select(token => token!.Value)
             .OrderBy(token => token.Line)
@@ -845,11 +889,12 @@ internal sealed class LspServer : IDisposable
             return [];
 
         var array = new JsonArray();
+        var lineCache = new Dictionary<int, string?>();
         foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxInlayHintItems)
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol.ReturnType))
             .Take(MaxInlayHintItems))
         {
-            array.Add((JsonNode)ToInlayHint(document, symbol));
+            array.Add((JsonNode)ToInlayHint(document, symbol, lineCache));
         }
         return array;
     }
@@ -871,18 +916,40 @@ internal sealed class LspServer : IDisposable
         ["sortText"] = index.ToString("D4", CultureInfo.InvariantCulture) + "_" + symbol.Name,
     };
 
-    private static string FormatHoverText(SymbolResult symbol)
+    private string FormatHoverText(SymbolResult symbol)
     {
         var builder = new StringBuilder();
         builder.Append(symbol.Kind).Append(' ').Append(symbol.Name);
         if (!string.IsNullOrWhiteSpace(symbol.Signature))
             builder.AppendLine().Append(symbol.Signature);
-        builder.AppendLine().Append(symbol.Path).Append(':').Append(symbol.Line.ToString(CultureInfo.InvariantCulture));
+        builder.AppendLine().Append(FormatHoverPath(symbol.Path)).Append(':').Append(symbol.Line.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrWhiteSpace(symbol.ContainerName))
             builder.AppendLine().Append("container: ").Append(symbol.ContainerName);
         if (!string.IsNullOrWhiteSpace(symbol.ReturnType))
             builder.AppendLine().Append("returns: ").Append(symbol.ReturnType);
         return builder.ToString();
+    }
+
+    private string FormatHoverPath(string path)
+    {
+        if (!Path.IsPathRooted(path))
+            return path.Replace('\\', '/');
+
+        foreach (var root in EnumerateHoverRoots())
+        {
+            if (TryGetRelativePath(root, path, out var relativePath) && relativePath != null)
+                return relativePath.Replace('\\', '/');
+        }
+
+        return "[outside workspace]";
+    }
+
+    private IEnumerable<string> EnumerateHoverRoots()
+    {
+        if (_projectRoot != null)
+            yield return _projectRoot;
+        foreach (var workspaceFolder in _workspaceFolders)
+            yield return workspaceFolder;
     }
 
     private static string FormatSymbolDetail(SymbolResult symbol)
@@ -937,9 +1004,9 @@ internal sealed class LspServer : IDisposable
         },
     };
 
-    private JsonObject ToInlayHint(IndexedDocumentContext document, SymbolResult symbol)
+    private JsonObject ToInlayHint(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
     {
-        var startCharacter = FindSymbolStartCharacter(document, symbol);
+        var startCharacter = FindSymbolStartCharacter(document, symbol, lineCache);
         return new JsonObject
         {
             ["position"] = ToPosition(symbol.Line, startCharacter + symbol.Name.Length + 1),
@@ -951,13 +1018,13 @@ internal sealed class LspServer : IDisposable
 
     private readonly record struct SemanticToken(int Line, int StartCharacter, int Length, int TokenType, int TokenModifiers);
 
-    private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol)
+    private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
     {
         var line = Math.Max(symbol.Line, symbol.StartLine);
         if (line <= 0)
             return null;
 
-        var startCharacter = FindSymbolStartCharacter(document, symbol);
+        var startCharacter = FindSymbolStartCharacter(document, symbol, lineCache);
         var length = Math.Max(symbol.Name.Length, 1);
         return new SemanticToken(
             line - 1,
@@ -967,13 +1034,13 @@ internal sealed class LspServer : IDisposable
             1 << 1);
     }
 
-    private int FindSymbolStartCharacter(IndexedDocumentContext document, SymbolResult symbol)
+    private int FindSymbolStartCharacter(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?>? lineCache = null)
     {
         var line = Math.Max(symbol.Line, symbol.StartLine);
         if (line <= 0 || string.IsNullOrWhiteSpace(symbol.Name))
             return 0;
 
-        return TryReadPositionLine(document.ResolvedPath, line - 1, out var sourceLine, out _)
+        return TryReadPositionLineCached(document.ResolvedPath, line - 1, lineCache, out var sourceLine)
             ? Math.Max(0, sourceLine.IndexOf(symbol.Name, StringComparison.Ordinal))
             : 0;
     }
@@ -1288,6 +1355,24 @@ internal sealed class LspServer : IDisposable
             return TryReadPositionLineFromText(liveText, targetLine, out sourceLine, out failureReason);
 
         return TryReadPositionLineFromFile(path, targetLine, out sourceLine, out failureReason);
+    }
+
+    private bool TryReadPositionLineCached(
+        string path,
+        int targetLine,
+        Dictionary<int, string?>? lineCache,
+        out string sourceLine)
+    {
+        if (lineCache != null && lineCache.TryGetValue(targetLine, out var cachedLine))
+        {
+            sourceLine = cachedLine ?? string.Empty;
+            return cachedLine != null;
+        }
+
+        var found = TryReadPositionLine(path, targetLine, out sourceLine, out _);
+        if (lineCache != null)
+            lineCache[targetLine] = found ? sourceLine : null;
+        return found;
     }
 
     private static bool TryReadPositionLineFromText(string text, int targetLine, out string sourceLine, out string? failureReason)
@@ -1982,13 +2067,36 @@ internal sealed class LspServer : IDisposable
             "LSP input ended before a frame was available."),
     };
 
+    private void WriteResponseMessage(Stream output, JsonObject response)
+    {
+        var payload = response.ToJsonString(_jsonOptions);
+        if (TryWriteMessage(output, payload, out _))
+            return;
+
+        var id = response["id"]?.DeepClone();
+        var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
+        if (!TryWriteMessage(output, errorPayload, out _))
+            throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
+    }
+
     internal static void WriteMessage(Stream output, string payload)
     {
+        if (!TryWriteMessage(output, payload, out _))
+            throw new InvalidOperationException($"LSP response body exceeded the {MaxLspResponseFrameBytes} byte limit.");
+    }
+
+    internal static bool TryWriteMessage(Stream output, string payload, out int bodyBytes)
+    {
         var body = Encoding.UTF8.GetBytes(payload);
+        bodyBytes = body.Length;
+        if (body.Length > MaxLspResponseFrameBytes)
+            return false;
+
         var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
         output.Write(header);
         output.Write(body);
         output.Flush();
+        return true;
     }
 
     private static string? ReadAsciiLine(
