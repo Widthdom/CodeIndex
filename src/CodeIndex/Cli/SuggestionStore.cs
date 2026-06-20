@@ -1177,11 +1177,7 @@ public class SuggestionStore
         // The lock is held for the lifetime of the FileStream (released on Dispose).
         // FileShare.None は全プラットフォームでプロセス間の排他アクセスを提供する。
         // ロックは FileStream の寿命の間保持される（Dispose で解放）。
-        using var lockFile = new FileStream(
-            _lockPath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.None);
+        using var lockFile = ExclusiveFileLock.Open(_lockPath);
 
         return action();
     }
