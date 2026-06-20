@@ -7888,6 +7888,36 @@ public static partial class QueryCommandRunner
         };
     }
 
+    internal static JsonObject BuildUnusedRepresentativeSymbolsJson(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Take(3).ToList(), StringComparer.Ordinal);
+        var representatives = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (!grouped.TryGetValue(bucket, out var bucketResults) || bucketResults.Count == 0)
+                continue;
+
+            var samples = new JsonArray();
+            foreach (var result in bucketResults)
+            {
+                samples.Add(new JsonObject
+                {
+                    ["name"] = result.Name,
+                    ["kind"] = result.Kind,
+                    ["path"] = result.Path,
+                    ["line"] = result.Line,
+                    ["confidence"] = result.UnusedConfidence,
+                });
+            }
+
+            representatives[bucket] = samples;
+        }
+
+        return representatives;
+    }
+
     internal static JsonObject BuildUnusedBucketTaxonomyJson()
     {
         var taxonomy = new JsonObject();
@@ -7940,6 +7970,7 @@ public static partial class QueryCommandRunner
         if (queryOptions?.Compact == true)
         {
             payload["compact"] = true;
+            payload["representative_symbols"] = BuildUnusedRepresentativeSymbolsJson(resultList);
             payload["omitted_sections"] = new JsonArray(JsonValue.Create("symbols"));
         }
         else

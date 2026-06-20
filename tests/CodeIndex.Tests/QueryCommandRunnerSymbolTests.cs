@@ -1039,6 +1039,18 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("compact").GetBoolean());
             Assert.False(json.TryGetProperty("symbols", out _));
             Assert.Contains(json.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "symbols");
+            Assert.Equal(
+                "Hidden",
+                json.GetProperty("representative_symbols")
+                    .GetProperty("likely_unused_private")[0]
+                    .GetProperty("name")
+                    .GetString());
+            Assert.Equal(
+                "function",
+                json.GetProperty("representative_symbols")
+                    .GetProperty("likely_unused_private")[0]
+                    .GetProperty("kind")
+                    .GetString());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
             Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
