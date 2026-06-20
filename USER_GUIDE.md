@@ -454,9 +454,10 @@ cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
-or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
-CR-only line endings, likely non-UTF-8 content, Git LFS pointer placeholders, and
-malformed or truncated Dockerfile JSON-form instruction payloads.
+or symbol names: U+FFFD replacement characters, UTF-16 BOM and BOM-less
+heuristic detections, null bytes, mixed or CR-only line endings, likely non-UTF-8
+content, Git LFS pointer placeholders, and malformed or truncated Dockerfile
+JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
@@ -464,9 +465,9 @@ Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
 default `{ "count": ..., "issues": [...] }` object.
-LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
-not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
-content.
+LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
+not indexed, and their checksum stays tied to the pointer identity until you run
+`git lfs pull` and then `cdidx index .` to index the real file content.
 
 ### Find potentially unused symbols
 
@@ -2305,7 +2306,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
-| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings, Dockerfile JSON-form diagnostics) |
+| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM/heuristic detection, likely non-UTF8 encodings, Git LFS pointer placeholders, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2958,17 +2959,19 @@ cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
-対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder、Dockerfile の
-JSON-form instruction payload の parse / truncation 診断などです。
+対象は U+FFFD replacement character、UTF-16 BOM と BOM なし heuristic 検出、
+null byte、mixed / CR-only line ending、likely non-UTF-8 content、Git LFS pointer
+placeholder、Dockerfile の JSON-form instruction payload の parse / truncation
+診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
 エンコーディング破損の可能性を agent が区別できます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。pipeline が既定の `{ "count": ..., "issues": [...] }`
 object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
-は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
-実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
+は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
+実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
+の後に `cdidx index .` を再実行してください。
 
 ### 未使用の可能性がある symbols を探す
 
@@ -4804,7 +4807,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
-| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング、Dockerfile JSON-form 診断）を報告 |
+| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM / heuristic 検出、UTF-8 以外と推定されるエンコーディング、Git LFS pointer placeholder、Dockerfile JSON-form 診断）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |

@@ -1533,8 +1533,20 @@ public class FileIndexer
         if (_symlinkPolicy == SymlinkPolicy.Internal && IsPathEqualOrParent(_projectRoot, targetPath))
             return false;
 
-        errors.Add(new ScanError(relative, $"Skipped symlinked directory outside the active symlink policy: {targetPath}", ScanIssueSeverity.Warning));
+        errors.Add(new ScanError(
+            relative,
+            $"Skipped symlinked directory outside the active symlink policy: target {FormatSymlinkPolicyTargetForDiagnostic(targetPath)}",
+            ScanIssueSeverity.Warning));
         return true;
+    }
+
+    private string FormatSymlinkPolicyTargetForDiagnostic(string targetPath)
+    {
+        if (!IsPathEqualOrParent(_projectRoot, targetPath))
+            return "<outside project root>";
+
+        var relative = NormalizePathSeparators(Path.GetRelativePath(_projectRoot, targetPath));
+        return relative == "." ? "<project root>" : relative;
     }
 
     internal bool ShouldSkipDirectoryTraversal(string directory)
@@ -1568,7 +1580,7 @@ public class FileIndexer
         {
         }
 
-        return directory;
+        return $"unresolved-reparse:{Path.GetFullPath(directory)}";
     }
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
@@ -3689,8 +3701,13 @@ public class FileIndexer
         // 不正サロゲートペアに備え content 側 U+FFFD 走査は継続する。Closes #1540.
         var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
-        if (isUtf16 && hasUtf16Bom)
-            AddUtf16BomIssue(issues, relativePath, utf16BigEndian);
+        if (isUtf16)
+        {
+            if (hasUtf16Bom)
+                AddUtf16BomIssue(issues, relativePath, utf16BigEndian);
+            else
+                AddUtf16HeuristicIssue(issues, relativePath, utf16BigEndian);
+        }
 
         if (TryGetConflictMarkerLine(content, out var conflictMarkerLine))
         {
@@ -3957,6 +3974,19 @@ public class FileIndexer
             Message = utf16BigEndian
                 ? "UTF-16 BE BOM detected (decoded as UTF-16)"
                 : "UTF-16 LE BOM detected (decoded as UTF-16)",
+        });
+    }
+
+    private static void AddUtf16HeuristicIssue(List<FileIssue> issues, string relativePath, bool utf16BigEndian)
+    {
+        issues.Add(new FileIssue
+        {
+            Path = relativePath,
+            Kind = "utf16_heuristic",
+            Line = 1,
+            Message = utf16BigEndian
+                ? "BOM-less UTF-16 BE detected by NUL-byte heuristic (decoded as UTF-16)"
+                : "BOM-less UTF-16 LE detected by NUL-byte heuristic (decoded as UTF-16)",
         });
     }
 
@@ -4424,9 +4454,8 @@ public class FileIndexer
             if (string.IsNullOrWhiteSpace(commandLine))
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            var tokens = commandLine
-                .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (tokens.Length == 0)
+            var tokens = TokenizeShebangCommandLine(commandLine);
+            if (tokens.Count == 0)
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var interpreter = ResolveShebangInterpreter(tokens);
@@ -4524,15 +4553,77 @@ public class FileIndexer
         _ => new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes),
     };
 
+    private static IReadOnlyList<string> TokenizeShebangCommandLine(string commandLine)
+    {
+        var tokens = new List<string>();
+        var token = new StringBuilder(commandLine.Length);
+        char? quote = null;
+        var escaped = false;
+
+        foreach (var ch in commandLine)
+        {
+            if (escaped)
+            {
+                token.Append(ch);
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (quote is { } activeQuote)
+            {
+                if (ch == activeQuote)
+                    quote = null;
+                else
+                    token.Append(ch);
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch is ' ' or '\t')
+            {
+                if (token.Length > 0)
+                {
+                    tokens.Add(token.ToString());
+                    token.Clear();
+                }
+                continue;
+            }
+
+            token.Append(ch);
+        }
+
+        if (escaped)
+            token.Append('\\');
+        if (token.Length > 0)
+            tokens.Add(token.ToString());
+
+        return tokens;
+    }
+
     private static string? ResolveShebangInterpreter(IReadOnlyList<string> tokens)
     {
-        var interpreter = Path.GetFileName(tokens[0]).ToLowerInvariant();
+        var interpreter = NormalizeShebangInterpreterToken(tokens[0]);
+        if (interpreter == null)
+            return null;
         if (interpreter is not "env")
             return interpreter;
 
         for (var i = 1; i < tokens.Count; i++)
         {
             var token = tokens[i];
+            if (token == "--")
+                continue;
             if (token.StartsWith("-", StringComparison.Ordinal))
                 continue;
 
@@ -4541,10 +4632,27 @@ public class FileIndexer
             if (token.Contains('='))
                 continue;
 
-            return Path.GetFileName(token).ToLowerInvariant();
+            return NormalizeShebangInterpreterToken(token);
         }
 
         return null;
+    }
+
+    private static string? NormalizeShebangInterpreterToken(string token)
+    {
+        var candidate = token;
+        if (token.IndexOfAny([' ', '\t']) >= 0)
+        {
+            var nestedTokens = TokenizeShebangCommandLine(token);
+            if (nestedTokens.Count == 0)
+                return null;
+            candidate = nestedTokens[0];
+        }
+
+        if (string.IsNullOrWhiteSpace(candidate))
+            return null;
+
+        return Path.GetFileName(candidate).ToLowerInvariant();
     }
 
     private static string? MapShebangInterpreterToLanguage(string interpreter) => interpreter switch

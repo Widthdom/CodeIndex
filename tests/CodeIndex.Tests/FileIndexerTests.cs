@@ -1062,6 +1062,8 @@ public class FileIndexerTests
     [InlineData("worker", "#!/usr/bin/python3\nprint('hi')\n", "python")]
     [InlineData("bundle", "#!/usr/bin/env ruby\nputs 'hi'\n", "ruby")]
     [InlineData("cli", "#!/usr/bin/env node\nconsole.log('hi')\n", "javascript")]
+    [InlineData("envsplit", "#!/usr/bin/env -S python -O\nprint('hi')\n", "python")]
+    [InlineData("envquoted", "#!/usr/bin/env -S \"python -O\"\nprint('hi')\n", "python")]
     [InlineData("script", "#!/usr/bin/env pwsh\nWrite-Host hi\n", "powershell")]
     public void DetectLanguage_ExtensionlessShebangScripts_ReturnCorrectLang(string fileName, string content, string expected)
     {
@@ -4121,7 +4123,9 @@ public class FileIndexerTests
                 result.Errors,
                 error => error.Path == "external"
                     && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase));
+                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase)
+                    && error.Message.Contains("<outside project root>", StringComparison.Ordinal)
+                    && !error.Message.Contains(externalDir, StringComparison.Ordinal));
         }
         finally
         {
@@ -4882,7 +4886,9 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.Null(warning);
+            Assert.NotNull(warning);
+            Assert.Contains("UTF-16LE without BOM", warning, StringComparison.Ordinal);
+            Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
             Assert.Contains("namespace Utf16LeNoBom;", content);
             Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.Unicode.GetBytes(payload)));
         }
@@ -4910,7 +4916,9 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.Null(warning);
+            Assert.NotNull(warning);
+            Assert.Contains("UTF-16BE without BOM", warning, StringComparison.Ordinal);
+            Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
             Assert.Contains("namespace Utf16BeNoBom;", content);
             Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.BigEndianUnicode.GetBytes(payload)));
         }
@@ -4955,9 +4963,34 @@ public class FileIndexerTests
 
         var issues = FileIndexer.ValidateContent("utf16le-nobom.cs", rawBytes, payload);
 
+        var issue = Assert.Single(issues.Where(i => i.Kind == "utf16_heuristic"));
+        Assert.Equal(1, issue.Line);
+        Assert.Contains("UTF-16 LE", issue.Message, StringComparison.Ordinal);
+        Assert.Contains("NUL-byte heuristic", issue.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(issues, i => i.Kind == "utf16_bom");
         Assert.DoesNotContain(issues, i => i.Kind == "null_byte");
         Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
+    }
+
+    [Fact]
+    public void BuildRecord_NonUtf16NullByte_ThrowsOffsetDiagnostic()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "binary.cs");
+            File.WriteAllBytes(filePath, [(byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', 0x00]);
+
+            var indexer = new FileIndexer(tempDir);
+            var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(() => indexer.BuildRecordWithRawBytes(filePath));
+
+            Assert.Contains("NULL byte at byte offset 6", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
@@ -5180,6 +5213,8 @@ public class FileIndexerTests
 
             Assert.Equal(string.Empty, content);
             Assert.Equal(0, record.Lines);
+            Assert.Equal(FileIndexer.ComputeChecksum(rawBytes), record.Checksum);
+            Assert.NotEqual(FileIndexer.ComputeChecksum(System.Text.Encoding.UTF8.GetBytes(string.Empty)), record.Checksum);
             var issue = Assert.Single(issues, i => i.Kind == "lfs_pointer_skipped");
             Assert.Equal("asset.cs", issue.Path);
             Assert.Equal(1, issue.Line);

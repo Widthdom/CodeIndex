@@ -20,8 +20,10 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         var (content, warning) = DecodeIndexableContent(bytes, relativePath);
         content = NormalizeLineEndings(content);
         content = StripLineLeadingInvisibles(content);
-        if (IsGitLfsPointer(bytes))
+        var isGitLfsPointer = IsGitLfsPointer(bytes);
+        if (isGitLfsPointer)
             content = string.Empty;
+        var checksumBytes = isGitLfsPointer ? bytes : Encoding.UTF8.GetBytes(content);
 
         return new LoadedFileContent(
             content,
@@ -29,7 +31,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             sizeBytes,
             modifiedUtc,
             FileIndexer.CountPhysicalLines(content),
-            ComputeChecksum(Encoding.UTF8.GetBytes(content)),
+            ComputeChecksum(checksumBytes),
             warning);
     }
 
@@ -105,14 +107,17 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     {
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
-        if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
-            throw new FileIndexer.BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
+        if (!isUtf16Encoded && TryFindIndexBlockingNullByte(bytes, out var nullByteOffset))
+            throw new FileIndexer.BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
 
         if (isUtf16Encoded)
         {
             var content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
                 .GetString(bytes);
-            return (content, null);
+            var warning = hasUtf16Bom
+                ? null
+                : $"{relativePath}: decoded as {(utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
+            return (content, warning);
         }
 
         try
@@ -274,7 +279,17 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
     {
-        return !TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _) && rawBytes.Any(b => b == 0);
+        return TryFindIndexBlockingNullByte(rawBytes, out _);
+    }
+
+    internal static bool TryFindIndexBlockingNullByte(byte[] rawBytes, out int offset)
+    {
+        offset = -1;
+        if (TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _))
+            return false;
+
+        offset = Array.IndexOf(rawBytes, (byte)0);
+        return offset >= 0;
     }
 
     internal static bool TryDetectUtf16Encoding(
