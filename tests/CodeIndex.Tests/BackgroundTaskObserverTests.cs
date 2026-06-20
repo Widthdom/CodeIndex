@@ -45,4 +45,30 @@ public class BackgroundTaskObserverTests
 
         Assert.Empty(messages);
     }
+
+    [Fact]
+    public async Task Run_UsesShutdownCancellationWhenScheduling_Issue3760()
+    {
+        var started = false;
+        var messages = new List<string>();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var task = BackgroundTaskObserver.Run(
+            _ =>
+            {
+                started = true;
+                return Task.CompletedTask;
+            },
+            "cdidx-test",
+            "shutdown worker",
+            cts.Token,
+            messages.Add);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await task);
+        await Task.Delay(50);
+
+        Assert.False(started);
+        Assert.Empty(messages);
+    }
 }

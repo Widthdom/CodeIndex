@@ -206,9 +206,14 @@ public class SuggestionStore
     /// Add a suggestion under the file lock, then attempt GitHub submission outside the lock.
     /// The store reserves the attempt before releasing the lock so concurrent callers do not
     /// also submit the same unsubmitted duplicate while the remote API is slow.
+    /// This compatibility wrapper has no caller cancellation; use the overload that accepts
+    /// <see cref="CancellationToken"/> when cancellation should be observed.
     /// 提案をファイルロック内で追加し、その後 GitHub 送信はロック外で試行する。
     /// remote API が遅い間に並行呼び出しが同じ未送信重複を送信しないよう、
     /// ロック解放前に送信試行を予約する。
+    /// この互換 wrapper は caller cancellation を持たない。キャンセルを監視する場合は
+    /// <see cref="TryAddAndSubmit(SuggestionRecord, Func{SuggestionRecord, SubmitAttemptResult}?, CancellationToken)"/>
+    /// を使う。
     /// </summary>
     /// <param name="record">The suggestion to add / 追加する提案</param>
     /// <param name="submitToGitHub">
@@ -218,13 +223,19 @@ public class SuggestionStore
     /// 未送信の重複）にのみロック外で呼ばれる。成功時は Issue URL を返す。
     /// </param>
     public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, SubmitAttemptResult>? submitToGitHub)
+        => TryAddAndSubmit(record, submitToGitHub, CancellationToken.None);
+
+    public AddAndSubmitResult TryAddAndSubmit(
+        SuggestionRecord record,
+        Func<SuggestionRecord, SubmitAttemptResult>? submitToGitHub,
+        CancellationToken cancellationToken)
     {
         return TryAddAndSubmitAsync(
             record,
             submitToGitHub == null
                 ? null
                 : (r, _) => Task.FromResult(submitToGitHub(r)),
-            CancellationToken.None).GetAwaiter().GetResult();
+            cancellationToken).GetAwaiter().GetResult();
     }
 
     public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(

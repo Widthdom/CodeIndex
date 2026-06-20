@@ -7758,6 +7758,37 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task ToolsCall_StatusUpdateCheck_UsesRequestCancellationToken_Issue3658()
+    {
+        var previous = McpServer.StatusUpdateCheckForTesting;
+        using var cts = new CancellationTokenSource();
+        var observedToken = CancellationToken.None;
+        var observedCallerCancellation = false;
+        McpServer.StatusUpdateCheckForTesting = (version, token) =>
+        {
+            observedToken = token;
+            cts.Cancel();
+            observedCallerCancellation = token.IsCancellationRequested;
+            return UpdateChecker.CreateDisabledResult(version);
+        };
+        try
+        {
+            using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+            var transport = new QueuedFrameTransport(
+                """{"jsonrpc":"2.0","id":3658,"method":"tools/call","params":{"name":"status","arguments":{"updateCheck":true}}}""");
+
+            await server.RunAsync(transport, cts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(observedToken.CanBeCanceled);
+            Assert.True(observedCallerCancellation);
+        }
+        finally
+        {
+            McpServer.StatusUpdateCheckForTesting = previous;
+        }
+    }
+
+    [Fact]
     public void ToolsList_BatchQuerySchemaAdvertisesLimitsAndControls_Issue3539()
     {
         var response = _server.HandleMessage(JsonNode.Parse(
@@ -15034,7 +15065,7 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(250),
+            RequestTimeout = TimeSpan.FromMilliseconds(500),
         };
         using var delayStarted = new ManualResetEventSlim(false);
         using var releaseDelay = new ManualResetEventSlim(false);
@@ -15065,6 +15096,7 @@ public sealed class Caller
 
             var status = server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"status"}}""")!)!;
+            Assert.True(status["result"] is not null, status.ToJsonString());
             var requestTimeouts = status["result"]!["structuredContent"]!["mcp"]!["request_timeouts"]!;
             Assert.Equal(1L, requestTimeouts["isolated_action_draining_count"]!.GetValue<long>());
             Assert.Equal(0L, requestTimeouts["isolated_action_drained_count"]!.GetValue<long>());
