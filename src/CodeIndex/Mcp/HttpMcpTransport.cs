@@ -50,11 +50,6 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
 
-    private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
-    {
-        MaxDepth = McpServer.MaxJsonDepth,
-    };
-
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
@@ -587,11 +582,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private static bool IsCancellationNotification(string body)
     {
+        if (!JsonFrameParser.TryParseNode(body, McpServer.MaxJsonDepth, out var node, out _)
+            || node is not JsonObject obj)
+            return false;
+
         try
         {
-            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
-            if (node is not JsonObject obj)
-                return false;
             var method = obj["method"]?.GetValue<string>();
             return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
                 || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
@@ -604,18 +600,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private static bool IsJsonRpcResponse(string body)
     {
-        try
-        {
-            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
-            return node is JsonObject obj
-                && obj.ContainsKey("id")
-                && obj["method"] is null
-                && (obj.ContainsKey("result") || obj.ContainsKey("error"));
-        }
-        catch
-        {
+        if (!JsonFrameParser.TryParseNode(body, McpServer.MaxJsonDepth, out var node, out _))
             return false;
-        }
+
+        return node is JsonObject obj
+            && obj.ContainsKey("id")
+            && obj["method"] is null
+            && (obj.ContainsKey("result") || obj.ContainsKey("error"));
     }
 
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
@@ -1118,7 +1109,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
-            using var doc = JsonDocument.Parse(body, HttpProbeJsonDocumentOptions);
+            using var doc = JsonDocument.Parse(body, JsonFrameParser.CreateDocumentOptions(McpServer.MaxJsonDepth));
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
 

@@ -891,18 +891,13 @@ public partial class McpServer : IDisposable
 
     private static bool IsServerResponseFrame(string frame)
     {
-        try
-        {
-            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
-            return node is JsonObject obj
-                && obj.ContainsKey("id")
-                && obj["method"] is null
-                && (obj.ContainsKey("result") || obj.ContainsKey("error"));
-        }
-        catch (JsonException)
-        {
+        if (!JsonFrameParser.TryParseNode(frame, MaxJsonDepth, out var node, out _))
             return false;
-        }
+
+        return node is JsonObject obj
+            && obj.ContainsKey("id")
+            && obj["method"] is null
+            && (obj.ContainsKey("result") || obj.ContainsKey("error"));
     }
 
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
@@ -958,7 +953,7 @@ public partial class McpServer : IDisposable
         IDisposable? frameCorrelationScope = null;
         try
         {
-            request = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
+            request = JsonFrameParser.ParseNode(line, MaxJsonDepth);
             if (request == null)
                 return null;
 
@@ -976,7 +971,7 @@ public partial class McpServer : IDisposable
         catch (JsonException ex)
         {
             // Parse error / パースエラー
-            DeferFrameLog(BuildJsonParseErrorLog(ex.Message));
+            DeferFrameLog(BuildJsonParseErrorLog(JsonFrameParser.FormatExceptionDetail(ex)));
             var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error",
                 category: McpErrorEnvelope.CategoryParseError,
                 suggestion: $"Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON with nesting depth <= {MaxJsonDepth}.",
@@ -1803,19 +1798,13 @@ public partial class McpServer : IDisposable
 
     private static bool IsCancellationFrame(string frame)
     {
-        try
-        {
-            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
-            if (node is not JsonObject obj)
-                return false;
-            var method = obj["method"]?.GetValue<string>();
-            return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
-                || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
-        }
-        catch
-        {
+        if (!JsonFrameParser.TryParseNode(frame, MaxJsonDepth, out var node, out _)
+            || node is not JsonObject obj)
             return false;
-        }
+
+        var method = TryGetStringMember(obj, "method");
+        return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
+            || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
     }
 
     // Safe accessor that returns null instead of throwing when `name` is missing OR present
@@ -3391,7 +3380,7 @@ public partial class McpServer : IDisposable
         $"[cdidx-mcp] Message too large ({characterCount} chars / {byteCount} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
 
     internal static string BuildJsonParseErrorLog(string detail) =>
-        $"[cdidx-mcp] JSON parse error: {detail}. Send one UTF-8 JSON-RPC object per line and retry.";
+        $"[cdidx-mcp] JSON parse error: {DiagnosticRedactor.BoundDiagnosticText(detail, JsonFrameParser.MaxParseDiagnosticChars)}. Send one UTF-8 JSON-RPC object per line and retry.";
 
     internal static string BuildUnhandledLoopErrorLog(string detail) =>
         $"[cdidx-mcp] Error: {detail}. This request was skipped; fix the request or inspect the server environment, then retry.";

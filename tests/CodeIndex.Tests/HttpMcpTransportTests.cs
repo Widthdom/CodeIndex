@@ -347,6 +347,41 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_MalformedCancellationNotification_IsQueuedForNormalHandling_Issue3711()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var outOfBandHandlerCalls = 0;
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null);
+        transport.OutOfBandFrameHandler = (_, _) =>
+        {
+            Interlocked.Increment(ref outOfBandHandlerCalls);
+            return Task.FromResult<string?>(null);
+        };
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        const string body = """{"jsonrpc":"2.0","method":"notifications/cancelled","params":""";
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "malformed cancellation notification to stay in the normal HTTP MCP queue");
+
+        Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(body, frame);
+
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}""", CancellationToken.None);
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_CancellationNotificationBeyondJsonDepth_IsQueuedForNormalHandling()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");

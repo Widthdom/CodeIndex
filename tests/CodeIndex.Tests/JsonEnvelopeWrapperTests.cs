@@ -293,6 +293,29 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void RunWrapped_MalformedRawJsonItem_KeepsLineAsString_Issue3711()
+    {
+        const string rawLine = """{"path":"src/App.cs","score":""";
+        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            _ =>
+            {
+                Console.WriteLine(rawLine);
+                return CommandExitCodes.Success;
+            }));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var result = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(JsonValueKind.String, result.ValueKind);
+        Assert.Equal(rawLine, result.GetString());
+    }
+
+    [Fact]
     public void RunWrapped_OversizedRawJsonItem_ReturnsStructuredEnvelopeError_Issue3454()
     {
         var rawLine = new string('x', JsonEnvelopeWrapper.MaxRawJsonItemChars + 1);

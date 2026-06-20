@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
@@ -2814,6 +2815,18 @@ public class McpServerTests : IDisposable
         Assert.Contains("JSON parse error", message);
         Assert.Contains("Send one UTF-8 JSON-RPC object per line", message);
         Assert.Contains("retry", message);
+    }
+
+    [Fact]
+    public void BuildJsonParseErrorLog_BoundsDiagnosticDetail_Issue3711()
+    {
+        var longDetail = "Expected ':' " + new string('x', JsonFrameParser.MaxParseDiagnosticChars + 100);
+
+        var message = McpServer.BuildJsonParseErrorLog(longDetail);
+
+        Assert.Contains("JSON parse error", message);
+        Assert.Contains("<truncated; original length", message);
+        Assert.DoesNotContain(new string('x', JsonFrameParser.MaxParseDiagnosticChars + 1), message, StringComparison.Ordinal);
     }
 
     [Fact]
