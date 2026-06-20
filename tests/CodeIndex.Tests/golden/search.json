@@ -55,6 +55,11 @@
       "test_fixture": false
     }
   ],
+  "result_kinds": [
+    "code",
+    "declaration",
+    "identifier"
+  ],
   "test_file": false,
   "test_symbol": false,
   "test_fixture": false,

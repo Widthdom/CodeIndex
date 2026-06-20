@@ -872,6 +872,7 @@ public sealed class CompactSearchResult
     public List<SearchHighlight> Highlights { get; set; } = [];
     public List<string> MatchOrigins { get; set; } = [];
     public List<SearchMatchFacet> MatchFacets { get; set; } = [];
+    public List<string> ResultKinds { get; set; } = [];
     public bool TestFile { get; set; }
     public bool TestSymbol { get; set; }
     public bool TestFixture { get; set; }
@@ -902,6 +903,10 @@ public sealed class CompactSearchResult
     public List<SearchGuardCheck>? GuardChecks { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SearchQueryHint? ExactSubstringHint { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchCommandHint>? NextSteps { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? NextStepsTruncated { get; set; }
     public double Score { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? EnclosingSymbolName { get; set; }
@@ -919,6 +924,12 @@ public sealed class SearchNextMatchHint
 {
     public int Line { get; set; }
     public int RemainingMatchLineCount { get; set; }
+}
+
+public sealed class SearchCommandHint
+{
+    public string Command { get; set; } = string.Empty;
+    public string Purpose { get; set; } = string.Empty;
 }
 
 public enum SearchSnippetFocusMode

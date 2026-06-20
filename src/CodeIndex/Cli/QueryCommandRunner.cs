@@ -35,6 +35,12 @@ public static partial class QueryCommandRunner
     internal const int BatchMaxJsonDepth = 32;
     internal const int MaxStatusSymbolKindEntries = 32;
     internal const int MaxStatusSymbolKindNameLength = 64;
+    private const int MaxSearchProjectionFieldsCsvLength = 256;
+    private const int MaxSearchProjectionFieldsCsvEntries = 16;
+    private const int DefaultSearchGroupedPerFileLimit = 3;
+    private const int MaxSearchGroupedPerFileLimit = 20;
+    private const int MaxSearchNextStepLimit = 10;
+    private const int MaxSearchJsonByteLimit = 16 * 1024 * 1024;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -183,6 +189,14 @@ public static partial class QueryCommandRunner
         "--issue-label",
         "--cursor",
         "--group-by",
+        "--unique",
+        "--count-by",
+        "--match-origin",
+        "--result-kind",
+        "--sample",
+        "--per-file-limit",
+        "--max-json-bytes",
+        "--search-fields",
         "--focus-line",
         "--focus-column",
         "--focus-length",
@@ -307,6 +321,9 @@ public static partial class QueryCommandRunner
         "--pretty",
         "--compact",
         "--body-only",
+        "--first-per-file",
+        "--results-only",
+        "--next-steps",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -315,6 +332,7 @@ public static partial class QueryCommandRunner
     private const string OutputFormatSarif = "sarif";
     private const string OutputFormatCount = "count";
     private const string OutputFormatCompact = "compact";
+    private const string OutputFormatGrouped = "grouped";
     private const string OutputFormatCsv = "csv";
     private const string OutputFormatTsv = "tsv";
     private const string OutputFormatIssueDrafts = "issue-drafts";
@@ -472,6 +490,19 @@ public static partial class QueryCommandRunner
                 "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe and named-batch output.");
             return CommandExitCodes.UsageError;
         }
+        if (options.OutputFormat == OutputFormatGrouped && (options.ListRecipes || options.NamedSearchQueries.Count > 0 || options.RecipeName != null))
+        {
+            var mode = options.ListRecipes
+                ? "--list-recipes"
+                : options.NamedSearchQueries.Count > 0
+                    ? "--named-query"
+                    : "--recipe";
+            WriteUsageError(
+                "--format grouped is only supported for plain search output.",
+                GetUsageLineOrThrow("search"),
+                $"Remove {mode}, or run a plain `cdidx search <query> --format grouped`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.ListRecipes)
         {
             if (options.Query != null || options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
@@ -616,12 +647,12 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (options.GroupBy != null)
         {
-            if (options.GroupBy is not "file" and not "symbol")
+            if (options.GroupBy is not "file" and not "symbol" and not "origin")
             {
                 WriteUsageError(
-                    "--group-by for search must be one of file or symbol.",
+                    "--group-by for search must be one of file, symbol, or origin.",
                     GetUsageLineOrThrow("search"),
-                    "Use `cdidx search <query> --group-by file --count` or `cdidx search <query> --group-by symbol --count`.");
+                    "Use `cdidx search <query> --group-by file --count`, `--group-by symbol --count`, or `--count-by origin`.");
                 return CommandExitCodes.UsageError;
             }
             if (!options.CountOnly)
@@ -649,17 +680,86 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
         }
+        if (options.CountBy != null && options.UniqueBy != null)
+        {
+            WriteUsageError(
+                "--count-by cannot be combined with --unique.",
+                GetUsageLineOrThrow("search"),
+                "Run one aggregation mode at a time.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.GroupBy != null && (options.CountBy != null || options.UniqueBy != null))
+        {
+            WriteUsageError(
+                "--group-by cannot be combined with --count-by or --unique.",
+                GetUsageLineOrThrow("search"),
+                "Use either `--group-by <field> --count`, `--count-by <field>`, or `--unique <field>`.");
+            return CommandExitCodes.UsageError;
+        }
+        if ((options.CountBy != null || options.UniqueBy != null) && options.JsonOutputFormat == JsonOutputFormatArray)
+        {
+            WriteUsageError(
+                "--json=array is not supported with search aggregation because aggregation output is a JSON object.",
+                GetUsageLineOrThrow("search"),
+                "Use plain `--json` for `--count-by` or `--unique` aggregation output.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.OutputFormat == OutputFormatGrouped && options.JsonOutputFormat == JsonOutputFormatArray)
+        {
+            WriteUsageError(
+                "--json=array is not supported with search --format grouped because grouped output is a JSON object.",
+                GetUsageLineOrThrow("search"),
+                "Use plain `--json` or omit --json when using `--format grouped`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
+        {
+            WriteUsageError(
+                "--results-only is only supported with NDJSON search output.",
+                GetUsageLineOrThrow("search"),
+                "Use `--results-only --json=ndjson`, or remove --results-only when using --json=array.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.MaxJsonBytes.HasValue && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson))
+        {
+            WriteUsageError(
+                "--max-json-bytes is only supported with NDJSON search output.",
+                GetUsageLineOrThrow("search"),
+                "Use `--json=ndjson --max-json-bytes <n>` for bounded streaming output.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.CountBy != null && options.CountBy is not "path" and not "file" and not "symbol" and not "origin")
+        {
+            WriteUsageError(
+                "--count-by for search must be one of path, file, symbol, or origin.",
+                GetUsageLineOrThrow("search"),
+                "Use `--count-by path`, `--count-by symbol`, or `--count-by origin`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.UniqueBy != null && options.UniqueBy is not "path" and not "file" and not "symbol" and not "origin")
+        {
+            WriteUsageError(
+                "--unique for search must be one of path, file, symbol, or origin.",
+                GetUsageLineOrThrow("search"),
+                "Use `--unique path`, `--unique symbol`, or `--unique origin`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.OutputFormat == OutputFormatIssueDrafts)
             return RunSearchIssueDrafts(options, jsonOptions, exact);
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
+        var jsonDoneInterrupted = false;
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.GroupBy != null)
             {
                 return RunGroupedSearchCount(reader, options, jsonOptions, exact, exactSubstringHint);
+            }
+            if (options.CountBy != null || options.UniqueBy != null)
+            {
+                return RunSearchAggregation(reader, options, jsonOptions, exact, exactSubstringHint);
             }
 
             if (options.CountOnly)
@@ -712,6 +812,8 @@ public static partial class QueryCommandRunner
 
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             var displayRows = ReadSearchDisplayRows(reader, options, exact);
+            var selection = ApplySearchOutputSelection(displayRows, options);
+            displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -728,7 +830,9 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
+                        var pathHint = BuildSearchPathGlobHint(reader, options);
+                        if (!options.ResultsOnly)
+                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload => AddSearchPathHint(payload, pathHint)).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -737,7 +841,8 @@ public static partial class QueryCommandRunner
                     Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
                     WriteLangHint(options.Lang, reader);
                     WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                    WriteZeroResultHints(options, reader);
+                    var pathHint = BuildSearchPathGlobHint(reader, options);
+                    WriteZeroResultHints(options, reader, filterHint: pathHint?.SuggestedAction);
                 }
                 return ZeroResultExitCode(options);
             }
@@ -746,9 +851,22 @@ public static partial class QueryCommandRunner
             {
                 var compactResults = displayRows.Select(row => row.Compact).ToArray();
                 AttachExactSubstringHint(compactResults, exactSubstringHint);
+                AttachSearchNextSteps(compactResults, options);
+                if (options.SearchFields != null)
+                {
+                    WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted);
+                    jsonDoneCount = projectedDoneCount;
+                    jsonDoneInterrupted = projectedInterrupted;
+                    return CommandExitCodes.Success;
+                }
                 if (options.OutputFormat == OutputFormatCompact)
                 {
                     WriteCompactSearchResults(compactResults, jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatGrouped)
+                {
+                    WriteGroupedSearchResults(displayRows, options, jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (TryWriteFormattedLocations(
@@ -779,33 +897,39 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    foreach (var result in compactResults)
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            result,
-                            CliJsonSerializerContextFactory.Create(ndjsonOptions).CompactSearchResult));
-                    jsonDoneCount = compactResults.Length;
+                    WriteSearchNdjsonResults(compactResults, options, ndjsonOptions, out var emittedCount, out var interrupted);
+                    jsonDoneCount = emittedCount;
+                    jsonDoneInterrupted = interrupted;
                 }
             }
             else
             {
-                foreach (var row in displayRows)
+                if (options.OutputFormat == OutputFormatGrouped)
                 {
-                    var r = row.Result;
-                    Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
-                    var snippetLines = row.Compact.Snippet.Split('\n', StringSplitOptions.None);
-                    foreach (var line in snippetLines)
-                        Console.WriteLine($"  {line}");
-                    Console.WriteLine();
+                    WriteGroupedSearchResultsHuman(displayRows, options);
+                }
+                else
+                {
+                    foreach (var row in displayRows)
+                    {
+                        var r = row.Result;
+                        Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
+                        var snippetLines = row.Compact.Snippet.Split('\n', StringSplitOptions.None);
+                        foreach (var line in snippetLines)
+                            Console.WriteLine($"  {line}");
+                        Console.WriteLine();
+                    }
                 }
                 var fileCount = displayRows.Select(row => row.Result.Path).Distinct().Count();
                 Console.Error.WriteLine($"({displayRows.Count} results in {fileCount} files)");
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
+                WriteSearchNextSteps(displayRows, options);
             }
             return CommandExitCodes.Success;
         }, exitCode =>
         {
-            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions);
+            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted);
         });
     }
 
@@ -853,6 +977,24 @@ public static partial class QueryCommandRunner
                 .OrderByDescending(group => group.Count)
                 .ThenBy(group => group.Key, StringComparer.Ordinal)
                 .ToList()
+            : groupBy == "origin"
+                ? rows
+                    .SelectMany(row => row.Compact.MatchOrigins.Count == 0
+                        ? [SearchMatchClassifier.Unknown]
+                        : row.Compact.MatchOrigins)
+                    .GroupBy(origin => origin, StringComparer.Ordinal)
+                    .Select(group => new SearchGroupedCountItemJsonResult(
+                        group.Key,
+                        group.Count(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null))
+                    .OrderByDescending(group => group.Count)
+                    .ThenBy(group => group.Key, StringComparer.Ordinal)
+                    .ToList()
             : rows
                 .GroupBy(row => BuildSearchSymbolGroupKey(row.Result), StringComparer.Ordinal)
                 .Select(group =>
@@ -903,6 +1045,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"{group.Count,8} {group.File}");
                 continue;
             }
+            if (groupBy == "origin")
+            {
+                Console.WriteLine($"{group.Count,8} {group.Key}");
+                continue;
+            }
 
             var location = group.SymbolStartLine.HasValue
                 ? $"{group.File}:{group.SymbolStartLine}-{group.SymbolEndLine ?? group.SymbolStartLine}"
@@ -916,6 +1063,277 @@ public static partial class QueryCommandRunner
 
         Console.Error.WriteLine($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
     }
+
+    private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
+    {
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var rows = BuildSearchDisplayRows(results, options, exact);
+        var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
+        var groups = BuildSearchGroupedCounts(groupBy, rows);
+        var uniqueOnly = options.UniqueBy != null;
+        var fileCount = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchAggregationJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    options.Query!,
+                    uniqueOnly ? "unique" : "count_by",
+                    groupBy,
+                    rows.Count,
+                    fileCount,
+                    uniqueOnly,
+                    groups),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult));
+        }
+        else
+        {
+            if (uniqueOnly)
+            {
+                foreach (var group in groups)
+                    Console.WriteLine(group.Key);
+                Console.Error.WriteLine($"({groups.Count} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
+            }
+            else
+            {
+                WriteSearchGroupedCounts(groupBy, groups, rows.Count, fileCount);
+            }
+            WriteExactSubstringHintIfNeeded(exactSubstringHint);
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static string NormalizeSearchAggregationKey(string key)
+        => key == "path" ? "file" : key;
+
+    private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
+    {
+        var originalCount = rows.Count;
+        if (options.FirstPerFile)
+        {
+            rows = rows
+                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+        }
+
+        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
+            rows = SampleSearchRows(rows, options.SampleSize.Value);
+
+        if (rows.Count > options.Limit)
+            rows = rows.Take(options.Limit).ToList();
+
+        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount);
+    }
+
+    private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
+    {
+        if (sampleSize <= 0 || rows.Count <= sampleSize)
+            return rows;
+        if (sampleSize == 1)
+            return [rows[0]];
+
+        var sampled = new List<SearchDisplayRow>(sampleSize);
+        var lastIndex = rows.Count - 1;
+        for (var i = 0; i < sampleSize; i++)
+        {
+            var index = (int)Math.Round(i * (lastIndex / (double)(sampleSize - 1)), MidpointRounding.AwayFromZero);
+            sampled.Add(rows[Math.Clamp(index, 0, lastIndex)]);
+        }
+        return sampled;
+    }
+
+    private static void WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var groups = BuildSearchFileGroups(rows, options);
+        var totalMatches = rows.Count;
+        Console.WriteLine(JsonSerializer.Serialize(
+            new SearchFileGroupedJsonResult(
+                JsonOutputContract.ApiVersion,
+                options.Query!,
+                totalMatches,
+                groups.Count,
+                rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
+                options.GroupedPerFileLimit,
+                groups.Any(group => group.Truncated),
+                groups),
+            CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult));
+    }
+
+    private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
+    {
+        foreach (var group in BuildSearchFileGroups(rows, options))
+        {
+            Console.WriteLine($"{group.Path} ({group.Count} results)");
+            foreach (var result in group.Results)
+            {
+                Console.WriteLine($"  {result.Path}:{result.SnippetStartLine}-{result.SnippetEndLine}");
+                var firstLine = result.Snippet.Split('\n', StringSplitOptions.None).FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(firstLine))
+                    Console.WriteLine($"    {firstLine.Trim()}");
+            }
+            if (group.Truncated)
+                Console.WriteLine($"  ... {group.OmittedCount} more result(s)");
+        }
+    }
+
+    private static List<SearchFileGroupJsonResult> BuildSearchFileGroups(List<SearchDisplayRow> rows, QueryCommandOptions options)
+        => rows
+            .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var groupRows = group.ToList();
+                var representative = groupRows.Take(options.GroupedPerFileLimit).Select(row => row.Compact).ToList();
+                return new SearchFileGroupJsonResult(
+                    group.Key,
+                    groupRows.Count,
+                    representative,
+                    groupRows.Count > representative.Count,
+                    Math.Max(0, groupRows.Count - representative.Count));
+            })
+            .OrderByDescending(group => group.Count)
+            .ThenBy(group => group.Path, StringComparer.Ordinal)
+            .ToList();
+
+    private static void WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
+    {
+        var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!)).ToArray();
+        if (options.JsonOutputFormat == JsonOutputFormatArray)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(projected, jsonOptions));
+            emittedCount = projected.Length;
+            interrupted = false;
+            return;
+        }
+
+        emittedCount = 0;
+        interrupted = false;
+        var bytesWritten = 0;
+        foreach (var result in projected)
+        {
+            var line = result.ToJsonString(ndjsonOptions);
+            if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
+                break;
+            Console.WriteLine(line);
+            bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
+            emittedCount++;
+        }
+    }
+
+    private static JsonObject BuildProjectedSearchResult(CompactSearchResult result, IReadOnlyList<string> fields)
+    {
+        var payload = new JsonObject();
+        foreach (var field in fields)
+        {
+            switch (field)
+            {
+                case "path":
+                    payload["path"] = result.Path;
+                    break;
+                case "line":
+                    payload["line"] = result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine;
+                    break;
+                case "end_line":
+                    payload["end_line"] = result.ChunkEndLine;
+                    break;
+                case "lang":
+                    payload["lang"] = result.Lang;
+                    break;
+                case "column":
+                    payload["column"] = result.MatchFacets.Count > 0 ? result.MatchFacets[0].Column : (int?)null;
+                    break;
+                case "symbol":
+                    payload["symbol"] = result.EnclosingSymbolName;
+                    break;
+                case "symbol_kind":
+                    payload["symbol_kind"] = result.EnclosingSymbolKind;
+                    break;
+                case "origin":
+                    payload["match_origins"] = JsonSerializer.SerializeToNode(result.MatchOrigins);
+                    break;
+                case "kind":
+                    payload["result_kinds"] = JsonSerializer.SerializeToNode(result.ResultKinds);
+                    break;
+                case "score":
+                    payload["score"] = result.Score;
+                    break;
+                case "snippet":
+                    payload["snippet"] = result.Snippet;
+                    break;
+            }
+        }
+        return payload;
+    }
+
+    private static void WriteSearchNdjsonResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
+    {
+        emittedCount = 0;
+        interrupted = false;
+        var bytesWritten = 0;
+        foreach (var result in results)
+        {
+            var line = JsonSerializer.Serialize(result, CliJsonSerializerContextFactory.Create(ndjsonOptions).CompactSearchResult);
+            if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
+                break;
+            Console.WriteLine(line);
+            bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
+            emittedCount++;
+        }
+    }
+
+    private static bool WouldExceedJsonByteLimit(QueryCommandOptions options, int bytesWritten, string nextLine, out bool interrupted)
+    {
+        interrupted = false;
+        if (!options.MaxJsonBytes.HasValue)
+            return false;
+        var nextBytes = Encoding.UTF8.GetByteCount(nextLine) + Environment.NewLine.Length;
+        if (bytesWritten + nextBytes <= options.MaxJsonBytes.Value)
+            return false;
+        interrupted = true;
+        return true;
+    }
+
+    private static void WriteSearchNextSteps(List<SearchDisplayRow> rows, QueryCommandOptions options)
+    {
+        if (!options.NextSteps || rows.Count == 0)
+            return;
+        Console.Error.WriteLine("Next steps:");
+        foreach (var row in rows.Take(MaxSearchNextStepLimit))
+        {
+            var line = row.Compact.MatchLines.Count > 0 ? row.Compact.MatchLines[0] : row.Result.StartLine;
+            Console.Error.WriteLine($"  cdidx inspect --path \"{row.Result.Path}\" --line {line}");
+            Console.Error.WriteLine($"  cdidx excerpt --path \"{row.Result.Path}\" --start {Math.Max(1, line - 3)} --end {line + 3}");
+        }
+    }
+
+    private static void AttachSearchNextSteps(CompactSearchResult[] results, QueryCommandOptions options)
+    {
+        if (!options.NextSteps || results.Length == 0)
+            return;
+        var truncated = results.Length > MaxSearchNextStepLimit;
+        foreach (var result in results.Take(MaxSearchNextStepLimit))
+        {
+            var line = result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine;
+            result.NextSteps =
+            [
+                new SearchCommandHint
+                {
+                    Command = $"cdidx inspect --path \"{result.Path}\" --line {line}",
+                    Purpose = "inspect the enclosing symbol for this search hit",
+                },
+                new SearchCommandHint
+                {
+                    Command = $"cdidx excerpt --path \"{result.Path}\" --start {Math.Max(1, line - 3)} --end {line + 3}",
+                    Purpose = "read a bounded source excerpt around this search hit",
+                },
+            ];
+            result.NextStepsTruncated = truncated;
+        }
+    }
+
+    private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated);
 
     private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
     {
@@ -1888,6 +2306,10 @@ public static partial class QueryCommandRunner
             if (!ApplySearchOriginFilters(compact, options))
                 continue;
 
+            compact.ResultKinds = BuildSearchResultKinds(result, compact, displayQuery);
+            if (!ApplySearchResultKindFilters(compact, options))
+                continue;
+
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
             {
                 var keptLines = new List<int>(compact.MatchLines.Count);
@@ -1935,14 +2357,14 @@ public static partial class QueryCommandRunner
     private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {
         if (!HasSearchOriginFilters(options))
-            return BuildSearchDisplayRows(ReadSearchResults(reader, options, exact, options.Limit), options, exact);
+            return BuildSearchDisplayRows(ReadSearchResults(reader, options, exact, GetSearchDisplayCandidateLimit(options)), options, exact);
 
         return ReadOriginFilteredSearchDisplayRows(reader, options, exact);
     }
 
     private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {
-        var requestedLimit = Math.Max(0, options.Limit);
+        var requestedLimit = Math.Max(0, GetSearchDisplayCandidateLimit(options));
         if (requestedLimit == 0)
             return [];
 
@@ -1991,6 +2413,15 @@ public static partial class QueryCommandRunner
     private static int GetSearchOriginFilterCandidateLimit(int requestedLimit)
         => requestedLimit <= 0 ? 0 : SearchOriginFilterMaxCandidates;
 
+    private static int GetSearchDisplayCandidateLimit(QueryCommandOptions options)
+    {
+        var requested = Math.Max(1, options.Limit);
+        if (!options.FirstPerFile && !options.SampleSize.HasValue)
+            return requested;
+        var sampleTarget = Math.Max(requested, options.SampleSize ?? requested);
+        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested, sampleTarget * SearchOriginFilterOverFetchFactor));
+    }
+
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
         => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit);
 
@@ -2008,7 +2439,7 @@ public static partial class QueryCommandRunner
         if (!HasSearchOriginFilters(options))
             return true;
         if (compact.MatchFacets.Count == 0)
-            return true;
+            return options.MatchOrigins.Count == 0;
 
         var keptFacets = compact.MatchFacets
             .Where(facet => !IsSearchFacetExcluded(facet, options))
@@ -2056,7 +2487,7 @@ public static partial class QueryCommandRunner
     }
 
     private static bool HasSearchOriginFilters(QueryCommandOptions options)
-        => options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures;
+        => options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.MatchOrigins.Count > 0 || options.ResultKinds.Count > 0;
 
     private static bool IsSearchFacetExcluded(SearchMatchFacet facet, QueryCommandOptions options)
     {
@@ -2066,7 +2497,58 @@ public static partial class QueryCommandRunner
             return true;
         if (options.ExcludeFixtures && facet.TestFixture)
             return true;
+        if (options.MatchOrigins.Count > 0 && !options.MatchOrigins.Contains(facet.Origin, StringComparer.Ordinal))
+            return true;
         return false;
+    }
+
+    private static bool ApplySearchResultKindFilters(CompactSearchResult compact, QueryCommandOptions options)
+        => options.ResultKinds.Count == 0 || compact.ResultKinds.Any(kind => options.ResultKinds.Contains(kind, StringComparer.Ordinal));
+
+    private static List<string> BuildSearchResultKinds(SearchResult result, CompactSearchResult compact, string query)
+    {
+        var kinds = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var origin in compact.MatchOrigins)
+            kinds.Add(origin);
+
+        if (compact.MatchFacets.Any(facet => string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal)))
+            kinds.Add("identifier");
+
+        var declarationLine = result.EnclosingSymbolStartLine;
+        if (declarationLine.HasValue && compact.MatchLines.Contains(declarationLine.Value))
+            kinds.Add("declaration");
+
+        if (LooksLikeSearchCallSite(result, compact, query))
+            kinds.Add("call_site");
+
+        if (kinds.Count == 0)
+            kinds.Add(SearchMatchClassifier.Unknown);
+        return kinds.ToList();
+    }
+
+    private static bool LooksLikeSearchCallSite(SearchResult result, CompactSearchResult compact, string query)
+    {
+        var identifier = ExtractSearchIdentifierProbe(query);
+        if (identifier.Length == 0)
+            return false;
+
+        var callPattern = identifier + "(";
+        return compact.Highlights.Any(highlight =>
+            highlight.Line != result.EnclosingSymbolStartLine &&
+            highlight.MatchOrigins.Contains(SearchMatchClassifier.Code, StringComparer.Ordinal) &&
+            highlight.Text.Contains(callPattern, StringComparison.Ordinal));
+    }
+
+    private static string ExtractSearchIdentifierProbe(string query)
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return string.Empty;
+        var match = Regex.Match(trimmed, @"[A-Za-z_@][A-Za-z0-9_@]*(?:\.[A-Za-z_@][A-Za-z0-9_@]*)*$");
+        if (!match.Success)
+            return string.Empty;
+        var value = match.Value;
+        return value.StartsWith("@", StringComparison.Ordinal) ? value[1..] : value;
     }
 
     private static List<SearchTermOccurrence> FilterSearchOccurrences(List<SearchTermOccurrence> occurrences, int line, HashSet<string> keptFacetKeys)
@@ -2135,9 +2617,9 @@ public static partial class QueryCommandRunner
             result.ExactSubstringHint = hint;
     }
 
-    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions)
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false)
         => Console.WriteLine(JsonSerializer.Serialize(
-            new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
+            new JsonStreamDoneResult(Done: true, Count: count, Interrupted: interrupted),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
 
     private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
@@ -7531,6 +8013,17 @@ public static partial class QueryCommandRunner
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
         string? groupBy = null;
+        string? uniqueBy = null;
+        string? countBy = null;
+        var matchOrigins = new List<string>();
+        var resultKinds = new List<string>();
+        List<string>? searchFields = null;
+        bool firstPerFile = false;
+        bool resultsOnly = false;
+        bool nextSteps = false;
+        int groupedPerFileLimit = DefaultSearchGroupedPerFileLimit;
+        int? sampleSize = null;
+        int? maxJsonBytes = null;
         bool rawBytes = false;
         bool rawKinds = false;
         bool verbose = false;
@@ -8243,6 +8736,92 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(groupByError!);
                     break;
+                case "--unique":
+                    if (TryReadStringOptionValue(args, ref i, "--unique", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var uniqueValue, out var uniqueError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--unique", uniqueValue!);
+                        uniqueBy = uniqueValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(uniqueError!);
+                    break;
+                case "--count-by":
+                    if (TryReadStringOptionValue(args, ref i, "--count-by", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var countByValue, out var countByError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--count-by", countByValue!);
+                        countBy = countByValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(countByError!);
+                    break;
+                case "--match-origin":
+                    if (TryReadStringOptionValue(args, ref i, "--match-origin", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var originValue, out var originError))
+                        AddSearchMatchOrigins(originValue!, matchOrigins, AddParseError);
+                    else
+                        AddParseError(originError!);
+                    break;
+                case "--result-kind":
+                    if (TryReadStringOptionValue(args, ref i, "--result-kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var resultKindValue, out var resultKindError))
+                        AddSearchResultKinds(resultKindValue!, resultKinds, AddParseError);
+                    else
+                        AddParseError(resultKindError!);
+                    break;
+                case "--search-fields":
+                    if (TryReadStringOptionValue(args, ref i, "--search-fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var searchFieldsValue, out var searchFieldsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--search-fields", searchFieldsValue!);
+                        searchFields = ParseSearchProjectionFields(searchFieldsValue!, AddParseError);
+                        json = true;
+                        outputFormat = OutputFormatJson;
+                    }
+                    else
+                        AddParseError(searchFieldsError!);
+                    break;
+                case "--first-per-file":
+                    firstPerFile = true;
+                    break;
+                case "--results-only":
+                    resultsOnly = true;
+                    json = true;
+                    jsonOutputFormat = JsonOutputFormatNdjson;
+                    outputFormat = OutputFormatJson;
+                    break;
+                case "--next-steps":
+                    nextSteps = true;
+                    break;
+                case "--sample":
+                    if (!TryReadRawOptionValue(args, ref i, "--sample", inlineValue, out var sampleValue, out var missingSampleError))
+                        AddParseError(missingSampleError!);
+                    else if (TryParsePositiveInt(sampleValue!, "--sample", out var parsedSample, out var sampleError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--sample", sampleValue!);
+                        sampleSize = parsedSample;
+                    }
+                    else
+                        AddParseError(sampleError!);
+                    break;
+                case "--per-file-limit":
+                    if (!TryReadRawOptionValue(args, ref i, "--per-file-limit", inlineValue, out var perFileLimitValue, out var missingPerFileLimitError))
+                        AddParseError(missingPerFileLimitError!);
+                    else if (TryParsePositiveInt(perFileLimitValue!, "--per-file-limit", out var parsedPerFileLimit, out var perFileLimitError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--per-file-limit", perFileLimitValue!);
+                        groupedPerFileLimit = Math.Min(parsedPerFileLimit, MaxSearchGroupedPerFileLimit);
+                    }
+                    else
+                        AddParseError(perFileLimitError!);
+                    break;
+                case "--max-json-bytes":
+                    if (!TryReadRawOptionValue(args, ref i, "--max-json-bytes", inlineValue, out var maxJsonBytesValue, out var missingMaxJsonBytesError))
+                        AddParseError(missingMaxJsonBytesError!);
+                    else if (TryParsePositiveInt(maxJsonBytesValue!, "--max-json-bytes", out var parsedMaxJsonBytes, out var maxJsonBytesError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--max-json-bytes", maxJsonBytesValue!);
+                        maxJsonBytes = Math.Min(parsedMaxJsonBytes, MaxSearchJsonByteLimit);
+                    }
+                    else
+                        AddParseError(maxJsonBytesError!);
+                    break;
                 case "--with-paths":
                     withPaths = true;
                     break;
@@ -8677,6 +9256,17 @@ public static partial class QueryCommandRunner
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
             GroupBy = groupBy,
+            UniqueBy = uniqueBy,
+            CountBy = countBy,
+            MatchOrigins = matchOrigins,
+            ResultKinds = resultKinds,
+            SearchFields = searchFields,
+            FirstPerFile = firstPerFile,
+            ResultsOnly = resultsOnly,
+            NextSteps = nextSteps,
+            GroupedPerFileLimit = groupedPerFileLimit,
+            SampleSize = sampleSize,
+            MaxJsonBytes = maxJsonBytes,
             RawBytes = rawBytes,
             RawKinds = rawKinds,
             Verbose = verbose,
@@ -8873,6 +9463,183 @@ public static partial class QueryCommandRunner
         return all ? null : fields;
     }
 
+    private static List<string>? ParseSearchProjectionFields(string rawValue, Action<string> addParseError)
+    {
+        var fields = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (!ValidateCsvBounds("--search-fields", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
+            return fields;
+
+        foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var field = rawField.ToLowerInvariant().Replace('-', '_');
+            string canonical;
+            switch (field)
+            {
+                case "path":
+                case "file":
+                    canonical = "path";
+                    break;
+                case "line":
+                case "start_line":
+                    canonical = "line";
+                    break;
+                case "end_line":
+                    canonical = "end_line";
+                    break;
+                case "lang":
+                case "language":
+                    canonical = "lang";
+                    break;
+                case "column":
+                case "col":
+                    canonical = "column";
+                    break;
+                case "symbol":
+                case "symbol_name":
+                    canonical = "symbol";
+                    break;
+                case "symbol_kind":
+                    canonical = "symbol_kind";
+                    break;
+                case "origin":
+                case "origins":
+                case "match_origin":
+                case "match_origins":
+                    canonical = "origin";
+                    break;
+                case "kind":
+                case "result_kind":
+                case "result_kinds":
+                    canonical = "kind";
+                    break;
+                case "score":
+                    canonical = "score";
+                    break;
+                case "snippet":
+                    canonical = "snippet";
+                    break;
+                default:
+                    addParseError($"Error: unsupported --search-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of path,line,end_line,lang,column,symbol,symbol_kind,origin,kind,score,snippet.");
+                    continue;
+            }
+
+            if (seen.Add(canonical))
+                fields.Add(canonical);
+        }
+
+        if (fields.Count == 0)
+            addParseError("Error: --search-fields requires at least one field name.");
+        return fields;
+    }
+
+    private static void AddSearchMatchOrigins(string rawValue, List<string> origins, Action<string> addParseError)
+    {
+        if (!ValidateCsvBounds("--match-origin", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
+            return;
+        foreach (var rawOrigin in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!TryNormalizeSearchMatchOrigin(rawOrigin, out var origin))
+            {
+                addParseError($"Error: unsupported --match-origin value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, or unknown.");
+                continue;
+            }
+            if (!origins.Contains(origin, StringComparer.Ordinal))
+                origins.Add(origin);
+        }
+    }
+
+    private static bool TryNormalizeSearchMatchOrigin(string rawOrigin, out string origin)
+    {
+        switch (rawOrigin.ToLowerInvariant().Replace("-", "_"))
+        {
+            case SearchMatchClassifier.Code:
+                origin = SearchMatchClassifier.Code;
+                return true;
+            case SearchMatchClassifier.Comment:
+                origin = SearchMatchClassifier.Comment;
+                return true;
+            case "string":
+            case SearchMatchClassifier.StringLiteral:
+                origin = SearchMatchClassifier.StringLiteral;
+                return true;
+            case "regex":
+            case SearchMatchClassifier.RegexLiteral:
+                origin = SearchMatchClassifier.RegexLiteral;
+                return true;
+            case "help":
+            case SearchMatchClassifier.HelpText:
+                origin = SearchMatchClassifier.HelpText;
+                return true;
+            case SearchMatchClassifier.Unknown:
+                origin = SearchMatchClassifier.Unknown;
+                return true;
+            default:
+                origin = string.Empty;
+                return false;
+        }
+    }
+
+    private static void AddSearchResultKinds(string rawValue, List<string> resultKinds, Action<string> addParseError)
+    {
+        if (!ValidateCsvBounds("--result-kind", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
+            return;
+        foreach (var rawKind in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!TryNormalizeSearchResultKind(rawKind, out var kind))
+            {
+                addParseError($"Error: unsupported --result-kind value '{ConsoleUi.FormatBoundedValue(rawKind)}'. Use call_site, declaration, identifier, code, comment, string_literal, regex_literal, help_text, or unknown.");
+                continue;
+            }
+            if (!resultKinds.Contains(kind, StringComparer.Ordinal))
+                resultKinds.Add(kind);
+        }
+    }
+
+    private static bool TryNormalizeSearchResultKind(string rawKind, out string kind)
+    {
+        switch (rawKind.ToLowerInvariant().Replace("-", "_"))
+        {
+            case "call":
+            case "callsite":
+            case "call_site":
+                kind = "call_site";
+                return true;
+            case "decl":
+            case "declaration":
+                kind = "declaration";
+                return true;
+            case "identifier":
+            case "ident":
+                kind = "identifier";
+                return true;
+            case SearchMatchClassifier.Code:
+                kind = SearchMatchClassifier.Code;
+                return true;
+            case SearchMatchClassifier.Comment:
+                kind = SearchMatchClassifier.Comment;
+                return true;
+            case "string":
+            case SearchMatchClassifier.StringLiteral:
+                kind = SearchMatchClassifier.StringLiteral;
+                return true;
+            case "regex":
+            case SearchMatchClassifier.RegexLiteral:
+                kind = SearchMatchClassifier.RegexLiteral;
+                return true;
+            case "help":
+            case SearchMatchClassifier.HelpText:
+                kind = SearchMatchClassifier.HelpText;
+                return true;
+            case SearchMatchClassifier.Unknown:
+                kind = SearchMatchClassifier.Unknown;
+                return true;
+            default:
+                kind = string.Empty;
+                return false;
+        }
+    }
+
     private static bool ValidateCsvBounds(
         string optionName,
         string rawValue,
@@ -8965,6 +9732,7 @@ public static partial class QueryCommandRunner
             case OutputFormatJson:
             case OutputFormatCount:
             case OutputFormatCompact:
+            case OutputFormatGrouped:
             case OutputFormatCsv:
             case OutputFormatTsv:
             case OutputFormatLsp:
@@ -10205,6 +10973,58 @@ public static partial class QueryCommandRunner
             if (age > staleAfter.Value)
                 Console.Error.WriteLine($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
+    }
+
+    private static SearchQueryHint? BuildSearchPathGlobHint(DbReader reader, QueryCommandOptions options)
+    {
+        if (options.PathPatterns.Count != 1)
+            return null;
+        var pattern = options.PathPatterns[0].Replace('\\', '/').TrimEnd('/');
+        if (pattern.Length == 0 || ContainsGlobMeta(pattern) || pattern.EndsWith("/**", StringComparison.Ordinal))
+            return null;
+
+        if (!string.IsNullOrEmpty(Path.GetExtension(pattern)))
+        {
+            var exactMatches = reader.ListFiles(
+                query: null,
+                limit: 1,
+                lang: options.Lang,
+                pathPatterns: [pattern],
+                excludePathPatterns: options.ExcludePaths,
+                excludeTests: options.ExcludeTests,
+                since: options.Since);
+            if (exactMatches.Count > 0)
+                return null;
+        }
+
+        var suggested = pattern + "/**";
+        var prefixMatches = reader.ListFiles(
+            query: null,
+            limit: 1,
+            lang: options.Lang,
+            pathPatterns: [suggested],
+            excludePathPatterns: options.ExcludePaths,
+            excludeTests: options.ExcludeTests,
+            since: options.Since);
+        if (prefixMatches.Count == 0)
+            return null;
+
+        return new SearchQueryHint
+        {
+            Reason = "path_filter_looks_like_directory",
+            SuggestedAction = $"`--path {pattern}` looks like an indexed directory prefix; use `--path {suggested}` to match files below it.",
+            Flag = "--path",
+            McpArgument = "path",
+        };
+    }
+
+    private static bool ContainsGlobMeta(string pattern)
+        => pattern.IndexOfAny(new[] { '*', '?', '[', ']' }) >= 0;
+
+    private static void AddSearchPathHint(JsonObject payload, SearchQueryHint? pathHint)
+    {
+        if (pathHint != null)
+            payload["path_filter_hint"] = BuildSearchQueryHintJson(pathHint);
     }
 
     private static void WriteExactSubstringHintIfNeeded(SearchQueryHint? hint)
@@ -12132,6 +12952,17 @@ public sealed class QueryCommandOptions
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }
     public string? GroupBy { get; init; }
+    public string? UniqueBy { get; init; }
+    public string? CountBy { get; init; }
+    public List<string> MatchOrigins { get; init; } = [];
+    public List<string> ResultKinds { get; init; } = [];
+    public List<string>? SearchFields { get; init; }
+    public bool FirstPerFile { get; init; }
+    public bool ResultsOnly { get; init; }
+    public bool NextSteps { get; init; }
+    public int GroupedPerFileLimit { get; init; } = 3;
+    public int? SampleSize { get; init; }
+    public int? MaxJsonBytes { get; init; }
     public bool RawBytes { get; init; }
     public bool RawKinds { get; init; }
     public bool Verbose { get; init; }

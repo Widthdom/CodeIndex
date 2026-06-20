@@ -68,6 +68,7 @@ Index and query:
 cdidx .
 cdidx status --check --json
 cdidx search "handleRequest"
+cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536
 cdidx definition UserService
 cdidx validate
 ```
@@ -243,6 +244,7 @@ index を作って検索します。
 cdidx .
 cdidx status --check --json
 cdidx search "handleRequest"
+cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536
 cdidx definition UserService
 cdidx validate
 ```

@@ -5884,6 +5884,347 @@ jobs:
         }
     }
 
+    [Fact]
+    public void RunSearch_MatchOriginAndResultKindFiltersKeepCodeCallSites_Issues3748And3749()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_origin_kind_filters");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/code.cs",
+                "csharp",
+                """
+                public class Demo
+                {
+                    void Run()
+                    {
+                        Directory.Delete(path);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment.cs", "csharp", "// Directory.Delete(path) only in a comment\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Directory.Delete", "--db", dbPath, "--exact-substring", "--match-origin", "code", "--result-kind", "call_site", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.Contains("code", row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+            Assert.Contains("call_site", row.GetProperty("result_kinds").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_CountByOriginReturnsAggregatedJson_Issue3729()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_count_by_origin");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mixed.cs",
+                "csharp",
+                """
+                public class Demo { void Run() { OriginCountNeedle(); } }
+                // OriginCountNeedle in comment
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["OriginCountNeedle", "--db", dbPath, "--exact-substring", "--count-by", "origin", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("count_by", document.RootElement.GetProperty("mode").GetString());
+            var groups = document.RootElement.GetProperty("groups").EnumerateArray().ToArray();
+            Assert.Contains(groups, group => group.GetProperty("key").GetString() == "code");
+            Assert.Contains(groups, group => group.GetProperty("key").GetString() == "comment");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupedFormatBoundsRepresentativeMatches_Issue3788()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_grouped_output");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/a.cs",
+                    Lang = "csharp",
+                    Size = "GroupedNeedle();\nGroupedNeedle();\nGroupedNeedle();\n".Length,
+                    Lines = 3,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "grouped-output-a",
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = "GroupedNeedle();",
+                    },
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 1,
+                        StartLine = 2,
+                        EndLine = 2,
+                        Content = "GroupedNeedle();",
+                    },
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 2,
+                        StartLine = 3,
+                        EndLine = 3,
+                        Content = "GroupedNeedle();",
+                    }
+                ]);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "GroupedNeedle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GroupedNeedle", "--db", dbPath, "--exact-substring", "--format", "grouped", "--per-file-limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(2, document.RootElement.GetProperty("returned_groups").GetInt32());
+            Assert.Equal(1, document.RootElement.GetProperty("per_file_limit").GetInt32());
+            var groups = document.RootElement.GetProperty("groups").EnumerateArray().ToArray();
+            Assert.Equal("src/a.cs", groups[0].GetProperty("path").GetString());
+            Assert.Equal(3, groups[0].GetProperty("count").GetInt32());
+            Assert.Equal("src/b.cs", groups[1].GetProperty("path").GetString());
+            foreach (var group in groups)
+                Assert.True(group.GetProperty("results").EnumerateArray().Count() <= 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_SearchFieldsResultsOnlyOmitsDoneRecord_Issue3728()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_projection_results_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/projected.cs", "csharp", "public class Demo { void Run() { ProjectedNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["ProjectedNeedle", "--db", dbPath, "--exact-substring", "--search-fields", "path,line,symbol,origin", "--results-only"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var line = Assert.Single(lines);
+            using var document = JsonDocument.Parse(line);
+            Assert.Equal("src/projected.cs", document.RootElement.GetProperty("path").GetString());
+            Assert.True(document.RootElement.TryGetProperty("line", out _));
+            Assert.False(document.RootElement.TryGetProperty("done", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_FirstPerFileSampleAndMaxJsonBytesInterruptsNdjson_Issue3768()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_sampling_byte_cap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "SampleNeedle();\nSampleNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "SampleNeedle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["SampleNeedle", "--db", dbPath, "--exact-substring", "--first-per-file", "--sample", "2", "--json=ndjson", "--max-json-bytes", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var done = Assert.Single(lines);
+            using var document = JsonDocument.Parse(done);
+            Assert.True(document.RootElement.GetProperty("done").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
+            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultsSuggestsDirectoryGlobPath_Issue3814()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_path_glob_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/CodeIndex/Foo.cs", "csharp", "public class Foo {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--path", "src/CodeIndex", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var hint = document.RootElement.GetProperty("path_filter_hint");
+            Assert.Equal("path_filter_looks_like_directory", hint.GetProperty("reason").GetString());
+            Assert.Contains("src/CodeIndex/**", hint.GetProperty("suggested_action").GetString());
+
+            var (exactFileExitCode, exactFileStdout, exactFileStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--path", "src/CodeIndex/Foo.cs", "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, exactFileExitCode);
+            Assert.Equal(string.Empty, exactFileStderr);
+            using var exactFileDocument = ParseJsonOutput(exactFileStdout);
+            Assert.False(exactFileDocument.RootElement.TryGetProperty("path_filter_hint", out _));
+
+            var (alreadyGlobbedExitCode, alreadyGlobbedStdout, alreadyGlobbedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--path", "src/CodeIndex/**", "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, alreadyGlobbedExitCode);
+            Assert.Equal(string.Empty, alreadyGlobbedStderr);
+            using var alreadyGlobbedDocument = ParseJsonOutput(alreadyGlobbedStdout);
+            Assert.False(alreadyGlobbedDocument.RootElement.TryGetProperty("path_filter_hint", out _));
+
+            var (nonexistentExitCode, nonexistentStdout, nonexistentStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--path", "src/Missing", "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, nonexistentExitCode);
+            Assert.Equal(string.Empty, nonexistentStderr);
+            using var nonexistentDocument = ParseJsonOutput(nonexistentStdout);
+            Assert.False(nonexistentDocument.RootElement.TryGetProperty("path_filter_hint", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MultiTokenCodePhraseSuggestsExactSubstring_Issue3664()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_code_phrase_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "throw new Exception();\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["throw new Exception", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("--exact-substring", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NextStepsAddsStructuredJsonHintsForOneManyAndZeroResults_Issue3802()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_next_steps");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/next.cs",
+                "csharp",
+                """
+                public class Demo
+                {
+                    void Run()
+                    {
+                        NextStepNeedle();
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["NextStepNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--next-steps"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            var nextSteps = row.GetProperty("next_steps").EnumerateArray().ToArray();
+            Assert.Contains(nextSteps, step => step.GetProperty("command").GetString()!.Contains("cdidx inspect", StringComparison.Ordinal));
+            Assert.Contains(nextSteps, step => step.GetProperty("command").GetString()!.Contains("cdidx excerpt", StringComparison.Ordinal));
+
+            for (var i = 0; i < 11; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/many{i}.cs",
+                    "csharp",
+                    $"public class Many{i} {{ void Run() {{ ManyNextStepNeedle(); }} }}\n");
+            }
+
+            var (manyExitCode, manyStdout, manyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["ManyNextStepNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--next-steps", "--limit", "20"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, manyExitCode);
+            Assert.Equal(string.Empty, manyStderr);
+            using var manyDocument = ParseJsonOutput(manyStdout);
+            var manyRows = manyDocument.RootElement.EnumerateArray().ToArray();
+            Assert.Equal(11, manyRows.Length);
+            Assert.Equal(10, manyRows.Count(result => result.TryGetProperty("next_steps", out _)));
+            Assert.All(manyRows.Take(10), result => Assert.True(result.GetProperty("next_steps_truncated").GetBoolean()));
+            Assert.False(manyRows[10].TryGetProperty("next_steps", out _));
+
+            var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNextStepNeedle", "--db", dbPath, "--json", "--next-steps"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStderr);
+            using var zeroDocument = ParseJsonOutput(zeroStdout);
+            Assert.False(zeroDocument.RootElement.TryGetProperty("next_steps", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static string QuoteReplayShellArgForAssertion(string arg)
     {
         if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))

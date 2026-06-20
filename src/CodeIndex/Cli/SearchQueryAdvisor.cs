@@ -33,8 +33,21 @@ internal static class SearchQueryAdvisor
         if (punctuationCount >= 2)
             return true;
 
-        return tokens.Any(IsStandaloneOperatorToken);
+        return tokens.Any(IsStandaloneOperatorToken) || LooksLikeMultiTokenCodePhrase(tokens);
     }
+
+    private static bool LooksLikeMultiTokenCodePhrase(string[] tokens)
+        => tokens.Length >= 3 && tokens.Any(IsCommonCodeKeyword) && tokens.Any(IsIdentifierLikeToken);
+
+    private static bool IsCommonCodeKeyword(string token)
+        => token.ToLowerInvariant() is "await" or "catch" or "class" or "const" or "def" or "else" or "for" or "function"
+            or "if" or "import" or "let" or "new" or "public" or "private" or "protected" or "return"
+            or "static" or "throw" or "try" or "using" or "var" or "void" or "while";
+
+    private static bool IsIdentifierLikeToken(string token)
+        => token.Length > 0
+            && (char.IsLetter(token[0]) || token[0] == '_' || token[0] == '@')
+            && token.Skip(1).All(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '@' || ch == '.');
 
     private static bool TryUnwrapSingleDoubleQuotedPhrase(string query, out string phrase)
     {
