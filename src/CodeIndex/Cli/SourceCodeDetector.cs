@@ -4,6 +4,17 @@ using CodeIndex.Indexer;
 namespace CodeIndex.Cli;
 
 /// <summary>
+/// Source-code detection result with a stable reason code for diagnostics.
+/// 診断用の安定した理由コードを持つソースコード検出結果。
+/// </summary>
+public readonly record struct SourceCodeDetectionResult(bool ContainsSourceCode, string? ReasonCode)
+{
+    public static SourceCodeDetectionResult NoSourceCode { get; } = new(false, null);
+
+    public static SourceCodeDetectionResult Detected(string reasonCode) => new(true, reasonCode);
+}
+
+/// <summary>
 /// Detects whether a text string likely contains source code.
 /// テキスト文字列にソースコードが含まれている可能性があるかを検出する。
 ///
@@ -86,6 +97,14 @@ public static class SourceCodeDetector
     /// 検出を発動させるのに必要な、連続する import/using 行の数。
     /// </summary>
     private const int ConsecutiveImportThreshold = 3;
+    private const int MaxMarkdownFenceIndentSpaces = 3;
+
+    public const string ReasonStatementEnding = "statement-ending";
+    public const string ReasonIndentedCodeLines = "indented-code-lines";
+    public const string ReasonBlockStructure = "block-structure";
+    public const string ReasonRepeatedImports = "repeated-imports";
+    public const string ReasonFunctionDefinition = "function-definition";
+    public const string ReasonFencedCodeBlock = "fenced-code-block";
 
     // ---------------------------------------------------------------
     // Public API / 公開API
@@ -101,10 +120,18 @@ public static class SourceCodeDetector
     /// </summary>
     /// <param name="text">The text to inspect / 検査するテキスト</param>
     /// <returns>true if source code is likely present / ソースコードが含まれる可能性がある場合 true</returns>
-    public static bool ContainsSourceCode(string text)
+    public static bool ContainsSourceCode(string? text) => Detect(text).ContainsSourceCode;
+
+    /// <summary>
+    /// Returns a detection result with a stable reason code when source code is likely present.
+    /// ソースコードが含まれる可能性がある場合、安定した理由コード付きの検出結果を返す。
+    /// </summary>
+    /// <param name="text">The text to inspect / 検査するテキスト</param>
+    /// <returns>Detection result / 検出結果</returns>
+    public static SourceCodeDetectionResult Detect(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return false;
+            return SourceCodeDetectionResult.NoSourceCode;
 
         // Run each heuristic independently.
         // Any single match is sufficient to flag the text.
@@ -112,24 +139,24 @@ public static class SourceCodeDetector
         // 1つでもマッチすればテキストをフラグする。
 
         if (HasCodeStatementPattern(text))
-            return true;
+            return SourceCodeDetectionResult.Detected(ReasonStatementEnding);
 
         if (HasConsecutiveCodeLines(text))
-            return true;
+            return SourceCodeDetectionResult.Detected(ReasonIndentedCodeLines);
 
         if (HasBlockStructure(text))
-            return true;
+            return SourceCodeDetectionResult.Detected(ReasonBlockStructure);
 
         if (HasRepeatedImports(text))
-            return true;
+            return SourceCodeDetectionResult.Detected(ReasonRepeatedImports);
 
         if (HasMultiLineFunctionDefinition(text))
-            return true;
+            return SourceCodeDetectionResult.Detected(ReasonFunctionDefinition);
 
         if (HasFencedCodeBlock(text))
-            return true;
+            return SourceCodeDetectionResult.Detected(ReasonFencedCodeBlock);
 
-        return false;
+        return SourceCodeDetectionResult.NoSourceCode;
     }
 
     // ---------------------------------------------------------------
@@ -522,24 +549,24 @@ public static class SourceCodeDetector
     /// </summary>
     private static bool HasFencedCodeBlock(string text)
     {
-        bool inFence = false;
+        char activeMarker = '\0';
+        int activeMarkerLength = 0;
         int contentLines = 0;
 
         foreach (var rawLine in EnumerateLines(text))
         {
-            var trimmed = rawLine.Trim();
-
-            // Check for fence delimiter (``` with optional language tag)
-            // フェンス区切り（```＋任意の言語タグ）を検査
-            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            // Check for fence delimiter (``` or ~~~ with optional language tag)
+            // フェンス区切り（``` または ~~~＋任意の言語タグ）を検査
+            if (TryReadMarkdownFence(rawLine, out var marker, out var markerLength))
             {
-                if (!inFence)
+                if (activeMarker == '\0')
                 {
                     // Opening fence / 開始フェンス
-                    inFence = true;
+                    activeMarker = marker;
+                    activeMarkerLength = markerLength;
                     contentLines = 0;
                 }
-                else
+                else if (marker == activeMarker && markerLength >= activeMarkerLength)
                 {
                     // Closing fence — if there was at least 1 content line,
                     // this is a fenced code block.
@@ -547,16 +574,53 @@ public static class SourceCodeDetector
                     // フェンスドコードブロックである。
                     if (contentLines >= 1)
                         return true;
-                    inFence = false;
+                    activeMarker = '\0';
+                    activeMarkerLength = 0;
+                }
+                else
+                {
+                    contentLines++;
                 }
                 continue;
             }
 
-            if (inFence && trimmed.Length > 0)
+            if (activeMarker != '\0' && rawLine.Trim().Length > 0)
                 contentLines++;
         }
 
         return false;
+    }
+
+    private static bool TryReadMarkdownFence(string line, out char marker, out int markerLength)
+    {
+        marker = '\0';
+        markerLength = 0;
+        var index = 0;
+        while (index < line.Length && line[index] == ' ' && index < MaxMarkdownFenceIndentSpaces)
+            index++;
+        if (index < line.Length && line[index] == ' ')
+            return false;
+        if (index >= line.Length)
+            return false;
+
+        var candidate = line[index];
+        if (candidate is not ('`' or '~'))
+            return false;
+
+        while (index < line.Length && line[index] == candidate)
+        {
+            markerLength++;
+            index++;
+        }
+
+        if (markerLength < 3)
+        {
+            markerLength = 0;
+            return false;
+        }
+
+        marker = candidate;
+        return true;
     }
 
     private static IEnumerable<string> EnumerateLines(string text)

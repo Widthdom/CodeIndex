@@ -89,6 +89,7 @@ public class SourceCodeDetectorTests
         Assert.False(SourceCodeDetector.ContainsSourceCode(""));
         Assert.False(SourceCodeDetector.ContainsSourceCode("   "));
         Assert.False(SourceCodeDetector.ContainsSourceCode(null!));
+        Assert.Null(SourceCodeDetector.Detect(null).ReasonCode);
     }
 
     [Fact]
@@ -100,6 +101,18 @@ public class SourceCodeDetectorTests
                  + "    const handler = (e) => {\n"
                  + "The above is not extracted as a symbol.";
         Assert.False(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void AllowsProseWithBackticksAndTildes_Issue3830()
+    {
+        var text = "The docs mention `inline code`, ``` fences, and ~~~ fences in prose, "
+                 + "but no fenced block is present.";
+
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.False(result.ContainsSourceCode);
+        Assert.Null(result.ReasonCode);
     }
 
     // ================================================================
@@ -121,6 +134,34 @@ public class SourceCodeDetectorTests
                  + "        Console.WriteLine(line);\n"
                  + "    }\n"
                  + "}";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Theory]
+    [InlineData(
+        "alpha;\nbeta;\ngamma;\ndelta;\nepsilon;",
+        SourceCodeDetector.ReasonStatementEnding)]
+    [InlineData(
+        "    var current = 1\n    return current\n    result.ToString()",
+        SourceCodeDetector.ReasonIndentedCodeLines)]
+    [InlineData(
+        "section {\nalpha\nbeta\ngamma\n}",
+        SourceCodeDetector.ReasonBlockStructure)]
+    [InlineData(
+        "import alpha\nimport beta\nimport gamma",
+        SourceCodeDetector.ReasonRepeatedImports)]
+    [InlineData(
+        "def process():\n    return 1",
+        SourceCodeDetector.ReasonFunctionDefinition)]
+    [InlineData(
+        "Here is the snippet:\n~~~csharp\nreturn token;\n~~~",
+        SourceCodeDetector.ReasonFencedCodeBlock)]
+    public void Detect_ReturnsStableReasonCode_Issue3830(string text, string expectedReason)
+    {
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.True(result.ContainsSourceCode);
+        Assert.Equal(expectedReason, result.ReasonCode);
         Assert.True(SourceCodeDetector.ContainsSourceCode(text));
     }
 
@@ -371,6 +412,34 @@ public class SourceCodeDetectorTests
     }
 
     [Fact]
+    public void RejectsTildeFencedCodeBlock_Issue3830()
+    {
+        var text = "The problem:\n"
+                 + "~~~python\n"
+                 + "token\n"
+                 + "~~~";
+
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.True(result.ContainsSourceCode);
+        Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, result.ReasonCode);
+    }
+
+    [Fact]
+    public void RejectsIndentedTildeFencedCodeBlock_Issue3830()
+    {
+        var text = "The problem:\n"
+                 + "   ~~~python\n"
+                 + "token\n"
+                 + "   ~~~";
+
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.True(result.ContainsSourceCode);
+        Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, result.ReasonCode);
+    }
+
+    [Fact]
     public void AllowsEmptyFencedBlock()
     {
         // An empty fenced block (no content lines) should be allowed.
@@ -380,6 +449,20 @@ public class SourceCodeDetectorTests
                  + "```\n"
                  + "Nothing there.";
         Assert.False(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void AllowsEmptyTildeFencedBlock_Issue3830()
+    {
+        var text = "See:\n"
+                 + "~~~\n"
+                 + "~~~\n"
+                 + "Nothing there.";
+
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.False(result.ContainsSourceCode);
+        Assert.Null(result.ReasonCode);
     }
 
     [Fact]
