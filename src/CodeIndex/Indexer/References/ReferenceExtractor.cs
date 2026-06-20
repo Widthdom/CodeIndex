@@ -6,6 +6,12 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
+public sealed record ReferenceExtractionDiagnostic(string Kind, string Message);
+
+public sealed record ReferenceExtractionResult(
+    List<ReferenceRecord> References,
+    IReadOnlyList<ReferenceExtractionDiagnostic> Diagnostics);
+
 /// <summary>
 /// Extracts lightweight symbol references such as call sites.
 /// 軽量なシンボル参照（呼び出し箇所など）を抽出する。
@@ -895,6 +901,25 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null)
+        => ExtractDetailed(
+            fileId,
+            lang,
+            content,
+            symbols,
+            path,
+            workspaceSymbols,
+            cancellationToken,
+            maxReferenceCount).References;
+
+    public static ReferenceExtractionResult ExtractDetailed(
+        long fileId,
+        string? lang,
+        string content,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path = null,
+        IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
+        CancellationToken cancellationToken = default,
+        int? maxReferenceCount = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
@@ -902,28 +927,37 @@ public static partial class ReferenceExtractor
         if (!TryGetExtractor(lang, out var extractor))
         {
             if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
-                return [];
+                return new ReferenceExtractionResult([], []);
 
             if (string.IsNullOrEmpty(content))
-                return [];
+                return new ReferenceExtractionResult([], []);
             if (ChunkSplitter.HasOversizeLine(content))
-                return [];
+                return new ReferenceExtractionResult([], []);
             if (content.Contains('\r'))
                 content = content.Replace("\r\n", "\n").Replace("\r", "\n");
             content = FileIndexer.StripLineLeadingInvisibles(content);
             cancellationToken.ThrowIfCancellationRequested();
 
-            return pluginExtractor.Extract(
-                    fileId,
-                    content,
-                    new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols))
-                .Take(maxReferenceCount ?? int.MaxValue)
-                .ToList();
+            var pluginReferences = pluginExtractor.Extract(
+                fileId,
+                content,
+                new ExtractionContext(pluginLanguage, path, symbols, workspaceSymbols, maxReferenceCount));
+            var references = CopyPluginReferencesWithinLimit(pluginReferences, maxReferenceCount, out var truncated);
+            IReadOnlyList<ReferenceExtractionDiagnostic> diagnostics = truncated
+                ? [
+                    new ReferenceExtractionDiagnostic(
+                        "plugin_reference_count_truncated",
+                        $"Plugin reference extraction for language '{pluginLanguage}' produced {pluginReferences.Count:N0} references, exceeding the materialization budget of {maxReferenceCount!.Value:N0}; only the first {maxReferenceCount.Value:N0} references were retained."),
+                ]
+                : [];
+            return new ReferenceExtractionResult(references, diagnostics);
         }
 
         lang = NormalizeLanguage(lang);
         var language = lang!;
-        return extractor.Extract(new ReferenceExtractionContext(
+        var builtInDiagnostics = new List<ReferenceExtractionDiagnostic>();
+        return new ReferenceExtractionResult(
+            extractor.Extract(new ReferenceExtractionContext(
             fileId,
             language,
             content,
@@ -932,7 +966,34 @@ public static partial class ReferenceExtractor
             workspaceSymbols,
             requestedLanguage,
             cancellationToken,
-            maxReferenceCount));
+            maxReferenceCount,
+            builtInDiagnostics.Add)),
+            builtInDiagnostics);
+    }
+
+    private static List<ReferenceRecord> CopyPluginReferencesWithinLimit(
+        IReadOnlyList<ReferenceRecord> references,
+        int? maxReferenceCount,
+        out bool truncated)
+    {
+        if (maxReferenceCount is not { } limit)
+        {
+            truncated = false;
+            return references.ToList();
+        }
+
+        if (limit <= 0)
+        {
+            truncated = references.Count > 0;
+            return [];
+        }
+
+        var retainedCount = Math.Min(references.Count, limit);
+        var retained = new List<ReferenceRecord>(retainedCount);
+        for (var i = 0; i < retainedCount; i++)
+            retained.Add(references[i]);
+        truncated = references.Count > retainedCount;
+        return retained;
     }
 
     private sealed class BoundedReferenceList(int maxReferenceCount) : List<ReferenceRecord>

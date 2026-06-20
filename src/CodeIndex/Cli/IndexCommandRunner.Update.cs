@@ -135,7 +135,10 @@ public static partial class IndexCommandRunner
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(options.MaxFileSizeBytes);
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
+            options.MaxFileSizeBytes,
+            maxSymbolCount: options.MaxSymbolsPerFile + 1,
+            maxReferenceCount: options.MaxReferencesPerFile + 1);
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -748,9 +751,10 @@ public static partial class IndexCommandRunner
                     currentUpdatePath = FormatIndexPhasePath(relPath, "references");
                     List<ReferenceRecord> references;
                     FileIssue? referenceRegexTimeoutIssue;
+                    ReferenceExtractionResult referenceExtraction;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
                     {
-                        references = ReferenceExtractor.Extract(
+                        referenceExtraction = ReferenceExtractor.ExtractDetailed(
                             fileId,
                             record.Lang,
                             content,
@@ -759,6 +763,7 @@ public static partial class IndexCommandRunner
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             cancellationToken,
                             maxReferenceCount: options.MaxReferencesPerFile + 1);
+                        references = referenceExtraction.References;
                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.OnReferencesExtracted(fileContext, references);
@@ -776,6 +781,7 @@ public static partial class IndexCommandRunner
                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (referenceRegexTimeoutIssue != null)
                         issues = AppendIssue(issues, referenceRegexTimeoutIssue);
+                    issues = AppendReferenceExtractionDiagnosticIssues(issues, record.Path, referenceExtraction.Diagnostics);
                     if (referenceCapIssue != null)
                         issues = AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);
