@@ -3669,7 +3669,7 @@ internal static partial class ProgramRunner
         {
             Directory.CreateDirectory(directory);
             probe = Path.Combine(directory, $".cdidx-write-test-{Guid.NewGuid():N}");
-            File.WriteAllText(probe, "");
+            FileWriteProbe.WriteEmptyFile(probe, Encoding.UTF8);
             createdProbe = true;
             return true;
         }
