@@ -598,6 +598,7 @@ public partial class McpServer : IDisposable
 
         while (_running)
         {
+            PruneCompletedRequestTasks(tasks);
             string? frame;
             try
             {
@@ -735,6 +736,38 @@ public partial class McpServer : IDisposable
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    internal static int PruneCompletedRequestTasks(List<Task> tasks)
+    {
+        var removed = 0;
+        for (var i = tasks.Count - 1; i >= 0; i--)
+        {
+            var task = tasks[i];
+            if (!task.IsCompleted)
+                continue;
+
+            ObserveCompletedRequestTask(task);
+            tasks.RemoveAt(i);
+            removed++;
+        }
+
+        return removed;
+    }
+
+    private static void ObserveCompletedRequestTask(Task task)
+    {
+        if (!task.IsFaulted)
+            return;
+
+        try
+        {
+            task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended before EOF drain ({ex.GetType().Name}).");
+        }
     }
 
     internal async Task DrainInFlightTasksAsync(
