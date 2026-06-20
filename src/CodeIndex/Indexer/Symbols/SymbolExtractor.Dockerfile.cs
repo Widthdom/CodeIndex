@@ -8,6 +8,7 @@ public static partial class SymbolExtractor
 {
     internal const int DockerfileJsonFormMaxDepth = 8;
     internal const int DockerfileJsonFormMaxItems = 128;
+    internal const int DockerfileJsonFormMaxBodyLength = 32 * 1024;
     internal const int DockerfileJsonFormMaxStringLength = 4096;
     private static readonly JsonDocumentOptions DockerfileJsonFormDocumentOptions = new()
     {
@@ -309,6 +310,12 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         string body)
     {
+        if (body.Length > DockerfileJsonFormMaxBodyLength)
+        {
+            AddDockerfileJsonFormDiagnostic(symbols, fileId, lineNumber, line, "dockerfile_json_form_body_budget_exceeded", "Dockerfile JSON-form body exceeded the parse budget; JSON-form symbols were truncated.");
+            return;
+        }
+
         try
         {
             using var document = JsonDocument.Parse(body, DockerfileJsonFormDocumentOptions);
@@ -319,7 +326,10 @@ public static partial class SymbolExtractor
             foreach (var item in document.RootElement.EnumerateArray())
             {
                 if (itemCount >= DockerfileJsonFormMaxItems)
+                {
+                    AddDockerfileJsonFormDiagnostic(symbols, fileId, lineNumber, line, "dockerfile_json_form_array_budget_exceeded", "Dockerfile JSON-form array exceeded the item budget; remaining items were truncated.");
                     break;
+                }
                 itemCount++;
 
                 if (!TryGetDockerfileJsonFormString(item, out var name))
@@ -413,6 +423,11 @@ public static partial class SymbolExtractor
         var body = trimmed[5..].TrimStart();
         if (!body.StartsWith("[", StringComparison.Ordinal))
             return;
+        if (body.Length > DockerfileJsonFormMaxBodyLength)
+        {
+            AddDockerfileJsonFormDiagnostic(symbols, fileId, lineNumber, line, "dockerfile_json_form_body_budget_exceeded", "Dockerfile JSON-form body exceeded the parse budget; JSON-form symbols were truncated.");
+            return;
+        }
 
         try
         {
@@ -471,8 +486,28 @@ public static partial class SymbolExtractor
         if (!TryGetDockerfileInstructionBody(line, instruction, allowOnbuild, out var body))
             return;
 
-        var destination = GetDockerfileShellFormDestination(body)
-            ?? (includeJsonForm ? GetDockerfileJsonFormDestination(body) : null);
+        string? destination;
+        var jsonArrayBudgetExceeded = false;
+        if (includeJsonForm && DockerfileInstructionBodyStartsWithJsonForm(body))
+        {
+            if (DockerfileJsonFormBodyExceedsBudget(body))
+            {
+                AddDockerfileJsonFormDiagnostic(symbols, fileId, lineNumber, line, "dockerfile_json_form_body_budget_exceeded", "Dockerfile JSON-form body exceeded the parse budget; JSON-form symbols were truncated.");
+                return;
+            }
+
+            destination = GetDockerfileJsonFormDestination(body, out jsonArrayBudgetExceeded);
+        }
+        else
+        {
+            destination = GetDockerfileShellFormDestination(body);
+        }
+
+        if (jsonArrayBudgetExceeded)
+        {
+            AddDockerfileJsonFormDiagnostic(symbols, fileId, lineNumber, line, "dockerfile_json_form_array_budget_exceeded", "Dockerfile JSON-form array exceeded the item budget; remaining items were truncated.");
+            return;
+        }
         if (destination is null or "." or "./")
             return;
 
@@ -562,10 +597,13 @@ public static partial class SymbolExtractor
         return arguments.Count >= 2 ? arguments[^1] : null;
     }
 
-    private static string? GetDockerfileJsonFormDestination(string body)
+    private static string? GetDockerfileJsonFormDestination(string body, out bool arrayBudgetExceeded)
     {
+        arrayBudgetExceeded = false;
         var jsonStart = SkipDockerfileInstructionOptions(body);
         if (jsonStart >= body.Length || body[jsonStart] != '[')
+            return null;
+        if (body.Length - jsonStart > DockerfileJsonFormMaxBodyLength)
             return null;
 
         try
@@ -579,7 +617,10 @@ public static partial class SymbolExtractor
             foreach (var item in document.RootElement.EnumerateArray())
             {
                 if (count >= DockerfileJsonFormMaxItems)
+                {
+                    arrayBudgetExceeded = true;
                     return null;
+                }
                 count++;
 
                 if (!TryGetDockerfileJsonFormString(item, out var value))
@@ -594,6 +635,32 @@ public static partial class SymbolExtractor
         {
             return null;
         }
+    }
+
+    private static bool DockerfileJsonFormBodyExceedsBudget(string body)
+    {
+        var jsonStart = SkipDockerfileInstructionOptions(body);
+        return jsonStart < body.Length
+               && body[jsonStart] == '['
+               && body.Length - jsonStart > DockerfileJsonFormMaxBodyLength;
+    }
+
+    private static bool DockerfileInstructionBodyStartsWithJsonForm(string body)
+    {
+        var jsonStart = SkipDockerfileInstructionOptions(body);
+        return jsonStart < body.Length && body[jsonStart] == '[';
+    }
+
+    private static void AddDockerfileJsonFormDiagnostic(
+        List<SymbolRecord> symbols,
+        long fileId,
+        int lineNumber,
+        string line,
+        string category,
+        string message)
+    {
+        var added = false;
+        AddStructuredDataDiagnosticSymbol(symbols, fileId, category, lineNumber, [line], message, ref added);
     }
 
     private static int SkipDockerfileInstructionOptions(string body)

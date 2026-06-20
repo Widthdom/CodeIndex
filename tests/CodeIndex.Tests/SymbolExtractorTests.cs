@@ -154,6 +154,85 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JsonBroadObject_EmitsStructuredDataTruncationDiagnostic_Issue3765()
+    {
+        var properties = string.Join(",\n", Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"  \"p{index}\": {index}"));
+        var content = "{\n" + properties + "\n}";
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_symbol_budget_exceeded");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+    }
+
+    [Fact]
+    public void Extract_JsonDeepObject_EmitsStructuredDataDepthDiagnostic_Issue3765()
+    {
+        var builder = new StringBuilder();
+        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxDepth; index++)
+            builder.Append("{\"p").Append(index).Append("\":");
+        builder.Append('0');
+        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxDepth; index++)
+            builder.Append('}');
+
+        var symbols = SymbolExtractor.Extract(1, "json", builder.ToString());
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_depth_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_YamlBroadMapping_EmitsStructuredDataTruncationDiagnostic_Issue3765()
+    {
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"p{index}: {index}"));
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_symbol_budget_exceeded");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+    }
+
+    [Fact]
+    public void Extract_XmlBroadXaml_EmitsStructuredDataTruncationDiagnostic_Issue3765()
+    {
+        var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"""  <Button x:Name="Button{index}" />"""));
+        var content = $$"""
+            <Window x:Class="App.MainWindow" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+            {{elements}}
+            </Window>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_xml_symbol_budget_exceeded");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+    }
+
+    [Fact]
+    public void Extract_DockerfileJsonFormVolume_EmitsArrayTruncationDiagnostic_Issue3765()
+    {
+        var items = string.Join(", ", Enumerable.Range(0, SymbolExtractor.DockerfileJsonFormMaxItems + 1).Select(index => $"\"/data/{index}\""));
+        var content = $"FROM alpine\nVOLUME [{items}]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "dockerfile_json_form_array_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_DockerfileJsonFormCopy_EmitsBodyTruncationDiagnostic_Issue3765()
+    {
+        var longPath = "/" + new string('a', SymbolExtractor.DockerfileJsonFormMaxBodyLength + 1);
+        var content = $$"""
+            FROM alpine
+            COPY ["src", "{{longPath}}"]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "dockerfile_json_form_body_budget_exceeded");
+    }
+
+    [Fact]
     public void Extract_Solution_IndexesProjectEntries_Issue3662()
     {
         const string content = """

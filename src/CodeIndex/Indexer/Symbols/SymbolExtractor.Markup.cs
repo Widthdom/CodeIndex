@@ -816,20 +816,34 @@ public static partial class SymbolExtractor
             }
         }
 
-        AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts, symbols);
-        AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols)
+            AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
 
         foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
         {
+            if (symbols.Count >= StructuredDataMaxSymbols)
+                break;
+
             var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
             if (value.Length == 0)
                 continue;
@@ -848,7 +862,7 @@ public static partial class SymbolExtractor
             });
         }
 
-        return symbols;
+        return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
     }
 
     private static void AddWrappedXamlTypeArgumentSymbols(
