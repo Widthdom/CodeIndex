@@ -2059,13 +2059,13 @@ public sealed class Caller
         var result = response["result"]!;
         Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
         var text = result["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Project filter could not be resolved", text, StringComparison.Ordinal);
+        Assert.Contains("Project filter could not be resolved: InvalidOperationException", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Tool 'search' failed", text, StringComparison.Ordinal);
-        Assert.DoesNotContain(nameof(InvalidOperationException), text, StringComparison.Ordinal);
+        Assert.DoesNotContain("DefinitelyMissingProject3160", text, StringComparison.Ordinal);
         var structured = result["structuredContent"]!;
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
         Assert.Equal("project", structured["parameter"]!.GetValue<string>());
-        Assert.Contains("DefinitelyMissingProject3160", structured["diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("InvalidOperationException", structured["diagnostic"]!.GetValue<string>());
     }
 
     [Fact]
@@ -12819,6 +12819,52 @@ public sealed class Caller
             Assert.Equal("src/App/ServiceA.cs", result!["path"]!.GetValue<string>());
             Assert.Equal(expectedProjectRoot, structured["project_filter_root"]!.GetValue<string>());
             Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, structured["project_filter_root_fallback_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ProjectScopeErrorSanitizesCaughtExceptionMessage_Issue3660()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_sanitized_exception");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_sanitized_exception_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var secretProject = "secret-project-token-ghp_1234567890abcdef-private";
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var requestJson = """
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"ServiceA","project":"__PROJECT__","exactSubstring":true}}}
+            """.Replace("__PROJECT__", secretProject, StringComparison.Ordinal);
+            var response = server.HandleMessage(JsonNode.Parse(requestJson)!)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var contentText = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            var structured = response["result"]!["structuredContent"]!;
+            var structuredMessage = structured["message"]!.GetValue<string>();
+            var diagnostic = structured["diagnostic"]!.GetValue<string>();
+            Assert.Equal("InvalidOperationException", diagnostic);
+            Assert.Contains("Project filter could not be resolved: InvalidOperationException", contentText);
+            Assert.DoesNotContain(secretProject, contentText);
+            Assert.DoesNotContain(secretProject, structuredMessage);
+            Assert.DoesNotContain(secretProject, diagnostic);
+            Assert.DoesNotContain(projectRoot, contentText);
+            Assert.DoesNotContain(projectRoot, structuredMessage);
+            Assert.DoesNotContain(projectRoot, diagnostic);
         }
         finally
         {

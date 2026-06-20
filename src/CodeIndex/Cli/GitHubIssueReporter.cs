@@ -67,6 +67,10 @@ internal static class GitHubIssueReporter
         "(\"(?:token|access_token|authorization|password|secret|client_secret|private_key|api_key)\"\\s*:\\s*)(\"(?:\\\\.|[^\"])*\"|[^,}\\]\\s]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(100));
+    private static readonly JsonDocumentOptions GitHubApiResponseJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxGitHubApiResponseJsonDepth,
+    };
 
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
@@ -856,7 +860,7 @@ internal static class GitHubIssueReporter
     internal static JsonNode? ParseGitHubApiResponseJson(string json)
         => JsonNode.Parse(
             json,
-            documentOptions: new JsonDocumentOptions { MaxDepth = MaxGitHubApiResponseJsonDepth });
+            documentOptions: GitHubApiResponseJsonDocumentOptions);
 
     private static bool IsRecoverableGitHubApiResponseException(Exception ex)
         => ex is JsonException or InvalidDataException or InvalidOperationException;
@@ -876,9 +880,26 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrEmpty(errorBody))
             return string.Empty;
 
-        return errorBody.Length <= MaxGitHubApiErrorBodyBytes
+        return Encoding.UTF8.GetByteCount(errorBody) <= MaxGitHubApiErrorBodyBytes
             ? errorBody
-            : errorBody[..MaxGitHubApiErrorBodyBytes] + ApiErrorBodyTruncatedText;
+            : TruncateUtf8(errorBody, MaxGitHubApiErrorBodyBytes) + ApiErrorBodyTruncatedText;
+    }
+
+    private static string TruncateUtf8(string value, int maxBytes)
+    {
+        var builder = new StringBuilder(Math.Min(value.Length, maxBytes));
+        var usedBytes = 0;
+        foreach (var rune in value.EnumerateRunes())
+        {
+            var nextBytes = usedBytes + rune.Utf8SequenceLength;
+            if (nextBytes > maxBytes)
+                break;
+
+            builder.Append(rune.ToString());
+            usedBytes = nextBytes;
+        }
+
+        return builder.ToString();
     }
 
     private static bool TryRedactSensitiveJsonFields(string errorBody, out string redactedJson)
@@ -890,7 +911,7 @@ internal static class GitHubIssueReporter
             if (node == null || !RedactSensitiveJsonFields(node))
                 return false;
 
-            redactedJson = node.ToJsonString();
+            redactedJson = BoundApiErrorBodyForFormatting(node.ToJsonString());
             return true;
         }
         catch (JsonException)
