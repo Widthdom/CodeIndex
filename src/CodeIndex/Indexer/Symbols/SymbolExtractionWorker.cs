@@ -500,6 +500,14 @@ internal static class SymbolExtractionWorker
                 if (requestJson is null)
                     break;
 
+                if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
+                {
+                    response = new WorkerResponse(null, validationError, null);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
                 try
                 {
                     request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)

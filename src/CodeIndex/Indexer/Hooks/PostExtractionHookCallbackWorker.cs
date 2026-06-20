@@ -523,6 +523,14 @@ internal static class PostExtractionHookCallbackWorker
                 if (requestJson is null)
                     break;
 
+                if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
+                {
+                    response = new WorkerResponse(null, null, null, validationError);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
                 try
                 {
                     request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)

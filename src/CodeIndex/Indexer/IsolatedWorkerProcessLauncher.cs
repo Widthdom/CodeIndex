@@ -8,7 +8,8 @@ namespace CodeIndex.Indexer;
 internal static class IsolatedWorkerProcessLauncher
 {
     internal static ProcessStartInfo CreateStartInfo()
-        => new()
+    {
+        var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -19,6 +20,47 @@ internal static class IsolatedWorkerProcessLauncher
             StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             CreateNoWindow = true,
         };
+        ApplyEnvironmentAllowlist(startInfo);
+        return startInfo;
+    }
+
+    private static readonly string[] EnvironmentAllowlist =
+    [
+        "PATH",
+        "DOTNET_ROOT",
+        "DOTNET_ROOT_X64",
+        "DOTNET_ROOT_X86",
+        "DOTNET_ROOT_ARM64",
+        "DOTNET_BUNDLE_EXTRACT_BASE_DIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SystemRoot",
+        "WINDIR",
+    ];
+
+    private static void ApplyEnvironmentAllowlist(ProcessStartInfo startInfo)
+    {
+        startInfo.Environment.Clear();
+        foreach (var name in EnvironmentAllowlist)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrEmpty(value))
+                startInfo.Environment[name] = value;
+        }
+
+        foreach (System.Collections.DictionaryEntry item in Environment.GetEnvironmentVariables())
+        {
+            if (item.Key is not string name
+                || item.Value is not string value
+                || !name.StartsWith("CDIDX_TEST_", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            startInfo.Environment[name] = value;
+        }
+    }
 
     internal static bool ShouldStartCurrentExecutable(
         string? currentProcessPath,
