@@ -3,6 +3,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 
 namespace CodeIndex.Database;
 
@@ -105,6 +106,8 @@ public class DbContext : IDisposable
     private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedForeignKeysDisabledForTesting = new();
+    private static readonly AsyncLocal<Action<string, long>?> ScopedForeignKeysRestoringForTesting = new();
 
     internal static Action<string>? OptimizePragmaExecutedForTesting
     {
@@ -128,6 +131,18 @@ public class DbContext : IDisposable
     {
         get => ScopedWalCheckpointTruncateExecutedForTesting.Value;
         set => ScopedWalCheckpointTruncateExecutedForTesting.Value = value;
+    }
+
+    internal static Action<string>? ForeignKeysDisabledForTesting
+    {
+        get => ScopedForeignKeysDisabledForTesting.Value;
+        set => ScopedForeignKeysDisabledForTesting.Value = value;
+    }
+
+    internal static Action<string, long>? ForeignKeysRestoringForTesting
+    {
+        get => ScopedForeignKeysRestoringForTesting.Value;
+        set => ScopedForeignKeysRestoringForTesting.Value = value;
     }
 
     public SqliteConnection Connection => _connection;
@@ -2055,9 +2070,7 @@ public class DbContext : IDisposable
         const string oldSymbolReferences = "_symbol_references_file_line_key";
         var quotedOldReferenceLines = SqliteIdentifier.Quote(oldReferenceLines);
         var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
-        var foreignKeys = ReadPragmaLong("foreign_keys");
-        Execute("PRAGMA foreign_keys=OFF");
-        try
+        RunWithForeignKeysDisabledForMigration("EnsureReferenceLinesContextKey", () =>
         {
             Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
             Execute($"DROP TABLE IF EXISTS {quotedOldReferenceLines}");
@@ -2069,11 +2082,7 @@ public class DbContext : IDisposable
             Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldReferenceLines}");
-        }
-        finally
-        {
-            Execute($"PRAGMA foreign_keys={foreignKeys}");
-        }
+        });
 
         _schemaCache?.Refresh();
     }
@@ -2159,20 +2168,48 @@ public class DbContext : IDisposable
             """;
         const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
 
-        var foreignKeys = ReadPragmaLong("foreign_keys");
-        Execute("PRAGMA foreign_keys=OFF");
-        try
+        RunWithForeignKeysDisabledForMigration("EnsureKindCheckConstraintsCurrent", () =>
         {
             if (!TableCheckContainsAll("symbols", SymbolKindCatalog.SymbolKinds))
                 RebuildTableWithCurrentKindChecks("symbols", "_symbols_kind_check", symbolsCreateSql, symbolsColumns);
 
             if (!TableCheckContainsAll("symbol_references", SymbolKindCatalog.SymbolKinds.Concat(SymbolKindCatalog.ReferenceKinds)))
                 RebuildTableWithCurrentKindChecks("symbol_references", "_symbol_references_kind_check", symbolReferencesCreateSql, symbolReferencesColumns);
-        }
-        finally
+        });
+    }
+
+    private void RunWithForeignKeysDisabledForMigration(string operation, Action action)
+    {
+        var foreignKeys = ReadPragmaLong("foreign_keys");
+        Execute("PRAGMA foreign_keys=OFF");
+        ExceptionDispatchInfo? operationFailure = null;
+        try
         {
+            ForeignKeysDisabledForTesting?.Invoke(operation);
+            action();
+        }
+        catch (Exception ex)
+        {
+            operationFailure = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        try
+        {
+            ForeignKeysRestoringForTesting?.Invoke(operation, foreignKeys);
             Execute($"PRAGMA foreign_keys={foreignKeys}");
         }
+        catch (Exception ex)
+        {
+            throw new CodeIndexException(
+                code: CommandErrorCodes.DbError,
+                category: CodeIndexExceptionCategory.Database,
+                message: $"Failed to restore PRAGMA foreign_keys after {operation}.",
+                path: _connection.DataSource,
+                hint: "Close other database connections, restore write access if needed, and rerun the command before trusting further migration work.",
+                innerException: ex);
+        }
+
+        operationFailure?.Throw();
     }
 
     private bool TableCheckContainsAll(string tableName, IEnumerable<string> allowedValues)
