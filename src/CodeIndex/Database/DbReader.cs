@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
@@ -875,7 +876,7 @@ public partial class DbReader : IDisposable
 
     private static bool ShouldVerifyFoldReadyRows()
     {
-        var value = Environment.GetEnvironmentVariable(VerifyFoldReadyRowsEnvironmentVariable);
+        var value = CdidxEnvironment.GetEnvironmentVariable(VerifyFoldReadyRowsEnvironmentVariable);
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 

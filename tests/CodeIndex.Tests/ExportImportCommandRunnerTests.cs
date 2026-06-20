@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -666,6 +667,125 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_ManifestReportsEmptyUnknownExtensionSampleList_Issue3715()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SetUnknownExtensionPathSamples(dbPath, []);
+
+            using var document = ExportArchiveManifest(projectRoot, dbPath);
+            var root = document.RootElement;
+
+            Assert.Equal(0, root.GetProperty("unknown_extension_file_sample_count").GetInt32());
+            Assert.Equal(DbContext.UnknownExtensionFilePathSampleLimit, root.GetProperty("unknown_extension_file_sample_limit").GetInt32());
+            Assert.False(root.GetProperty("unknown_extension_file_sample_truncated").GetBoolean());
+            Assert.True(
+                !root.TryGetProperty("unknown_extension_files", out var files)
+                || files.ValueKind == JsonValueKind.Null);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_ManifestReportsBoundedUnknownExtensionSampleList_Issue3715()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_bounded");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SetUnknownExtensionPathSamples(dbPath, ["tools/custom.foo", "docs/archive.bar"]);
+
+            using var document = ExportArchiveManifest(projectRoot, dbPath);
+            var root = document.RootElement;
+
+            Assert.Equal(2, root.GetProperty("unknown_extension_file_sample_count").GetInt32());
+            Assert.Equal(DbContext.UnknownExtensionFilePathSampleLimit, root.GetProperty("unknown_extension_file_sample_limit").GetInt32());
+            Assert.False(root.GetProperty("unknown_extension_file_sample_truncated").GetBoolean());
+            Assert.Equal("tools/custom.foo", root.GetProperty("unknown_extension_files")[0].GetString());
+            Assert.Equal("docs/archive.bar", root.GetProperty("unknown_extension_files")[1].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_ManifestReportsTruncatedUnknownExtensionSampleList_Issue3715()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_truncated");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sampleLimit = DbContext.UnknownExtensionFilePathSampleLimit;
+            var paths = Enumerable
+                .Range(0, sampleLimit + 3)
+                .Select(index => $"samples/file-{index:D2}.unknown")
+                .ToArray();
+            SetUnknownExtensionPathSamples(dbPath, paths);
+
+            using var document = ExportArchiveManifest(projectRoot, dbPath);
+            var root = document.RootElement;
+            var files = root.GetProperty("unknown_extension_files");
+
+            Assert.Equal(paths.Length, root.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.Equal(sampleLimit, root.GetProperty("unknown_extension_file_sample_count").GetInt32());
+            Assert.Equal(sampleLimit, root.GetProperty("unknown_extension_file_sample_limit").GetInt32());
+            Assert.True(root.GetProperty("unknown_extension_file_sample_truncated").GetBoolean());
+            Assert.Equal(sampleLimit, files.GetArrayLength());
+            Assert.Equal(paths[0], files[0].GetString());
+            Assert.Equal(paths[sampleLimit - 1], files[sampleLimit - 1].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImport_DryRunJsonReportsUnknownExtensionSampleMetadata_Issue3715()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_unknown_extensions_metadata");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sampleLimit = DbContext.UnknownExtensionFilePathSampleLimit;
+            var paths = Enumerable
+                .Range(0, sampleLimit + 2)
+                .Select(index => $"imports/file-{index:D2}.unknown")
+                .ToArray();
+            SetUnknownExtensionPathSamples(sourceDbPath, paths);
+            var archivePath = ExportArchive(projectRoot, sourceDbPath);
+            var importDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", importDbPath, "--dry-run", "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            var files = root.GetProperty("unknown_extension_files");
+            Assert.Equal(paths.Length, root.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.Equal(sampleLimit, root.GetProperty("unknown_extension_file_sample_count").GetInt32());
+            Assert.Equal(sampleLimit, root.GetProperty("unknown_extension_file_sample_limit").GetInt32());
+            Assert.True(root.GetProperty("unknown_extension_file_sample_truncated").GetBoolean());
+            Assert.Equal(sampleLimit, files.GetArrayLength());
+            Assert.Equal(paths[sampleLimit - 1], files[sampleLimit - 1].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void CreateDatabaseSnapshot_AppliesPrivateFileMode()
     {
         if (OperatingSystem.IsWindows())
@@ -1021,6 +1141,40 @@ public class ExportImportCommandRunnerTests
             stream.Write(databaseBytes, 0, databaseBytes.Length);
 
         return archivePath;
+    }
+
+    private static JsonDocument ExportArchiveManifest(string projectRoot, string dbPath)
+    {
+        var archivePath = ExportArchive(projectRoot, dbPath);
+        using var archive = ZipFile.OpenRead(archivePath);
+        var manifestEntry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+        using var stream = manifestEntry.Open();
+        return JsonDocument.Parse(stream);
+    }
+
+    private static string ExportArchive(string projectRoot, string dbPath)
+    {
+        var archivePath = Path.Combine(projectRoot, $"codeindex-{Guid.NewGuid():N}.cdidx.zip");
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunExport([archivePath, "--db", dbPath], new JsonSerializerOptions(), "test"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("Exported CodeIndex archive", stdout);
+        Assert.Equal(string.Empty, stderr);
+        return archivePath;
+    }
+
+    private static void SetUnknownExtensionPathSamples(string dbPath, string[] paths)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, paths.Length.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, JsonSerializer.Serialize(paths));
+        writer.SetMeta(DbContext.UnknownExtensionFilesTruncatedMetaKey, bool.FalseString);
+        writer.SetMeta(
+            DbContext.UnknownExtensionFilePathLimitMetaKey,
+            DbContext.UnknownExtensionFilePathSampleLimit.ToString(CultureInfo.InvariantCulture));
     }
 
     private static void AssertExportImportError(string stdout, string command, string phase, string errorCode)

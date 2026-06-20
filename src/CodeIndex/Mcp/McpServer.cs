@@ -587,7 +587,7 @@ public partial class McpServer : IDisposable
             }
         }
 
-        Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+        CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
     private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
@@ -734,7 +734,7 @@ public partial class McpServer : IDisposable
         }
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
-        Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+        CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
     internal async Task DrainInFlightTasksAsync(
@@ -758,7 +758,7 @@ public partial class McpServer : IDisposable
         if (graceDelay.IsCanceled)
             return;
 
-        Console.Error.WriteLine($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
+        CommandErrorWriter.WriteStderr($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
         try
         {
             if (!_shutdownCts.IsCancellationRequested)
@@ -793,7 +793,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
         }
     }
 
@@ -1235,7 +1235,7 @@ public partial class McpServer : IDisposable
         var line = AddCorrelationPrefix(message);
         try
         {
-            Console.Error.WriteLine(line);
+            CommandErrorWriter.WriteStderr(line);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
@@ -1475,7 +1475,7 @@ public partial class McpServer : IDisposable
             || seconds > MaxKeepAliveIntervalSeconds)
         {
             var displayValue = DiagnosticRedactor.FormatEnvironmentValue(KeepAliveIntervalEnvironmentVariable, raw);
-            Console.Error.WriteLine(
+            CommandErrorWriter.WriteStderr(
                 $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{displayValue}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
         }
@@ -1719,7 +1719,7 @@ public partial class McpServer : IDisposable
                 elapsedMs,
                 "draining");
         }
-        Console.Error.WriteLine(BuildTimedOutIsolatedActionDrainingLog(requestKey, elapsedMs));
+        CommandErrorWriter.WriteStderr(BuildTimedOutIsolatedActionDrainingLog(requestKey, elapsedMs));
     }
 
     private void RecordTimedOutIsolatedActionDrained(string requestKey, Task task)
@@ -3983,7 +3983,10 @@ public partial class McpServer : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "JSON byte limit must be non-negative.");
 
         serialized = null;
-        using var stream = new BoundedJsonUtf8Stream(maxBytes, captureSerialized);
+        using var stream = new BoundedJsonUtf8Stream(
+            maxBytes,
+            captureSerialized,
+            bytes => new JsonResponseByteLimitExceededException(bytes));
         var writerOptions = new JsonWriterOptions
         {
             Encoder = options.Encoder,
@@ -4009,65 +4012,6 @@ public partial class McpServer : IDisposable
     private sealed class JsonResponseByteLimitExceededException(int bytesWritten) : Exception
     {
         public int BytesWritten { get; } = bytesWritten;
-    }
-
-    private sealed class BoundedJsonUtf8Stream(int maxBytes, bool captureSerialized) : Stream
-    {
-        private readonly MemoryStream? _buffer = captureSerialized ? new MemoryStream(Math.Min(Math.Max(maxBytes, 0), 16 * 1024)) : null;
-
-        public int BytesWritten { get; private set; }
-
-        public override bool CanRead => false;
-        public override bool CanSeek => false;
-        public override bool CanWrite => true;
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public string? GetCapturedString()
-        {
-            if (_buffer is null)
-                return null;
-            return Encoding.UTF8.GetString(_buffer.GetBuffer(), 0, (int)_buffer.Length);
-        }
-
-        public override void Flush()
-        {
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-            => throw new NotSupportedException();
-
-        public override long Seek(long offset, SeekOrigin origin)
-            => throw new NotSupportedException();
-
-        public override void SetLength(long value)
-            => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count)
-            => Write(buffer.AsSpan(offset, count));
-
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            if (buffer.Length == 0)
-                return;
-
-            var remaining = maxBytes - BytesWritten;
-            if (remaining < buffer.Length)
-            {
-                if (remaining > 0)
-                    _buffer?.Write(buffer[..remaining]);
-                BytesWritten = maxBytes == int.MaxValue ? int.MaxValue : maxBytes + 1;
-                throw new JsonResponseByteLimitExceededException(BytesWritten);
-            }
-
-            _buffer?.Write(buffer);
-            BytesWritten += buffer.Length;
-        }
     }
 
     private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
@@ -4106,14 +4050,14 @@ public partial class McpServer : IDisposable
             || limit <= 0)
         {
             var displayValue = DiagnosticRedactor.FormatEnvironmentValue(envVar, raw);
-            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{displayValue}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] Ignoring invalid {envVar}='{displayValue}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
             return defaultValue;
         }
 
         if (limit > maximumValue)
         {
             var displayValue = DiagnosticRedactor.FormatEnvironmentValue(envVar, raw);
-            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{displayValue}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] Clamping {envVar}='{displayValue}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
             return maximumValue;
         }
 

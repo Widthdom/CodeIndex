@@ -232,7 +232,7 @@ public static partial class IndexCommandRunner
 
             if (options.Json)
             {
-                Console.Error.WriteLine(message);
+                CommandErrorWriter.WriteStderr(message);
                 return;
             }
 
@@ -463,9 +463,9 @@ public static partial class IndexCommandRunner
                         {
                             PauseUpdateSpinnerForConsoleWrite();
                             if (options.Verbose)
-                                Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                                CommandErrorWriter.WriteStderr($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
                             else
-                                Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                                CommandErrorWriter.WriteStderr($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
                         continue;
@@ -909,7 +909,7 @@ public static partial class IndexCommandRunner
                     if (!options.Json)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
-                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex, errorMessage));
+                        CommandErrorWriter.WriteStderr(FormatPerFileErrorLine("ERR ", relPath, ex, errorMessage));
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
                 }

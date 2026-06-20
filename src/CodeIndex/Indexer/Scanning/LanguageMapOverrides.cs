@@ -1,4 +1,5 @@
 using System.Text;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer;
 
@@ -187,7 +188,7 @@ internal static class LanguageMapOverrides
                 return;
         }
 
-        Console.Error.WriteLine("cdidx: warning: " + message);
+        CommandErrorWriter.WriteStderr("cdidx: warning: " + message);
     }
 
     private static bool TryReadScalar(string line, string key, out string value)

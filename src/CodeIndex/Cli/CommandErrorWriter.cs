@@ -10,7 +10,7 @@ internal static class CommandErrorWriter
     internal static void WriteStdout(string message = "")
         => Console.WriteLine(message);
 
-    internal static void WriteStderr(string message = "")
+    internal static void WriteStderr(string? message = "")
         => Console.Error.WriteLine(message);
 
     internal static void WriteWarning(string message)

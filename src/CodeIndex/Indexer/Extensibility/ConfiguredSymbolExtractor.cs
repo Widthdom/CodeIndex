@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Cli;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -83,7 +84,7 @@ internal sealed class ConfiguredSymbolExtractor(
         if (!shouldReport)
             return;
 
-        Console.Error.WriteLine(
+        CommandErrorWriter.WriteStderr(
             $"[cdidx] Pattern extractor for language '{Language}' kind '{pattern.Kind}' timed out after {(int)ExtractorPluginRegistry.PatternRegexTimeout.TotalMilliseconds}ms; skipped this pattern.");
     }
 }

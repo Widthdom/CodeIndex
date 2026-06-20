@@ -127,8 +127,7 @@ internal static class PathCasing
 
             using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(anchor, "case-probe-");
             var probePath = probe.Path;
-            var prefixedProbePath = LongPath.EnsureWindowsPrefix(probePath);
-            File.WriteAllText(prefixedProbePath, string.Empty);
+            FileWriteProbe.WriteEmptyFile(probePath);
             try
             {
                 if (TryCreateCaseVariant(probePath, out var probeVariant))
@@ -136,8 +135,7 @@ internal static class PathCasing
             }
             finally
             {
-                if (File.Exists(prefixedProbePath))
-                    File.Delete(prefixedProbePath);
+                FileWriteProbe.DeleteFileIfExists(probePath);
             }
 
             throw new CaseSensitivityProbeException(

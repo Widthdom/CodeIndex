@@ -380,7 +380,7 @@ internal static class SearchAuditRecipes
 
     private static List<RecipeSourcePath> ReadConfiguredRecipeSourcePaths(List<string> diagnostics)
     {
-        var raw = Environment.GetEnvironmentVariable(RecipePathsEnvironmentVariable);
+        var raw = CdidxEnvironment.GetEnvironmentVariable(RecipePathsEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return [];
 

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -7,7 +8,7 @@ public static partial class ExtractorPluginRegistry
 {
     private static void ReportPatternConfigRejected(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
+        CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern",
             path,
@@ -20,7 +21,7 @@ public static partial class ExtractorPluginRegistry
 
     private static void ReportPatternConfigSkipped(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
+        CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern",
             path,
@@ -33,7 +34,7 @@ public static partial class ExtractorPluginRegistry
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
+        CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern_directory",
             path,
@@ -46,7 +47,7 @@ public static partial class ExtractorPluginRegistry
 
     private static void ReportPatternDirectorySkipped(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
+        CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern_directory",
             path,
