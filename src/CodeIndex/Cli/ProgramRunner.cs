@@ -3053,6 +3053,7 @@ internal static partial class ProgramRunner
                 CommandErrorWriter.WriteStderr($"Error: install directory is not writable: {installDir}");
                 if (installDirectoryError != null)
                     CommandErrorWriter.WriteStderr($"Reason: {installDirectoryError}");
+                WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
             }
             return CommandExitCodes.UsageError;
@@ -3134,6 +3135,7 @@ internal static partial class ProgramRunner
             else
             {
                 CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
+                WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
             }
             return CommandExitCodes.InstallError;
@@ -3231,6 +3233,9 @@ internal static partial class ProgramRunner
 
     private static bool IsPrereleaseTag(string releaseTag)
         => releaseTag.Contains('-', StringComparison.Ordinal);
+
+    private static void WriteUpgradeInstallerTrustDiagnostic()
+        => CommandErrorWriter.WriteStderr($"Installer verification: {UpgradeInstallerVerification}; {UpgradeInstallerTrustBoundary}");
 
     internal static UpgradeHandoff CreateWindowsUpgradeHandoff(string releaseTag, Architecture processArchitecture)
     {
@@ -3697,8 +3702,20 @@ internal static partial class ProgramRunner
         var createdProbe = false;
         try
         {
-            Directory.CreateDirectory(directory);
-            probe = Path.Combine(directory, $".cdidx-write-test-{Guid.NewGuid():N}");
+            if (!TryResolveUpgradeInstallDirectory(directory, out var fullDirectory, out diagnostic))
+                return false;
+
+            Directory.CreateDirectory(fullDirectory);
+            if (!TryValidateExistingUpgradeInstallDirectory(fullDirectory, out diagnostic))
+                return false;
+
+            probe = Path.GetFullPath(Path.Combine(fullDirectory, $".cdidx-write-test-{Guid.NewGuid():N}"));
+            if (!IsPathEqualOrChildNoProbe(fullDirectory, probe) || string.Equals(fullDirectory, probe, InstallDirectoryPathComparison))
+            {
+                diagnostic = "install directory write probe escaped the install directory.";
+                return false;
+            }
+
             File.WriteAllText(probe, "");
             createdProbe = true;
             return true;
@@ -3713,6 +3730,97 @@ internal static partial class ProgramRunner
             if (createdProbe && probe != null)
                 TryDeleteInstallDirectoryWriteProbe(probe);
         }
+    }
+
+    private static bool TryResolveUpgradeInstallDirectory(string directory, out string fullDirectory, out string? diagnostic)
+    {
+        fullDirectory = string.Empty;
+        diagnostic = null;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            diagnostic = "install directory is empty.";
+            return false;
+        }
+
+        try
+        {
+            fullDirectory = NormalizeDirectoryBoundaryPath(Path.GetFullPath(directory));
+            var root = Path.GetPathRoot(fullDirectory);
+            if (!string.IsNullOrEmpty(root) && string.Equals(fullDirectory, NormalizeDirectoryBoundaryPath(root), InstallDirectoryPathComparison))
+            {
+                diagnostic = "install directory must not be the filesystem root.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            diagnostic = CommandErrorWriter.FormatSanitizedException(ex);
+            return false;
+        }
+    }
+
+    private static bool TryValidateExistingUpgradeInstallDirectory(string fullDirectory, out string? diagnostic)
+    {
+        diagnostic = null;
+        try
+        {
+            var directoryInfo = new DirectoryInfo(fullDirectory);
+            directoryInfo.Refresh();
+            if (!directoryInfo.Exists)
+            {
+                diagnostic = "install directory does not exist after creation.";
+                return false;
+            }
+
+            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
+            {
+                diagnostic = "install directory must not be a symbolic link or reparse point.";
+                return false;
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(fullDirectory);
+                if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+                {
+                    diagnostic = "install directory must not be group- or world-writable.";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            diagnostic = CommandErrorWriter.FormatSanitizedException(ex);
+            return false;
+        }
+    }
+
+    private static string NormalizeDirectoryBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, InstallDirectoryPathComparison))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static StringComparison InstallDirectoryPathComparison
+        => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+    private static bool IsPathEqualOrChildNoProbe(string normalizedParent, string normalizedChild)
+    {
+        if (string.Equals(normalizedParent, normalizedChild, InstallDirectoryPathComparison))
+            return true;
+
+        var trimmedParent = normalizedParent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedChild.StartsWith(trimmedParent + Path.DirectorySeparatorChar, InstallDirectoryPathComparison)
+            || normalizedChild.StartsWith(trimmedParent + Path.AltDirectorySeparatorChar, InstallDirectoryPathComparison);
     }
 
     private static void TryDeleteInstallDirectoryWriteProbe(string probePath)

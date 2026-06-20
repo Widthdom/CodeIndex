@@ -2013,6 +2013,72 @@ exit 7
     }
 
     [Fact]
+    public void TryCheckInstallDirectoryWritable_RootPathRejected_Issue3733()
+    {
+        var rootPath = Path.GetPathRoot(Path.GetFullPath(Path.GetTempPath()));
+        Assert.False(string.IsNullOrEmpty(rootPath));
+
+        var writable = ProgramRunner.TryCheckInstallDirectoryWritable(rootPath!, out var diagnostic);
+
+        Assert.False(writable);
+        Assert.Contains("filesystem root", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_SymlinkRejected_Issue3733()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_link_{Guid.NewGuid():N}");
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "link");
+        try
+        {
+            Directory.CreateDirectory(target);
+            Directory.CreateSymbolicLink(link, target);
+
+            var writable = ProgramRunner.TryCheckInstallDirectoryWritable(link, out var diagnostic);
+
+            Assert.False(writable);
+            Assert.Contains("symbolic link", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+                Directory.Delete(link);
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_GroupWritableDirectoryRejected_Issue3733()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_mode_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(path);
+            File.SetUnixFileMode(
+                path,
+                DataDirectorySecurity.PrivateDirectoryMode | UnixFileMode.GroupWrite);
+
+            var writable = ProgramRunner.TryCheckInstallDirectoryWritable(path, out var diagnostic);
+
+            Assert.False(writable);
+            Assert.Contains("group- or world-writable", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(path))
+                File.SetUnixFileMode(path, DataDirectorySecurity.PrivateDirectoryMode);
+            TestProjectHelper.DeleteDirectory(path);
+        }
+    }
+
+    [Fact]
     public void RunUpgrade_CheckOnlyJsonPrerelease_ReportsSelection()
     {
         lock (TestConsoleLock.Gate)
