@@ -42,8 +42,8 @@ public class DocumentationStatusContractTests
         "recommended_action",
         "alternative_action",
         "repair_commands",
-        "rate_limit.bucket_limit",
-        "rate_limit.bucket_limit_rejection_count",
+        "mcp.rate_limit.bucket_limit",
+        "mcp.rate_limit.bucket_limit_rejection_count",
     ];
 
     [Theory]
