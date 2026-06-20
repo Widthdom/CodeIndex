@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -695,6 +696,66 @@ public class IndexCommandRunnerTests
                 protocolLimit.ToString(CultureInfo.InvariantCulture),
             ],
             startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void IsolatedWorkers_StartInfo_ShareDefaultsAndProtocolArguments_Issue3703()
+    {
+        var protocolLimit = WorkerProtocolLineLimits.MaxLineUtf8Bytes + 1024;
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+
+        var symbolCreated = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var symbolStartInfo,
+            out var symbolError);
+        var hookCreated = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var hookStartInfo,
+            out var hookError);
+
+        Assert.True(symbolCreated, symbolError);
+        Assert.True(hookCreated, hookError);
+        AssertIsolatedWorkerStartInfoDefaults(symbolStartInfo);
+        AssertIsolatedWorkerStartInfoDefaults(hookStartInfo);
+        Assert.Equal(currentProcessPath, symbolStartInfo.FileName);
+        Assert.Equal(currentProcessPath, hookStartInfo.FileName);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            symbolStartInfo.ArgumentList);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            hookStartInfo.ArgumentList);
+    }
+
+    private static void AssertIsolatedWorkerStartInfoDefaults(ProcessStartInfo startInfo)
+    {
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.True(startInfo.CreateNoWindow);
+        Assert.Equal(Encoding.UTF8.WebName, startInfo.StandardInputEncoding?.WebName);
+        Assert.Equal(Encoding.UTF8.WebName, startInfo.StandardOutputEncoding?.WebName);
+        Assert.Equal(Encoding.UTF8.WebName, startInfo.StandardErrorEncoding?.WebName);
     }
 
     [Fact]

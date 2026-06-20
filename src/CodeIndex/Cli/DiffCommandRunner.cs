@@ -840,9 +840,9 @@ public static class DiffCommandRunner
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
         else
         {
-            Console.Error.WriteLine($"Error [{errorCode ?? CommandErrorCodes.UsageError}]: {message}");
+            CommandErrorWriter.WriteStderr($"Error [{errorCode ?? CommandErrorCodes.UsageError}]: {message}");
             if (!string.IsNullOrWhiteSpace(hint))
-                Console.Error.WriteLine($"Hint: {hint}");
+                CommandErrorWriter.WriteStderr($"Hint: {hint}");
         }
         return exitCode;
     }

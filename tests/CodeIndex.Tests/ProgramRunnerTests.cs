@@ -1133,6 +1133,22 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void UpdateChecker_ResolveDefaultCachePath_UsesScopedCdidxEnvironmentOverride_Issue3690()
+    {
+        var previous = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_cache_scope_{Guid.NewGuid():N}");
+        using var env = CdidxEnvironment.Push(new Dictionary<string, string>
+        {
+            ["XDG_CACHE_HOME"] = cacheRoot,
+        });
+
+        var path = UpdateChecker.ResolveDefaultCachePath();
+
+        Assert.Equal(previous, Environment.GetEnvironmentVariable("XDG_CACHE_HOME"));
+        Assert.Equal(Path.Combine(Path.GetFullPath(cacheRoot), "cdidx", "update-check.json"), path);
+    }
+
+    [Fact]
     public void UpdateChecker_Check_RateLimitResponseReportsRetryMetadata_Issue3822()
     {
         lock (TestConsoleLock.Gate)

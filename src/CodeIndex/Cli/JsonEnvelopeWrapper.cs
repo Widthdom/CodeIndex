@@ -106,8 +106,8 @@ internal static class JsonEnvelopeWrapper
         {
             var message = $"--json-envelope captured output exceeded {captureLimitExceeded.MaxChars} characters.";
             var hint = "Reduce the result set with --limit/--top or run the command with --json for streaming NDJSON output.";
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {message}");
-            Console.Error.WriteLine($"Hint: {hint}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
+            CommandErrorWriter.WriteStderr($"Hint: {hint}");
             var envelopeError = new JsonObject
             {
                 ["message"] = message,
@@ -141,8 +141,8 @@ internal static class JsonEnvelopeWrapper
             exitCode = CommandExitCodes.InvalidArgument;
             var message = $"--json-envelope raw JSON item line exceeded {ex.MaxChars} characters.";
             var hint = "Run the command with --json for streaming NDJSON output or reduce the raw item size.";
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {message}");
-            Console.Error.WriteLine($"Hint: {hint}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
+            CommandErrorWriter.WriteStderr($"Hint: {hint}");
             parseError = new JsonObject
             {
                 ["message"] = message,

@@ -314,7 +314,7 @@ internal static class IndexWatchRunner
         else
         {
             var human = FormatHumanSummary(eventStatus, batchSize, stopwatch.ElapsedMilliseconds, capturedJson, subRunExitCode);
-            Console.Error.WriteLine(human);
+            CommandErrorWriter.WriteStderr(human);
         }
 
         return subRunExitCode;
@@ -441,8 +441,8 @@ internal static class IndexWatchRunner
         }
         else
         {
-            Console.Error.WriteLine();
-            Console.Error.WriteLine($"[watch] Watching {projectRoot} for changes (debounce {(int)debounce.TotalMilliseconds} ms). Press Ctrl+C to stop.");
+            CommandErrorWriter.WriteStderr();
+            CommandErrorWriter.WriteStderr($"[watch] Watching {projectRoot} for changes (debounce {(int)debounce.TotalMilliseconds} ms). Press Ctrl+C to stop.");
         }
     }
 
@@ -466,7 +466,7 @@ internal static class IndexWatchRunner
         else
         {
             var detail = string.IsNullOrEmpty(reason) ? string.Empty : $" ({reason})";
-            Console.Error.WriteLine($"[watch] Watcher buffer overflowed{detail}; falling back to full rescan.");
+            CommandErrorWriter.WriteStderr($"[watch] Watcher buffer overflowed{detail}; falling back to full rescan.");
         }
     }
 
@@ -485,7 +485,7 @@ internal static class IndexWatchRunner
         }
         else
         {
-            Console.Error.WriteLine("[watch] Stopped.");
+            CommandErrorWriter.WriteStderr("[watch] Stopped.");
         }
     }
 

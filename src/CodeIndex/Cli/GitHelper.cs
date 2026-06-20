@@ -1200,8 +1200,7 @@ public static class GitHelper
 
             using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
             var probePath = probe.Path;
-            var ioProbePath = LongPath.EnsureWindowsPrefix(probePath);
-            File.WriteAllText(ioProbePath, string.Empty);
+            FileWriteProbe.WriteEmptyFile(probePath);
             try
             {
                 if (TryCreateCaseVariant(probePath, out var variant))
@@ -1209,8 +1208,7 @@ public static class GitHelper
             }
             finally
             {
-                if (File.Exists(ioProbePath))
-                    File.Delete(ioProbePath);
+                FileWriteProbe.DeleteFileIfExists(probePath);
             }
 
             throw new CaseSensitivityProbeException(

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
-using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -400,7 +399,7 @@ internal static class PostExtractionHookCallbackWorker
         return TryCreateStartInfo(
             hook,
             Environment.ProcessPath,
-            ResolveCurrentRunnerAssemblyPath(),
+            IsolatedWorkerProcessLauncher.ResolveCurrentRunnerAssemblyPath(typeof(PostExtractionHookCallbackWorker).Assembly),
             maxProtocolLineBytes,
             out startInfo,
             out error);
@@ -430,8 +429,11 @@ internal static class PostExtractionHookCallbackWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
-        startInfo = CreateStartInfo();
-        if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
+        startInfo = IsolatedWorkerProcessLauncher.CreateStartInfo();
+        if (IsolatedWorkerProcessLauncher.ShouldStartCurrentExecutable(
+                currentProcessPath,
+                runnerAssemblyPath,
+                typeof(PostExtractionHookCallbackWorker).Assembly))
         {
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
@@ -442,28 +444,23 @@ internal static class PostExtractionHookCallbackWorker
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(runnerAssemblyPath))
+        if (!IsolatedWorkerProcessLauncher.TryPrepareFrameworkDependentStartInfo(
+                startInfo,
+                currentProcessPath,
+                runnerAssemblyPath,
+                typeof(PostExtractionHookCallbackWorker).Assembly,
+                "could not resolve the cdidx assembly path for isolated hook callback execution.",
+                "could not resolve a trusted dotnet host path for isolated hook callback execution; run cdidx through an absolute dotnet host path or use a self-contained cdidx executable.",
+                out error))
         {
             startInfo = new ProcessStartInfo();
-            error = "could not resolve the cdidx assembly path for isolated hook callback execution.";
             return false;
         }
 
-        var dotnetHostPath = DotnetHostPathResolver.Resolve(currentProcessPath);
-        if (dotnetHostPath == null)
-        {
-            startInfo = new ProcessStartInfo();
-            error = "could not resolve a trusted dotnet host path for isolated hook callback execution; run cdidx through an absolute dotnet host path or use a self-contained cdidx executable.";
-            return false;
-        }
-
-        startInfo.FileName = dotnetHostPath;
-        startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
         startInfo.ArgumentList.Add(hook.AssemblyPath);
         startInfo.ArgumentList.Add(hook.TypeName);
         AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
-        ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
         return true;
@@ -646,80 +643,6 @@ internal static class PostExtractionHookCallbackWorker
 
         error = $"post-extraction hook callback worker requires assembly path, type name, and optional `{ProtocolMaxLineBytesOption} <bytes>`.";
         return false;
-    }
-
-    private static ProcessStartInfo CreateStartInfo()
-        => new()
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            CreateNoWindow = true,
-        };
-
-    private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
-    {
-        if (string.IsNullOrWhiteSpace(currentProcessPath) || DotnetHostPathResolver.IsDotnetHostPath(currentProcessPath))
-            return false;
-
-        var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
-        var appName = typeof(PostExtractionHookCallbackWorker).Assembly.GetName().Name;
-        if (!string.IsNullOrWhiteSpace(appName)
-            && string.Equals(processName, appName, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return string.IsNullOrWhiteSpace(runnerAssemblyPath);
-    }
-
-    private static string? ResolveCurrentRunnerAssemblyPath()
-    {
-        var assemblyName = typeof(PostExtractionHookCallbackWorker).Assembly.GetName().Name;
-        if (string.IsNullOrWhiteSpace(assemblyName))
-            return null;
-
-        var candidate = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
-        return File.Exists(candidate) ? candidate : null;
-    }
-
-    private static void ApplyCurrentRuntimeRollForward(ProcessStartInfo startInfo)
-    {
-        var targetMajor = GetRunnerTargetFrameworkMajor();
-        if (targetMajor.HasValue && Environment.Version.Major > targetMajor.Value)
-            startInfo.Environment["DOTNET_ROLL_FORWARD"] = "LatestMajor";
-    }
-
-    private static int? GetRunnerTargetFrameworkMajor()
-    {
-        var frameworkName = typeof(PostExtractionHookCallbackWorker)
-            .Assembly
-            .GetCustomAttribute<TargetFrameworkAttribute>()
-            ?.FrameworkName;
-        if (string.IsNullOrWhiteSpace(frameworkName))
-            return null;
-
-        const string versionPrefix = "Version=v";
-        var versionIndex = frameworkName.IndexOf(versionPrefix, StringComparison.OrdinalIgnoreCase);
-        if (versionIndex < 0)
-            return null;
-
-        var majorStart = versionIndex + versionPrefix.Length;
-        var majorEnd = frameworkName.IndexOf('.', majorStart);
-        var majorText = majorEnd < 0
-            ? frameworkName[majorStart..]
-            : frameworkName[majorStart..majorEnd];
-        return int.TryParse(
-            majorText,
-            System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out var major)
-            ? major
-            : null;
     }
 
     internal sealed record WorkerRequest(

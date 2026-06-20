@@ -101,7 +101,7 @@ internal static class SuggestionsCommandRunner
         var record = ResolveById(records, options.Id);
         if (record == null)
         {
-            Console.Error.WriteLine($"Suggestion not found: {options.Id}");
+            CommandErrorWriter.WriteStderr($"Suggestion not found: {options.Id}");
             return CommandExitCodes.NotFound;
         }
 

@@ -145,7 +145,7 @@ public static partial class IndexCommandRunner
 
                 var detail = detailProvider?.Invoke();
                 var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
-                Console.Error.WriteLine($"cdidx: still {phase}{suffix}...");
+                CommandErrorWriter.WriteStderr($"cdidx: still {phase}{suffix}...");
             }
         }, token);
         return (cts, task);

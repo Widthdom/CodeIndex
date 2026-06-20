@@ -427,7 +427,7 @@ public static partial class IndexCommandRunner
 
         var peakMb = timeline.PeakWorkingSetBytes / (1024 * 1024);
         if (peakMb >= thresholdMb)
-            Console.Error.WriteLine($"Warning: cdidx working set reached {peakMb:N0} MB (CDIDX_MEM_WARN_MB={thresholdMb:N0}).");
+            CommandErrorWriter.WriteStderr($"Warning: cdidx working set reached {peakMb:N0} MB (CDIDX_MEM_WARN_MB={thresholdMb:N0}).");
     }
 
     private static void StampLastIndexRunMetadata(
@@ -855,7 +855,7 @@ public static partial class IndexCommandRunner
             if (IsOutsideProjectRoot(relPath))
             {
                 if (!json)
-                    Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {file}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
+                    CommandErrorWriter.WriteStderr($"  [WARN] Skipping file outside project root: {file}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
                 continue;
             }
 

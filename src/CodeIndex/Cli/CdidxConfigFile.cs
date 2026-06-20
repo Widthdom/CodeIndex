@@ -88,7 +88,7 @@ internal static class CdidxConfigFile
     /// validation errors. No-op when `CDIDX_DISABLE_CONFIG_FILE=1` is set.
     /// </summary>
     internal static LoadResult Load(string startingDirectory)
-        => Load(startingDirectory, Environment.GetEnvironmentVariable);
+        => Load(startingDirectory, CdidxEnvironment.GetEnvironmentVariable);
 
     internal static LoadResult Load(
         string startingDirectory,
@@ -529,7 +529,7 @@ internal static class CdidxConfigFile
         var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name));
         if (result.Failed)
         {
-            Console.Error.WriteLine(result.Error);
+            CommandErrorWriter.WriteStderr(result.Error);
             return CommandExitCodes.UsageError;
         }
 

@@ -98,6 +98,7 @@ internal static class ExportImportCommandRunner
 
         string? tempDirectory = null;
         string? tempPath = null;
+        ExportManifest? importedManifest = null;
         var validationPhases = new List<ImportValidationPhaseResult>();
         var phase = PhaseOpenArchive;
         try
@@ -124,6 +125,7 @@ internal static class ExportImportCommandRunner
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_invalid", $"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_incompatible", $"archive manifest is invalid: {manifestHeaderError}.", "re-export from a compatible CodeIndex database.", ImportUsage);
+                importedManifest = manifest;
                 AddImportValidationPhase(validationPhases, PhaseManifest);
 
                 phase = PhaseDatabaseEntry;
@@ -159,6 +161,7 @@ internal static class ExportImportCommandRunner
             if (dryRun)
             {
                 AddImportValidationPhase(validationPhases, PhaseReplaceDb, "skipped", "dry-run does not replace the destination database");
+                var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
                 if (wantsJson)
                 {
                     Console.WriteLine(JsonSerializer.Serialize(
@@ -171,7 +174,14 @@ internal static class ExportImportCommandRunner
                             prunePaths,
                             prunePaths ? importTargetProjectRoot : null,
                             ReplacementWouldBeAllowed: true,
-                            validationPhases),
+                            validationPhases,
+                            UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
+                            UnknownExtensionFiles: manifest.UnknownExtensionFiles,
+                            UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
+                            UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
+                            UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
+                            UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
+                            UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
                         CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
                 }
                 else
@@ -189,8 +199,20 @@ internal static class ExportImportCommandRunner
             ReplaceImportedDatabase(tempPath, fullDbPath);
             if (wantsJson)
             {
+                var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
                 Console.WriteLine(JsonSerializer.Serialize(
-                    new ImportResult("1", fullDbPath, prunePaths, prunePaths ? importTargetProjectRoot : null),
+                    new ImportResult(
+                        "1",
+                        fullDbPath,
+                        prunePaths,
+                        prunePaths ? importTargetProjectRoot : null,
+                        UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
+                        UnknownExtensionFiles: manifest.UnknownExtensionFiles,
+                        UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
+                        UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
+                        UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
+                        UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
+                        UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
                     jsonOptions));
             }
             else
@@ -550,6 +572,7 @@ internal static class ExportImportCommandRunner
         var userVersion = ReadSqliteUserVersion(connection);
         var projectRoot = ReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
         var indexedHead = ReadMetaString(connection, DbContext.IndexedHeadShaMetaKey);
+        var unknownExtensionFiles = ReadUnknownExtensionFileSample(connection);
         return new ExportManifest(
             "1",
             appVersion,
@@ -572,9 +595,12 @@ internal static class ExportImportCommandRunner
             SqlGraphContractVersion: ReadMetaInt(connection, DbContext.SqlGraphContractVersionMetaKey),
             HotspotFamilyVersion: ReadMetaInt(connection, DbContext.HotspotFamilyVersionMetaKey),
             UnknownExtensionFileCount: ReadMetaLong(connection, DbContext.UnknownExtensionFileCountMetaKey),
-            UnknownExtensionFiles: ReadUnknownExtensionFiles(connection),
+            UnknownExtensionFiles: unknownExtensionFiles.Files,
             UnknownExtensionFilesTruncated: ReadMetaBool(connection, DbContext.UnknownExtensionFilesTruncatedMetaKey),
-            UnknownExtensionFilePathLimit: ReadMetaInt(connection, DbContext.UnknownExtensionFilePathLimitMetaKey));
+            UnknownExtensionFilePathLimit: ReadMetaInt(connection, DbContext.UnknownExtensionFilePathLimitMetaKey),
+            UnknownExtensionFileSampleCount: unknownExtensionFiles.Count,
+            UnknownExtensionFileSampleLimit: unknownExtensionFiles.Limit,
+            UnknownExtensionFileSampleTruncated: unknownExtensionFiles.Truncated);
     }
 
     private static void AddTextEntry(ZipArchive archive, string name, string content)
@@ -737,8 +763,28 @@ internal static class ExportImportCommandRunner
             || !ValidateNonNegativeManifestInt(manifest.CSharpSymbolNameContractVersion, "csharp_symbol_name_contract_version", out message)
             || !ValidateNonNegativeManifestInt(manifest.SqlGraphContractVersion, "sql_graph_contract_version", out message)
             || !ValidateNonNegativeManifestInt(manifest.HotspotFamilyVersion, "hotspot_family_version", out message)
-            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFilePathLimit, "unknown_extension_file_path_limit", out message))
+            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFilePathLimit, "unknown_extension_file_path_limit", out message)
+            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFileSampleCount, "unknown_extension_file_sample_count", out message)
+            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFileSampleLimit, "unknown_extension_file_sample_limit", out message))
         {
+            return false;
+        }
+
+        if (manifest.UnknownExtensionFileSampleCount.HasValue)
+        {
+            var sampleLength = manifest.UnknownExtensionFiles?.Length ?? 0;
+            if (manifest.UnknownExtensionFileSampleCount.Value != sampleLength)
+            {
+                message = "unknown_extension_file_sample_count must match unknown_extension_files length";
+                return false;
+            }
+        }
+
+        if (manifest.UnknownExtensionFileSampleCount.HasValue
+            && manifest.UnknownExtensionFileSampleLimit.HasValue
+            && manifest.UnknownExtensionFileSampleCount.Value > manifest.UnknownExtensionFileSampleLimit.Value)
+        {
+            message = "unknown_extension_file_sample_count exceeds unknown_extension_file_sample_limit";
             return false;
         }
 
@@ -900,27 +946,36 @@ internal static class ExportImportCommandRunner
         return bool.TryParse(value, out var parsed) ? parsed : null;
     }
 
-    private static string[]? ReadUnknownExtensionFiles(SqliteConnection connection)
+    private readonly record struct UnknownExtensionFileSample(string[]? Files, int? Count, int? Limit, bool? Truncated);
+
+    private static UnknownExtensionFileSample ReadUnknownExtensionFileSample(SqliteConnection connection)
     {
         var json = ReadMetaString(connection, DbContext.UnknownExtensionFilePathsMetaKey);
         if (string.IsNullOrWhiteSpace(json) || json.Length > MaxImportManifestBytes)
-            return null;
+            return new(null, null, null, null);
 
         try
         {
             var files = JsonSerializer.Deserialize<string[]>(json);
-            if (files == null || files.Length == 0)
-                return null;
+            if (files == null)
+                return new(null, 0, ManifestUnknownExtensionFileLimit, false);
 
-            return files
+            var validFiles = files
                 .Where(path => !string.IsNullOrWhiteSpace(path))
+                .ToArray();
+            if (validFiles.Length == 0)
+                return new(null, 0, ManifestUnknownExtensionFileLimit, false);
+
+            var sample = validFiles
                 .Take(ManifestUnknownExtensionFileLimit)
                 .Select(path => path.Length <= ManifestUnknownExtensionPathCharLimit ? path : path[..ManifestUnknownExtensionPathCharLimit])
                 .ToArray();
+
+            return new(sample, sample.Length, ManifestUnknownExtensionFileLimit, validFiles.Length > sample.Length);
         }
         catch (JsonException)
         {
-            return null;
+            return new(null, null, null, null);
         }
     }
 
@@ -1065,7 +1120,7 @@ internal static class ExportImportCommandRunner
             }
             catch (Exception rollbackEx) when (IsRecoverableReplacementException(rollbackEx))
             {
-                Console.Error.WriteLine($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to roll back imported database replacement ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
             }
 
             throw new IOException("import database replacement failed; rolled back the previous destination database when possible.", ex);
@@ -1158,7 +1213,7 @@ internal static class ExportImportCommandRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             if (!string.IsNullOrWhiteSpace(cleanupDescription))
-                Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
@@ -1174,7 +1229,7 @@ internal static class ExportImportCommandRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             if (!string.IsNullOrWhiteSpace(cleanupDescription))
-                Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
@@ -1367,7 +1422,13 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_files_truncated")]
         bool? UnknownExtensionFilesTruncated = null,
         [property: JsonPropertyName("unknown_extension_file_path_limit")]
-        int? UnknownExtensionFilePathLimit = null);
+        int? UnknownExtensionFilePathLimit = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_count")]
+        int? UnknownExtensionFileSampleCount = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_limit")]
+        int? UnknownExtensionFileSampleLimit = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_truncated")]
+        bool? UnknownExtensionFileSampleTruncated = null);
     internal sealed record ExportImportErrorResult(
         [property: JsonPropertyName("api_version")] string ApiVersion,
         [property: JsonPropertyName("status")] string Status,
@@ -1392,7 +1453,14 @@ internal static class ExportImportCommandRunner
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? PrunedProjectRoot,
         [property: JsonPropertyName("replacement_would_be_allowed")] bool ReplacementWouldBeAllowed,
-        [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases);
+        [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases,
+        [property: JsonPropertyName("unknown_extension_file_count")] long? UnknownExtensionFileCount = null,
+        [property: JsonPropertyName("unknown_extension_files")] string[]? UnknownExtensionFiles = null,
+        [property: JsonPropertyName("unknown_extension_files_truncated")] bool? UnknownExtensionFilesTruncated = null,
+        [property: JsonPropertyName("unknown_extension_file_path_limit")] int? UnknownExtensionFilePathLimit = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_count")] int? UnknownExtensionFileSampleCount = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_limit")] int? UnknownExtensionFileSampleLimit = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null);
     internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
     private sealed record CtagsExportOptions(
         string? Lang,
@@ -1423,5 +1491,12 @@ internal static class ExportImportCommandRunner
         bool PrunedPaths,
         [property: JsonPropertyName("pruned_project_root")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        string? PrunedProjectRoot);
+        string? PrunedProjectRoot,
+        [property: JsonPropertyName("unknown_extension_file_count")] long? UnknownExtensionFileCount = null,
+        [property: JsonPropertyName("unknown_extension_files")] string[]? UnknownExtensionFiles = null,
+        [property: JsonPropertyName("unknown_extension_files_truncated")] bool? UnknownExtensionFilesTruncated = null,
+        [property: JsonPropertyName("unknown_extension_file_path_limit")] int? UnknownExtensionFilePathLimit = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_count")] int? UnknownExtensionFileSampleCount = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_limit")] int? UnknownExtensionFileSampleLimit = null,
+        [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null);
 }

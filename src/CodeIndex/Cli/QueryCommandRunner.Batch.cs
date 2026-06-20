@@ -17,7 +17,7 @@ public static partial class QueryCommandRunner
             {
                 if (i + 1 >= cmdArgs.Length || string.IsNullOrWhiteSpace(cmdArgs[i + 1]))
                 {
-                    Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
+                    CommandErrorWriter.WriteStderr(BuildMissingOptionValueError("--db"));
                     return CommandExitCodes.UsageError;
                 }
                 dbPath = cmdArgs[++i];
@@ -30,23 +30,23 @@ public static partial class QueryCommandRunner
                 dbPath = arg["--db=".Length..];
                 if (string.IsNullOrWhiteSpace(dbPath))
                 {
-                    Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
+                    CommandErrorWriter.WriteStderr(BuildMissingOptionValueError("--db"));
                     return CommandExitCodes.UsageError;
                 }
                 dbPathExplicit = true;
                 continue;
             }
 
-            Console.Error.WriteLine($"Error: {ConsoleUi.FormatBoundedValue(arg)} is not supported for batch.");
-            Console.Error.WriteLine($"Usage: {ConsoleUi.GetUsageLine("batch")}");
+            CommandErrorWriter.WriteStderr($"Error: {ConsoleUi.FormatBoundedValue(arg)} is not supported for batch.");
+            CommandErrorWriter.WriteStderr($"Usage: {ConsoleUi.GetUsageLine("batch")}");
             return CommandExitCodes.UsageError;
         }
 
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(dbPath))
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {FormatDbDiagnosticValue(Path.GetFullPath(dbPath))}");
-            Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {FormatDbDiagnosticValue(Path.GetFullPath(dbPath))}");
+            CommandErrorWriter.WriteStderr("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
             return CommandExitCodes.DatabaseError;
         }
 
@@ -67,7 +67,7 @@ public static partial class QueryCommandRunner
                 lineNumber++;
                 if (lineExceededLimit)
                 {
-                    Console.Error.WriteLine($"Error: batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.");
+                    CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.");
                     if (firstFailure == CommandExitCodes.Success)
                         firstFailure = CommandExitCodes.UsageError;
                     continue;
@@ -144,12 +144,12 @@ public static partial class QueryCommandRunner
             using var document = JsonDocument.Parse(line, BatchJsonDocumentOptions);
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
-                Console.Error.WriteLine($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
+                CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
                 return false;
             }
             if (document.RootElement.GetArrayLength() > BatchMaxArgumentCount + 1)
             {
-                Console.Error.WriteLine($"Error: batch line {lineNumber} must contain at most {BatchMaxArgumentCount} command arguments.");
+                CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} must contain at most {BatchMaxArgumentCount} command arguments.");
                 return false;
             }
 
@@ -158,13 +158,13 @@ public static partial class QueryCommandRunner
             {
                 if (element.ValueKind != JsonValueKind.String)
                 {
-                    Console.Error.WriteLine($"Error: batch line {lineNumber} must contain only strings.");
+                    CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} must contain only strings.");
                     return false;
                 }
                 var value = element.GetString() ?? string.Empty;
                 if (value.Length > BatchMaxArgumentChars)
                 {
-                    Console.Error.WriteLine($"Error: batch line {lineNumber} argument {values.Count + 1} exceeds the {BatchMaxArgumentChars} character limit.");
+                    CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} argument {values.Count + 1} exceeds the {BatchMaxArgumentChars} character limit.");
                     return false;
                 }
                 values.Add(value);
@@ -176,7 +176,7 @@ public static partial class QueryCommandRunner
         }
         catch (JsonException)
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.");
             return false;
         }
     }
@@ -207,8 +207,8 @@ public static partial class QueryCommandRunner
 
     private static int WriteBatchUnsupportedCommand(string commandName)
     {
-        Console.Error.WriteLine($"Error: batch only supports query commands; '{commandName}' is not supported.");
-        Console.Error.WriteLine("Hint: use one of search, definition, references, callers, callees, symbols, files, find, excerpt, map, inspect, outline, status, validate, impact, deps, unused, or hotspots.");
+        CommandErrorWriter.WriteStderr($"Error: batch only supports query commands; '{commandName}' is not supported.");
+        CommandErrorWriter.WriteStderr("Hint: use one of search, definition, references, callers, callees, symbols, files, find, excerpt, map, inspect, outline, status, validate, impact, deps, unused, or hotspots.");
         return CommandExitCodes.UsageError;
     }
 }

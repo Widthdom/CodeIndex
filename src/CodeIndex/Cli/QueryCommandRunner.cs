@@ -104,6 +104,7 @@ public static partial class QueryCommandRunner
     private const int SearchEnvelopeMinCandidates = 200;
     private const int SearchEnvelopeOverFetchFactor = 50;
     private const int SearchEnvelopeMaxCandidates = 10_000;
+    private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
     private const string HotspotsGroupedByNameKind = "name_kind";
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
@@ -178,6 +179,7 @@ public static partial class QueryCommandRunner
         "--reject-before",
         "--reject-after",
         "--guard-window",
+        "--guard-scope",
         "--project",
         "--solution",
         "--exclude-path",
@@ -198,7 +200,9 @@ public static partial class QueryCommandRunner
         "--group-by",
         "--unique",
         "--count-by",
+        "--origin",
         "--match-origin",
+        "--exclude-origin",
         "--result-kind",
         "--sample",
         "--per-file-limit",
@@ -379,7 +383,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true, allowIssueDraftsFormat: true);
@@ -389,7 +393,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
@@ -869,7 +873,7 @@ public static partial class QueryCommandRunner
                 }
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No results found", options));
                     WriteLangHint(options.Lang, reader);
                     WriteExactSubstringHintIfNeeded(exactSubstringHint);
                     var pathHint = BuildSearchPathGlobHint(reader, options);
@@ -957,7 +961,7 @@ public static partial class QueryCommandRunner
                     }
                 }
                 var fileCount = displayRows.Select(row => row.Result.Path).Distinct().Count();
-                Console.Error.WriteLine($"({displayRows.Count} results in {fileCount} files)");
+                CommandErrorWriter.WriteStderr($"({displayRows.Count} results in {fileCount} files)");
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
                 WriteSearchNextSteps(displayRows, options);
             }
@@ -971,7 +975,7 @@ public static partial class QueryCommandRunner
 
     private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
-        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
         var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
         var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -1097,12 +1101,12 @@ public static partial class QueryCommandRunner
             Console.WriteLine($"{group.Count,8} {location} {symbol}{container}");
         }
 
-        Console.Error.WriteLine($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
+        CommandErrorWriter.WriteStderr($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
     }
 
     private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
-        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var rows = BuildSearchDisplayRows(results, options, exact);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
         var groups = BuildSearchGroupedCounts(groupBy, rows);
@@ -1129,7 +1133,7 @@ public static partial class QueryCommandRunner
             {
                 foreach (var group in groups)
                     Console.WriteLine(group.Key);
-                Console.Error.WriteLine($"({groups.Count} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
+                CommandErrorWriter.WriteStderr($"({groups.Count} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
             }
             else
             {
@@ -1335,12 +1339,12 @@ public static partial class QueryCommandRunner
     {
         if (!options.NextSteps || rows.Count == 0)
             return;
-        Console.Error.WriteLine("Next steps:");
+        CommandErrorWriter.WriteStderr("Next steps:");
         foreach (var row in rows.Take(MaxSearchNextStepLimit))
         {
             var line = row.Compact.MatchLines.Count > 0 ? row.Compact.MatchLines[0] : row.Result.StartLine;
-            Console.Error.WriteLine($"  cdidx inspect --path \"{row.Result.Path}\" --line {line}");
-            Console.Error.WriteLine($"  cdidx excerpt --path \"{row.Result.Path}\" --start {Math.Max(1, line - 3)} --end {line + 3}");
+            CommandErrorWriter.WriteStderr($"  cdidx inspect --path \"{row.Result.Path}\" --line {line}");
+            CommandErrorWriter.WriteStderr($"  cdidx excerpt --path \"{row.Result.Path}\" --start {Math.Max(1, line - 3)} --end {line + 3}");
         }
     }
 
@@ -1404,7 +1408,7 @@ public static partial class QueryCommandRunner
                 Console.WriteLine();
             }
 
-            Console.Error.WriteLine($"({total} named-query results across {queryResults.Count} queries)");
+            CommandErrorWriter.WriteStderr($"({total} named-query results across {queryResults.Count} queries)");
             return CommandExitCodes.Success;
         });
     }
@@ -1646,7 +1650,7 @@ public static partial class QueryCommandRunner
                 Console.WriteLine();
             }
 
-            Console.Error.WriteLine($"({total} recipe results across {selection.Queries.Count} queries)");
+            CommandErrorWriter.WriteStderr($"({total} recipe results across {selection.Queries.Count} queries)");
             return CommandExitCodes.Success;
         });
     }
@@ -1748,7 +1752,8 @@ public static partial class QueryCommandRunner
                 options.Prefix,
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow);
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope);
             var rows = BuildSearchDisplayRows(results, options, exact);
             var queryResult = new SearchRecipeQueryResultJsonResult(
                 "ad-hoc",
@@ -1758,6 +1763,9 @@ public static partial class QueryCommandRunner
                 "Review the evidence paths and surrounding code before filing.",
                 exact,
                 SearchAuditRecipes.DefaultQuerySeverity,
+                [],
+                [],
+                [],
                 [],
                 [],
                 rows.Count,
@@ -1821,8 +1829,9 @@ public static partial class QueryCommandRunner
                 cursor: options.SearchCursor,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
@@ -1837,6 +1846,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
+                [.. recipeQuery.MatchOrigins],
+                [.. recipeQuery.ExcludeOrigins],
+                [.. recipeQuery.ResultKinds],
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -1879,8 +1891,9 @@ public static partial class QueryCommandRunner
                 cursor: options.SearchCursor,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
@@ -1892,6 +1905,9 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
+                [.. recipeQuery.MatchOrigins],
+                [.. recipeQuery.ExcludeOrigins],
+                [.. recipeQuery.ResultKinds],
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -2080,7 +2096,8 @@ public static partial class QueryCommandRunner
                 options.Prefix,
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow);
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope);
             var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             AttachExactSubstringHint(
@@ -2324,6 +2341,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
             AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
+        if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
+            AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
         AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
@@ -2464,6 +2483,9 @@ public static partial class QueryCommandRunner
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
+            [.. query.MatchOrigins],
+            [.. query.ExcludeOrigins],
+            [.. query.ResultKinds],
             query.ExactSubstring)).ToList());
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
@@ -2471,12 +2493,14 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         bool exact,
         string? queryOverride = null,
-        bool? rawFtsOverride = null)
+        bool? rawFtsOverride = null,
+        SearchAuditRecipeQuery? recipeQuery = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
         var rawFts = rawFtsOverride ?? options.RawFts;
+        var facetFilters = BuildSearchDisplayFacetFilters(options, recipeQuery);
         var effectiveRawFts = rawFts && !exact;
         var queryContext = effectiveRawFts
             ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
@@ -2492,7 +2516,7 @@ public static partial class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
-            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, options);
+            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, facetFilters);
             if (preferredOriginFilterLine.HasValue && !IsLineWithinSnippet(compact, preferredOriginFilterLine.Value))
             {
                 compact = SearchSnippetFormatter.ToCompactResult(
@@ -2511,11 +2535,11 @@ public static partial class QueryCommandRunner
             if (!effectiveRawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
 
-            if (!ApplySearchOriginFilters(compact, options))
+            if (!ApplySearchOriginFilters(compact, facetFilters))
                 continue;
 
             compact.ResultKinds = BuildSearchResultKinds(result, compact, displayQuery);
-            if (!ApplySearchResultKindFilters(compact, options))
+            if (!ApplySearchResultKindFilters(compact, facetFilters))
                 continue;
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
@@ -2547,13 +2571,50 @@ public static partial class QueryCommandRunner
         return rows;
     }
 
-    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, QueryCommandOptions options)
+    private sealed record SearchDisplayFacetFilters(
+        bool ExcludeComments,
+        bool ExcludeStrings,
+        bool ExcludeFixtures,
+        List<string> MatchOrigins,
+        List<string> ExcludeOrigins,
+        List<string> ResultKinds);
+
+    private static SearchDisplayFacetFilters BuildSearchDisplayFacetFilters(QueryCommandOptions options, SearchAuditRecipeQuery? recipeQuery)
+        => new(
+            options.ExcludeComments,
+            options.ExcludeStrings,
+            options.ExcludeFixtures,
+            CombineInclusiveSearchFilters(options.MatchOrigins, recipeQuery?.MatchOrigins),
+            CombineExclusiveSearchFilters(options.ExcludeOrigins, recipeQuery?.ExcludeOrigins),
+            CombineInclusiveSearchFilters(options.ResultKinds, recipeQuery?.ResultKinds));
+
+    private static List<string> CombineInclusiveSearchFilters(IReadOnlyList<string> optionValues, IReadOnlyList<string>? recipeValues)
     {
-        if (!HasSearchOriginFilters(options) || compact.MatchFacets.Count == 0)
+        if (recipeValues is not { Count: > 0 })
+            return [.. optionValues];
+        if (optionValues.Count == 0)
+            return [.. recipeValues];
+
+        var intersected = optionValues
+            .Where(value => recipeValues.Contains(value, StringComparer.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return intersected.Count == 0 ? [SearchFilterNoMatchSentinel] : intersected;
+    }
+
+    private static List<string> CombineExclusiveSearchFilters(IReadOnlyList<string> optionValues, IReadOnlyList<string>? recipeValues)
+        => optionValues
+            .Concat(recipeValues ?? Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, SearchDisplayFacetFilters filters)
+    {
+        if (!HasSearchOriginFilters(filters) || compact.MatchFacets.Count == 0)
             return null;
 
         return compact.MatchFacets
-            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Where(facet => !IsSearchFacetExcluded(facet, filters))
             .Select(facet => (int?)facet.Line)
             .OrderBy(line => line)
             .FirstOrDefault();
@@ -2631,7 +2692,7 @@ public static partial class QueryCommandRunner
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
-        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit);
+        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope);
 
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
     {
@@ -2642,15 +2703,15 @@ public static partial class QueryCommandRunner
             rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
     }
 
-    private static bool ApplySearchOriginFilters(CompactSearchResult compact, QueryCommandOptions options)
+    private static bool ApplySearchOriginFilters(CompactSearchResult compact, SearchDisplayFacetFilters filters)
     {
-        if (!HasSearchOriginFilters(options))
+        if (!HasSearchOriginFilters(filters))
             return true;
         if (compact.MatchFacets.Count == 0)
-            return options.MatchOrigins.Count == 0;
+            return filters.MatchOrigins.Count == 0;
 
         var keptFacets = compact.MatchFacets
-            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Where(facet => !IsSearchFacetExcluded(facet, filters))
             .ToList();
         if (keptFacets.Count == 0)
             return false;
@@ -2695,23 +2756,33 @@ public static partial class QueryCommandRunner
     }
 
     private static bool HasSearchOriginFilters(QueryCommandOptions options)
-        => options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.MatchOrigins.Count > 0 || options.ResultKinds.Count > 0;
+        => HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery: null));
 
-    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, QueryCommandOptions options)
+    private static bool HasSearchOriginFilters(SearchDisplayFacetFilters filters)
+        => filters.ExcludeComments ||
+           filters.ExcludeStrings ||
+           filters.ExcludeFixtures ||
+           filters.MatchOrigins.Count > 0 ||
+           filters.ExcludeOrigins.Count > 0 ||
+           filters.ResultKinds.Count > 0;
+
+    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, SearchDisplayFacetFilters filters)
     {
-        if (options.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
+        if (filters.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
             return true;
-        if (options.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
+        if (filters.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
             return true;
-        if (options.ExcludeFixtures && facet.TestFixture)
+        if (filters.ExcludeFixtures && facet.TestFixture)
             return true;
-        if (options.MatchOrigins.Count > 0 && !options.MatchOrigins.Contains(facet.Origin, StringComparer.Ordinal))
+        if (filters.MatchOrigins.Count > 0 && !filters.MatchOrigins.Contains(facet.Origin, StringComparer.Ordinal))
+            return true;
+        if (filters.ExcludeOrigins.Count > 0 && filters.ExcludeOrigins.Contains(facet.Origin, StringComparer.Ordinal))
             return true;
         return false;
     }
 
-    private static bool ApplySearchResultKindFilters(CompactSearchResult compact, QueryCommandOptions options)
-        => options.ResultKinds.Count == 0 || compact.ResultKinds.Any(kind => options.ResultKinds.Contains(kind, StringComparer.Ordinal));
+    private static bool ApplySearchResultKindFilters(CompactSearchResult compact, SearchDisplayFacetFilters filters)
+        => filters.ResultKinds.Count == 0 || compact.ResultKinds.Any(kind => filters.ResultKinds.Contains(kind, StringComparer.Ordinal));
 
     private static List<string> BuildSearchResultKinds(SearchResult result, CompactSearchResult compact, string query)
     {
@@ -3193,7 +3264,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("definition", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -3210,7 +3281,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
@@ -3289,7 +3360,7 @@ public static partial class QueryCommandRunner
                     return ZeroResultExitCode(options);
                 if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No definitions found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No definitions found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -3352,7 +3423,7 @@ public static partial class QueryCommandRunner
                     Console.WriteLine();
                 }
                 var defFileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} definitions in {defFileCount} files)");
+                CommandErrorWriter.WriteStderr($"({results.Count} definitions in {defFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -3371,7 +3442,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "goto", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         if (TryWriteBlankQueryError(options, "goto"))
@@ -3402,7 +3473,7 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
-                    Console.Error.WriteLine(BuildZeroResultLine("No definitions found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No definitions found", options));
                 return CommandExitCodes.NotFound;
             }
 
@@ -3414,8 +3485,8 @@ public static partial class QueryCommandRunner
 
             if (results.Count > 1)
             {
-                Console.Error.WriteLine($"Error: goto found {results.Count} matching definitions for '{options.Query}'.");
-                Console.Error.WriteLine("Hint: narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.");
+                CommandErrorWriter.WriteStderr($"Error: goto found {results.Count} matching definitions for '{options.Query}'.");
+                CommandErrorWriter.WriteStderr("Hint: narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.");
                 return CommandExitCodes.UsageError;
             }
 
@@ -3440,7 +3511,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("references", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
@@ -3452,7 +3523,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         if (TryWriteBlankQueryError(options, "references"))
@@ -3530,7 +3601,7 @@ public static partial class QueryCommandRunner
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No references found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No references found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
@@ -3579,7 +3650,7 @@ public static partial class QueryCommandRunner
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
                 var refFileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} references in {refFileCount} files)");
+                CommandErrorWriter.WriteStderr($"({results.Count} references in {refFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -3590,7 +3661,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("callers", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
@@ -3604,7 +3675,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         if (TryWriteBlankQueryError(options, "callers"))
@@ -3682,7 +3753,7 @@ public static partial class QueryCommandRunner
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No callers found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callers found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
@@ -3731,7 +3802,7 @@ public static partial class QueryCommandRunner
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
+                CommandErrorWriter.WriteStderr($"({results.Count} callers in {callerFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -3742,7 +3813,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("callees", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
@@ -3756,7 +3827,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         if (TryWriteBlankQueryError(options, "callees"))
@@ -3832,7 +3903,7 @@ public static partial class QueryCommandRunner
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No callees found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callees found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
@@ -3881,7 +3952,7 @@ public static partial class QueryCommandRunner
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
+                CommandErrorWriter.WriteStderr($"({results.Count} callees in {calleeFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -4130,7 +4201,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("symbols", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -4151,7 +4222,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "symbols", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         var exactBareVerbatimOnly = exact && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase) && (
@@ -4172,12 +4243,12 @@ public static partial class QueryCommandRunner
             // verbatim prefix (e.g. `|`, `@`, `--name ""`). Returning null here would broaden into
             // an unfiltered symbol dump. /
             // 明示入力が正規化で空、または verbatim 接頭辞単独（`|`、`@`、`--name ""` など）になった場合は必ず拒否する。
-            Console.Error.WriteLine("Error: symbol name list is empty after normalization. Check for empty --name values, bare verbatim prefixes like `@`, or bare `|` separators. / シンボル名リストが正規化の結果空です。--name の空値、`@` のような verbatim 接頭辞単独、単独の `|` を確認してください。");
+            CommandErrorWriter.WriteStderr("Error: symbol name list is empty after normalization. Check for empty --name values, bare verbatim prefixes like `@`, or bare `|` separators. / シンボル名リストが正規化の結果空です。--name の空値、`@` のような verbatim 接頭辞単独、単独の `|` を確認してください。");
             return CommandExitCodes.UsageError;
         }
         if (symbolQueries != null && symbolQueries.Count > MaxSymbolQueryNames)
         {
-            Console.Error.WriteLine($"Error: too many symbol names ({symbolQueries.Count}); maximum is {MaxSymbolQueryNames}. Split the request into smaller batches. / シンボル名が多すぎます（{symbolQueries.Count}件、上限は {MaxSymbolQueryNames} 件）。分割してください。");
+            CommandErrorWriter.WriteStderr($"Error: too many symbol names ({symbolQueries.Count}); maximum is {MaxSymbolQueryNames}. Split the request into smaller batches. / シンボル名が多すぎます（{symbolQueries.Count}件、上限は {MaxSymbolQueryNames} 件）。分割してください。");
             return CommandExitCodes.UsageError;
         }
 
@@ -4243,7 +4314,7 @@ public static partial class QueryCommandRunner
             {
                 if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No symbols found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbols found", options));
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -4274,7 +4345,7 @@ public static partial class QueryCommandRunner
                 }
                 var symFileCount = results.Select(r => r.Path).Distinct().Count();
                 var sortSummary = options.SymbolSortMode == SymbolSortMode.Name ? string.Empty : $"; sort={options.SymbolSortMode.ToString().ToLowerInvariant()}";
-                Console.Error.WriteLine($"({results.Count} symbols in {symFileCount} files{sortSummary})");
+                CommandErrorWriter.WriteStderr($"({results.Count} symbols in {symFileCount} files{sortSummary})");
             }
             return CommandExitCodes.Success;
         });
@@ -4303,7 +4374,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("files", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -4349,7 +4420,7 @@ public static partial class QueryCommandRunner
                 }
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No files found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No files found", options));
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
@@ -4376,7 +4447,7 @@ public static partial class QueryCommandRunner
                     var size = options.RawBytes ? $"{r.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(r.Size);
                     Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {size,12}  {r.Path}");
                 }
-                Console.Error.WriteLine($"({results.Count} files)");
+                CommandErrorWriter.WriteStderr($"({results.Count} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -4387,7 +4458,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("excerpt", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: true);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -4446,7 +4517,7 @@ public static partial class QueryCommandRunner
                     var requestedEnd = Math.Min(file.Lines, endLine + options.ContextAfter);
                     if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
                     {
-                        Console.Error.WriteLine($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
+                        CommandErrorWriter.WriteStderr($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
                         return CommandExitCodes.UsageError;
                     }
                 }
@@ -4462,7 +4533,7 @@ public static partial class QueryCommandRunner
                     options.FocusLine ?? options.StartLine.Value);
                 if (focusLineLength.HasValue && options.FocusColumn.Value > focusLineLength.Value)
                 {
-                    Console.Error.WriteLine($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
+                    CommandErrorWriter.WriteStderr($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
                     return CommandExitCodes.UsageError;
                 }
             }
@@ -4480,7 +4551,7 @@ public static partial class QueryCommandRunner
             if (excerpt == null)
             {
                 if (!options.Json)
-                    Console.Error.WriteLine("No excerpt found.");
+                    CommandErrorWriter.WriteStderr("No excerpt found.");
                 return ZeroResultExitCode(options);
             }
             if (options.Json)
@@ -4587,16 +4658,16 @@ public static partial class QueryCommandRunner
         var preparedFindArgs = PrepareFindArgs(cmdArgs, out var preparationError);
         if (preparationError != null)
         {
-            Console.Error.WriteLine(preparationError);
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr(preparationError);
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
         var findValidationError = ValidateFindArgs(preparedFindArgs);
         if (findValidationError != null)
         {
-            Console.Error.WriteLine(findValidationError);
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr(findValidationError);
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
@@ -4607,43 +4678,43 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false);
         if (options.ParseError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr(options.ParseError);
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
         if (options.Query is not null && string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: find query cannot be empty or whitespace-only");
-            Console.Error.WriteLine("Hint: Pass a non-empty value after `find`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr("Error: find query cannot be empty or whitespace-only");
+            CommandErrorWriter.WriteStderr("Hint: Pass a non-empty value after `find`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: find requires a query argument");
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr("Error: find requires a query argument");
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
         if (options.Query.Length > QueryLimits.MaxQueryLength)
         {
-            Console.Error.WriteLine($"Error: {QueryLimits.FormatQueryTooLongError()}");
-            Console.Error.WriteLine("Hint: Shorten the find text or split generated input into smaller queries before running `cdidx find`.");
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr($"Error: {QueryLimits.FormatQueryTooLongError()}");
+            CommandErrorWriter.WriteStderr("Hint: Shorten the find text or split generated input into smaller queries before running `cdidx find`.");
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
         if (options.PathPatterns.Count == 0 && !options.All)
         {
-            Console.Error.WriteLine("Error: find requires at least one --path <glob> or explicit --all to scope the search");
-            Console.Error.WriteLine("Hint: use --path <glob> for a bounded file set, or --all to scan all indexed files with safety caps.");
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr("Error: find requires at least one --path <glob> or explicit --all to scope the search");
+            CommandErrorWriter.WriteStderr("Hint: use --path <glob> for a bounded file set, or --all to scan all indexed files with safety caps.");
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
         if (options.PathPatterns.Count > 0 && options.All)
         {
-            Console.Error.WriteLine("Error: find accepts either --path <glob> or --all, not both");
-            Console.Error.WriteLine("Hint: remove --all when using explicit path filters, or remove --path to scan all indexed files with caps.");
-            Console.Error.WriteLine(FindUsage);
+            CommandErrorWriter.WriteStderr("Error: find accepts either --path <glob> or --all, not both");
+            CommandErrorWriter.WriteStderr("Hint: remove --all when using explicit path filters, or remove --path to scan all indexed files with caps.");
+            CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
@@ -4747,7 +4818,7 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No matches found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No matches found", options));
                     if (candidateFileCount > 0)
                     {
                         var fileText = ConsoleUi.Counted(candidateFileCount, "file");
@@ -4795,7 +4866,7 @@ public static partial class QueryCommandRunner
                     Console.WriteLine();
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} matches in {fileCount} files)");
+                CommandErrorWriter.WriteStderr($"({results.Count} matches in {fileCount} files)");
                 WriteFindScanSummary(findResults.Scan);
             }
             return CommandExitCodes.Success;
@@ -4804,7 +4875,7 @@ public static partial class QueryCommandRunner
 
     private static int WriteFindInvalidRegexError(Exception ex)
     {
-        Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+        CommandErrorWriter.WriteStderr($"Error: invalid regular expression: {ex.Message}");
         return CommandExitCodes.UsageError;
     }
 
@@ -4986,7 +5057,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("map", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -5033,7 +5104,7 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.Error.WriteLine("No files found matching the given filters.");
+                    CommandErrorWriter.WriteStderr("No files found matching the given filters.");
                 }
                 return ZeroResultExitCode(options);
             }
@@ -5412,7 +5483,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -5428,7 +5499,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
         {
-            Console.Error.WriteLine(exactError);
+            CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
         var pathLineInspectMode = IsInspectPathLineMode(options);
@@ -5639,7 +5710,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -5664,7 +5735,7 @@ public static partial class QueryCommandRunner
                 if (options.Json)
                     Console.WriteLine(JsonSerializer.Serialize(new QueryPathErrorJsonResult(filePath, "file not found in index"), CliJsonSerializerContextFactory.Create(jsonOptions).QueryPathErrorJsonResult));
                 else
-                    Console.Error.WriteLine($"Error: '{filePath}' not found in index.");
+                    CommandErrorWriter.WriteStderr($"Error: '{filePath}' not found in index.");
                 return CommandExitCodes.NotFound;
             }
 
@@ -5722,9 +5793,9 @@ public static partial class QueryCommandRunner
                 // 人間向け本体を汚さないよう、理由を短く stderr に出す。
                 if (LooksLikeCsharpTopLevelStatements(outline, outlineContent))
                 {
-                    Console.Error.WriteLine();
-                    Console.Error.WriteLine("Note: no type/namespace declarations found; this file likely uses C# top-level statements.");
-                    Console.Error.WriteLine("      Outline lists imports and local functions only; the executable body is not indexed as symbols.");
+                    CommandErrorWriter.WriteStderr();
+                    CommandErrorWriter.WriteStderr("Note: no type/namespace declarations found; this file likely uses C# top-level statements.");
+                    CommandErrorWriter.WriteStderr("      Outline lists imports and local functions only; the executable body is not indexed as symbols.");
                 }
             }
             return CommandExitCodes.Success;
@@ -5836,7 +5907,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("status", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -5856,7 +5927,7 @@ public static partial class QueryCommandRunner
         {
             if (options.CheckWorkspace || options.StatusLogPath || options.StatusExplainField != null)
             {
-                Console.Error.WriteLine("Error: status --config cannot be combined with --check, --log-path, or --explain.");
+                CommandErrorWriter.WriteStderr("Error: status --config cannot be combined with --check, --log-path, or --explain.");
                 return CommandExitCodes.UsageError;
             }
 
@@ -5867,7 +5938,7 @@ public static partial class QueryCommandRunner
         {
             if (options.CheckWorkspace)
             {
-                Console.Error.WriteLine("Error: status --log-path cannot be combined with --check.");
+                CommandErrorWriter.WriteStderr("Error: status --log-path cannot be combined with --check.");
                 return CommandExitCodes.UsageError;
             }
 
@@ -5893,7 +5964,7 @@ public static partial class QueryCommandRunner
                 staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
                 if (staleAfter.Error != null)
                 {
-                    Console.Error.WriteLine(staleAfter.Error);
+                    CommandErrorWriter.WriteStderr(staleAfter.Error);
                     return CommandExitCodes.UsageError;
                 }
             }
@@ -5927,6 +5998,11 @@ public static partial class QueryCommandRunner
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
                 status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
+            var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
+                .Concat(postExtractionHookSnapshot.TrustOverrides)
+                .ToList();
+            if (trustOverrides.Count > 0)
+                status.TrustOverrides = trustOverrides;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -6051,6 +6127,16 @@ public static partial class QueryCommandRunner
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", $"{status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})"));
+                if (status.TrustOverrides is { Count: > 0 })
+                {
+                    foreach (var trustOverride in status.TrustOverrides)
+                    {
+                        var pathSuffix = string.IsNullOrWhiteSpace(trustOverride.Path)
+                            ? string.Empty
+                            : $" ({trustOverride.Path})";
+                        Console.WriteLine(ConsoleUi.FormatSummaryLine("Trust", $"{trustOverride.Kind} via {trustOverride.EnvironmentVariable}{pathSuffix}"));
+                    }
+                }
                 // #1546: surface the persisted filesystem case-sensitivity so operators can
                 // diagnose phantom path collapses on case-sensitive APFS / WSL / ReFS volumes.
                 // #1546: case-sensitivity を診断用に明示する。
@@ -6292,8 +6378,8 @@ public static partial class QueryCommandRunner
         var explicitDbPathError = BuildExplicitDbPathParseError(options);
         if (explicitDbPathError != null && explicitDbPathError.Contains(CommandErrorCodes.DbNotFound, StringComparison.Ordinal))
         {
-            Console.Error.WriteLine(explicitDbPathError);
-            Console.Error.WriteLine("Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
+            CommandErrorWriter.WriteStderr(explicitDbPathError);
+            CommandErrorWriter.WriteStderr("Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
             return CommandExitCodes.NotFound;
         }
         if (TryWriteParseError(options, "vacuum"))
@@ -6303,8 +6389,8 @@ public static partial class QueryCommandRunner
 
         if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound))
         {
-            Console.Error.WriteLine($"Error [{(isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError)}]: {validationMessage}");
-            Console.Error.WriteLine(isNotFound
+            CommandErrorWriter.WriteStderr($"Error [{(isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError)}]: {validationMessage}");
+            CommandErrorWriter.WriteStderr(isNotFound
                 ? "Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
                 : "Hint: point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx vacuum`.");
             return isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError;
@@ -6341,7 +6427,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
@@ -6374,7 +6460,7 @@ public static partial class QueryCommandRunner
         {
             var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --max-hops/--depth is parsed into ContextAfter; 0 means resolve-only
             if (!options.Json && options.ImpactDeprecatedDepthUsed)
-                Console.Error.WriteLine("Warning: --depth is deprecated for impact; use --max-hops instead.");
+                CommandErrorWriter.WriteStderr("Warning: --depth is deprecated for impact; use --max-hops instead.");
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
@@ -6445,7 +6531,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        Console.Error.WriteLine("Depth 0 requested: resolved the symbol only; callers were not traversed.");
+                        CommandErrorWriter.WriteStderr("Depth 0 requested: resolved the symbol only; callers were not traversed.");
                         WriteImpactResolutionHint(analysis);
                         WriteGraphSupportHint(options.Lang);
                     }
@@ -6494,7 +6580,7 @@ public static partial class QueryCommandRunner
                     {
                         Console.WriteLine("0");
                         if (!analysis.GraphTableAvailable)
-                            Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
+                            CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
                     }
                 }
                 else if (options.Json)
@@ -6544,7 +6630,7 @@ public static partial class QueryCommandRunner
                 }
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine($"No impact found for '{analysis.Query}'.");
+                    CommandErrorWriter.WriteStderr($"No impact found for '{analysis.Query}'.");
                     WriteImpactResolutionHint(analysis);
                     WriteGraphSupportHint(options.Lang);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
@@ -6627,11 +6713,11 @@ public static partial class QueryCommandRunner
             {
                 if (hasHeuristicHints)
                 {
-                    Console.Error.WriteLine($"No symbol-level callers found for '{analysis.ResolvedName}'. Possible file-level dependents follow.");
+                    CommandErrorWriter.WriteStderr($"No symbol-level callers found for '{analysis.ResolvedName}'. Possible file-level dependents follow.");
                     WriteImpactResolutionHint(analysis);
-                    Console.Error.WriteLine("WARN: these file-level dependents are heuristic only; the current graph does not record resolved target file/type for each call.");
+                    CommandErrorWriter.WriteStderr("WARN: these file-level dependents are heuristic only; the current graph does not record resolved target file/type for each call.");
                     if (analysis.Truncated)
-                        Console.Error.WriteLine("WARN: heuristic file-level dependents were truncated by the current limit.");
+                        CommandErrorWriter.WriteStderr("WARN: heuristic file-level dependents were truncated by the current limit.");
                     foreach (var edge in analysis.FileImpacts)
                         Console.WriteLine($"  {edge.SourcePath,-40} -> {edge.TargetPath} ({edge.ReferenceCount} refs: {edge.Symbols})");
                 }
@@ -6640,7 +6726,7 @@ public static partial class QueryCommandRunner
                     var grouped = analysis.Callers.GroupBy(r => r.Depth).OrderBy(g => g.Key);
                     foreach (var group in grouped)
                     {
-                        Console.Error.WriteLine($"--- Depth {group.Key} ---");
+                        CommandErrorWriter.WriteStderr($"--- Depth {group.Key} ---");
                         foreach (var r in group)
                         {
                             var indent = new string(' ', (r.Depth - 1) * 2);
@@ -6663,9 +6749,9 @@ public static partial class QueryCommandRunner
                         : " [TRUNCATED]"
                     : "";
                 if (hasHeuristicHints)
-                    Console.Error.WriteLine($"\n({hintCount} heuristic dependency hints across {hintFileCount} files{truncNote})");
+                    CommandErrorWriter.WriteStderr($"\n({hintCount} heuristic dependency hints across {hintFileCount} files{truncNote})");
                 else
-                    Console.Error.WriteLine($"\n({confirmedCount} callers across {confirmedFileCount} files, max depth {maxDepth}{truncNote})");
+                    CommandErrorWriter.WriteStderr($"\n({confirmedCount} callers across {confirmedFileCount} files, max depth {maxDepth}{truncNote})");
             }
             return StrictImpactExitCode(options, analysis, CommandExitCodes.Success);
         });
@@ -6701,12 +6787,12 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("deps", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
         {
-            Console.Error.WriteLine(depsFormatError);
+            CommandErrorWriter.WriteStderr(depsFormatError);
             return CommandExitCodes.UsageError;
         }
 
@@ -6741,7 +6827,7 @@ public static partial class QueryCommandRunner
                     Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal)).ToJsonString(jsonOptions));
                 else
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No file dependencies found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
                     WriteSqlGraphContractWarningIfNeeded(json: false, zeroSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "edges", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -6774,7 +6860,7 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No dependency cycles found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No dependency cycles found", options));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                 }
                 return ZeroResultExitCode(options);
@@ -6805,7 +6891,7 @@ public static partial class QueryCommandRunner
                 {
                     foreach (var cycle in cycles)
                         Console.WriteLine(string.Join(" -> ", cycle.Concat([cycle[0]])));
-                    Console.Error.WriteLine($"({cycles.Count} dependency cycles)");
+                    CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles)");
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     return CommandExitCodes.Success;
                 }
@@ -6815,7 +6901,7 @@ public static partial class QueryCommandRunner
                     var syms = r.Symbols.Length > 60 ? r.Symbols[..57] + "..." : r.Symbols;
                     Console.WriteLine($"{r.SourcePath,-45} -> {r.TargetPath,-45} ({r.ReferenceCount} refs: {syms})");
                 }
-                Console.Error.WriteLine($"({results.Count} dependency edges)");
+                CommandErrorWriter.WriteStderr($"({results.Count} dependency edges)");
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
@@ -7139,8 +7225,8 @@ public static partial class QueryCommandRunner
 
         var maxAdditional = MaxWorkspaceDependencyDatabaseCount - 1;
         var additionalCount = Math.Max(0, memberDbs.Count - 1);
-        Console.Error.WriteLine($"Error: deps --workspace-db accepts at most {maxAdditional} distinct additional databases ({MaxWorkspaceDependencyDatabaseCount} total including --db), which is {MaxWorkspaceDependencyDatabasePairCount} ordered cross-database pairs; got {additionalCount} additional ({memberDbs.Count} total, {pairCount} pairs).");
-        Console.Error.WriteLine("Hint: pass fewer --workspace-db values or run deps separately for smaller workspace member groups.");
+        CommandErrorWriter.WriteStderr($"Error: deps --workspace-db accepts at most {maxAdditional} distinct additional databases ({MaxWorkspaceDependencyDatabaseCount} total including --db), which is {MaxWorkspaceDependencyDatabasePairCount} ordered cross-database pairs; got {additionalCount} additional ({memberDbs.Count} total, {pairCount} pairs).");
+        CommandErrorWriter.WriteStderr("Hint: pass fewer --workspace-db values or run deps separately for smaller workspace member groups.");
         return true;
     }
 
@@ -7294,7 +7380,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("hotspots", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -7312,8 +7398,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
         {
-            Console.Error.WriteLine(groupByError);
-            Console.Error.WriteLine("Usage: cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
+            CommandErrorWriter.WriteStderr(groupByError);
+            CommandErrorWriter.WriteStderr("Usage: cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
             return CommandExitCodes.UsageError;
         }
 
@@ -7380,7 +7466,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        Console.Error.WriteLine(BuildZeroResultLine("No symbol hotspots found", options));
+                        CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbol hotspots found", options));
                         WriteZeroResultHints(options, reader);
                         WriteKindHint(options.Kind, reader);
                         WriteLangHint(options.Lang, reader);
@@ -7427,7 +7513,7 @@ public static partial class QueryCommandRunner
                         var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
                         Console.WriteLine($"{FormatHotspotScore(g.ReferenceScore),5} score {g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
-                    Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
+                    CommandErrorWriter.WriteStderr($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                 }
                 return CommandExitCodes.Success;
@@ -7515,7 +7601,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        Console.Error.WriteLine("No symbol hotspots found.");
+                        CommandErrorWriter.WriteStderr("No symbol hotspots found.");
                         WriteZeroResultHints(options, reader);
                         WriteKindHint(options.Kind, reader);
                         WriteLangHint(options.Lang, reader);
@@ -7562,7 +7648,7 @@ public static partial class QueryCommandRunner
                     {
                         Console.WriteLine($"{result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
                     }
-                    Console.Error.WriteLine($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
+                    CommandErrorWriter.WriteStderr($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
                     WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                 }
@@ -7599,7 +7685,7 @@ public static partial class QueryCommandRunner
                 {
                     Console.WriteLine($"{countSummary.Count}");
                     if (!reader._hasReferencesTable)
-                        Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
+                        CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
                     WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                     WriteSqlGraphContractWarningIfNeeded(json: false, countSqlGraphSignal, reader, options);
                 }
@@ -7618,7 +7704,7 @@ public static partial class QueryCommandRunner
                     {
                         Console.WriteLine("0");
                         if (!reader._hasReferencesTable)
-                            Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
+                            CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
                         WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                     }
                     else
@@ -7660,7 +7746,7 @@ public static partial class QueryCommandRunner
                         }).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No symbol hotspots found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbol hotspots found", options));
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -7702,7 +7788,7 @@ public static partial class QueryCommandRunner
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                     Console.WriteLine($"{FormatHotspotScore(r.ReferenceScore),5} score {r.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
-                Console.Error.WriteLine($"({results.Count} symbol hotspots; grouped_by={groupBy})");
+                CommandErrorWriter.WriteStderr($"({results.Count} symbol hotspots; grouped_by={groupBy})");
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
@@ -7716,7 +7802,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("unused", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -7756,7 +7842,7 @@ public static partial class QueryCommandRunner
         {
             // Warn if user specified an unsupported language / 未対応言語の場合は警告
             if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
-                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Unused results are unavailable for this language.");
+                CommandErrorWriter.WriteStderr($"Warning: '{options.Lang}' does not support reference extraction. Unused results are unavailable for this language.");
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
@@ -7856,7 +7942,7 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.Error.WriteLine(BuildZeroResultLine("No unused symbols found", options));
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No unused symbols found", options));
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
@@ -7892,9 +7978,9 @@ public static partial class QueryCommandRunner
                 var summaryBuckets = OrderedUnusedBuckets
                     .Where(bucketCounts.ContainsKey)
                     .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
-                Console.Error.WriteLine($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
+                CommandErrorWriter.WriteStderr($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
                 if (nextCursor != null)
-                    Console.Error.WriteLine($"next_cursor={nextCursor}");
+                    CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
@@ -8170,7 +8256,7 @@ public static partial class QueryCommandRunner
         var previewOptionError = ValidatePreviewOptions("validate", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            Console.Error.WriteLine(previewOptionError);
+            CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
@@ -8223,10 +8309,10 @@ public static partial class QueryCommandRunner
                     }.ToJsonString(jsonOptions));
                 }
                 else if (!issuesAvailable)
-                    Console.Error.WriteLine("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
+                    CommandErrorWriter.WriteStderr("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
                 else
                 {
-                    Console.Error.WriteLine("No encoding issues found.");
+                    CommandErrorWriter.WriteStderr("No encoding issues found.");
                     WriteValidateKindHint(options.Kind);
                 }
                 return CommandExitCodes.Success;
@@ -8275,7 +8361,7 @@ public static partial class QueryCommandRunner
                     Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {issue.Message}");
                 }
                 var kindCounts = issues.GroupBy(i => i.Kind).Select(g => $"{g.Key}: {g.Count()}");
-                Console.Error.WriteLine($"\n({issues.Count} issues: {string.Join(", ", kindCounts)})");
+                CommandErrorWriter.WriteStderr($"\n({issues.Count} issues: {string.Join(", ", kindCounts)})");
             }
             return CommandExitCodes.Success;
         });
@@ -8388,7 +8474,7 @@ public static partial class QueryCommandRunner
                             Console.WriteLine($"  Gaps: {string.Join(", ", info.CapabilityGaps)}");
                     }
                 }
-                Console.Error.WriteLine($"\n({filtered.Count} languages)");
+                CommandErrorWriter.WriteStderr($"\n({filtered.Count} languages)");
             }
 
             return CommandExitCodes.Success;
@@ -8449,6 +8535,27 @@ public static partial class QueryCommandRunner
         return false;
     }
 
+    private static bool TryNormalizeSearchGuardScope(string value, out SearchGuardScope scope)
+    {
+        switch (value.Trim().ToLowerInvariant().Replace("_", "-"))
+        {
+            case "window":
+                scope = SearchGuardScope.Window;
+                return true;
+            case "same-line":
+            case "sameline":
+                scope = SearchGuardScope.SameLine;
+                return true;
+            default:
+                scope = SearchGuardScope.Window;
+                return false;
+        }
+    }
+
+    private static string FormatSearchGuardScope(SearchGuardScope scope)
+        => scope == SearchGuardScope.SameLine ? "same-line" : "window";
+
+
     public static QueryCommandOptions ParseArgs(
         string[] args,
         bool jsonDefault,
@@ -8506,6 +8613,7 @@ public static partial class QueryCommandRunner
         bool prefix = false;
         var guardFilters = new List<SearchGuardFilter>();
         var guardWindow = DbReader.DefaultSearchGuardWindow;
+        var guardScope = SearchGuardScope.Window;
         bool excludeComments = false;
         bool excludeStrings = false;
         bool excludeFixtures = false;
@@ -8523,6 +8631,7 @@ public static partial class QueryCommandRunner
         string? uniqueBy = null;
         string? countBy = null;
         var matchOrigins = new List<string>();
+        var excludeOrigins = new List<string>();
         var resultKinds = new List<string>();
         List<string>? searchFields = null;
         bool firstPerFile = false;
@@ -8696,7 +8805,7 @@ public static partial class QueryCommandRunner
             if (seenSingleValueOptions.Add(canonicalName))
                 return;
             var displayValue = ConsoleUi.FormatBoundedValue(newValue);
-            Console.Error.WriteLine($"Warning: {canonicalName} specified more than once; the rightmost CLI value '{displayValue}' takes precedence over earlier CLI values and any environment/config default.");
+            CommandErrorWriter.WriteStderr($"Warning: {canonicalName} specified more than once; the rightmost CLI value '{displayValue}' takes precedence over earlier CLI values and any environment/config default.");
         }
 
         for (int i = 0; i < args.Length; i++)
@@ -9085,6 +9194,18 @@ public static partial class QueryCommandRunner
                         AddParseError(guardWindowError!);
                     }
                     break;
+                case "--guard-scope":
+                    if (TryReadStringOptionValue(args, ref i, "--guard-scope", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var guardScopeValue, out var guardScopeError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--guard-scope", guardScopeValue!);
+                        if (TryNormalizeSearchGuardScope(guardScopeValue!, out var parsedGuardScope))
+                            guardScope = parsedGuardScope;
+                        else
+                            AddParseError($"Error: unsupported --guard-scope value '{ConsoleUi.FormatBoundedValue(guardScopeValue!)}'. Use window or same-line.");
+                    }
+                    else
+                        AddParseError(guardScopeError!);
+                    break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
                     {
@@ -9306,11 +9427,19 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(countByError!);
                     break;
+                case "--origin":
                 case "--match-origin":
-                    if (TryReadStringOptionValue(args, ref i, "--match-origin", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var originValue, out var originError))
-                        AddSearchMatchOrigins(originValue!, matchOrigins, AddParseError);
+                    var originOptionName = normalizedArg;
+                    if (TryReadStringOptionValue(args, ref i, originOptionName, inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var originValue, out var originError))
+                        AddSearchMatchOrigins(originOptionName, originValue!, matchOrigins, AddParseError);
                     else
                         AddParseError(originError!);
+                    break;
+                case "--exclude-origin":
+                    if (TryReadStringOptionValue(args, ref i, "--exclude-origin", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var excludedOriginValue, out var excludedOriginError))
+                        AddSearchMatchOrigins("--exclude-origin", excludedOriginValue!, excludeOrigins, AddParseError);
+                    else
+                        AddParseError(excludedOriginError!);
                     break;
                 case "--result-kind":
                     if (TryReadStringOptionValue(args, ref i, "--result-kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var resultKindValue, out var resultKindError))
@@ -9827,6 +9956,7 @@ public static partial class QueryCommandRunner
             Prefix = prefix,
             GuardFilters = guardFilters,
             GuardWindow = guardWindow,
+            GuardScope = guardScope,
             ExcludeComments = excludeComments,
             ExcludeStrings = excludeStrings,
             ExcludeFixtures = excludeFixtures,
@@ -9840,6 +9970,7 @@ public static partial class QueryCommandRunner
             UniqueBy = uniqueBy,
             CountBy = countBy,
             MatchOrigins = matchOrigins,
+            ExcludeOrigins = excludeOrigins,
             ResultKinds = resultKinds,
             SearchFields = searchFields,
             FirstPerFile = firstPerFile,
@@ -10123,15 +10254,15 @@ public static partial class QueryCommandRunner
         return fields;
     }
 
-    private static void AddSearchMatchOrigins(string rawValue, List<string> origins, Action<string> addParseError)
+    private static void AddSearchMatchOrigins(string optionName, string rawValue, List<string> origins, Action<string> addParseError)
     {
-        if (!ValidateCsvBounds("--match-origin", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
+        if (!ValidateCsvBounds(optionName, rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
             return;
         foreach (var rawOrigin in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (!TryNormalizeSearchMatchOrigin(rawOrigin, out var origin))
             {
-                addParseError($"Error: unsupported --match-origin value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, or unknown.");
+                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, or unknown.");
                 continue;
             }
             if (!origins.Contains(origin, StringComparer.Ordinal))
@@ -10665,7 +10796,7 @@ public static partial class QueryCommandRunner
         {
             if (string.IsNullOrWhiteSpace(dbPath))
             {
-                Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
+                CommandErrorWriter.WriteStderr(BuildMissingOptionValueError("--db"));
                 return CommandExitCodes.UsageError;
             }
 
@@ -10682,8 +10813,8 @@ public static partial class QueryCommandRunner
                 if (!DbPathResolver.TryNormalizeDbPath(dbPath, out fileExistsPath, out var parseError))
                 {
                     var boundedDbPath = FormatDbDiagnosticValue(dbPath);
-                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI: {SqliteFileUri.FormatParseError(parseError)}");
-                    Console.Error.WriteLine($"Hint: pass a valid SQLite file URI such as `file:///absolute/path/to/codeindex.db?immutable=1`; the --db value resolved to: {boundedDbPath}");
+                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI: {SqliteFileUri.FormatParseError(parseError)}");
+                    CommandErrorWriter.WriteStderr($"Hint: pass a valid SQLite file URI such as `file:///absolute/path/to/codeindex.db?immutable=1`; the --db value resolved to: {boundedDbPath}");
                     GlobalToolLog.Error($"invalid_db_file_uri db={FormatLogValue(dbPath)} exception={FormatLogValue(parseError?.ToString() ?? "<unknown>")}");
                     return CommandExitCodes.DatabaseError;
                 }
@@ -10694,10 +10825,10 @@ public static partial class QueryCommandRunner
             {
                 var resolvedPath = Path.GetFullPath(fileExistsPath);
                 var displayPath = FormatDbDiagnosticValue(resolvedPath);
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {displayPath}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {displayPath}");
                 if (isUri)
-                    Console.Error.WriteLine($"Hint: the --db path resolved to: {displayPath}");
-                Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
+                    CommandErrorWriter.WriteStderr($"Hint: the --db path resolved to: {displayPath}");
+                CommandErrorWriter.WriteStderr("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
                 return CommandExitCodes.DatabaseError;
             }
         }
@@ -10745,27 +10876,27 @@ public static partial class QueryCommandRunner
         }
         catch (FtsQuerySyntaxException ex)
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
             if (ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
             {
-                Console.Error.WriteLine("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
+                CommandErrorWriter.WriteStderr("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
             }
             else
             {
-                Console.Error.WriteLine("Hint: `--fts` passes raw FTS5 syntax. Fix the query or drop `--fts` to use literal-safe search.");
+                CommandErrorWriter.WriteStderr("Hint: `--fts` passes raw FTS5 syntax. Fix the query or drop `--fts` to use literal-safe search.");
             }
             return CommandExitCodes.UsageError;
         }
         catch (SearchGuardCandidateLimitException ex)
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
-            Console.Error.WriteLine("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
+            CommandErrorWriter.WriteStderr("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
             return CommandExitCodes.UsageError;
         }
         catch (SearchQueryLimitException ex)
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {ex.Message}");
-            Console.Error.WriteLine("Hint: shorten the search text or split generated input into smaller literal queries.");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {ex.Message}");
+            CommandErrorWriter.WriteStderr("Hint: shorten the search text or split generated input into smaller literal queries.");
             return CommandExitCodes.UsageError;
         }
         catch (Exception ex)
@@ -10777,8 +10908,8 @@ public static partial class QueryCommandRunner
             {
                 if (sqliteEx.SqliteErrorCode == 13)
                 {
-                    Console.Error.WriteLine($"Error [{CommandErrorCodes.TempStoreExhausted}]: SQLite temp-store exhausted while evaluating this query.");
-                    Console.Error.WriteLine("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
+                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.TempStoreExhausted}]: SQLite temp-store exhausted while evaluating this query.");
+                    CommandErrorWriter.WriteStderr("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
                     Database.DbDebug.DumpToStderr(ex);
                     return CommandExitCodes.DatabaseError;
                 }
@@ -10790,8 +10921,8 @@ public static partial class QueryCommandRunner
                 // E002_DB_LOCKED で機械可読に区別する。
                 if (sqliteEx.SqliteErrorCode == 5 || sqliteEx.SqliteErrorCode == 6)
                 {
-                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {ex.Message}");
-                    Console.Error.WriteLine("Hint: another process may be holding the database. Wait for it to finish, or retry with backoff.");
+                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {ex.Message}");
+                    CommandErrorWriter.WriteStderr("Hint: another process may be holding the database. Wait for it to finish, or retry with backoff.");
                     Database.DbDebug.DumpToStderr(ex);
                     return CommandExitCodes.DatabaseError;
                 }
@@ -10812,8 +10943,8 @@ public static partial class QueryCommandRunner
 
     private static int WriteInvalidCodeIndexDbError(string dbPath, string? validationReason)
     {
-        Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: {FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).");
-        Console.Error.WriteLine("Hint: rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.");
+        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: {FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).");
+        CommandErrorWriter.WriteStderr("Hint: rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.");
         return CommandExitCodes.DatabaseError;
     }
 
@@ -10835,16 +10966,16 @@ public static partial class QueryCommandRunner
         var unauthorized = FindException<UnauthorizedAccessException>(ex);
         if (unauthorized != null)
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
-            Console.Error.WriteLine(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
+            CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
 
         var io = FindException<IOException>(ex);
         if (io != null)
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
-            Console.Error.WriteLine(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
+            CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
 
@@ -10853,27 +10984,27 @@ public static partial class QueryCommandRunner
         {
             if (sqlite.SqliteErrorCode == 14)
             {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
-                Console.Error.WriteLine(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
                 return;
             }
 
             if (sqlite.SqliteErrorCode == 11)
             {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
-                Console.Error.WriteLine("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
                 return;
             }
 
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
-            Console.Error.WriteLine(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
+            CommandErrorWriter.WriteStderr(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
                 ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
                 : "Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
             return;
         }
 
-        Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
-        Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
+        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
+        CommandErrorWriter.WriteStderr("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
     }
 
     private static T? FindException<T>(Exception ex)
@@ -10961,11 +11092,11 @@ public static partial class QueryCommandRunner
         var rowsScanned = entries.Sum(entry => entry.RowsScanned);
         if (!options.Json)
         {
-            Console.Error.WriteLine($"DEBUG query: sql_statements={entries.Count} elapsed_ms={elapsedMs.ToString(CultureInfo.InvariantCulture)} rows_scanned={rowsScanned}");
+            CommandErrorWriter.WriteStderr($"DEBUG query: sql_statements={entries.Count} elapsed_ms={elapsedMs.ToString(CultureInfo.InvariantCulture)} rows_scanned={rowsScanned}");
             for (var i = 0; i < entries.Count; i++)
             {
                 var entry = entries[i];
-                Console.Error.WriteLine(
+                CommandErrorWriter.WriteStderr(
                     $"DEBUG query sql_{i + 1}: elapsed_ms={Math.Round(entry.ElapsedMs, 3).ToString(CultureInfo.InvariantCulture)} rows_scanned={entry.RowsScanned}");
             }
             return;
@@ -11471,7 +11602,7 @@ public static partial class QueryCommandRunner
         var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
         if (scan.Truncated)
             summary += scan.TruncationReason == null ? "; truncated" : $"; truncated by {scan.TruncationReason}";
-        Console.Error.WriteLine($"({summary})");
+        CommandErrorWriter.WriteStderr($"({summary})");
     }
 
     // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
@@ -11540,20 +11671,20 @@ public static partial class QueryCommandRunner
         var freshness = reader.GetFreshnessHint();
         if (freshness.FileCount == 0)
         {
-            Console.Error.WriteLine("Hint: the index is empty. Run 'cdidx index <projectPath>' first.");
+            CommandErrorWriter.WriteStderr("Hint: the index is empty. Run 'cdidx index <projectPath>' first.");
             return;
         }
 
         if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, --exclude-strings, or --exclude-fixtures to broaden the search."}");
+            CommandErrorWriter.WriteStderr($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, --exclude-strings, or --exclude-fixtures to broaden the search."}");
 
         if (alternativeHint != null)
-            Console.Error.WriteLine($"Hint: {alternativeHint}");
+            CommandErrorWriter.WriteStderr($"Hint: {alternativeHint}");
 
         var staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
         if (staleAfter.Error != null)
         {
-            Console.Error.WriteLine(staleAfter.Error);
+            CommandErrorWriter.WriteStderr(staleAfter.Error);
             return;
         }
 
@@ -11561,7 +11692,7 @@ public static partial class QueryCommandRunner
         {
             var age = GetUtcNow() - freshness.IndexedAt.Value;
             if (age > staleAfter.Value)
-                Console.Error.WriteLine($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
+                CommandErrorWriter.WriteStderr($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
     }
 
@@ -11622,7 +11753,7 @@ public static partial class QueryCommandRunner
         if (hint == null)
             return;
 
-        Console.Error.WriteLine($"Hint: {hint.SuggestedAction}");
+        CommandErrorWriter.WriteStderr($"Hint: {hint.SuggestedAction}");
     }
 
     private static string BuildZeroResultLine(string message, QueryCommandOptions options)
@@ -11990,9 +12121,9 @@ public static partial class QueryCommandRunner
             ? string.Empty
             : $" (e.g. {string.Join(", ", exactZeroHint.SampleNames.Select(name => $"`{name}`"))})";
         if (exactZeroHint.RelaxedCount.HasValue)
-            Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return {exactZeroHint.RelaxedCount}{examples}. Drop --exact or use the exact indexed name.");
+            CommandErrorWriter.WriteStderr($"Hint: --exact found 0 matches, but substring matching would return {exactZeroHint.RelaxedCount}{examples}. Drop --exact or use the exact indexed name.");
         else
-            Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return results{examples}. Drop --exact or use the exact indexed name.");
+            CommandErrorWriter.WriteStderr($"Hint: --exact found 0 matches, but substring matching would return results{examples}. Drop --exact or use the exact indexed name.");
     }
 
     private static bool IsSqlGraphContractSignal(ExactQuerySignal signal)
@@ -12012,8 +12143,8 @@ public static partial class QueryCommandRunner
         var field = FindStatusReadinessField(fieldName);
         if (field == null)
         {
-            Console.Error.WriteLine($"Error: unknown status readiness field `{fieldName}`.");
-            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
+            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
             return CommandExitCodes.UsageError;
         }
 
@@ -12030,8 +12161,8 @@ public static partial class QueryCommandRunner
         var field = FindStatusReadinessField(fieldName);
         if (field == null)
         {
-            Console.Error.WriteLine($"Error: unknown status readiness field `{fieldName}`.");
-            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
+            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
             return CommandExitCodes.UsageError;
         }
 
@@ -12367,7 +12498,7 @@ public static partial class QueryCommandRunner
     private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
     {
         foreach (var failure in failures)
-            Console.Error.WriteLine(failure.Diagnostic);
+            CommandErrorWriter.WriteStderr(failure.Diagnostic);
     }
 
     private static int GetStatusCheckExitCode(IReadOnlyList<StatusCheckFailure> failures)
@@ -12559,22 +12690,22 @@ public static partial class QueryCommandRunner
 
         if (signal.HasMissingIndex)
         {
-            Console.Error.WriteLine($"WARN: --exact symbol query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
-            Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact symbol query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
+            CommandErrorWriter.WriteStderr("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
             return;
         }
 
         if (IsCSharpCanonicalNameSignal(signal))
         {
-            Console.Error.WriteLine($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
-            Console.Error.WriteLine($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
+            CommandErrorWriter.WriteStderr($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
             return;
         }
 
         if (IsSqlGraphContractSignal(signal))
         {
-            Console.Error.WriteLine($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
-            Console.Error.WriteLine($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
+            CommandErrorWriter.WriteStderr($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
         }
     }
 
@@ -12594,7 +12725,7 @@ public static partial class QueryCommandRunner
             return;
 
         if (status.Languages.Count > 0)
-            Console.Error.WriteLine($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
+            CommandErrorWriter.WriteStderr($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
 
         // Recover from `--lang pythno` / `--lang csarp` typos by suggesting the
         // closest indexed language first; if the typo does not match anything currently
@@ -12616,7 +12747,7 @@ public static partial class QueryCommandRunner
         var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
                          ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
         if (suggestion != null && !string.Equals(suggestion, lang, StringComparison.OrdinalIgnoreCase))
-            Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
+            CommandErrorWriter.WriteStderr($"Did you mean: --lang {suggestion}?");
     }
 
     private static void WriteSymbolExtractionCapabilityHint(string? lang, DbReader reader)
@@ -12630,7 +12761,7 @@ public static partial class QueryCommandRunner
         if (status.Languages.Count == 0 || !status.Languages.ContainsKey(lang))
             return;
 
-        Console.Error.WriteLine($"Hint: '{lang}' is indexed for full-text search, but symbol extraction is not available for that language. Use `cdidx search <query> --lang {lang}` for text matches or `cdidx languages --capability missing-symbols` to audit capability gaps.");
+        CommandErrorWriter.WriteStderr($"Hint: '{lang}' is indexed for full-text search, but symbol extraction is not available for that language. Use `cdidx search <query> --lang {lang}` for text matches or `cdidx languages --capability missing-symbols` to audit capability gaps.");
     }
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
@@ -12662,17 +12793,17 @@ public static partial class QueryCommandRunner
         if (kind == null) return;
         if (!AllValidKinds.Contains(kind))
         {
-            Console.Error.WriteLine($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", AllValidKinds)}");
+            CommandErrorWriter.WriteStderr($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", AllValidKinds)}");
             var suggestion = ConsoleUi.FindClosestMatch(kind, AllValidKinds);
             if (suggestion != null)
-                Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
+                CommandErrorWriter.WriteStderr($"Did you mean: --kind {suggestion}?");
             return;
         }
         // Kind is valid but not found in this index — hint that no symbols of this kind exist
         // 種別は有効だがインデックスに存在しない場合のヒント
         var existingKinds = reader.GetDistinctKinds();
         if (!existingKinds.Contains(kind))
-            Console.Error.WriteLine($"Hint: no '{kind}' symbols in the index. Indexed kinds: {string.Join(", ", existingKinds)}");
+            CommandErrorWriter.WriteStderr($"Hint: no '{kind}' symbols in the index. Indexed kinds: {string.Join(", ", existingKinds)}");
     }
 
     private static void WriteValidateKindHint(string? kind)
@@ -12688,10 +12819,10 @@ public static partial class QueryCommandRunner
         // `validate --kind` は FileIndexer が出す file_issues kind のみ受理する。
         // `--kind replacement_chra` のようなタイプミスは 0 行となり、クリーンな状態と区別が
         // つかないまま暗黙に握り潰されていた。ヒントと did-you-mean を出すよう改修 (#1582)。
-        Console.Error.WriteLine($"Hint: '{kind}' is not a known validate kind. Available: {string.Join(", ", AllValidValidateKinds)}");
+        CommandErrorWriter.WriteStderr($"Hint: '{kind}' is not a known validate kind. Available: {string.Join(", ", AllValidValidateKinds)}");
         var suggestion = ConsoleUi.FindClosestMatch(kind, AllValidValidateKinds);
         if (suggestion != null)
-            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
+            CommandErrorWriter.WriteStderr($"Did you mean: --kind {suggestion}?");
     }
 
     private static void WriteGraphReferenceKindHint(string command, string? kind, bool json)
@@ -12709,14 +12840,14 @@ public static partial class QueryCommandRunner
 
         if (AllValidKinds.Contains(kind))
         {
-            Console.Error.WriteLine($"WARN: '{ConsoleUi.FormatBoundedValue(kind)}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", acceptedKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
+            CommandErrorWriter.WriteStderr($"WARN: '{ConsoleUi.FormatBoundedValue(kind)}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", acceptedKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
             return;
         }
 
-        Console.Error.WriteLine($"Hint: '{ConsoleUi.FormatBoundedValue(kind)}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
+        CommandErrorWriter.WriteStderr($"Hint: '{ConsoleUi.FormatBoundedValue(kind)}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
         var suggestion = ConsoleUi.FindClosestMatch(kind, acceptedKinds);
         if (suggestion != null)
-            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
+            CommandErrorWriter.WriteStderr($"Did you mean: --kind {suggestion}?");
     }
 
     // Reference kinds that are valid `references --kind` values but NOT valid
@@ -12762,19 +12893,19 @@ public static partial class QueryCommandRunner
             return false;
 
         if (kind == "type_reference")
-            Console.Error.WriteLine($"Error: '--kind type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command} --kind type_reference` cannot return accurate call-graph rows.");
+            CommandErrorWriter.WriteStderr($"Error: '--kind type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command} --kind type_reference` cannot return accurate call-graph rows.");
         else if (kind == "import")
-            Console.Error.WriteLine($"Error: '--kind import' is not supported on '{command}'. Import references are structural dependency edges, not runtime calls, so `{command} --kind import` cannot return accurate call-graph rows.");
+            CommandErrorWriter.WriteStderr($"Error: '--kind import' is not supported on '{command}'. Import references are structural dependency edges, not runtime calls, so `{command} --kind import` cannot return accurate call-graph rows.");
         else
-            Console.Error.WriteLine($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
-        Console.Error.WriteLine($"Hint: use `cdidx references <name> --kind {kind}` instead.");
+            CommandErrorWriter.WriteStderr($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
+        CommandErrorWriter.WriteStderr($"Hint: use `cdidx references <name> --kind {kind}` instead.");
         return true;
     }
 
     private static void WriteGraphSupportHint(string? lang)
     {
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
-            Console.Error.WriteLine($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
+            CommandErrorWriter.WriteStderr($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
     }
 
     private static void WriteImpactResolutionHint(ImpactAnalysisResult analysis)
@@ -12790,15 +12921,15 @@ public static partial class QueryCommandRunner
             var extra = analysis.DefinitionFileCount > pathPreview.Count
                 ? $" (+{analysis.DefinitionFileCount - pathPreview.Count} more)"
                 : string.Empty;
-            Console.Error.WriteLine($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) as {ConsoleUi.Counted(analysis.DefinitionCount, "definition")} across {ConsoleUi.Counted(analysis.DefinitionFileCount, "file")}: {string.Join(", ", pathPreview)}{extra}");
+            CommandErrorWriter.WriteStderr($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) as {ConsoleUi.Counted(analysis.DefinitionCount, "definition")} across {ConsoleUi.Counted(analysis.DefinitionFileCount, "file")}: {string.Join(", ", pathPreview)}{extra}");
         }
         else if (analysis.ZeroResultReason == "no_matching_definition")
         {
-            Console.Error.WriteLine($"Note: no indexed definition matched '{analysis.Query}'.");
+            CommandErrorWriter.WriteStderr($"Note: no indexed definition matched '{analysis.Query}'.");
         }
 
         if (!string.IsNullOrWhiteSpace(analysis.Suggestion))
-            Console.Error.WriteLine($"Hint: {analysis.Suggestion}");
+            CommandErrorWriter.WriteStderr($"Hint: {analysis.Suggestion}");
     }
 
     // Emit a zero-result payload that distinguishes "real 0 hits" from "graph table missing
@@ -12817,7 +12948,7 @@ public static partial class QueryCommandRunner
         }
         else
         {
-            Console.Error.WriteLine("WARN: symbol_references table missing — this 0-result is degraded, not authoritative.");
+            CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this 0-result is degraded, not authoritative.");
         }
     }
 
@@ -12828,22 +12959,22 @@ public static partial class QueryCommandRunner
 
         if (signal.HasMissingIndex)
         {
-            Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
-            Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
+            CommandErrorWriter.WriteStderr("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
             return;
         }
 
         if (IsCSharpCanonicalNameSignal(signal))
         {
-            Console.Error.WriteLine($"WARN: --exact graph query may return false negatives ({signal.DegradedReason}).");
-            Console.Error.WriteLine($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact graph query may return false negatives ({signal.DegradedReason}).");
+            CommandErrorWriter.WriteStderr($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
             return;
         }
 
         if (IsSqlGraphContractSignal(signal))
         {
-            Console.Error.WriteLine($"WARN: --exact graph query may return false negatives ({signal.DegradedReason}).");
-            Console.Error.WriteLine($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact graph query may return false negatives ({signal.DegradedReason}).");
+            CommandErrorWriter.WriteStderr($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
         }
     }
 
@@ -12854,22 +12985,22 @@ public static partial class QueryCommandRunner
 
         if (signal.HasMissingIndex)
         {
-            Console.Error.WriteLine($"WARN: --exact inspect bundle ran without all supporting indexes ({signal.DegradedReason}). Results are correct but may be slow.");
-            Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact inspect bundle ran without all supporting indexes ({signal.DegradedReason}). Results are correct but may be slow.");
+            CommandErrorWriter.WriteStderr("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
             return;
         }
 
         if (IsCSharpCanonicalNameSignal(signal))
         {
-            Console.Error.WriteLine($"WARN: --exact inspect bundle may return false negatives ({signal.DegradedReason}).");
-            Console.Error.WriteLine($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact inspect bundle may return false negatives ({signal.DegradedReason}).");
+            CommandErrorWriter.WriteStderr($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
             return;
         }
 
         if (IsSqlGraphContractSignal(signal))
         {
-            Console.Error.WriteLine($"WARN: --exact inspect bundle may return false negatives ({signal.DegradedReason}).");
-            Console.Error.WriteLine($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
+            CommandErrorWriter.WriteStderr($"WARN: --exact inspect bundle may return false negatives ({signal.DegradedReason}).");
+            CommandErrorWriter.WriteStderr($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
         }
     }
 
@@ -12881,7 +13012,7 @@ public static partial class QueryCommandRunner
             Console.WriteLine($"{count}");
             WriteGraphSupportOverrideHint(graphSupportOverride);
             if (!graphAvailable)
-                Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
+                CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
             return;
         }
 
@@ -12999,7 +13130,7 @@ public static partial class QueryCommandRunner
         if (graphSupportOverride == null)
             return;
 
-        Console.Error.WriteLine($"Note: {graphSupportOverride.GraphSupportReason}");
+        CommandErrorWriter.WriteStderr($"Note: {graphSupportOverride.GraphSupportReason}");
     }
 
     private sealed record GraphSupportOverride(
@@ -13025,8 +13156,8 @@ public static partial class QueryCommandRunner
         if (json || signal.Ready || signal.DegradedReason == null)
             return;
 
-        Console.Error.WriteLine($"WARN: {signal.DegradedReason}");
-        Console.Error.WriteLine("Hint: rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
+        CommandErrorWriter.WriteStderr($"WARN: {signal.DegradedReason}");
+        CommandErrorWriter.WriteStderr("Hint: rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
     }
 
     internal static SqlGraphContractSignal NarrowSqlGraphContractSignal(SqlGraphContractSignal signal, bool relevant)
@@ -13073,8 +13204,8 @@ public static partial class QueryCommandRunner
         if (json || !signal.Relevant || signal.Ready || signal.DegradedReason == null)
             return;
 
-        Console.Error.WriteLine($"WARN: {signal.DegradedReason}");
-        Console.Error.WriteLine($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows before trusting SQL graph/dependency results.");
+        CommandErrorWriter.WriteStderr($"WARN: {signal.DegradedReason}");
+        CommandErrorWriter.WriteStderr($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows before trusting SQL graph/dependency results.");
     }
 
     // Per-flag upper bounds for numeric CLI options. Without a cap, `--limit 2147483647` or
@@ -13162,9 +13293,9 @@ public static partial class QueryCommandRunner
 
     // Build a missing-value error string with optional caller-supplied hint lines first, then the
     // per-flag hint from MissingOptionValueHints. Newline-separated so each Hint stays on its own
-    // line when written via Console.Error.WriteLine. Returns just the base error if no hint exists.
+    // line when written via CommandErrorWriter.WriteStderr. Returns just the base error if no hint exists.
     // 呼び出し元固有のヒント (例: inline-form) を先に、テーブル由来のフラグ別ヒントを後ろに追記する。
-    // Console.Error.WriteLine 経由で出力されたとき各 Hint が別行になるよう改行で連結する。
+    // CommandErrorWriter.WriteStderr 経由で出力されたとき各 Hint が別行になるよう改行で連結する。
     private static string BuildMissingOptionValueError(string optionName, params string?[] extraHintLines)
     {
         var sb = new System.Text.StringBuilder();
@@ -13535,6 +13666,7 @@ public sealed class QueryCommandOptions
     public bool Prefix { get; init; }
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
+    public SearchGuardScope GuardScope { get; init; } = SearchGuardScope.Window;
     public bool ExcludeComments { get; init; }
     public bool ExcludeStrings { get; init; }
     public bool ExcludeFixtures { get; init; }
@@ -13548,6 +13680,7 @@ public sealed class QueryCommandOptions
     public string? UniqueBy { get; init; }
     public string? CountBy { get; init; }
     public List<string> MatchOrigins { get; init; } = [];
+    public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
     public List<string>? SearchFields { get; init; }
     public bool FirstPerFile { get; init; }

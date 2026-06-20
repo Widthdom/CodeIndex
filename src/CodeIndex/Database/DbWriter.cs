@@ -1182,7 +1182,7 @@ public class DbWriter
         if (testSink != null)
             testSink(message);
         else
-            Console.Error.WriteLine(message);
+            CommandErrorWriter.WriteStderr(message);
     }
 
     internal static string BuildBatchRowSkipWarningForTesting(string rowIdentifier, Exception batchException, Exception rowException)

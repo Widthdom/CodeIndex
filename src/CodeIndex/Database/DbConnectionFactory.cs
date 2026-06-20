@@ -141,7 +141,7 @@ internal static class DbConnectionFactory
             // trade-off knowingly.
             // サンドボックスで -shm/-wal に触れない場合の最終手段。hot WAL 誤判定を避けるため、
             // ファイルサイズでの拒否はやめ、stderr 警告のみ出してフォールバック。
-            Console.Error.WriteLine("Warning: falling back to SQLite immutable=1 read-only open. " +
+            CommandErrorWriter.WriteStderr("Warning: falling back to SQLite immutable=1 read-only open. " +
                 "If the base DB has uncheckpointed WAL state, the snapshot may be stale. " +
                 "Re-run cdidx on writable storage to checkpoint WAL if this matters.");
 

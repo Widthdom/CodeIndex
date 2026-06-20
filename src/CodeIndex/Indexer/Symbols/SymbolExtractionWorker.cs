@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
-using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -392,7 +390,7 @@ internal static class SymbolExtractionWorker
     {
         return TryCreateStartInfo(
             Environment.ProcessPath,
-            ResolveCurrentRunnerAssemblyPath(),
+            IsolatedWorkerProcessLauncher.ResolveCurrentRunnerAssemblyPath(typeof(SymbolExtractionWorker).Assembly),
             maxProtocolLineBytes,
             out startInfo,
             out error);
@@ -419,8 +417,11 @@ internal static class SymbolExtractionWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
-        startInfo = CreateStartInfo();
-        if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
+        startInfo = IsolatedWorkerProcessLauncher.CreateStartInfo();
+        if (IsolatedWorkerProcessLauncher.ShouldStartCurrentExecutable(
+                currentProcessPath,
+                runnerAssemblyPath,
+                typeof(SymbolExtractionWorker).Assembly))
         {
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
@@ -430,59 +431,25 @@ internal static class SymbolExtractionWorker
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(runnerAssemblyPath))
+        if (!IsolatedWorkerProcessLauncher.TryPrepareFrameworkDependentStartInfo(
+                startInfo,
+                currentProcessPath,
+                runnerAssemblyPath,
+                typeof(SymbolExtractionWorker).Assembly,
+                "could not resolve the cdidx assembly path for isolated symbol extraction.",
+                "could not resolve a trusted dotnet host path for isolated symbol extraction; run cdidx through an absolute dotnet host path or use a self-contained cdidx executable.",
+                out error))
         {
             startInfo = new ProcessStartInfo();
-            error = "could not resolve the cdidx assembly path for isolated symbol extraction.";
             return false;
         }
 
-        var dotnetHostPath = DotnetHostPathResolver.Resolve(currentProcessPath);
-        if (dotnetHostPath == null)
-        {
-            startInfo = new ProcessStartInfo();
-            error = "could not resolve a trusted dotnet host path for isolated symbol extraction; run cdidx through an absolute dotnet host path or use a self-contained cdidx executable.";
-            return false;
-        }
-
-        startInfo.FileName = dotnetHostPath;
-        startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
         AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
         AddTestingArguments(startInfo);
-        ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
         return true;
-    }
-
-    private static ProcessStartInfo CreateStartInfo()
-        => new()
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            CreateNoWindow = true,
-        };
-
-    private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
-    {
-        if (string.IsNullOrWhiteSpace(currentProcessPath) || DotnetHostPathResolver.IsDotnetHostPath(currentProcessPath))
-            return false;
-
-        var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
-        var appName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
-        if (!string.IsNullOrWhiteSpace(appName)
-            && string.Equals(processName, appName, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return string.IsNullOrWhiteSpace(runnerAssemblyPath);
     }
 
     internal static string? TryKillProcess(Process process)
@@ -725,51 +692,6 @@ internal static class SymbolExtractionWorker
             + $"`{ProtocolMaxLineBytesOption} <bytes>`, "
             + $"`{TestDelayMillisecondsOption} <milliseconds>`, or "
             + $"`{TestConsoleStdoutOption} <text>`.";
-
-    private static string? ResolveCurrentRunnerAssemblyPath()
-    {
-        var assemblyName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
-        if (string.IsNullOrWhiteSpace(assemblyName))
-            return null;
-
-        var candidate = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
-        return File.Exists(candidate) ? candidate : null;
-    }
-
-    private static void ApplyCurrentRuntimeRollForward(ProcessStartInfo startInfo)
-    {
-        var targetMajor = GetRunnerTargetFrameworkMajor();
-        if (targetMajor.HasValue && Environment.Version.Major > targetMajor.Value)
-            startInfo.Environment["DOTNET_ROLL_FORWARD"] = "LatestMajor";
-    }
-
-    private static int? GetRunnerTargetFrameworkMajor()
-    {
-        var frameworkName = typeof(SymbolExtractionWorker)
-            .Assembly
-            .GetCustomAttribute<TargetFrameworkAttribute>()
-            ?.FrameworkName;
-        if (string.IsNullOrWhiteSpace(frameworkName))
-            return null;
-
-        const string versionPrefix = "Version=v";
-        var versionIndex = frameworkName.IndexOf(versionPrefix, StringComparison.OrdinalIgnoreCase);
-        if (versionIndex < 0)
-            return null;
-
-        var majorStart = versionIndex + versionPrefix.Length;
-        var majorEnd = frameworkName.IndexOf('.', majorStart);
-        var majorText = majorEnd < 0
-            ? frameworkName[majorStart..]
-            : frameworkName[majorStart..majorEnd];
-        return int.TryParse(
-            majorText,
-            System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out var major)
-            ? major
-            : null;
-    }
 
     internal sealed record WorkerRequest(
         long FileId,

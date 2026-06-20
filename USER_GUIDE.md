@@ -948,6 +948,7 @@ cdidx search "Run();" --exact-substring                 # case-sensitive exact s
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
+cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # require a guard earlier on the same line
 cdidx search --list-recipes                             # show reusable audit recipes
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
@@ -959,7 +960,7 @@ cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --
 cdidx search "catch (Exception" --group-by file --count --json    # rank broad audit hits by file
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # rank broad audit hits by enclosing symbol
 cdidx search "catch (Exception" --count-by origin --json          # count broad audit hits by match origin
-cdidx search "Directory.Delete" --match-origin code --result-kind call_site --json=array  # focus on code call sites
+cdidx search "Directory.Delete" --origin code --exclude-origin comment --result-kind call_site --json=array  # focus on code call sites
 cdidx search "Authorization" --format grouped --per-file-limit 2  # file-grouped JSON with representative matches
 cdidx search "throw new Exception" --search-fields path,line,symbol,origin --results-only  # projected result-only NDJSON
 cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536      # bounded audit sample
@@ -981,10 +982,13 @@ into smaller searches or use narrower text.
 Guard-aware search filters primary `search` matches by nearby literal guards:
 `--require-before` / `--require-after` keep matches only when the guard query
 appears in the selected line window, while `--reject-before` / `--reject-after`
-drop matches when the guard query appears. JSON search results include
+drop matches when the guard query appears. Add `--guard-scope same-line` to
+limit before/after checks to the same source line and the primary match column
+ordering instead of nearby lines. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, 1-based span, origin category, and source line.
+before/after relationship, scope (`window` or `same_line`), 1-based span,
+origin category, and source line.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
@@ -992,7 +996,7 @@ return a validation error. Narrow with more specific query text, `--lang`,
 `--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
-`guardWindow`.
+`guardWindow` / `guardScope`.
 
 Machine-readable search exports include enough context for downstream tools to
 triage results without reparsing human text. `--format csv` and `--format tsv`
@@ -1156,7 +1160,7 @@ When `definition --body` is combined with `--json`, `body_content` is capped to 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
 
 `search --json`, `search --format compact`, named search batches, and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
-Search JSON also exposes `match_origins`, `match_facets`, and `result_kinds` so tools can distinguish matches in code, comments, string literals, regex literals, CLI help text, declarations, identifiers, and likely call sites. Each highlight includes its own `match_origins`; `--exclude-comments`, `--exclude-strings`, `--match-origin`, and `--result-kind` use those facets to hide or keep specific match classes. Broad audit output can be reduced with `--unique path|symbol|origin`, `--count-by path|symbol|origin`, `--format grouped`, `--first-per-file`, `--sample <n>`, `--search-fields <fields>`, `--results-only`, and `--max-json-bytes <n>`.
+Search JSON also exposes `match_origins`, `match_facets`, and `result_kinds` so tools can distinguish matches in code, comments, string literals, regex literals, CLI help text, declarations, identifiers, and likely call sites. Each highlight includes its own `match_origins`; `--exclude-comments`, `--exclude-strings`, `--origin` / `--match-origin`, `--exclude-origin`, and `--result-kind` use those facets to hide or keep specific match classes. Broad audit output can be reduced with `--unique path|symbol|origin`, `--count-by path|symbol|origin`, `--format grouped`, `--first-per-file`, `--sample <n>`, `--search-fields <fields>`, `--results-only`, and `--max-json-bytes <n>`.
 The same facets expose `test_file`, `test_symbol`, and `test_fixture` booleans at result, highlight, and match-facet levels. `test_fixture` marks string-like matches inside likely test files or indexed test methods, and `--exclude-fixtures` hides fixture-only matches while keeping real code matches.
 
 ### Resolve a definition
@@ -1404,7 +1408,8 @@ same source location.
 | `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
 | `--exclude-strings` | `search` | Exclude matches whose only retained origin is a string literal, regex literal, or CLI help text |
 | `--exclude-fixtures` | `search` | Exclude matches whose only retained facet is a test fixture string |
-| `--match-origin <origin>` | `search` | Keep only matches from selected origins such as `code`, `comment`, `string_literal`, `regex_literal`, or `help_text`; repeat or comma-separate values |
+| `--origin <origin>` / `--match-origin <origin>` | `search` | Keep only matches from selected origins such as `code`, `comment`, `string_literal`, `regex_literal`, or `help_text`; repeat or comma-separate values |
+| `--exclude-origin <origin>` | `search` | Drop matches from selected origins while keeping other origins in the same result; repeat or comma-separate values |
 | `--result-kind <kind>` | `search` | Keep only projected result kinds such as `call_site`, `declaration`, `identifier`, `comment`, or `string_literal` |
 | `--unique <path\|symbol\|origin>` / `--count-by <path\|symbol\|origin>` | `search` | Emit unique aggregation rows or count aggregation rows for broad audits |
 | `--format grouped` / `--per-file-limit <n>` | `search` | Return file-grouped JSON with bounded representative matches per file |
@@ -3505,6 +3510,7 @@ cdidx search "Run();" --exact-substring                 # 大文字小文字区�
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
+cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # 同じ行の前方 guard を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
@@ -3516,7 +3522,7 @@ cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --
 cdidx search "catch (Exception" --group-by file --count --json    # 広い audit hit を file 別にランク付け
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # 広い audit hit を enclosing symbol 別にランク付け
 cdidx search "catch (Exception" --count-by origin --json          # 広い audit hit を match origin 別に集計
-cdidx search "Directory.Delete" --match-origin code --result-kind call_site --json=array  # コード上の呼び出し候補に絞る
+cdidx search "Directory.Delete" --origin code --exclude-origin comment --result-kind call_site --json=array  # コード上の呼び出し候補に絞る
 cdidx search "Authorization" --format grouped --per-file-limit 2  # file grouped JSON と代表 match
 cdidx search "throw new Exception" --search-fields path,line,symbol,origin --results-only  # projection 付き result-only NDJSON
 cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536      # 上限付き audit sample
@@ -3537,10 +3543,12 @@ literal-safe な `search` query は 1000 文字、128 whitespace term までで�
 より狭い text にしてください。
 guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
-`--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
+`--reject-before` / `--reject-after` は guard query がある一致を落とします。
+`--guard-scope same-line` を追加すると、近傍行ではなく同じソース行内で primary match の列位置を基準に
+before / after を評価します。JSON の検索結果には
 一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
 `guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
-1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
+scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
@@ -3702,7 +3710,7 @@ function   CreateUser                               src/Services/UserService.cs:
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は共通で繰り返し指定できる `--path <glob>` の glob 形式パスフィルタ（複数値は OR で結合）、繰り返し指定できる `--exclude-path <glob>`、`--exclude-tests` に対応しています。`*` と `?` でパスパターンを指定でき、ワイルドカードを含めない場合は従来どおり部分文字列として扱われます。検索結果は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致するファイルを上に出します。
 
 `search --json`、`search --format compact`、名前付き search batch、MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` が含まれ、マッチ行がインデックス済みシンボル範囲内にある場合は `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
-検索 JSON には `match_origins`、`match_facets`、`result_kinds` も含まれ、コード、コメント、文字列リテラル、正規表現リテラル、CLI ヘルプ文言、宣言、識別子、呼び出し候補のどこで一致したかをツール側で区別できます。各 highlight にも個別の `match_origins` が付き、`--exclude-comments`、`--exclude-strings`、`--match-origin`、`--result-kind` はこの facet を使って特定の一致種別を隠す、または保持します。広い audit 出力は `--unique path|symbol|origin`、`--count-by path|symbol|origin`、`--format grouped`、`--first-per-file`、`--sample <n>`、`--search-fields <fields>`、`--results-only`、`--max-json-bytes <n>` で小さくできます。
+検索 JSON には `match_origins`、`match_facets`、`result_kinds` も含まれ、コード、コメント、文字列リテラル、正規表現リテラル、CLI ヘルプ文言、宣言、識別子、呼び出し候補のどこで一致したかをツール側で区別できます。各 highlight にも個別の `match_origins` が付き、`--exclude-comments`、`--exclude-strings`、`--origin` / `--match-origin`、`--exclude-origin`、`--result-kind` はこの facet を使って特定の一致種別を隠す、または保持します。広い audit 出力は `--unique path|symbol|origin`、`--count-by path|symbol|origin`、`--format grouped`、`--first-per-file`、`--sample <n>`、`--search-fields <fields>`、`--results-only`、`--max-json-bytes <n>` で小さくできます。
 同じ facet は result、highlight、match-facet の各レベルで `test_file`、`test_symbol`、`test_fixture` boolean も返します。`test_fixture` はテストらしいファイルまたはインデックス済み test method 内の文字列系一致を示し、`--exclude-fixtures` は実コードの一致を残したまま fixture だけの一致を隠します。
 
 ### 定義を引く
@@ -3950,7 +3958,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
 | `--exclude-strings` | `search` | 保持される一致 origin が文字列リテラル、正規表現リテラル、CLI ヘルプ文言だけの検索結果を除外する |
 | `--exclude-fixtures` | `search` | 保持される facet がテスト fixture 文字列だけの検索結果を除外する |
-| `--match-origin <origin>` | `search` | `code`、`comment`、`string_literal`、`regex_literal`、`help_text` など、選択した origin の一致だけを保持する。繰り返し指定とカンマ区切りに対応 |
+| `--origin <origin>` / `--match-origin <origin>` | `search` | `code`、`comment`、`string_literal`、`regex_literal`、`help_text` など、選択した origin の一致だけを保持する。繰り返し指定とカンマ区切りに対応 |
+| `--exclude-origin <origin>` | `search` | 選択した origin の一致を除外し、同じ結果内の他 origin の一致は保持する。繰り返し指定とカンマ区切りに対応 |
 | `--result-kind <kind>` | `search` | `call_site`、`declaration`、`identifier`、`comment`、`string_literal` など、projection された result kind だけを保持する |
 | `--unique <path\|symbol\|origin>` / `--count-by <path\|symbol\|origin>` | `search` | 広い audit 向けに unique aggregation row または count aggregation row を出力する |
 | `--format grouped` / `--per-file-limit <n>` | `search` | file ごとに grouped JSON を返し、各 file の代表 match 数を制限する |

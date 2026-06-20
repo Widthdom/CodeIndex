@@ -140,7 +140,7 @@ internal static class GitHubIssueReporter
                 linkedCts.Token);
             if (existingLookup.Error != null)
             {
-                Console.Error.WriteLine(BuildSubmissionFailureMessage(existingLookup.Error));
+                CommandErrorWriter.WriteStderr(BuildSubmissionFailureMessage(existingLookup.Error));
                 return SuggestionStore.SubmitAttemptResult.Failure(existingLookup.Error);
             }
 
@@ -152,7 +152,7 @@ internal static class GitHubIssueReporter
         catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             var detail = $"{ex.GetType().Name}: GitHub submission timed out after {ResolveSubmitTimeout().TotalSeconds:0} seconds";
-            Console.Error.WriteLine(BuildSubmissionFailureMessage(detail));
+            CommandErrorWriter.WriteStderr(BuildSubmissionFailureMessage(detail));
             return SuggestionStore.SubmitAttemptResult.Failure(detail);
         }
         catch (Exception ex) when (ShouldTreatAsSubmissionFailure(ex))
@@ -160,7 +160,7 @@ internal static class GitHubIssueReporter
             // Best-effort: log to stderr but do not propagate.
             // ベストエフォート: stderr にログ出力するが伝播しない。
             var detail = CommandErrorWriter.FormatSanitizedException(ex);
-            Console.Error.WriteLine(BuildSubmissionFailureMessage(detail));
+            CommandErrorWriter.WriteStderr(BuildSubmissionFailureMessage(detail));
             return SuggestionStore.SubmitAttemptResult.Failure(detail);
         }
     }
@@ -581,13 +581,13 @@ internal static class GitHubIssueReporter
             var rateLimitRetryAt = GetRateLimitRetryAt(response, TimeProvider.GetUtcNow().UtcDateTime);
             if (rateLimitRetryAt != null)
             {
-                Console.Error.WriteLine(BuildRateLimitFailureMessage((int)response.StatusCode, errorBody, rateLimitRetryAt.Value));
+                CommandErrorWriter.WriteStderr(BuildRateLimitFailureMessage((int)response.StatusCode, errorBody, rateLimitRetryAt.Value));
                 return SuggestionStore.SubmitAttemptResult.RetryAfter(
                     BuildRateLimitErrorDetail((int)response.StatusCode, errorBody, rateLimitRetryAt.Value),
                     rateLimitRetryAt.Value);
             }
 
-            Console.Error.WriteLine(BuildApiFailureMessage((int)response.StatusCode, errorBody));
+            CommandErrorWriter.WriteStderr(BuildApiFailureMessage((int)response.StatusCode, errorBody));
             return SuggestionStore.SubmitAttemptResult.Failure(BuildApiErrorDetail((int)response.StatusCode, errorBody));
         }
 

@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Win32.SafeHandles;
@@ -1089,7 +1090,7 @@ public class FileIndexer
         if (explicitMaxFileSizeBytes is > 0 and <= int.MaxValue)
             return explicitMaxFileSizeBytes.Value;
 
-        var envValue = Environment.GetEnvironmentVariable(MaxFileSizeEnvironmentVariable);
+        var envValue = CdidxEnvironment.GetEnvironmentVariable(MaxFileSizeEnvironmentVariable);
         return TryParseMaxFileSizeBytes(envValue, out var envBytes)
             ? envBytes
             : DefaultMaxFileSizeBytes;
@@ -1109,8 +1110,7 @@ public class FileIndexer
 
             using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
             var probePath = probe.Path;
-            var prefixedProbePath = LongPath.EnsureWindowsPrefix(probePath);
-            File.WriteAllText(prefixedProbePath, string.Empty);
+            FileWriteProbe.WriteEmptyFile(probePath);
             try
             {
                 if (TryCreateCaseVariant(probePath, out var probeVariant))
@@ -1118,8 +1118,7 @@ public class FileIndexer
             }
             finally
             {
-                if (File.Exists(prefixedProbePath))
-                    File.Delete(prefixedProbePath);
+                FileWriteProbe.DeleteFileIfExists(probePath);
             }
 
             throw new CaseSensitivityProbeException(

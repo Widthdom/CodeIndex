@@ -158,7 +158,7 @@ public static class DbDebug
         if (Interlocked.Exchange(ref _invalidDebugValueWarned, 1) != 0)
             return;
         var displayValue = DiagnosticRedactor.FormatEnvironmentValue("CDIDX_DEBUG", value);
-        Console.Error.WriteLine(
+        CommandErrorWriter.WriteStderr(
             $"[cdidx] CDIDX_DEBUG value '{displayValue}' is not recognized. Expected one of: 1, 0, true, false, yes, no, on, off, unsafe, full. Falling back to off.");
     }
 
@@ -166,7 +166,7 @@ public static class DbDebug
     {
         if (Interlocked.Exchange(ref _unsafeDowngradeWarned, 1) != 0)
             return;
-        Console.Error.WriteLine(
+        CommandErrorWriter.WriteStderr(
             "[cdidx] CDIDX_DEBUG=unsafe was ignored: pass --debug-unsafe on the command line to enable raw text dumps. Falling back to redacted mode for this process.");
     }
 
@@ -278,7 +278,7 @@ public static class DbDebug
     {
         var sql = FormatSqlForSlowQueryLog(cmd.CommandText ?? string.Empty);
         var rowText = rowsRead.HasValue ? $" rows={rowsRead.Value}" : string.Empty;
-        Console.Error.WriteLine($"[cdidx] slow_query elapsed_ms={elapsedMs:0.###}{rowText} sql={sql}");
+        CommandErrorWriter.WriteStderr($"[cdidx] slow_query elapsed_ms={elapsedMs:0.###}{rowText} sql={sql}");
     }
 
     internal static string FormatSqlForSlowQueryLog(string sql)
