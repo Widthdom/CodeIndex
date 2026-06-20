@@ -31,6 +31,38 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadMessage_ReadsDirectAllocatedPayloadAbovePoolThreshold_Issue3799()
+    {
+        var payload = new string('x', LspServer.MaxPooledPayloadBufferBytes + 1);
+        var bytes = Encoding.UTF8.GetBytes($"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.True(LspServer.TryReadMessage(stream, out var actual));
+
+        Assert.Equal(payload.Length, actual.Length);
+        Assert.Equal(payload, actual);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(LspServer.MaxPooledPayloadBufferBytes, true)]
+    [InlineData(LspServer.MaxPooledPayloadBufferBytes + 1, false)]
+    public void ShouldRentPayloadBuffer_DefinesPoolBoundary_Issue3799(int byteCount, bool expected)
+    {
+        Assert.Equal(expected, LspServer.ShouldRentPayloadBuffer(byteCount));
+    }
+
+    [Fact]
+    public void ClearSensitivePayloadBufferForTests_ClearsOnlyUsedBytes_Issue3799()
+    {
+        var buffer = new byte[] { 1, 2, 3, 4, 5 };
+
+        LspServer.ClearSensitivePayloadBufferForTests(buffer, usedBytes: 3);
+
+        Assert.Equal(new byte[] { 0, 0, 0, 4, 5 }, buffer);
+    }
+
+    [Fact]
     public void TryReadMessage_AcceptsHeaderLineAtMaxLength()
     {
         const string payload = "{}";

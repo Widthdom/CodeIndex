@@ -21,6 +21,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspHeaderCount = 64;
     internal const int MaxLspHeaderBytes = 64 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
+    internal const int MaxPooledPayloadBufferBytes = 1024 * 1024;
     internal const int MaxLiveDocuments = 64;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxLspRequestIdRawBytes = 4 * 1024;
@@ -133,6 +134,28 @@ internal sealed class LspServer : IDisposable
         string Message,
         int? ContentLength = null,
         int? MaxContentLength = null);
+    private readonly struct SensitivePayloadBufferLease : IDisposable
+    {
+        private readonly bool _rented;
+        private readonly int _usedBytes;
+
+        internal SensitivePayloadBufferLease(byte[] buffer, int usedBytes, bool rented)
+        {
+            Buffer = buffer;
+            _usedBytes = usedBytes;
+            _rented = rented;
+        }
+
+        internal byte[] Buffer { get; }
+
+        public void Dispose()
+        {
+            ClearSensitivePayloadBuffer(Buffer, _usedBytes);
+            if (_rented)
+                ArrayPool<byte>.Shared.Return(Buffer, clearArray: false);
+        }
+    }
+
     private enum LspHeaderLineReadFailure
     {
         None,
@@ -299,7 +322,8 @@ internal sealed class LspServer : IDisposable
     {
         rawIdBytes = 0;
         var payloadByteCount = Encoding.UTF8.GetByteCount(payload);
-        var buffer = ArrayPool<byte>.Shared.Rent(payloadByteCount);
+        using var lease = RentSensitivePayloadBuffer(payloadByteCount);
+        var buffer = lease.Buffer;
         try
         {
             _ = Encoding.UTF8.GetBytes(payload.AsSpan(), buffer);
@@ -335,10 +359,34 @@ internal sealed class LspServer : IDisposable
         {
             return false;
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
+    }
+
+    internal static bool ShouldRentPayloadBuffer(int byteCount)
+    {
+        if (byteCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(byteCount), byteCount, "Byte count must be non-negative.");
+        return byteCount <= MaxPooledPayloadBufferBytes;
+    }
+
+    internal static void ClearSensitivePayloadBufferForTests(byte[] buffer, int usedBytes) =>
+        ClearSensitivePayloadBuffer(buffer, usedBytes);
+
+    private static SensitivePayloadBufferLease RentSensitivePayloadBuffer(int byteCount)
+    {
+        if (byteCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(byteCount), byteCount, "Byte count must be non-negative.");
+        var rented = ShouldRentPayloadBuffer(byteCount);
+        var buffer = rented
+            ? ArrayPool<byte>.Shared.Rent(byteCount)
+            : new byte[byteCount];
+        return new SensitivePayloadBufferLease(buffer, byteCount, rented);
+    }
+
+    private static void ClearSensitivePayloadBuffer(byte[] buffer, int usedBytes)
+    {
+        if (usedBytes <= 0 || buffer.Length == 0)
+            return;
+        Array.Clear(buffer, 0, Math.Min(usedBytes, buffer.Length));
     }
 
     private static string SanitizeUnknownMethod(string method)
@@ -1900,31 +1948,25 @@ internal sealed class LspServer : IDisposable
             return false;
         }
 
-        var buffer = ArrayPool<byte>.Shared.Rent(contentLength);
-        try
+        using var lease = RentSensitivePayloadBuffer(contentLength);
+        var buffer = lease.Buffer;
+        var offset = 0;
+        while (offset < contentLength)
         {
-            var offset = 0;
-            while (offset < contentLength)
+            var read = Read(input, buffer, offset, contentLength - offset, cancellationToken);
+            if (read == 0)
             {
-                var read = Read(input, buffer, offset, contentLength - offset, cancellationToken);
-                if (read == 0)
-                {
-                    diagnostic = new LspMessageReadDiagnostic(
-                        ReadDiagnosticIncompleteBody,
-                        "LSP frame ended before the declared Content-Length body was complete.",
-                        contentLength,
-                        MaxLspFrameBytes);
-                    return false;
-                }
-                offset += read;
+                diagnostic = new LspMessageReadDiagnostic(
+                    ReadDiagnosticIncompleteBody,
+                    "LSP frame ended before the declared Content-Length body was complete.",
+                    contentLength,
+                    MaxLspFrameBytes);
+                return false;
             }
-            payload = Encoding.UTF8.GetString(buffer, 0, contentLength);
-            return true;
+            offset += read;
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
+        payload = Encoding.UTF8.GetString(buffer, 0, contentLength);
+        return true;
     }
 
     private static LspMessageReadDiagnostic CreateHeaderReadDiagnostic(LspHeaderLineReadFailure failure) => failure switch
