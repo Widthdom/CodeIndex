@@ -527,6 +527,70 @@ public class PostExtractionHookTests
         }
     }
 
+    [Fact]
+    public void Discover_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-type-cap-3790");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalLimit = PostExtractionHookRunner.TypeInspectionLimitForTesting;
+            try
+            {
+                PostExtractionHookRunner.TypeInspectionLimitForTesting = () => 1;
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+                Assert.Empty(runner.Hooks);
+                var diagnostic = Assert.Single(runner.Diagnostics);
+                Assert.Equal("hook_type_limit_exceeded", diagnostic.Category);
+                Assert.Contains("too many loadable types", diagnostic.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal);
+            }
+            finally
+            {
+                PostExtractionHookRunner.TypeInspectionLimitForTesting = originalLimit;
+                CollectUnloadedHookAssemblies();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void Discover_UnloadsAssemblyWithoutRetainedHooks_Issue3790()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-no-hook-unload-3790");
+        WeakReference? weakLoadContext;
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                PostExtractionHookRunner.LastUnretainedLoadContextForTesting = null;
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(typeof(PostExtractionHookRunner).Assembly.Location, Path.Combine(hooksDir, "CodeIndex.dll"));
+
+                using (var runner = PostExtractionHookRunner.Discover(hooksDir))
+                {
+                    Assert.Empty(runner.Hooks);
+                    Assert.Empty(runner.Diagnostics);
+                    weakLoadContext = PostExtractionHookRunner.LastUnretainedLoadContextForTesting;
+                    Assert.NotNull(weakLoadContext);
+                }
+
+                CollectUnloadedHookAssemblies();
+                Assert.False(weakLoadContext!.IsAlive);
+            }
+            finally
+            {
+                PostExtractionHookRunner.LastUnretainedLoadContextForTesting = null;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
     private static void CollectUnloadedHookAssemblies()
     {
         GC.Collect();

@@ -37,6 +37,8 @@ internal sealed class IssueDuplicatePreflight
     private const string GitHubTokenEnvironmentVariable = "CDIDX_GITHUB_TOKEN";
     private const string GitHubApiBase = "https://api.github.com";
     private const string InvalidPreflightFileErrorCode = "invalid-preflight-file";
+    private const int MaxPreflightErrorPathLength = 160;
+    private const int MaxPreflightErrorDetailLength = 300;
 
     private static readonly HashSet<string> StopTitleTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -85,6 +87,7 @@ internal sealed class IssueDuplicatePreflight
             return true;
         }
 
+        var pathForError = FormatPreflightErrorPath(path);
         try
         {
             var fullPath = Path.GetFullPath(path);
@@ -92,7 +95,7 @@ internal sealed class IssueDuplicatePreflight
             if (json == null)
             {
                 preflight = new IssueDuplicatePreflight(false, null, []);
-                error = $"--open-issues file '{path}' exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.";
+                error = $"--open-issues file '{pathForError}' exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.";
                 return false;
             }
 
@@ -105,13 +108,13 @@ internal sealed class IssueDuplicatePreflight
         catch (InvalidOpenIssuesFileException ex)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
-            error = $"invalid --open-issues file '{path}' ({InvalidPreflightFileErrorCode}): {ex.Message}";
+            error = $"invalid --open-issues file '{pathForError}' ({InvalidPreflightFileErrorCode}): {SanitizePreflightErrorDetail(ex.Message)}";
             return false;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
-            error = $"could not read --open-issues file '{path}': {CommandErrorWriter.FormatSanitizedException(ex)}";
+            error = $"could not read --open-issues file '{pathForError}': {CommandErrorWriter.FormatSanitizedException(ex)}";
             return false;
         }
     }
@@ -339,6 +342,55 @@ internal sealed class IssueDuplicatePreflight
         }
 
         return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static string FormatPreflightErrorPath(string path)
+    {
+        var candidate = path.Trim();
+        try
+        {
+            var trimmedPath = candidate.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar,
+                '/',
+                '\\');
+            var separatorIndex = trimmedPath.LastIndexOfAny(['/', '\\']);
+            var fileName = separatorIndex >= 0
+                ? trimmedPath[(separatorIndex + 1)..]
+                : Path.GetFileName(trimmedPath);
+            if (!string.IsNullOrWhiteSpace(fileName))
+                candidate = fileName;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            candidate = "path";
+        }
+
+        return SanitizePreflightErrorText(candidate, MaxPreflightErrorPathLength, fallback: "path");
+    }
+
+    private static string SanitizePreflightErrorDetail(string detail)
+        => SanitizePreflightErrorText(detail, MaxPreflightErrorDetailLength, fallback: "InvalidOpenIssuesFileException");
+
+    private static string SanitizePreflightErrorText(string value, int maxLength, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+
+        var trimmed = value.Trim();
+        var builder = new StringBuilder(Math.Min(trimmed.Length, maxLength + 3));
+        foreach (var c in trimmed)
+        {
+            if (builder.Length >= maxLength)
+            {
+                builder.Append("...");
+                break;
+            }
+
+            builder.Append(char.IsControl(c) ? '?' : c);
+        }
+
+        return builder.Length == 0 ? fallback : builder.ToString();
     }
 
     private static async Task<IssueDuplicatePreflightLoadResult> TryLoadFromGitHubAsync(

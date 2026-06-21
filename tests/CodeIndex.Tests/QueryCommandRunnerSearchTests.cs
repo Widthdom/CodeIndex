@@ -1131,6 +1131,134 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_BuiltInRecipeSnapshotCoversNamesScopesAndQueries_Issue3692()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipes = SearchAuditRecipes.All;
+        var expectedSourceExcludes = new[]
+        {
+            "src/CodeIndex/Cli/SearchAuditRecipes.cs",
+            "tests/**",
+            "docs/**",
+            "CHANGELOG.md",
+            "changelog.d/**",
+            "README.md",
+            "USER_GUIDE.md",
+            "DEVELOPER_GUIDE.md",
+            "TESTING_GUIDE.md",
+            "AGENT_GUIDE.md",
+            ".codex/**",
+            ".github/**"
+        };
+
+        Assert.Equal(
+            ["risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
+            recipes.Select(recipe => recipe.Name).ToArray());
+
+        AssertRecipe(
+            "risky-code",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "unbounded-json-parse",
+                "full-materialization",
+                "file-read-all-text",
+                "file-read-all-bytes",
+                "max-value-probe",
+                "raw-diagnostic-echo",
+                "cancellation-gap",
+                "empty-catch-review",
+                "broad-exception-catch",
+                "process-start-info",
+                "process-start-direct",
+                "recursive-delete",
+                "infinite-timeout",
+                "thread-sleep",
+                "path-case-heuristic",
+                "regex-construction",
+                "regex-timeout-handling",
+                "environment-secret-source",
+                "authorization-handling",
+                "http-client-construction",
+                "bearer-token-handling",
+                "credential-term",
+                "secret-term",
+                "token-term"
+            ]);
+        AssertRecipe(
+            "json-parse-apis",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["json-document-parse", "json-node-parse", "json-serializer-deserialize", "json-async-deserialize"]);
+        AssertRecipe(
+            "dotnet-risk-patterns",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["sqlite-addwithvalue", "regex-construction", "cancellation-token-none", "sync-over-async"]);
+        AssertRecipe(
+            "xml-parser-security",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["xml-reader-settings", "dtd-processing", "xml-resolver"]);
+        AssertRecipe(
+            "filesystem-traversal",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["enumerate-files", "enumerate-directories", "enumerate-file-system-entries", "enumeration-options"]);
+        AssertRecipe(
+            "broad-token-audit",
+            SearchAuditRecipes.AllAuditScope,
+            [],
+            [],
+            ["token-term-broad"]);
+
+        void AssertRecipe(
+            string name,
+            string expectedScope,
+            string[] expectedPathPatterns,
+            string[] expectedExcludePaths,
+            string[] expectedQueries)
+        {
+            var recipe = recipes.Single(item => item.Name == name);
+            Assert.Equal(expectedScope, recipe.DefaultScope);
+            Assert.Equal(expectedPathPatterns, recipe.DefaultPathPatterns);
+            Assert.Equal(expectedExcludePaths, recipe.DefaultExcludePaths);
+            Assert.Equal(expectedQueries, recipe.Queries.Select(query => query.Name).ToArray());
+            Assert.All(recipe.Queries, query =>
+            {
+                Assert.NotEmpty(query.RecommendedLabels);
+                Assert.All(query.RecommendedLabels, label => Assert.False(string.IsNullOrWhiteSpace(label)));
+                Assert.False(string.IsNullOrWhiteSpace(query.FalsePositiveGuidance));
+            });
+        }
+    }
+
+    [Fact]
+    public void RunSearch_UnknownRecipeErrorListsBuiltInNames_Issue3692()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "missing-audit-recipe", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unknown search recipe 'missing-audit-recipe'", stderr);
+        Assert.Contains("Available recipes:", stderr);
+        foreach (var recipeName in new[] { "risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit" })
+            Assert.Contains(recipeName, stderr);
+    }
+
+    [Fact]
     public void RunSearch_CatchRecipeFiltersCommentOnlyCatchMatches_Issue3709()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_catch_origin_filter");

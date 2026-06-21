@@ -44,6 +44,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     public static readonly TimeSpan DefaultCallbackBudget = TimeSpan.FromSeconds(5);
     internal const int DefaultDiscoveryLimit = 128;
     internal const long DefaultDiscoveryMaxBytes = 64 * 1024 * 1024;
+    internal const int DefaultTypeInspectionLimit = 4096;
 
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
@@ -53,6 +54,8 @@ public sealed class PostExtractionHookRunner : IDisposable
     internal static Func<TimeSpan>? CallbackBudgetForTesting { get; set; }
     internal static Func<int>? DiscoveryLimitForTesting { get; set; }
     internal static Func<long>? DiscoveryMaxBytesForTesting { get; set; }
+    internal static Func<int>? TypeInspectionLimitForTesting { get; set; }
+    internal static WeakReference? LastUnretainedLoadContextForTesting { get; set; }
 
     private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks, TimeSpan callbackBudget)
     {
@@ -119,13 +122,15 @@ public sealed class PostExtractionHookRunner : IDisposable
         var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
         foreach (var dllPath in EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit()))
         {
+            ExtensionAssemblyLoadContext? loadContext = null;
+            var retainedLoadContext = false;
             Assembly assembly;
             try
             {
                 if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes))
                     continue;
 
-                var loadContext = new ExtensionAssemblyLoadContext(
+                loadContext = new ExtensionAssemblyLoadContext(
                     $"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}",
                     dllPath);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
@@ -134,6 +139,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             {
                 var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Hook assembly load", ex);
                 runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
+                loadContext?.Unload();
                 continue;
             }
 
@@ -146,6 +152,13 @@ public sealed class PostExtractionHookRunner : IDisposable
             {
                 var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Hook assembly type inspection", ex);
                 runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
+                loadContext?.Unload();
+                continue;
+            }
+
+            if (!HookAssemblyTypesAreWithinBudget(dllPath, types, runner))
+            {
+                loadContext?.Unload();
                 continue;
             }
 
@@ -169,13 +182,21 @@ public sealed class PostExtractionHookRunner : IDisposable
                     var info = new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name);
                     loaded.Add(new LoadedPostExtractionHook(
                         info,
-                        AssemblyLoadContext.GetLoadContext(type.Assembly),
+                        loadContext,
                         new PostExtractionHookCallbackWorkerClient(info, maxProtocolLineBytes)));
+                    retainedLoadContext = true;
                 }
                 catch (Exception)
                 {
                     runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "activation_failed");
                 }
+            }
+
+            if (!retainedLoadContext)
+            {
+                if (loadContext != null)
+                    LastUnretainedLoadContextForTesting = new WeakReference(loadContext, trackResurrection: false);
+                loadContext?.Unload();
             }
         }
 
@@ -522,6 +543,34 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     private static long NormalizeDiscoveryMaxBytes(long value)
         => value <= 0 ? DefaultDiscoveryMaxBytes : value;
+
+    private static int ResolveTypeInspectionLimit()
+    {
+        if (TypeInspectionLimitForTesting != null)
+            return NormalizeTypeInspectionLimit(TypeInspectionLimitForTesting());
+
+        return DefaultTypeInspectionLimit;
+    }
+
+    private static int NormalizeTypeInspectionLimit(int value)
+        => value <= 0 ? DefaultTypeInspectionLimit : value;
+
+    private static bool HookAssemblyTypesAreWithinBudget(
+        string dllPath,
+        IReadOnlyCollection<Type> types,
+        PostExtractionHookRunner runner)
+    {
+        var limit = ResolveTypeInspectionLimit();
+        if (types.Count <= limit)
+            return true;
+
+        runner.EnqueueDiagnostic(
+            dllPath,
+            null,
+            $"Hook assembly skipped: too many loadable types ({types.Count}; maximum {limit}).",
+            category: "hook_type_limit_exceeded");
+        return false;
+    }
 
     private static TimeSpan NormalizeCallbackBudgetMilliseconds(long milliseconds)
         => milliseconds <= 0
