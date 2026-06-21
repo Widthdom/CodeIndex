@@ -380,6 +380,7 @@ public class AuditLogSinkTests
                 ElapsedMs: 0.5,
                 ErrorCode: 0,
                 ErrorType: null));
+            WaitForAuditLogIdle(sink);
 
             var lines = File.ReadAllLines(path);
             Assert.Single(lines);
@@ -454,6 +455,7 @@ public class AuditLogSinkTests
 
             sink.Record(bigEvent);
             sink.Record(smallEvent);
+            WaitForAuditLogIdle(sink);
 
             Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(rotation1));
             Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(path));
@@ -501,6 +503,7 @@ public class AuditLogSinkTests
 
             for (var i = 0; i < 3; i++)
                 sink.Record(bigEvent);
+            WaitForAuditLogIdle(sink);
 
             Assert.True(File.Exists(rotation1), "first rotation slot should exist after rotation");
             Assert.True(File.Exists(rotation2), "second rotation slot should exist after three big writes");
@@ -545,6 +548,7 @@ public class AuditLogSinkTests
             // RotationKeep=3 なので path.3 は決して残らない（最古スロットが drop される）。
             for (var i = 0; i < 5; i++)
                 sink.Record(bigEvent);
+            WaitForAuditLogIdle(sink);
 
             Assert.True(File.Exists(rotation1));
             Assert.True(File.Exists(rotation2));
@@ -593,6 +597,7 @@ public class AuditLogSinkTests
                     ErrorCode: 0,
                     ErrorType: null)));
                 Assert.Null(ex);
+                WaitForAuditLogIdle(sink);
 
                 var diagnostics = sink.SnapshotDiagnostics();
                 Assert.Equal(1, diagnostics.DroppedRecordCount);
@@ -687,4 +692,9 @@ public class AuditLogSinkTests
                 Directory.Delete(path, recursive: true);
         }
     }
+
+    private static void WaitForAuditLogIdle(AuditLogSink sink)
+        => Assert.True(
+            sink.WaitForIdle(TimeSpan.FromSeconds(5)),
+            "Timed out waiting for the audit log writer to drain.");
 }
