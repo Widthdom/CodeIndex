@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
@@ -23,7 +22,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
     private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
-    private StringBuilder stderr = new();
+    private WorkerOutputBuffer stderr = new();
     private bool disposed;
 
     internal SymbolExtractionWorkerClient(long? maxFileSizeBytes = null)
@@ -112,7 +111,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             var responseJson = responseTask.GetAwaiter().GetResult();
             if (responseJson == null)
             {
-                var workerError = BuildWorkerExitError(process, stderr.ToString(), "worker exited before returning a response.");
+                var workerError = BuildWorkerExitError(process, stderr.GetCapturedText(), "worker exited before returning a response.");
                 ClearExitedWorker();
                 return Failure(workerError, stopwatch.ElapsedMilliseconds);
             }
@@ -193,7 +192,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
 
         ClearExitedWorker();
-        stderr = new StringBuilder();
+        stderr = new WorkerOutputBuffer();
         if (!SymbolExtractionWorker.TryCreateStartInfo(maxProtocolLineBytes, out var startInfo, out error))
             return false;
 
@@ -328,7 +327,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
         var exitCode = process == null ? (int?)null : process.ExitCode;
-        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
+        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback, stderr);
     }
 
     internal static WorkerProcessExitWaitResult WaitForWorkerExit(Process process, int milliseconds)
@@ -502,6 +501,14 @@ internal static class SymbolExtractionWorker
 
                 if (requestJson is null)
                     break;
+
+                if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
+                {
+                    response = new WorkerResponse(null, validationError, null);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
 
                 try
                 {
@@ -716,65 +723,6 @@ internal static class SymbolExtractionWorker
         int? DelayMillisecondsForTesting,
         string? ConsoleStdoutForTesting);
 
-    private sealed class BoundedTextWriter(int maxChars) : TextWriter
-    {
-        private readonly StringBuilder builder = new();
-        private bool truncated;
-
-        public override Encoding Encoding => Encoding.UTF8;
-
-        public override void Write(char value)
-        {
-            if (builder.Length < maxChars)
-            {
-                builder.Append(value);
-                return;
-            }
-
-            truncated = true;
-        }
-
-        public override void Write(string? value)
-        {
-            if (string.IsNullOrEmpty(value))
-                return;
-
-            Append(value.AsSpan());
-        }
-
-        public override void Write(char[] buffer, int index, int count)
-            => Append(buffer.AsSpan(index, count));
-
-        internal string GetCapturedText()
-        {
-            if (!truncated)
-                return builder.ToString();
-
-            return builder
-                .AppendLine()
-                .Append("[cdidx] captured worker console output truncated.")
-                .ToString();
-        }
-
-        private void Append(ReadOnlySpan<char> value)
-        {
-            var remaining = maxChars - builder.Length;
-            if (remaining <= 0)
-            {
-                truncated = true;
-                return;
-            }
-
-            if (value.Length <= remaining)
-            {
-                builder.Append(value);
-                return;
-            }
-
-            builder.Append(value[..remaining]);
-            truncated = true;
-        }
-    }
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]

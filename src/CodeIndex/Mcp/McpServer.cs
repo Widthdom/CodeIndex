@@ -347,6 +347,7 @@ public partial class McpServer : IDisposable
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
+    internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -679,6 +680,15 @@ public partial class McpServer : IDisposable
 
             await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
             var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Intentional bounded dispatch (#3774): normal request work can await SQLite,
+            // sampling, or transport callbacks while the read loop still needs to accept
+            // cancellation / response frames. `_concurrencyGate` caps thread-pool exposure;
+            // the scheduling token stays uncancelled because the gate slot is already owned
+            // and the task's finally block must release it even during shutdown.
+            // 意図的な bounded dispatch (#3774)。通常 request は SQLite / sampling /
+            // transport callback を await し得る一方、read loop は cancellation / response
+            // frame を受け続ける必要がある。`_concurrencyGate` で thread-pool 使用量を上限化し、
+            // gate slot 解放の finally を必ず走らせるため scheduling token は未キャンセルにする。
             var requestTask = Task.Run(async () =>
             {
                 try
@@ -812,6 +822,10 @@ public partial class McpServer : IDisposable
         if (postCancelDelay.IsCanceled)
             return;
 
+        // The shutdown token is already canceled in this path. Use an uncancelled observer so
+        // late task faults are still observed after the client-visible drain window (#3774).
+        // この経路では shutdown token はキャンセル済み。client-visible な drain window 後でも
+        // late fault を観測できるよう、未キャンセルの observer を使う (#3774)。
         _ = allTasks.ContinueWith(task =>
         {
             _ = task.Exception;
@@ -965,10 +979,13 @@ public partial class McpServer : IDisposable
 
     /// <summary>
     /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when
-    /// the request was a notification or otherwise yields no response). This is the
-    /// transport-neutral seam used by <see cref="IMcpTransport"/> implementations (issue #1558).
+    /// the request was a notification or otherwise yields no response). This synchronous wrapper
+    /// is retained for compatibility tests and legacy in-process callers only; transports and
+    /// request loops should call <see cref="ProcessFrameAsync"/> so cancellation and shutdown can
+    /// flow without sync-over-async blocking (#3770).
     /// 1 フレーム分の MCP JSON-RPC を処理し、ワイヤー応答文字列を返す（通知などで応答なしの場合は null）。
-    /// <see cref="IMcpTransport"/> 実装が共有するトランスポート非依存の合流点 (issue #1558)。
+    /// この同期ラッパは互換テストと legacy in-process 呼び出し専用に残す。transport と request loop は
+    /// sync-over-async blocking を避けるため <see cref="ProcessFrameAsync"/> を await する (#3770)。
     /// </summary>
     internal string? ProcessFrame(string line)
         // Synchronous callers are compatibility entry points for tests and non-async hosts;
@@ -1343,8 +1360,12 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Route a JSON-RPC message to the appropriate handler.
-    /// JSON-RPCメッセージを適切なハンドラにルーティング。
+    /// Route a JSON-RPC message to the appropriate handler. This synchronous wrapper is retained
+    /// for compatibility tests and legacy in-process callers only; transports should prefer
+    /// <see cref="HandleMessageAsync(JsonNode)"/> to avoid sync-over-async dispatch (#3770).
+    /// JSON-RPCメッセージを適切なハンドラにルーティング。この同期ラッパは互換テストと legacy
+    /// in-process 呼び出し専用に残し、transport は sync-over-async dispatch を避けるため
+    /// <see cref="HandleMessageAsync(JsonNode)"/> を優先する (#3770)。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
         // Keep this sync wrapper for existing in-process callers; async transports call
@@ -1703,6 +1724,11 @@ public partial class McpServer : IDisposable
                 var elapsed = stopwatch.Elapsed;
                 RecordTimedOutIsolatedActionDraining(requestKey, elapsed);
                 cleanupNow = false;
+                // This cleanup must run even after request timeout/shutdown cancellation;
+                // otherwise `_activeRequests` and the linked CTS would leak when an isolated
+                // action eventually observes cancellation and exits (#3722).
+                // request timeout / shutdown cancellation 後でも cleanup は必ず実行する。
+                // isolated action が後で終了した時に `_activeRequests` と linked CTS を漏らさないため (#3722)。
                 _ = actionTask.ContinueWith(task =>
                 {
                     _ = task.Exception;

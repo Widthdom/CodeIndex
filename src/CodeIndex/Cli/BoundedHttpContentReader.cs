@@ -4,7 +4,7 @@ namespace CodeIndex.Cli;
 
 internal static class BoundedHttpContentReader
 {
-    private const int BufferSize = 81920;
+    internal const int PooledCopyBufferSize = 81920;
 
     internal static async Task<byte[]> ReadAsByteArrayAsync(
         HttpContent content,
@@ -53,7 +53,7 @@ internal static class BoundedHttpContentReader
             Mode = FileMode.CreateNew,
             Access = FileAccess.Write,
             Share = FileShare.None,
-            BufferSize = BufferSize,
+            BufferSize = PooledCopyBufferSize,
             Options = FileOptions.SequentialScan,
         };
 
@@ -69,7 +69,7 @@ internal static class BoundedHttpContentReader
         long maxBytes,
         CancellationToken cancellationToken)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(PooledCopyBufferSize);
         try
         {
             long copied = 0;
@@ -90,8 +90,19 @@ internal static class BoundedHttpContentReader
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            ClearSensitiveCopyBuffer(buffer);
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
         }
+    }
+
+    internal static void ClearSensitiveCopyBufferForTests(byte[] buffer) =>
+        ClearSensitiveCopyBuffer(buffer);
+
+    private static void ClearSensitiveCopyBuffer(byte[] buffer)
+    {
+        if (buffer.Length == 0)
+            return;
+        Array.Clear(buffer, 0, buffer.Length);
     }
 
     private static void ThrowIfContentLengthExceedsLimit(HttpContent content, long maxBytes)

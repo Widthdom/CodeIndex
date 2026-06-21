@@ -825,6 +825,19 @@ public class StatusResult
     public bool WalCheckpointAttempted { get; set; }
     [JsonPropertyName("wal_checkpoint_succeeded")]
     public bool WalCheckpointSucceeded { get; set; }
+    [JsonPropertyName("read_only_immutable_fallback")]
+    public bool ReadOnlyImmutableFallback { get; set; }
+    [JsonPropertyName("wal_checkpoint_skipped_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalCheckpointSkippedReason { get; set; }
+    [JsonPropertyName("wal_checkpoint_failure_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalCheckpointFailureReason { get; set; }
+    [JsonPropertyName("wal_stale_snapshot_risk")]
+    public bool WalStaleSnapshotRisk { get; set; }
+    [JsonPropertyName("wal_stale_snapshot_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalStaleSnapshotReason { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     /// <summary>

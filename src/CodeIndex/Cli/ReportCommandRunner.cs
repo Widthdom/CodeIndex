@@ -27,13 +27,15 @@ public static class ReportCommandRunner
     internal const int DefaultLogLines = 200;
     internal const int MaxLogLines = 2000;
     internal const int MaxLogFileTailBytes = 1024 * 1024;
+    internal const int MaxLogTailLineChars = 16 * 1024;
     internal const int MaxRecentLogFiles = 32;
     internal const int MaxSchemaTables = 64;
     internal const int MaxSchemaTableNameDisplayChars = 96;
     internal const int MaxSchemaRowCountScanRows = 1000;
     internal const string RedactedPlaceholder = "[redacted]";
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-    private const string TruncatedTableNameSuffix = "...[truncated]";
+    private const string SchemaTableLabelPrefix = "table_";
+    private const string TruncatedLogLineSuffix = "...[line truncated]";
     private const int SupportManifestVersion = 1;
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
@@ -171,9 +173,11 @@ public static class ReportCommandRunner
                 options.IncludeArgs,
                 out var linesIncluded,
                 out redactions,
-                out var logTailTruncated);
+                out var logTailTruncated,
+                out var logLineCharsTruncated);
             bundle.LogLinesIncluded = linesIncluded;
             bundle.LogTailTruncated = logTailTruncated;
+            bundle.LogLineCharsTruncated = logLineCharsTruncated;
             bundle.AddText("log/stderr-recent.log", logText);
         }
 
@@ -198,13 +202,13 @@ public static class ReportCommandRunner
         sb.AppendLine("- `metadata.json` — version, OS, .NET runtime info (machine-readable).");
         sb.AppendLine("- `version.txt` — cdidx version only.");
         sb.AppendLine("- `env.txt` — human-readable OS / runtime summary.");
-        sb.AppendLine("- `schema.txt` — capped SQLite table list and bounded row counts (no table row contents).");
+        sb.AppendLine("- `schema.txt` — capped SQLite table labels and bounded row counts (no raw table names or row contents).");
         sb.AppendLine("- `support-manifest.json` — machine-readable redaction, omission, readiness, and diagnostic summary.");
         if (includeLog)
         {
             sb.AppendLine(
                 "- `log/stderr-recent.log` — up to the requested last N lifecycle-log lines, " +
-                $"selected from the {MaxRecentLogFiles} newest log files");
+                $"selected from the {MaxRecentLogFiles} newest log files, with each line capped at {MaxLogTailLineChars} characters");
             sb.AppendLine(includeArgs
                 ? "  (includes literal `args=` lines; path-bearing lifecycle fields stay redacted)."
                 : "  (`args=` and path-bearing lifecycle fields are redacted; rerun with `--include-args` to keep arguments literal).");
@@ -218,7 +222,7 @@ public static class ReportCommandRunner
         sb.AppendLine();
         sb.AppendLine("- Indexed source content, file paths, query strings, and `args=` lines are not included by default.");
         sb.AppendLine("- Path-bearing lifecycle fields such as `process_path=`, `base_dir=`, `cwd=`, `db=`, and `path=` are redacted by default.");
-        sb.AppendLine($"- Schema reporting emits at most {MaxSchemaTables} table names, capped at {MaxSchemaTableNameDisplayChars} display characters, with row counts bounded at {MaxSchemaRowCountScanRows} scanned rows per table.");
+        sb.AppendLine($"- Schema reporting emits at most {MaxSchemaTables} generated table labels, capped at {MaxSchemaTableNameDisplayChars} display characters, with raw table names omitted and row counts bounded at {MaxSchemaRowCountScanRows} scanned rows per table.");
         return sb.ToString();
     }
 
@@ -259,8 +263,9 @@ public static class ReportCommandRunner
         if (tableListTruncated)
             tableNames.RemoveRange(MaxSchemaTables, tableNames.Count - MaxSchemaTables);
 
-        foreach (var name in tableNames)
+        for (var i = 0; i < tableNames.Count; i++)
         {
+            var name = tableNames[i];
             long rowCount;
             var rowCountTruncated = false;
             try
@@ -275,7 +280,7 @@ public static class ReportCommandRunner
             {
                 rowCount = -1;
             }
-            tables.Add(new ReportSchemaTable(FormatSchemaTableName(name), rowCount, rowCountTruncated));
+            tables.Add(new ReportSchemaTable(FormatSchemaTableLabel(i), rowCount, rowCountTruncated));
         }
 
         var sb = new StringBuilder();
@@ -283,23 +288,19 @@ public static class ReportCommandRunner
         sb.AppendLine(tableListTruncated
             ? $"tables  : {tables.Count} (capped; additional tables omitted)"
             : $"tables  : {tables.Count}");
-        sb.AppendLine($"limits  : table entries <= {MaxSchemaTables}, table name chars <= {MaxSchemaTableNameDisplayChars}, row count scan rows <= {MaxSchemaRowCountScanRows}");
+        sb.AppendLine($"limits  : table entries <= {MaxSchemaTables}, table label chars <= {MaxSchemaTableNameDisplayChars}, row count scan rows <= {MaxSchemaRowCountScanRows}");
+        sb.AppendLine("privacy : raw table names redacted; generated labels are used");
         sb.AppendLine();
-        sb.AppendLine("name | row_count");
-        sb.AppendLine("-----|----------");
+        sb.AppendLine("label | row_count");
+        sb.AppendLine("------|----------");
         foreach (var t in tables)
             sb.AppendLine($"{t.Name} | {FormatSchemaRowCount(t)}");
 
         return (sb.ToString(), tables, normalizedDbPath, true, tableListTruncated);
     }
 
-    private static string FormatSchemaTableName(string name)
-    {
-        if (name.Length <= MaxSchemaTableNameDisplayChars)
-            return name;
-
-        return name[..(MaxSchemaTableNameDisplayChars - TruncatedTableNameSuffix.Length)] + TruncatedTableNameSuffix;
-    }
+    private static string FormatSchemaTableLabel(int index) =>
+        SchemaTableLabelPrefix + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string FormatSchemaRowCount(ReportSchemaTable table)
     {
@@ -325,9 +326,19 @@ public static class ReportCommandRunner
         out int linesIncluded,
         out ReportRedactionSummary redactions,
         out bool logTailTruncated)
+        => BuildRecentLogTail(maxLines, includeArgs, out linesIncluded, out redactions, out logTailTruncated, out _);
+
+    internal static string BuildRecentLogTail(
+        int maxLines,
+        bool includeArgs,
+        out int linesIncluded,
+        out ReportRedactionSummary redactions,
+        out bool logTailTruncated,
+        out bool logLineCharsTruncated)
     {
         linesIncluded = 0;
         logTailTruncated = false;
+        logLineCharsTruncated = false;
         var redactionCounter = new ReportRedactionCounter();
         var logDir = GlobalToolLog.ResolveLogDirectoryForReport();
         if (string.IsNullOrWhiteSpace(logDir) || !Directory.Exists(logDir))
@@ -365,6 +376,8 @@ public static class ReportCommandRunner
             }
             if (result.LinesTruncated || result.BytesTruncated)
                 logTailTruncated = true;
+            if (result.LineCharsTruncated)
+                logLineCharsTruncated = true;
             var lines = result.Lines;
             for (var i = lines.Count - 1; i >= 0 && collected.Count < maxLines; i--)
                 collected.AddFirst(lines[i]);
@@ -403,6 +416,7 @@ public static class ReportCommandRunner
                 MaxSchemaRowCountScanRows,
                 MaxLogLines,
                 MaxLogFileTailBytes,
+                MaxLogTailLineChars,
                 MaxRecentLogFiles),
             Bundle: new ReportManifestBundle(
                 DbIncluded: bundle.DbIncluded,
@@ -422,7 +436,7 @@ public static class ReportCommandRunner
         ReportBundle bundle,
         ReportReadinessSnapshot readiness)
     {
-        var schema = new List<string> { "database_path", "table_row_contents" };
+        var schema = new List<string> { "database_path", "raw_schema_table_names", "table_row_contents" };
         if (!bundle.DbIncluded)
             schema.Add("schema_unavailable_no_database");
         if (bundle.SchemaTablesTruncated)
@@ -432,11 +446,18 @@ public static class ReportCommandRunner
 
         var log = new List<string> { "log_source_directory" };
         if (!options.IncludeLog)
+        {
             log.Add("lifecycle_log_skipped_by_option");
-        else if (bundle.LogLinesIncluded == 0)
-            log.Add("lifecycle_log_unavailable_or_empty");
-        else if (bundle.LogTailTruncated)
-            log.Add("older_log_lines_outside_tail_limit");
+        }
+        else
+        {
+            if (bundle.LogLinesIncluded == 0)
+                log.Add("lifecycle_log_unavailable_or_empty");
+            if (bundle.LogTailTruncated)
+                log.Add("older_log_lines_outside_tail_limit");
+            if (bundle.LogLineCharsTruncated)
+                log.Add("log_line_chars_after_limit");
+        }
         if (!options.IncludeArgs)
             log.Add("literal_args");
 
@@ -652,7 +673,7 @@ public static class ReportCommandRunner
     private static ReportLogTailReadResult ReadLogFileTailLinesResult(string path, int maxLines)
     {
         if (maxLines <= 0)
-            return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: false);
+            return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: false, LineCharsTruncated: false);
 
         using var stream = File.OpenRead(path);
         var startOffset = Math.Max(0, stream.Length - MaxLogFileTailBytes);
@@ -665,14 +686,16 @@ public static class ReportCommandRunner
             leaveOpen: false);
         if (startOffset > 0)
         {
-            if (reader.ReadLine() == null)
-                return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: true);
+            if (ReadBoundedLogLine(reader, out _) == null)
+                return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: true, LineCharsTruncated: false);
         }
 
         var lines = new Queue<string>(maxLines + 1);
+        var lineCharsTruncated = false;
         string? line;
-        while ((line = reader.ReadLine()) != null)
+        while ((line = ReadBoundedLogLine(reader, out var lineTruncated)) != null)
         {
+            lineCharsTruncated |= lineTruncated;
             if (lines.Count == maxLines + 1)
                 lines.Dequeue();
             lines.Enqueue(line);
@@ -681,7 +704,42 @@ public static class ReportCommandRunner
         var linesTruncated = lines.Count > maxLines;
         if (linesTruncated)
             lines.Dequeue();
-        return new ReportLogTailReadResult(lines.ToArray(), linesTruncated, startOffset > 0);
+        return new ReportLogTailReadResult(lines.ToArray(), linesTruncated, startOffset > 0, lineCharsTruncated);
+    }
+
+    private static string? ReadBoundedLogLine(StreamReader reader, out bool lineTruncated)
+    {
+        lineTruncated = false;
+        var displayLimit = MaxLogTailLineChars - TruncatedLogLineSuffix.Length;
+        var sb = new StringBuilder(Math.Min(MaxLogTailLineChars, 1024));
+        while (true)
+        {
+            var next = reader.Read();
+            if (next < 0)
+                return sb.Length == 0 && !lineTruncated ? null : sb.ToString();
+
+            var c = (char)next;
+            if (c == '\n')
+                return sb.ToString();
+            if (c == '\r')
+            {
+                if (reader.Peek() == '\n')
+                    reader.Read();
+                return sb.ToString();
+            }
+
+            if (lineTruncated)
+                continue;
+
+            if (sb.Length < displayLimit)
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            sb.Append(TruncatedLogLineSuffix);
+            lineTruncated = true;
+        }
     }
 
     internal static string RedactSensitiveFields(string line)
@@ -817,6 +875,7 @@ internal sealed class ReportBundle
     public string? DbPath { get; set; }
     public int LogLinesIncluded { get; set; }
     public bool LogTailTruncated { get; set; }
+    public bool LogLineCharsTruncated { get; set; }
 
     public void AddText(string name, string content) =>
         Files.Add((name, Encoding.UTF8.GetBytes(content)));
@@ -827,7 +886,8 @@ internal sealed record ReportSchemaTable(string Name, long RowCount, bool RowCou
 internal sealed record ReportLogTailReadResult(
     IReadOnlyList<string> Lines,
     bool LinesTruncated,
-    bool BytesTruncated);
+    bool BytesTruncated,
+    bool LineCharsTruncated);
 
 internal sealed class ReportRedactionCounter
 {
@@ -906,6 +966,7 @@ internal sealed record ReportManifestLimits(
     int MaxSchemaRowCountScanRows,
     int MaxLogLines,
     int MaxLogFileTailBytes,
+    int MaxLogTailLineChars,
     int MaxRecentLogFiles);
 
 internal sealed record ReportManifestBundle(

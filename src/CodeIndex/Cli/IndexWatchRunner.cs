@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -23,8 +24,11 @@ internal static class IndexWatchRunner
     internal const int MaxHumanSummaryJsonDepth = 16;
     internal const int BatchPathSampleLimit = 20;
     internal const int MaxSubRunArgumentChars = 64 * 1024;
+    internal const int BatchPathSampleMaxChars = 160;
+    internal const int MaxWatchDiagnosticChars = 256;
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
+    private const string WatchDiagnosticTruncationMarker = "...[truncated]";
 
     public static int Run(
         IndexCommandOptions baseOptions,
@@ -604,10 +608,53 @@ internal static class IndexWatchRunner
             var sample = path;
             if (Path.IsPathRooted(path))
                 sample = Path.GetRelativePath(projectRoot, path);
-            samples.Add(FileIndexer.NormalizePathSeparators(sample));
+            sample = FileIndexer.NormalizePathSeparators(sample);
+            var sanitized = DiagnosticRedactor.RedactSensitiveText(sample, "[redacted]", redactPaths: false);
+            var bounded = BoundWatchDisplayText(sanitized, BatchPathSampleMaxChars, out var sampleTruncated);
+            truncated |= sampleTruncated;
+            samples.Add(bounded);
         }
 
         return samples;
+    }
+
+    internal static string? FormatWatchDiagnosticText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var redacted = DiagnosticRedactor.RedactSensitiveText(value, "[redacted]", redactPaths: true);
+        return BoundWatchDisplayText(redacted, MaxWatchDiagnosticChars, out _);
+    }
+
+    private static string BoundWatchDisplayText(string value, int maxChars, out bool truncated)
+    {
+        if (maxChars < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxChars), maxChars, "Watch diagnostic limit must be non-negative.");
+
+        var flattened = FlattenWatchDiagnosticControlChars(value);
+        if (flattened.Length <= maxChars)
+        {
+            truncated = false;
+            return flattened;
+        }
+
+        truncated = true;
+        if (maxChars == 0)
+            return string.Empty;
+
+        if (maxChars <= WatchDiagnosticTruncationMarker.Length)
+            return WatchDiagnosticTruncationMarker[..maxChars];
+
+        return flattened[..(maxChars - WatchDiagnosticTruncationMarker.Length)] + WatchDiagnosticTruncationMarker;
+    }
+
+    private static string FlattenWatchDiagnosticControlChars(string value)
+    {
+        var builder = new System.Text.StringBuilder(value.Length);
+        foreach (var c in value)
+            builder.Append(char.IsControl(c) ? ' ' : c);
+        return builder.ToString();
     }
 
     private static int TrimTrailingLineBreaks(string value)
@@ -636,8 +683,8 @@ internal static class IndexWatchRunner
             {
                 Status = "watching",
                 Phase = "initial_scan",
-                ProjectRoot = projectRoot,
-                Db = resolvedDbPath,
+                ProjectRoot = "[redacted]",
+                Db = "[redacted]",
                 DebounceMs = (int)debounce.TotalMilliseconds,
                 WatchPendingPathLimit = maxPendingPaths,
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
@@ -651,6 +698,7 @@ internal static class IndexWatchRunner
 
     private static void EmitWatchOverflow(IndexCommandOptions baseOptions, string? reason, string resolvedDbPath)
     {
+        var safeReason = FormatWatchDiagnosticText(reason);
         if (baseOptions.Json)
         {
             var jsonOpts = new JsonSerializerOptions
@@ -660,16 +708,16 @@ internal static class IndexWatchRunner
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = "overflow",
-                Reason = reason,
+                Reason = safeReason,
                 Phase = "incremental",
-                OverflowReason = reason,
+                OverflowReason = safeReason,
                 WatchPendingPathLimit = baseOptions.WatchPendingPathLimit,
-                RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions, resolvedDbPath),
+                RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions, resolvedDbPath, redactPaths: true),
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
         }
         else
         {
-            var detail = string.IsNullOrEmpty(reason) ? string.Empty : $" ({reason})";
+            var detail = string.IsNullOrEmpty(safeReason) ? string.Empty : $" ({safeReason})";
             CommandErrorWriter.WriteStderr($"[watch] Watcher buffer overflowed{detail}; falling back to full rescan.");
         }
     }
@@ -693,15 +741,29 @@ internal static class IndexWatchRunner
         }
     }
 
-    private static IndexWatchRecoveryCommandJsonResult BuildOverflowRecoveryCommand(IndexCommandOptions baseOptions, string resolvedDbPath)
+    private static IndexWatchRecoveryCommandJsonResult BuildOverflowRecoveryCommand(IndexCommandOptions baseOptions, string resolvedDbPath, bool redactPaths = false)
     {
         var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
         args.Insert(0, "index");
+        if (redactPaths)
+            RedactOverflowRecoveryPathArgs(args);
         return new IndexWatchRecoveryCommandJsonResult
         {
             Command = "cdidx",
             Args = args,
         };
+    }
+
+    private static void RedactOverflowRecoveryPathArgs(List<string> args)
+    {
+        if (args.Count > 1)
+            args[1] = "[redacted]";
+
+        for (var i = 0; i < args.Count - 1; i++)
+        {
+            if (string.Equals(args[i], "--db", StringComparison.Ordinal))
+                args[i + 1] = "[redacted]";
+        }
     }
 
     private readonly record struct WatchSubRunSummary(
@@ -824,7 +886,7 @@ internal sealed class FileChangeBatcher
         _pending.Clear();
         _overflowRequested = true;
         if (!string.IsNullOrEmpty(reason))
-            _overflowReason = reason;
+            _overflowReason = IndexWatchRunner.FormatWatchDiagnosticText(reason);
         _lastEventUtc = _clock();
     }
 }

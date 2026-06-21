@@ -4526,18 +4526,22 @@ public static partial class SymbolExtractor
                     if (scanColumn >= sanitizedLine.Length)
                         break;
 
-                    var remainingLine = sanitizedLine[scanColumn..];
-                    if (remainingLine.StartsWith("...", StringComparison.Ordinal))
+                    if (scanColumn + 2 < sanitizedLine.Length
+                        && sanitizedLine[scanColumn] == '.'
+                        && sanitizedLine[scanColumn + 1] == '.'
+                        && sanitizedLine[scanColumn + 2] == '.')
                     {
                         scanColumn += 3;
                         skippingPropertyValue = true;
                         continue;
                     }
 
-                    var propertyMatch = JavaScriptTypeScriptExportedObjectLiteralPropertyRegex.Match(remainingLine);
-                    if (propertyMatch.Success)
+                    if (TryReadJavaScriptTypeScriptIdentifierObjectLiteralKeyName(
+                            sanitizedLine,
+                            scanColumn,
+                            out var propertyName,
+                            out var identifierValueStartColumn))
                     {
-                        var propertyName = propertyMatch.Groups["name"].Value;
                         AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
                             fileId,
                             rawLines,
@@ -4545,9 +4549,9 @@ public static partial class SymbolExtractor
                             seenNames,
                             propertyName,
                             lineIndex,
-                            scanColumn + propertyMatch.Index,
+                            scanColumn,
                             signature);
-                        scanColumn += propertyMatch.Length;
+                        scanColumn = identifierValueStartColumn;
                         skippingPropertyValue = true;
                         continue;
                     }
@@ -4600,20 +4604,22 @@ public static partial class SymbolExtractor
                         continue;
                     }
 
-                    var shorthandMatch = JavaScriptTypeScriptExportedObjectLiteralShorthandPropertyRegex.Match(remainingLine);
-                    if (shorthandMatch.Success)
+                    if (TryReadJavaScriptTypeScriptShorthandObjectLiteralKeyName(
+                            sanitizedLine,
+                            scanColumn,
+                            out var shorthandPropertyName,
+                            out var shorthandEndColumn))
                     {
-                        var propertyName = shorthandMatch.Groups["name"].Value;
                         AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
                             fileId,
                             rawLines,
                             symbols,
                             seenNames,
-                            propertyName,
+                            shorthandPropertyName,
                             lineIndex,
-                            scanColumn + shorthandMatch.Index,
+                            scanColumn,
                             signature);
-                        scanColumn += shorthandMatch.Length;
+                        scanColumn = shorthandEndColumn;
                         continue;
                     }
                 }
@@ -4772,18 +4778,22 @@ public static partial class SymbolExtractor
                         if (scanColumn >= sanitizedLine.Length)
                             break;
 
-                        var remainingLine = sanitizedLine[scanColumn..];
-                        if (remainingLine.StartsWith("...", StringComparison.Ordinal))
+                        if (scanColumn + 2 < sanitizedLine.Length
+                            && sanitizedLine[scanColumn] == '.'
+                            && sanitizedLine[scanColumn + 1] == '.'
+                            && sanitizedLine[scanColumn + 2] == '.')
                         {
                             scanColumn += 3;
                             skippingPropertyValue = true;
                             continue;
                         }
 
-                        var propertyMatch = JavaScriptTypeScriptExportedObjectLiteralPropertyRegex.Match(remainingLine);
-                        if (propertyMatch.Success)
+                        if (TryReadJavaScriptTypeScriptIdentifierObjectLiteralKeyName(
+                                sanitizedLine,
+                                scanColumn,
+                                out var propertyName,
+                                out var identifierValueStartColumn))
                         {
-                            var propertyName = propertyMatch.Groups["name"].Value;
                             AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
                                 fileId,
                                 rawLines,
@@ -4792,9 +4802,9 @@ public static partial class SymbolExtractor
                                 target.ContainerName,
                                 propertyName,
                                 lineIndex,
-                                scanColumn + propertyMatch.Index);
+                                scanColumn);
 
-                            scanColumn += propertyMatch.Length;
+                            scanColumn = identifierValueStartColumn;
                             skippingPropertyValue = true;
                             continue;
                         }
@@ -4849,21 +4859,23 @@ public static partial class SymbolExtractor
                             continue;
                         }
 
-                        var shorthandMatch = JavaScriptTypeScriptExportedObjectLiteralShorthandPropertyRegex.Match(remainingLine);
-                        if (shorthandMatch.Success)
+                        if (TryReadJavaScriptTypeScriptShorthandObjectLiteralKeyName(
+                                sanitizedLine,
+                                scanColumn,
+                                out var shorthandPropertyName,
+                                out var shorthandEndColumn))
                         {
-                            var propertyName = shorthandMatch.Groups["name"].Value;
                             AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
                                 fileId,
                                 rawLines,
                                 symbols,
                                 existingContainerSymbolNames,
                                 target.ContainerName,
-                                propertyName,
+                                shorthandPropertyName,
                                 lineIndex,
-                                scanColumn + shorthandMatch.Index);
+                                scanColumn);
 
-                            scanColumn += shorthandMatch.Length;
+                            scanColumn = shorthandEndColumn;
                             continue;
                         }
                     }
@@ -4931,6 +4943,58 @@ public static partial class SymbolExtractor
                 Visibility = "export",
             },
             rawLines[lineIndex]);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptIdentifierObjectLiteralKeyName(
+        string sanitizedLine,
+        int startColumn,
+        out string propertyName,
+        out int valueStartColumn)
+    {
+        propertyName = string.Empty;
+        valueStartColumn = startColumn;
+
+        var probe = startColumn;
+        if (!TryReadJavaScriptTypeScriptIdentifierToken(sanitizedLine, ref probe, out propertyName))
+            return false;
+
+        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+            probe++;
+
+        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ':')
+        {
+            propertyName = string.Empty;
+            return false;
+        }
+
+        valueStartColumn = probe + 1;
+        return true;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptShorthandObjectLiteralKeyName(
+        string sanitizedLine,
+        int startColumn,
+        out string propertyName,
+        out int endColumn)
+    {
+        propertyName = string.Empty;
+        endColumn = startColumn;
+
+        var probe = startColumn;
+        if (!TryReadJavaScriptTypeScriptIdentifierToken(sanitizedLine, ref probe, out propertyName))
+            return false;
+
+        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+            probe++;
+
+        if (probe < sanitizedLine.Length && sanitizedLine[probe] is not ',' and not '}')
+        {
+            propertyName = string.Empty;
+            return false;
+        }
+
+        endColumn = probe;
+        return true;
     }
 
     private static bool TryReadJavaScriptTypeScriptLiteralObjectLiteralKeyName(
@@ -5099,6 +5163,90 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool StartsJavaScriptTypeScriptFunctionAssignmentValue(string rhs, int startColumn)
+    {
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, Math.Max(0, startColumn));
+        while (index < rhs.Length)
+        {
+            if (IsJavaScriptTypeScriptKeywordAt(rhs, index, "function")
+                || StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(rhs, index)
+                || StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs, index)
+                || StartsJavaScriptTypeScriptArrowAssignmentValue(rhs, index))
+            {
+                return true;
+            }
+
+            if (rhs[index] != '(')
+                return false;
+
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + 1);
+        }
+
+        return false;
+    }
+
+    private static bool StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(string rhs, int startColumn)
+    {
+        if (!IsJavaScriptTypeScriptKeywordAt(rhs, startColumn, "async"))
+            return false;
+
+        var functionColumn = SkipJavaScriptTypeScriptWhitespace(rhs, startColumn + "async".Length);
+        return IsJavaScriptTypeScriptKeywordAt(rhs, functionColumn, "function");
+    }
+
+    private static bool StartsJavaScriptTypeScriptGenericArrowAssignmentValue(string rhs, int startColumn)
+    {
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, startColumn);
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, index, "async"))
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + "async".Length);
+
+        if (index >= rhs.Length || rhs[index] != '<')
+            return false;
+
+        return StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs[index..]);
+    }
+
+    private static bool StartsJavaScriptTypeScriptArrowAssignmentValue(string rhs, int startColumn)
+    {
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, startColumn);
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, index, "async"))
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + "async".Length);
+
+        if (index >= rhs.Length)
+            return false;
+
+        if (rhs[index] == '(')
+        {
+            var parameterListEnd = rhs.IndexOf(')', index + 1);
+            if (parameterListEnd < 0)
+                return false;
+
+            var arrowColumn = SkipJavaScriptTypeScriptWhitespace(rhs, parameterListEnd + 1);
+            return arrowColumn + 1 < rhs.Length
+                && rhs[arrowColumn] == '='
+                && rhs[arrowColumn + 1] == '>';
+        }
+
+        if (!IsJavaScriptTypeScriptIdentifierStart(rhs[index]))
+            return false;
+
+        while (index < rhs.Length && IsJavaScriptTypeScriptIdentifierPart(rhs[index]))
+            index++;
+
+        index = SkipJavaScriptTypeScriptWhitespace(rhs, index);
+        return index + 1 < rhs.Length
+            && rhs[index] == '='
+            && rhs[index + 1] == '>';
+    }
+
+    private static int SkipJavaScriptTypeScriptWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+
+        return index;
     }
 
     private static bool StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(string rhs)
@@ -7852,7 +8000,7 @@ public static partial class SymbolExtractor
                             valueStartColumn++;
 
                         if (valueStartColumn < sanitizedLine.Length
-                            && StartsJavaScriptTypeScriptFunctionAssignmentValue(sanitizedLine[valueStartColumn..]))
+                            && StartsJavaScriptTypeScriptFunctionAssignmentValue(sanitizedLine, valueStartColumn))
                         {
                             var propertyName = sanitizedLine[propertyStartColumn..propertyEndColumn];
                             if (seenMethodStarts.Add((i + 1, propertyStartColumn)))
