@@ -4863,29 +4863,6 @@ public class FileIndexerTests
         }
     }
 
-    [Fact]
-    public void FileContentLoader_Load_CanonicalizesContentBeforeChecksum()
-    {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "sample.cs");
-            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("a\r\n\uFEFFb\r"));
-
-            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
-            var loaded = loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
-
-            Assert.Equal("a\nb\n", loaded.Content);
-            Assert.Equal(2, loaded.LineCount);
-            Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(loaded.Content)), loaded.Checksum);
-            Assert.Null(loaded.Warning);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
-    }
-
     [Theory]
     [InlineData("", "", 0)]
     [InlineData("a\nb\n", "a\nb\n", 2)]
@@ -4893,15 +4870,17 @@ public class FileIndexerTests
     [InlineData("a\r\n\uFEFFb\rc", "a\nb\nc", 3)]
     [InlineData("\uFEFF\u200B", "", 0)]
     [InlineData("a\n\uFEFF\u200Bb", "a\nb", 2)]
-    public void FileContentLoader_NormalizeForIndexing_NormalizesContentAndCountsLines(
-        string content,
+    public void FileContentLoader_Load_CanonicalizesContentAndLineCountBeforeChecksum(
+        string rawContent,
         string expectedContent,
         int expectedLineCount)
     {
-        var normalized = FileContentLoader.NormalizeForIndexing(content);
+        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes(rawContent));
 
-        Assert.Equal(expectedContent, normalized.Content);
-        Assert.Equal(expectedLineCount, normalized.LineCount);
+        Assert.Equal(expectedContent, loaded.Content);
+        Assert.Equal(expectedLineCount, loaded.LineCount);
+        Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(expectedContent)), loaded.Checksum);
+        Assert.Null(loaded.Warning);
     }
 
     [Fact]
@@ -6173,6 +6152,23 @@ public class FileIndexerTests
 
         Assert.Throws<OperationCanceledException>(() =>
             FileContentLoader.TryComputeChecksum(stream, long.MaxValue, out _, cancellation.Token));
+    }
+
+    private static LoadedFileContent LoadFileContentForTest(byte[] bytes)
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "sample.cs");
+            File.WriteAllBytes(path, bytes);
+
+            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
+            return loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
     }
 
     private static void WriteFileIndexerPatternConfig(string projectRoot, string fileName, string content)
