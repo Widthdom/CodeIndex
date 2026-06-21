@@ -684,6 +684,9 @@ public static partial class SymbolExtractor
             return [];
 
         var rawText = string.Join('\n', lines);
+        if (TryGetXmlStructureIssue(rawText, out _))
+            return [];
+
         var lineStarts = new int[lines.Length];
         var lineCursor = 0;
         for (var i = 0; i < lines.Length; i++)

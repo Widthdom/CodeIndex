@@ -10,10 +10,15 @@ public static partial class SymbolExtractor
     internal const int DockerfileJsonFormMaxItems = 128;
     internal const int DockerfileJsonFormMaxBodyLength = 32 * 1024;
     internal const int DockerfileJsonFormMaxStringLength = 4096;
-    private static readonly JsonDocumentOptions DockerfileJsonFormDocumentOptions = new()
-    {
-        MaxDepth = DockerfileJsonFormMaxDepth,
-    };
+
+    internal static JsonDocument ParseDockerfileJsonFormPayload(string payload)
+        => JsonDocument.Parse(payload, CreateDockerfileJsonFormDocumentOptions());
+
+    internal static JsonDocumentOptions CreateDockerfileJsonFormDocumentOptions()
+        => new()
+        {
+            MaxDepth = DockerfileJsonFormMaxDepth,
+        };
 
     private static void AddDockerfileAdditionalEnvSymbols(
         long fileId,
@@ -318,7 +323,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(body, DockerfileJsonFormDocumentOptions);
+            using var document = ParseDockerfileJsonFormPayload(body);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return;
 
@@ -431,7 +436,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(body, DockerfileJsonFormDocumentOptions);
+            using var document = ParseDockerfileJsonFormPayload(body);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return;
 
@@ -608,7 +613,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(body[jsonStart..], DockerfileJsonFormDocumentOptions);
+            using var document = ParseDockerfileJsonFormPayload(body[jsonStart..]);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return null;
 

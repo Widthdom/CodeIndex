@@ -29,6 +29,7 @@ public static class DbCommandRunner
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
     internal static Action<string>? DeleteTemporaryDirectoryForTesting { get; set; }
+    internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFilesForTesting { get; set; }
     internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFileNamesForTesting { get; set; }
 
@@ -351,9 +352,10 @@ public static class DbCommandRunner
                 Console.WriteLine($"  name      : {result.Name}");
                 Console.WriteLine($"  checkpoint: {result.CheckpointPath}");
                 Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}{(result.FilesTruncated ? " (truncated)" : string.Empty)}");
-                foreach (var diagnostic in result.Diagnostics)
-                    Console.Error.WriteLine($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
             }
+
+            foreach (var diagnostic in result.Diagnostics)
+                CommandErrorWriter.WriteStderr($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
 
             return CommandExitCodes.Success;
         }
@@ -1164,23 +1166,42 @@ public static class DbCommandRunner
         var truncated = false;
         try
         {
-            IEnumerable<string?> fileNames = EnumerateCheckpointFileNamesForTesting?.Invoke(checkpointPath)
-                ?? Directory.EnumerateFiles(checkpointPath).Select(Path.GetFileName);
-            foreach (var name in fileNames)
+            if (EnumerateCheckpointFileNamesForTesting != null)
             {
-                if (files.Count >= CheckpointFileInspectLimit)
+                foreach (var name in EnumerateCheckpointFileNamesForTesting(checkpointPath))
                 {
-                    truncated = true;
-                    break;
+                    if (files.Count >= CheckpointFileInspectLimit)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    if (name is not null)
+                        files.Add(name);
+                }
+            }
+            else
+            {
+                var listedFiles = EnumerateCheckpointFiles(checkpointPath, diagnostics, CheckpointFileInspectLimit + 1);
+                foreach (var file in listedFiles.Items)
+                {
+                    if (files.Count >= CheckpointFileInspectLimit)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    var name = Path.GetFileName(file);
+                    if (name is not null)
+                        files.Add(name);
                 }
 
-                if (name is not null)
-                    files.Add(name);
+                truncated = listedFiles.Truncated || listedFiles.Items.Count > CheckpointFileInspectLimit;
             }
         }
         catch (Exception ex) when (IsRecoverableFilesystemException(ex))
         {
-            diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_file_enumeration_failed", "Unable to enumerate every checkpoint file after creation.", checkpointPath));
+            diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_file_enumeration_failed", "Unable to enumerate every checkpoint file.", checkpointPath));
             truncated = true;
         }
 
@@ -1222,7 +1243,7 @@ public static class DbCommandRunner
         var files = new List<string>();
         try
         {
-            foreach (var file in Directory.EnumerateFiles(checkpointPath))
+            foreach (var file in EnumerateCheckpointFilesForTesting?.Invoke(checkpointPath) ?? Directory.EnumerateFiles(checkpointPath))
             {
                 if (files.Count >= limit)
                     return (files, Truncated: true);
@@ -1366,12 +1387,12 @@ public static class DbCommandRunner
         DataDirectorySecurity.ApplyPrivateFileMode(destination);
     }
 
-    private static void MoveIfExists(string source, string destination, bool privateDestination = false)
+    private static void MoveIfExists(string source, string destination, bool privateDestination = false, bool overwrite = false)
     {
         if (!TryGetRegularExistingFile(source, out var normalizedSource))
             return;
 
-        File.Move(normalizedSource, LongPath.EnsureWindowsPrefix(destination));
+        File.Move(normalizedSource, LongPath.EnsureWindowsPrefix(destination), overwrite);
         if (privateDestination)
             DataDirectorySecurity.ApplyPrivateFileMode(destination);
     }
@@ -1394,18 +1415,9 @@ public static class DbCommandRunner
         if (!Directory.Exists(backupPath))
             return;
 
-        DeleteIfExists(fullDbPath);
-        DeleteIfExists(fullDbPath + "-wal");
-        DeleteIfExists(fullDbPath + "-shm");
-        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath)), fullDbPath, privateDestination: true);
-        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal", privateDestination: true);
-        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm", privateDestination: true);
-    }
-
-    private static void DeleteIfExists(string path)
-    {
-        if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
-            File.Delete(LongPath.EnsureWindowsPrefix(path));
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath)), fullDbPath, privateDestination: true, overwrite: true);
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal", privateDestination: true, overwrite: true);
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm", privateDestination: true, overwrite: true);
     }
 
     internal static void TryDeleteTemporaryDirectory(string path, string cleanupDescription, string safeRoot, string expectedNamePrefix)
@@ -1420,6 +1432,12 @@ public static class DbCommandRunner
 
             if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
                 return;
+
+            if (!TryValidateTemporaryDirectoryCleanupTarget(fullPath, safeRoot, expectedNamePrefix, out fullPath, out validationFailure))
+            {
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                return;
+            }
 
             if (DeleteTemporaryDirectoryForTesting != null)
                 DeleteTemporaryDirectoryForTesting(fullPath);
@@ -1455,6 +1473,22 @@ public static class DbCommandRunner
             if (!Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
             {
                 failureReason = "target name does not match the expected temporary-directory prefix";
+                return false;
+            }
+
+            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
+            if (Directory.Exists(longPath))
+            {
+                var attributes = File.GetAttributes(longPath);
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+                {
+                    failureReason = "target is not a regular temporary directory";
+                    return false;
+                }
+            }
+            else if (File.Exists(longPath))
+            {
+                failureReason = "target is not a directory";
                 return false;
             }
 

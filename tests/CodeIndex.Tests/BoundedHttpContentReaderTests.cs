@@ -55,6 +55,19 @@ public class BoundedHttpContentReaderTests
     }
 
     [Fact]
+    public async Task ReadAsByteArrayAsync_ReadsNormalUnknownLengthPayload_Issue3799()
+    {
+        var payload = Encoding.UTF8.GetBytes("normal payload");
+
+        var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
+            new UnknownLengthContent(payload),
+            maxBytes: 1024,
+            CancellationToken.None);
+
+        Assert.Equal(payload, bytes);
+    }
+
+    [Fact]
     public async Task ReadAsByteArrayAsync_RejectsDeclaredLengthOverLimit()
     {
         using var content = new ByteArrayContent([1]);
@@ -64,6 +77,18 @@ public class BoundedHttpContentReaderTests
             BoundedHttpContentReader.ReadAsByteArrayAsync(content, maxBytes: 4, CancellationToken.None));
 
         Assert.Contains("4 byte limit", ex.Message);
+    }
+
+    [Fact]
+    public void ClearSensitiveCopyBufferForTests_ClearsWholePooledBuffer_Issue3799()
+    {
+        var buffer = Enumerable.Range(1, BoundedHttpContentReader.PooledCopyBufferSize)
+            .Select(i => (byte)(i % 251))
+            .ToArray();
+
+        BoundedHttpContentReader.ClearSensitiveCopyBufferForTests(buffer);
+
+        Assert.All(buffer, value => Assert.Equal(0, value));
     }
 
     private const UnixFileMode PermissionBits =

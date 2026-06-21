@@ -47,6 +47,25 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void BuiltInSymbolRegexes_UseBoundedRegexInstances_Issue3661()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(SymbolExtractor).Assembly.GetTypes().Where(IsSymbolRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var unboundedInstances = regexes
+            .Where(item => item.Regex is not BoundedRegex)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            unboundedInstances.Count == 0,
+            "Built-in symbol regex tables must use BoundedRegex instances: " + string.Join(", ", unboundedInstances));
+    }
+
+    [Fact]
     public void BuiltInSymbolRegexes_UseDefaultBacktrackingPolicy_Issue3479()
     {
         var regexes = EnumerateStaticRegexValues(
@@ -169,10 +188,10 @@ public partial class SymbolExtractorTests
     public void Extract_JsonDeepObject_EmitsStructuredDataDepthDiagnostic_Issue3765()
     {
         var builder = new StringBuilder();
-        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxDepth; index++)
+        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxJsonDepth; index++)
             builder.Append("{\"p").Append(index).Append("\":");
         builder.Append('0');
-        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxDepth; index++)
+        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxJsonDepth; index++)
             builder.Append('}');
 
         var symbols = SymbolExtractor.Extract(1, "json", builder.ToString());
@@ -629,6 +648,113 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_UsesReaderOffsetsForEscapedDuplicateKeys_Issue3808()
+    {
+        const string content = """
+            {
+              "key": 1,
+              "\u006bey": 2
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content)
+            .Where(symbol => symbol.Name == "key")
+            .ToList();
+
+        Assert.Equal([2, 3], symbols.Select(symbol => symbol.Line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_Json_CapsBroadObjects_Issue3808()
+    {
+        var properties = Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+            .Select(i => $"\"p{i}\": {i}");
+        var content = "{" + string.Join(", ", properties) + "}";
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "p" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+    }
+
+    [Fact]
+    public void Extract_Json_CapsDeepObjects_Issue3808()
+    {
+        var depth = SymbolExtractor.StructuredDataMaxJsonDepth + 4;
+        var builder = new StringBuilder();
+        builder.AppendLine("{");
+        for (var i = 0; i < depth; i++)
+        {
+            builder.Append(' ', (i + 1) * 2)
+                .Append('"')
+                .Append('n')
+                .Append(i)
+                .AppendLine("\": {");
+        }
+
+        builder.Append(' ', (depth + 1) * 2).AppendLine("\"leaf\": 0");
+        for (var i = depth; i >= 0; i--)
+            builder.Append(' ', i * 2).AppendLine("}");
+
+        var symbols = SymbolExtractor.Extract(1, "json", builder.ToString());
+
+        Assert.Contains(symbols, symbol => symbol.Name == "n0");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "n0.n1");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols);
+    }
+
+    [Fact]
+    public void Extract_Json_SkippedOverlongSubtreesDoNotStealDuplicateKeyLines_Issue3808()
+    {
+        var longName = new string('a', SymbolExtractor.StructuredDataMaxPathLength + 1);
+        var content = $$"""
+            {
+              "{{longName}}": {
+                "dup": "skipped"
+              },
+              "dup": "root"
+            }
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "dup");
+
+        Assert.Equal(5, symbol.Line);
+    }
+
+    [Fact]
+    public void Extract_Json_CapsStructuredSignatureLength_Issue3808()
+    {
+        var content = "{\"key\":\"" + new string('x', SymbolExtractor.StructuredDataMaxSignatureLength + 80) + "\"}";
+
+        var symbol = Assert.Single(SymbolExtractor.Extract(1, "json", content));
+
+        Assert.True(symbol.Signature!.Length <= SymbolExtractor.StructuredDataMaxSignatureLength);
+    }
+
+    [Fact]
+    public void Extract_Json_UsesFallbackBeyondParseSizeGuard_Issue3657()
+    {
+        var padding = string.Join(
+            '\n',
+            Enumerable.Repeat(new string(' ', 1024), (SymbolExtractor.StructuredDataMaxJsonParseChars / 1024) + 1));
+        var content = $$"""
+            {
+              "root": {
+                "leaf": "ok"
+              }
+              {{padding}}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "leaf");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "root.leaf");
+    }
+
+    [Fact]
     public void Extract_Yaml_IndexesIndentedConfigurationKeyPaths()
     {
         const string content = """
@@ -657,6 +783,29 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.runs-on");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps.uses");
         Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_Yaml_CapsBroadMappings_Issue3808()
+    {
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+            .Select(i => $"key{i}: value"));
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "key" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+    }
+
+    [Fact]
+    public void Extract_Yaml_DoesNotTreatTabIndentationAsStructure_Issue3808()
+    {
+        const string content = "root:\n\tbad: nope\n  good: yes\n";
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "root.good");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("bad", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -16127,6 +16276,49 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_MsBuild_CapsBroadXmlElementTables_Issue3801()
+    {
+        var items = Enumerable.Range(0, SymbolExtractor.XmlExtractionMaxElements + 8)
+            .Select(i => $"  <PackageReference Include=\"Pkg{i}\" />");
+        var content = "<Project>\n<ItemGroup>\n" + string.Join('\n', items) + "\n</ItemGroup>\n</Project>\n";
+
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Pkg" + (SymbolExtractor.XmlExtractionMaxElements + 7));
+        Assert.True(symbols.Count <= SymbolExtractor.XmlExtractionMaxElements);
+    }
+
+    [Fact]
+    public void Extract_MsBuild_CapsDeepXmlElementTrees_Issue3801()
+    {
+        var depth = SymbolExtractor.XmlExtractionMaxDepth + 4;
+        var content = "<Project>" + string.Concat(Enumerable.Repeat("<PropertyGroup>", depth))
+            + "<TargetFramework>net8.0</TargetFramework>"
+            + string.Concat(Enumerable.Repeat("</PropertyGroup>", depth)) + "</Project>";
+
+        var exception = Record.Exception(() => SymbolExtractor.Extract(1, "msbuild", content));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Extract_MsBuild_ProhibitsDtdDeclarations_Issue3801()
+    {
+        const string content = """
+            <!DOCTYPE Project [
+              <!ENTITY injected "value">
+            ]>
+            <Project>
+              <Target Name="Build" />
+            </Project>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void GetContractVersion_DockerfileSpecificKinds_UsesDedicatedVersion()
     {
         Assert.Equal(SymbolExtractor.DockerfileContractVersion, SymbolExtractor.GetContractVersion("dockerfile"));
@@ -16435,11 +16627,13 @@ public partial class SymbolExtractorTests
         var content = "VOLUME [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var volumeSymbols = symbols.Where(s => s.Kind == "volume").ToList();
 
-        Assert.Equal(maxItems, symbols.Count);
-        Assert.Contains(symbols, s => s.Kind == "volume" && s.Name == "/vol0");
-        Assert.Contains(symbols, s => s.Kind == "volume" && s.Name == "/vol" + (maxItems - 1));
-        Assert.DoesNotContain(symbols, s => s.Kind == "volume" && s.Name == "/too-many");
+        Assert.Equal(maxItems, volumeSymbols.Count);
+        Assert.Contains(volumeSymbols, s => s.Name == "/vol0");
+        Assert.Contains(volumeSymbols, s => s.Name == "/vol" + (maxItems - 1));
+        Assert.DoesNotContain(volumeSymbols, s => s.Name == "/too-many");
+        Assert.Contains(symbols, s => s.Kind == "extraction_diagnostic" && s.Name == "dockerfile_json_form_array_budget_exceeded");
     }
 
     [Fact]
@@ -16490,8 +16684,10 @@ public partial class SymbolExtractorTests
         var content = instruction + " [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var kind = instruction.ToLowerInvariant();
 
-        Assert.Empty(symbols);
+        Assert.DoesNotContain(symbols, s => s.Kind == kind);
+        Assert.Contains(symbols, s => s.Kind == "extraction_diagnostic" && s.Name == "dockerfile_json_form_array_budget_exceeded");
     }
 
     [Fact]
@@ -18393,6 +18589,41 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Sample.MainWindow");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveButton");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "StatusText");
+    }
+
+    [Fact]
+    public void Extract_Xml_CapsDeepXamlElementTrees_Issue3801()
+    {
+        var depth = SymbolExtractor.XmlExtractionMaxDepth + 4;
+        var content = "<ContentPage x:Class=\"Sample.MainWindow\" "
+            + "xmlns=\"http://schemas.microsoft.com/dotnet/2021/maui\" "
+            + "xmlns:x=\"http://schemas.microsoft.com/winfx/2009/xaml\">"
+            + string.Concat(Enumerable.Repeat("<Grid x:Name=\"NestedGrid\">", depth))
+            + string.Concat(Enumerable.Repeat("</Grid>", depth))
+            + "</ContentPage>";
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void Extract_Xml_ProhibitsDtdDeclarations_Issue3801()
+    {
+        const string content = """
+            <!DOCTYPE ContentPage [
+              <!ENTITY injected "value">
+            ]>
+            <ContentPage x:Class="Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+                <Button x:Name="SaveButton" />
+            </ContentPage>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Empty(symbols);
     }
 
     [Fact]
