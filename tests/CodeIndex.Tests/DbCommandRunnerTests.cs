@@ -567,6 +567,15 @@ public class DbCommandRunnerTests
         }
     }
 
+    public static IEnumerable<object[]> RecoverableTraversalFailures()
+    {
+        yield return [new IOException("secret local enumeration path")];
+        yield return [new UnauthorizedAccessException("secret local enumeration path")];
+        yield return [new NotSupportedException("secret local enumeration path")];
+        yield return [new PathTooLongException("secret local enumeration path")];
+        yield return [new ArgumentException("secret local enumeration path")];
+    }
+
     [Fact]
     public void Run_CheckpointJsonSuccessKeepsDiagnosticsArray_Issue3812()
     {
@@ -592,8 +601,9 @@ public class DbCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833()
+    [Theory]
+    [MemberData(nameof(RecoverableTraversalFailures))]
+    public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833(Exception exception)
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");
         var dbPath = Path.Combine(root, "codeindex.db");
@@ -601,7 +611,7 @@ public class DbCommandRunnerTests
         {
             Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
-            DbCommandRunner.EnumerateCheckpointFileNamesForTesting = _ => throw new IOException("secret local enumeration path");
+            DbCommandRunner.EnumerateCheckpointFileNamesForTesting = _ => throw exception;
 
             var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "enum", "--db", dbPath, "--json"]);
 

@@ -716,10 +716,16 @@ internal static class SearchAuditRecipes
         for (var i = 0; i < labelArray.Count && i < MaxExternalLabelCount; i++)
         {
             if (!TryReadString(labelArray[i], out var label) || string.IsNullOrWhiteSpace(label))
+            {
+                AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' label #{i + 1} must be a non-empty string.");
                 continue;
+            }
             label = label.Trim();
             if (label.Length > MaxExternalLabelLength)
+            {
+                AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' label #{i + 1} exceeds {MaxExternalLabelLength} characters.");
                 continue;
+            }
             if (seen.Add(label))
                 labels.Add(label);
         }

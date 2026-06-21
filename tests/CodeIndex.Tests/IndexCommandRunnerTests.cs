@@ -86,6 +86,21 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void StopObservedJsonPhaseHeartbeat_CancelsPendingTaskWithoutBlocking_Issue3771()
+    {
+        var cts = new CancellationTokenSource();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopwatch = Stopwatch.StartNew();
+
+        IndexCommandRunner.StopObservedJsonPhaseHeartbeat((cts, pending.Task));
+
+        stopwatch.Stop();
+        Assert.True(cts.IsCancellationRequested);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        pending.SetResult();
+    }
+
+    [Fact]
     public void ParseArgs_HelpFlagSetsShowHelp()
     {
         var options = IndexCommandRunner.ParseArgs(["--help"]);
@@ -2655,6 +2670,28 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResolveProjects_RejectsTooManySolutionLines_Issue3706()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_line_count_limit");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Repo.sln"),
+                string.Concat(Enumerable.Repeat("# comment\n", SolutionProjectResolver.MaxSolutionFileLines + 1)));
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln"));
+
+            Assert.Contains("solution file contains too many lines", ex.Message);
+            Assert.Contains(SolutionProjectResolver.MaxSolutionFileLines.ToString(CultureInfo.InvariantCulture), ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjects_RejectsTooManySolutionProjectReferences_Issue3064()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_project_limit");
@@ -2738,6 +2775,48 @@ public sealed class Caller
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    public static IEnumerable<object[]> SolutionProjectTraversalFailures()
+    {
+        yield return [new IOException("blocked"), "an I/O error"];
+        yield return [new UnauthorizedAccessException("blocked"), "permissions"];
+        yield return [new NotSupportedException("blocked"), "an unsupported path"];
+        yield return [new PathTooLongException("blocked"), "a path that is too long"];
+        yield return [new ArgumentException("blocked"), "an invalid path"];
+    }
+
+    [Theory]
+    [MemberData(nameof(SolutionProjectTraversalFailures))]
+    public void ResolveProjects_FallbackTraversalReportsExpectedFilesystemDiagnostics_Issue3707(
+        Exception exception,
+        string expectedReason)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_exception");
+        var previousEnumerateDirectories = SolutionProjectResolver.EnumerateDirectoriesForTesting;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            SolutionProjectResolver.EnumerateDirectoriesForTesting = _ => throw exception;
+            var diagnostics = new List<string>();
+
+            var projects = SolutionProjectResolver.ResolveProjects(
+                projectRoot,
+                solutionPath: null,
+                SolutionProjectResolverLimits.Default,
+                diagnostics);
+
+            Assert.Empty(projects);
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Contains("Could not enumerate subdirectories in .", diagnostic, StringComparison.Ordinal);
+            Assert.Contains(expectedReason, diagnostic, StringComparison.Ordinal);
+            Assert.DoesNotContain("blocked", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SolutionProjectResolver.EnumerateDirectoriesForTesting = previousEnumerateDirectories;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

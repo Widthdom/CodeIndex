@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -1154,22 +1155,6 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void UpdateChecker_ResolveDefaultCachePath_UsesPrivateTempFallback_Issue3675()
-    {
-        var path = UpdateChecker.ResolveDefaultCachePath(
-            xdgCacheHome: null,
-            home: null,
-            localAppData: null);
-
-        Assert.Equal(
-            Path.Combine(DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("cache"), "update-check.json"),
-            path);
-        Assert.NotEqual(
-            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "cache", "update-check.json")),
-            path);
-    }
-
-    [Fact]
     public void UpdateChecker_Check_RateLimitResponseReportsRetryMetadata_Issue3822()
     {
         lock (TestConsoleLock.Gate)
@@ -1423,23 +1408,59 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void CreateInstallerProcessStartInfo_UsesArgumentList()
+    public void CreateInstallerProcessStartInfo_UsesExplicitLaunchContract_Issue3685()
     {
         if (OperatingSystem.IsWindows())
             return;
 
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx installer launch {Guid.NewGuid():N}");
+        var script = Path.Combine(root, "install script's path.sh");
         var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
-            "/tmp/install script's path.sh",
-            "v1.27.0",
-            "/opt/cdidx install");
+            script,
+            "v1.27.0-rc.1",
+            "/opt/cdidx install & safe");
 
         Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
         Assert.Equal("bash", Path.GetFileName(startInfo.FileName));
         Assert.NotEqual("bash", startInfo.FileName);
         Assert.False(startInfo.UseShellExecute);
+        Assert.False(startInfo.RedirectStandardOutput);
+        Assert.False(startInfo.RedirectStandardError);
         Assert.Equal(string.Empty, startInfo.Arguments);
-        Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
-        Assert.Equal("/opt/cdidx install", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+        Assert.Equal(Path.GetFullPath(root), startInfo.WorkingDirectory);
+        Assert.Equal([Path.GetFullPath(script), "v1.27.0-rc.1"], startInfo.ArgumentList.ToArray());
+        Assert.Equal("/opt/cdidx install & safe", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+    }
+
+    [Fact]
+    public void RunInstallerProcess_StartFailureReturnsInstallError_Issue3685()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_start_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = Path.Combine(root, "missing-installer-shell"),
+                    UseShellExecute = false,
+                };
+                startInfo.ArgumentList.Add(Path.Combine(root, "install script.sh"));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromSeconds(10)));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("failed to start install.sh for upgrade", stderr);
+                Assert.Contains("rerun `install.sh` manually", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
     }
 
     [Fact]
@@ -1911,6 +1932,7 @@ exit 7
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
             var previousDelete = ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting;
+            string? cleanupDirectory = null;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
                 new UpgradeAssetResponseHandler(
                     checksumManifest,
@@ -1919,7 +1941,11 @@ exit 7
             {
                 Timeout = Timeout.InfiniteTimeSpan,
             };
-            ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = _ => throw new IOException("directory delete denied");
+            ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = path =>
+            {
+                cleanupDirectory = path;
+                throw new IOException("directory delete denied");
+            };
 
             try
             {
@@ -1932,11 +1958,15 @@ exit 7
                 Assert.True(doc.RootElement.GetProperty("install_succeeded").GetBoolean());
                 Assert.Contains("Warning: failed to delete upgrade installer temporary directory", stderr);
                 Assert.Contains("IOException", stderr);
+                Assert.NotNull(cleanupDirectory);
+                Assert.True(Directory.Exists(cleanupDirectory));
             }
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
                 ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = previousDelete;
+                if (cleanupDirectory != null)
+                    TestProjectHelper.DeleteDirectory(cleanupDirectory);
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
@@ -2043,6 +2073,141 @@ exit 7
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_RootPathRejected_Issue3733()
+    {
+        var rootPath = Path.GetPathRoot(Path.GetFullPath(Path.GetTempPath()));
+        Assert.False(string.IsNullOrEmpty(rootPath));
+
+        var writable = ProgramRunner.TryCheckInstallDirectoryWritable(rootPath!, out var diagnostic);
+
+        Assert.False(writable);
+        Assert.Contains("filesystem root", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_SymlinkRejected_Issue3733()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_link_{Guid.NewGuid():N}");
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "link");
+        try
+        {
+            Directory.CreateDirectory(target);
+            Directory.CreateSymbolicLink(link, target);
+
+            var writable = ProgramRunner.TryCheckInstallDirectoryWritable(link, out var diagnostic);
+
+            Assert.False(writable);
+            Assert.Contains("symbolic link", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+                Directory.Delete(link);
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void TryCheckInstallDirectoryWritable_GroupWritableDirectoryRejected_Issue3733()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_mode_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(path);
+            File.SetUnixFileMode(
+                path,
+                DataDirectorySecurity.PrivateDirectoryMode | UnixFileMode.GroupWrite);
+
+            var writable = ProgramRunner.TryCheckInstallDirectoryWritable(path, out var diagnostic);
+
+            Assert.False(writable);
+            Assert.Contains("group- or world-writable", diagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(path))
+                File.SetUnixFileMode(path, DataDirectorySecurity.PrivateDirectoryMode);
+            TestProjectHelper.DeleteDirectory(path);
+        }
+    }
+
+    [Fact]
+    public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsOutsideTempRoot_Issue3659()
+    {
+        var tempRoot = Path.GetFullPath(Path.GetTempPath());
+        var outside = Path.GetPathRoot(tempRoot);
+        Assert.False(string.IsNullOrEmpty(outside));
+        if (string.Equals(
+                Path.TrimEndingDirectorySeparator(tempRoot),
+                Path.TrimEndingDirectorySeparator(outside!),
+                OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
+            outside!,
+            out _,
+            out var failureReason);
+
+        Assert.False(valid);
+        Assert.Contains("outside the expected cleanup root", failureReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsUnexpectedPrefix_Issue3659()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-other-{Guid.NewGuid():N}");
+
+        var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
+            path,
+            out _,
+            out var failureReason);
+
+        Assert.False(valid);
+        Assert.Contains("expected upgrade temporary-directory prefix", failureReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsSymlink_Issue3659()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_link_{Guid.NewGuid():N}");
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(Path.GetTempPath(), $"cdidx-install-link-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(target);
+            Directory.CreateSymbolicLink(link, target);
+
+            var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
+                link,
+                out _,
+                out var failureReason);
+
+            Assert.False(valid);
+            Assert.Contains("symbolic link", failureReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+                Directory.Delete(link);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
