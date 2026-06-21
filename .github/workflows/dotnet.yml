@@ -230,10 +230,6 @@ jobs:
             throw "High or critical NuGet vulnerability detected."
           }
 
-      - name: Verify formatting
-        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
-        run: dotnet format whitespace CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
-
       - name: Verify Release solution build
         if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         run: dotnet build CodeIndex.sln --configuration Release --no-restore -p:UseSharedCompilation=false

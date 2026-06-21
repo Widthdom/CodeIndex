@@ -37,7 +37,7 @@ case "$task" in
       --blame-hang-timeout 5m
     ;;
   lint)
-    dotnet format whitespace CodeIndex.sln --verify-no-changes --verbosity minimal
+    dotnet format whitespace CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
     ;;
   format)
     dotnet format whitespace CodeIndex.sln --verbosity minimal
