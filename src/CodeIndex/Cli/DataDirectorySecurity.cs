@@ -100,6 +100,9 @@ internal static class DataDirectorySecurity
 
     private static void EnsureSensitiveTempFallbackRoot(string path)
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
         var root = ResolveSensitiveTempFallbackRootDirectory();
         if (!IsSameDirectory(path, root) && !IsDirectoryDescendant(path, root))
             return;
