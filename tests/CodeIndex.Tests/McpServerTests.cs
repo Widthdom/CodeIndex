@@ -15617,10 +15617,7 @@ public sealed class Caller
             Assert.True(error["data"]!["retry_safe"]!.GetValue<bool>());
             Assert.Equal(123, response["id"]!.GetValue<int>());
 
-            var status = server.HandleMessage(JsonNode.Parse(
-                """{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"status"}}""")!)!;
-            Assert.True(status["result"] is not null, status.ToJsonString());
-            var requestTimeouts = status["result"]!["structuredContent"]!["mcp"]!["request_timeouts"]!;
+            var requestTimeouts = server.BuildRequestTimeoutDiagnosticsStatus();
             Assert.Equal(1L, requestTimeouts["isolated_action_draining_count"]!.GetValue<long>());
             Assert.Equal(0L, requestTimeouts["isolated_action_drained_count"]!.GetValue<long>());
             Assert.Equal("123", requestTimeouts["last"]!["request_id"]!.GetValue<string>());
