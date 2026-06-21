@@ -28,8 +28,14 @@ public class CiWorkflowTests
         Assert.Contains("id: test", workflow);
         Assert.Contains("\"summarize=true\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
         Assert.Contains("steps.test.outputs.summarize == 'true' || failure()", workflow);
+        Assert.Contains(
+            "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
+            normalizedWorkflow);
         Assert.DoesNotContain(
             "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
+            normalizedWorkflow);
+        Assert.DoesNotContain(
+            "- name: Upload test results\n        if: always()\n",
             normalizedWorkflow);
         Assert.Contains("Initial test run hit TestSessionTimeout; skipping flaky retry", workflow);
         Assert.Contains("Rerunning once to classify possible flakiness.", workflow);
