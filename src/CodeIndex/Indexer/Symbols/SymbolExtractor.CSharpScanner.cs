@@ -3649,6 +3649,12 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool IsCSharpLineCommentOnly(string line)
+        => TryGetFirstNonWhitespaceColumn(line, 0, line.Length, out var column)
+            && column + 1 < line.Length
+            && line[column] == '/'
+            && line[column + 1] == '/';
+
     private static int FindCSharpDeclarationStartColumn(string rawLine, string? signature)
     {
         if (!string.IsNullOrWhiteSpace(signature))

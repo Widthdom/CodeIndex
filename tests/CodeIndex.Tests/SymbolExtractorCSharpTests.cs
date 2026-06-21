@@ -5032,6 +5032,25 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SkipsLineCommentDeclarationsWithoutSkippingInlineComments()
+    {
+        const string content = """
+            namespace Demo;
+
+            // public class Phantom {}
+            public class Fixture
+            {
+                public void Real() { var text = "// not a comment-only line"; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Fixture");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real");
+        Assert.DoesNotContain(symbols, s => s.Name == "Phantom");
+    }
+
+    [Fact]
     public void Extract_CSharp_EnumMembersTrackOwningEnum()
     {
         var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";

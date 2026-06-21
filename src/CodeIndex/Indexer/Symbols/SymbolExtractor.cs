@@ -2580,7 +2580,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var line = lines[i];
-            if (lang == "csharp" && line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            if (lang == "csharp" && IsCSharpLineCommentOnly(line))
                 continue;
 
             if (lang == "go"
