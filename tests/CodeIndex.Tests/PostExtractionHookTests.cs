@@ -558,27 +558,30 @@ public class PostExtractionHookTests
                 Directory.CreateDirectory(hooksDir);
                 File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
 
-                using var runner = PostExtractionHookRunner.Discover(
-                    hooksDir,
-                    maxSymbolCount: 2,
-                    maxReferenceCount: 2);
-                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
-                var symbols = new List<SymbolRecord>();
-                var references = new List<ReferenceRecord>();
+                {
+                    using var runner = PostExtractionHookRunner.Discover(
+                        hooksDir,
+                        maxSymbolCount: 2,
+                        maxReferenceCount: 2);
+                    var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                    var symbols = new List<SymbolRecord>();
+                    var references = new List<ReferenceRecord>();
 
-                runner.OnSymbolsExtracted(context, symbols);
-                runner.OnReferencesExtracted(context, references);
+                    runner.OnSymbolsExtracted(context, symbols);
+                    runner.OnReferencesExtracted(context, references);
 
-                Assert.True(symbols.Count <= 2);
-                Assert.True(references.Count <= 2);
-                Assert.Contains(
-                    runner.Diagnostics,
-                    diagnostic => diagnostic.Category == "hook_symbol_count_truncated"
-                                  && diagnostic.Message.Contains("materialization budget", StringComparison.Ordinal));
-                Assert.Contains(
-                    runner.Diagnostics,
-                    diagnostic => diagnostic.Category == "hook_reference_count_truncated"
-                                  && diagnostic.Message.Contains("materialization budget", StringComparison.Ordinal));
+                    Assert.True(symbols.Count <= 2);
+                    Assert.True(references.Count <= 2);
+                    Assert.Contains(
+                        runner.Diagnostics,
+                        diagnostic => diagnostic.Category == "hook_symbol_count_truncated"
+                                      && diagnostic.Message.Contains("materialization budget", StringComparison.Ordinal));
+                    Assert.Contains(
+                        runner.Diagnostics,
+                        diagnostic => diagnostic.Category == "hook_reference_count_truncated"
+                                      && diagnostic.Message.Contains("materialization budget", StringComparison.Ordinal));
+                }
+                CollectUnloadedHookAssemblies();
             }
             finally
             {
