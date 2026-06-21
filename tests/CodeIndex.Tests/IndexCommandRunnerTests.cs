@@ -3118,7 +3118,7 @@ public sealed class Caller
                     var exitCode = IndexCommandRunner.Run([projectRoot], _jsonOptions, cts);
 
                     Assert.Equal(CommandExitCodes.Interrupted, exitCode);
-                    Assert.Contains($"Error [{CommandErrorCodes.Interrupted}]: Interrupted; partial progress saved", stderr.ToString());
+                    Assert.Contains($"Error [{CommandErrorCodes.Interrupted}]: Interrupted; full-scan progress was rolled back", stderr.ToString());
                 }
                 finally
                 {
