@@ -243,6 +243,7 @@ jobs:
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
       - name: Test
+        id: test
         shell: pwsh
         run: |
           $testArgs = @(
@@ -276,6 +277,8 @@ jobs:
             exit 0
           }
 
+          "summarize=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
           if (Select-String -Path $firstLogPath -SimpleMatch "test run timeout" -Quiet) {
             Write-Warning "Initial test run hit TestSessionTimeout; skipping flaky retry to keep CI bounded. Inspect uploaded TRX/blame artifacts."
             exit $firstExitCode
@@ -295,7 +298,7 @@ jobs:
           exit $retryExitCode
 
       - name: Summarize TRX telemetry
-        if: always()
+        if: always() && (steps.test.outputs.summarize == 'true' || failure())
         run: dotnet run --project tools/CodeIndex.TestTelemetry -- summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
