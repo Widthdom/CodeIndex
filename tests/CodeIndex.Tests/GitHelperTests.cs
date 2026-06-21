@@ -522,6 +522,43 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void RunGitCapturingResult_FailsWhenCapturedStderrExceedsLimit_Issue3704()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-stderr-cap");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-stderr-cap");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatExceedsStderrLimit(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        try
+        {
+            var result = GitHelper.RunGitCapturingResultForTests(
+                repoDir,
+                gitEnvironmentOverrides: null,
+                CancellationToken.None,
+                "status");
+
+            Assert.True(
+                result.FailureKind == GitCommandFailureKind.CaptureLimitExceeded,
+                $"Expected CaptureLimitExceeded, got {result.FailureKind}: {result.Diagnostic ?? result.Error}");
+            Assert.Equal(-1, result.ExitCode);
+            Assert.NotNull(result.Diagnostic);
+            Assert.Contains("captured stderr exceeded", result.Diagnostic);
+            Assert.Contains("captured stderr exceeded", result.Error);
+            Assert.True(result.Error!.Length <= GitHelper.MaxGitFailureDiagnosticChars);
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
     public void GetChangedFilesFromCommit_FailsWhenGitCommandTimesOut()
     {
         if (OperatingSystem.IsWindows())
@@ -727,6 +764,43 @@ public class GitHelperTests : IDisposable
             Assert.True(
                 stopwatch.Elapsed < GitCancellationWallClockLimit,
                 $"Cancellation took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void RunGitCapturingResult_CancelDuringOutputCapture_ThrowsOperationCanceled_Issue3761()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-output-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-output-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatStreamsStdoutUntilKilled(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var stopwatch = Stopwatch.StartNew();
+
+            Assert.Throws<OperationCanceledException>(() =>
+                GitHelper.RunGitCapturingResultForTests(
+                    repoDir,
+                    gitEnvironmentOverrides: null,
+                    cts.Token,
+                    "status"));
+
+            stopwatch.Stop();
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Cancellation during output capture took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
         }
         finally
         {
@@ -1386,6 +1460,18 @@ exit 1
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
+    private static void WriteFakeGitThatExceedsStderrLimit(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+perl -e 'print STDERR "e" x 1048577'
+exit 0
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
     private static void WriteFakeGitThatHangsOnDiffTree(string directory)
     {
         var script = Path.Combine(directory, "git");
@@ -1453,6 +1539,17 @@ if [ "$1" = "rev-parse" ]; then
   exit 0
 fi
 exit 1
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatStreamsStdoutUntilKilled(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+perl -e '$|=1; while (1) { print "x" x 4096; select undef, undef, undef, 0.01 }'
 """);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -163,7 +162,7 @@ internal static class ExportImportCommandRunner
                 AddImportValidationPhase(validationPhases, PhaseDatabaseEntry);
 
                 phase = PhaseSha256;
-                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase))
+                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase, cancellationToken))
                     return WriteImportError(wantsJson, jsonOptions, manifestValidationPhase, "import_manifest_mismatch", $"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
                 AddImportValidationPhase(validationPhases, PhaseSha256);
             }
@@ -349,7 +348,7 @@ internal static class ExportImportCommandRunner
             }
             SqliteConnection.ClearAllPools();
             phase = PhaseSha256;
-            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
+            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath, cancellationToken) };
             phase = PhaseWriteArchive;
             WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions, cancellationToken);
 
@@ -705,10 +704,10 @@ internal static class ExportImportCommandRunner
             });
     }
 
-    private static string ComputeSha256(string path)
+    private static string ComputeSha256(string path, CancellationToken cancellationToken = default)
     {
         using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        return Sha256StreamHasher.ComputeHex(stream, cancellationToken);
     }
 
     private static bool TryValidateImportArchiveEntries(
@@ -947,10 +946,15 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message, out string phase)
+    private static bool TryValidateImportedManifest(
+        ExportManifest manifest,
+        string dbPath,
+        out string message,
+        out string phase,
+        CancellationToken cancellationToken = default)
     {
         phase = PhaseSha256;
-        var actualSha256 = ComputeSha256(dbPath);
+        var actualSha256 = ComputeSha256(dbPath, cancellationToken);
         if (!string.Equals(manifest.DatabaseSha256, actualSha256, StringComparison.OrdinalIgnoreCase))
         {
             message = "database_sha256 does not match codeindex.db";
@@ -1173,8 +1177,12 @@ internal static class ExportImportCommandRunner
         CopyToWithLimit(source, target, MaxImportDatabaseBytes, DatabaseEntryName, cancellationToken);
     }
 
-    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
-        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName);
+    internal static long CopyToWithLimit(
+        Stream source,
+        Stream target,
+        long maxBytes,
+        CancellationToken cancellationToken = default)
+        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
 
     internal static long CopyToWithLimit(
         Stream source,
