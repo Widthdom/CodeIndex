@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Text.Json.Nodes;
+using CodeIndex.Database;
 using CodeIndex.Mcp;
-using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
