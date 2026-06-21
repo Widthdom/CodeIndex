@@ -85,11 +85,7 @@ internal sealed class IndexLock : IDisposable
             // FileShare.None は全プラットフォームでプロセス間の排他を提供する
             // （SuggestionStore と同じ手法）。競合相手向け診断メタデータは隣接
             // .info ファイルに分離されるため、この共有モードを緩める必要はない。
-            stream = new FileStream(
-                lockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None);
+            stream = ExclusiveFileLock.Open(lockPath);
         }
         catch (IOException ex)
         {
@@ -111,7 +107,7 @@ internal sealed class IndexLock : IDisposable
                 Pid: Environment.ProcessId,
                 StartedAt: GetCurrentProcessStartTimeUtc(),
                 Verification: IndexLockHolderVerification.Verified);
-            DataDirectorySecurity.WritePrivateText(infoPath, SerializeInfo(info), Encoding.UTF8);
+            ExclusiveFileLock.WriteHolderInfo(infoPath, SerializeInfo(info), Encoding.UTF8);
         }
         catch (Exception)
         {
@@ -132,18 +128,9 @@ internal sealed class IndexLock : IDisposable
         var infoPath = GetInfoPath(lockPath);
         try
         {
-            var ioInfoPath = LongPath.EnsureWindowsPrefix(infoPath);
-            if (!File.Exists(ioInfoPath))
+            if (!ExclusiveFileLock.TryReadHolderInfoText(infoPath, MaxInfoBytes, out var text))
                 return null;
-            // FileShare.ReadWrite mirrors what a concurrent holder might be doing
-            // (the holder may overwrite the .info on stale recovery), so a
-            // diagnostic read is never rejected for share-mode mismatch.
-            // 保持者が .info を上書きしている可能性があるため FileShare.ReadWrite で
-            // 開き、共有モード不一致で読みを失敗させない。
-            var text = DataDirectorySecurity.ReadTextWithinLimit(ioInfoPath, MaxInfoBytes, FileShare.ReadWrite);
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
-            var info = ParseInfo(text);
+            var info = ParseInfo(text!);
             return info is null
                 ? null
                 : info with { Verification = VerifyHolder(info) };
@@ -160,7 +147,7 @@ internal sealed class IndexLock : IDisposable
             return;
         _disposed = true;
 
-        TryDeleteCleanupTarget(_infoPath, "metadata");
+        ExclusiveFileLock.TryDeleteCleanupTarget(_infoPath, "index_lock", "metadata", DeleteFileForTesting, CleanupDiagnosticSinkForTesting);
 
         try
         {
@@ -170,7 +157,6 @@ internal sealed class IndexLock : IDisposable
         {
             // Best-effort. / ベストエフォート。
         }
-
     }
 
     // --- Tiny key=value serializer (avoids touching JsonSerializerContext) ---
@@ -287,24 +273,6 @@ internal sealed class IndexLock : IDisposable
         return sb.ToString();
     }
 
-    private static void TryDeleteCleanupTarget(string path, string target)
-    {
-        try
-        {
-            DeleteFileForTesting(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            ReportCleanupFailure(target, ex);
-        }
-    }
-
-    private static void ReportCleanupFailure(string target, Exception exception)
-    {
-        var diagnostic = LockCleanupDiagnostic.Create("index_lock", target, exception);
-        GlobalToolLog.Error(diagnostic.ToLogMessage());
-        CleanupDiagnosticSinkForTesting?.Invoke(diagnostic);
-    }
 }
 
 internal sealed record IndexLockInfo(

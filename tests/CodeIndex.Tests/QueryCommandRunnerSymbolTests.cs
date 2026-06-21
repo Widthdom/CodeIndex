@@ -1228,6 +1228,130 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunUnused_CSharpPartialClassReferencesDoNotReportPrivateHandlers_Issue3673()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_partial_handlers_3673");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Server.Tools.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class Server
+                {
+                    private object HandleToolsList(object id) => id;
+                    private object ExecuteBatchQuery(object id) => id;
+                    private object ActuallyUnused(object id) => id;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Server.Dispatch.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class Server
+                {
+                    public object Dispatch(string method, object id)
+                    {
+                        return method switch
+                        {
+                            "tools/list" => HandleToolsList(id),
+                            "batch/query" => ExecuteBatchQuery(id),
+                            _ => id,
+                        };
+                    }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    DELETE FROM symbol_references
+                    WHERE symbol_name IN ('HandleToolsList', 'ExecuteBatchQuery')
+                    """;
+                cmd.ExecuteNonQuery();
+
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--visibility", "private", "--limit", "20"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.DoesNotContain("HandleToolsList", symbols.Keys);
+            Assert.DoesNotContain("ExecuteBatchQuery", symbols.Keys);
+            Assert.Equal("function", symbols["ActuallyUnused"].GetProperty("kind").GetString());
+            Assert.Equal("likely_unused_private", symbols["ActuallyUnused"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CSharpFieldsAndConstantsUseSpecificKinds_Issue3673()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_field_kinds_3673");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Limits.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class Limits
+                {
+                    private const int MaxLimit = 200;
+                    private static readonly string Token = "value";
+                    private int Count;
+                    private string Name { get; } = "demo";
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--visibility", "private", "--limit", "20"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("constant", symbols["MaxLimit"].GetProperty("kind").GetString());
+            Assert.Equal("field", symbols["Token"].GetProperty("kind").GetString());
+            Assert.Equal("field", symbols["Count"].GetProperty("kind").GetString());
+            Assert.Equal("property", symbols["Name"].GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--bucket", "missing_bucket", "invalid --bucket value")]
     [InlineData("--min-confidence", "high", "invalid --min-confidence value")]

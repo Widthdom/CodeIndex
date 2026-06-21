@@ -23,6 +23,7 @@ public partial class McpServer
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     internal const int MaxBatchQuerySize = 10;
+    private const int BatchQueryIncrementalEstimatePaddingBytes = 512;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = QueryCommandRunner.MaxQueryPathFilterCount;
@@ -1517,7 +1518,7 @@ public partial class McpServer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            var diagnostic = McpBoundedText.ForDisplay(ex.Message);
+            var diagnostic = FormatMcpCaughtExceptionDiagnostic(ex);
             var error = new JsonObject
             {
                 ["message"] = $"Project filter could not be resolved: {diagnostic.Text}",
@@ -1701,7 +1702,20 @@ public partial class McpServer
         => $"literal search query is too long; maximum is {DbReader.MaxLiteralSearchQueryLength} characters. Split generated input into smaller queries.";
 
     private static string FormatSearchGuardCandidateLimitError(SearchGuardCandidateLimitException ex)
-        => $"guarded search is too broad: inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}). Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.";
+        => $"guarded search is too broad: {FormatSearchGuardCandidateLimitDetail(ex)} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.";
+
+    private static string FormatSearchRecipeGuardCandidateLimitError(string recipeName, string queryName, SearchGuardCandidateLimitException ex)
+    {
+        var recipeDisplay = McpBoundedText.ForDisplay(recipeName).Text;
+        var queryDisplay = McpBoundedText.ForDisplay(queryName).Text;
+        return $"guarded search is too broad for recipe '{recipeDisplay}' query '{queryDisplay}': {FormatSearchGuardCandidateLimitDetail(ex)} Narrow the search with more specific path/lang filters or guards.";
+    }
+
+    private static string FormatSearchGuardCandidateLimitDetail(SearchGuardCandidateLimitException ex)
+        => $"inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}).";
+
+    private static BoundedMcpText FormatMcpCaughtExceptionDiagnostic(Exception ex)
+        => McpBoundedText.ForDisplay(CommandErrorWriter.FormatSanitizedException(ex));
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
@@ -1966,13 +1980,13 @@ public partial class McpServer
                         guardWindow: guardWindow,
                         guardScope: guardScope);
                 }
-                catch (SearchQueryLimitException ex)
+                catch (SearchQueryLimitException)
                 {
-                    return CreateToolErrorResponse(id, ex.Message);
+                    return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
                 }
                 catch (SearchGuardCandidateLimitException ex)
                 {
-                    return CreateToolErrorResponse(id, $"guarded search is too broad for recipe '{recipe.Name}' query '{recipeQuery.Name}': {ex.Message} Narrow the search with more specific path/lang filters or guards.");
+                    return CreateToolErrorResponse(id, FormatSearchRecipeGuardCandidateLimitError(recipe.Name, recipeQuery.Name, ex));
                 }
 
                 var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
@@ -3945,17 +3959,15 @@ public partial class McpServer
 
         bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, string? slotId, bool successfulSlot = false, bool failedSlot = false)
         {
-            var candidateResults = CloneJsonArray(resultsArray);
-            candidateResults.Add(entry.DeepClone());
             var candidateSuccessCount = successCount + (successfulSlot ? 1 : 0);
             var candidateFailureCount = failureCount + (failedSlot ? 1 : 0);
             var candidateExecutedCount = candidateSuccessCount + candidateFailureCount;
-            var candidateSummary = candidateFailureCount == 0
-                ? $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms (all succeeded)."
-                : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
-            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
-                GetBatchFailureScope(queries.Count, candidateSuccessCount, candidateFailureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
-                responseByteLimit, candidateResults, truncated: false, truncatedQueries, adjustments);
+            var candidateBytes = EstimateBatchAppendBytes(
+                estimatedResponseBytes,
+                entry,
+                candidateExecutedCount,
+                candidateSuccessCount,
+                candidateFailureCount);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
@@ -4605,19 +4617,45 @@ public partial class McpServer
         return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload), responseByteLimit);
     }
 
+    private int EstimateBatchAppendBytes(int currentEstimateBytes, JsonObject entry, int executedCount, int successCount, int failureCount)
+    {
+        var entryBytes = EstimateJsonUtf8Bytes(entry);
+        var digitGrowth = CountDecimalDigits(executedCount) + CountDecimalDigits(successCount) + CountDecimalDigits(failureCount);
+        return SaturatingAdd(
+            currentEstimateBytes,
+            entryBytes,
+            BatchQueryIncrementalEstimatePaddingBytes,
+            digitGrowth);
+    }
+
+    private static int CountDecimalDigits(int value)
+    {
+        var digits = 1;
+        while (value >= 10)
+        {
+            value /= 10;
+            digits++;
+        }
+        return digits;
+    }
+
+    private static int SaturatingAdd(params int[] values)
+    {
+        var total = 0L;
+        foreach (var value in values)
+        {
+            total += value;
+            if (total >= int.MaxValue)
+                return int.MaxValue;
+        }
+        return (int)total;
+    }
+
     private static string GetBatchFailureScope(int submittedCount, int successCount, int failureCount, int? cascadeStartedAtIndex)
     {
         if (cascadeStartedAtIndex.HasValue && cascadeStartedAtIndex.Value < submittedCount)
             return "cascading";
         return failureCount == 0 ? "none" : "isolated";
-    }
-
-    private static JsonArray CloneJsonArray(JsonArray source)
-    {
-        var clone = new JsonArray();
-        foreach (var item in source)
-            clone.Add(item?.DeepClone());
-        return clone;
     }
 
     /// <summary>

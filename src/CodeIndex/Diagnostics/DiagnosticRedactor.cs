@@ -10,8 +10,14 @@ internal static class DiagnosticRedactor
 {
     internal const int DefaultDiagnosticValueCharLimit = 120;
     internal const string AngleRedacted = "<redacted>";
+    internal const int MaxReportLogJsonLineChars = 64 * 1024;
+    internal const int MaxReportLogJsonDepth = 32;
 
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+    private static readonly JsonDocumentOptions ReportLogJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxReportLogJsonDepth,
+    };
 
     private static readonly Regex UriUserInfoPattern = new(
         @"(?<scheme>[a-z][a-z0-9+\-.]*://)(?<user>[^:@/\s]+):(?<password>[^@/\s]+)@",
@@ -236,10 +242,17 @@ internal static class DiagnosticRedactor
         redacted = line;
         if (!LooksLikeJsonObject(line))
             return false;
+        if (line.Length > MaxReportLogJsonLineChars)
+        {
+            redacted = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{{\"redaction\":\"json_line_too_large\",\"original_length\":{line.Length},\"max_length\":{MaxReportLogJsonLineChars}}}");
+            return true;
+        }
 
         try
         {
-            using var document = JsonDocument.Parse(line);
+            using var document = JsonDocument.Parse(line, ReportLogJsonDocumentOptions);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return false;
 
