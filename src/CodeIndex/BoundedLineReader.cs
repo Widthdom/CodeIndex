@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.CompilerServices;
 
 namespace CodeIndex;
 
@@ -65,6 +66,9 @@ internal static class WorkerProtocolLineLimits
 
 internal static class BoundedLineReader
 {
+    private const int AsyncReadBufferSize = 4096;
+    private static readonly ConditionalWeakTable<TextReader, AsyncReadBuffer> AsyncBuffers = new();
+
     internal static bool TryReadUtf8File(
         string path,
         int maxBytes,
@@ -202,16 +206,58 @@ internal static class BoundedLineReader
     {
         ArgumentNullException.ThrowIfNull(reader);
         var state = new LineState(maxCharacters, maxUtf8Bytes);
-        var buffer = new char[1];
+        var asyncBuffer = AsyncBuffers.GetValue(reader, _ => new AsyncReadBuffer(AsyncReadBufferSize));
 
         while (true)
         {
-            var read = await reader.ReadAsync(buffer.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
+            while (asyncBuffer.TryReadBufferedChar(out var bufferedChar))
+            {
+                if (state.Process(bufferedChar, out var bufferedLine))
+                    return bufferedLine;
+            }
+
+            var buffer = asyncBuffer.Buffer;
+            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
             if (read == 0)
                 return state.HasAnyInput ? state.CompleteLine() : null;
 
-            if (state.Process(buffer[0], out var line))
+            for (var index = 0; index < read; index++)
+            {
+                if (!state.Process(buffer[index], out var line))
+                    continue;
+
+                asyncBuffer.StoreRemainder(index + 1, read);
                 return line;
+            }
+        }
+    }
+
+    private sealed class AsyncReadBuffer(int size)
+    {
+        private int _start;
+        private int _length;
+
+        internal char[] Buffer { get; } = new char[size];
+
+        internal bool TryReadBufferedChar(out char ch)
+        {
+            if (_length == 0)
+            {
+                ch = default;
+                return false;
+            }
+
+            ch = Buffer[_start++];
+            _length--;
+            if (_length == 0)
+                _start = 0;
+            return true;
+        }
+
+        internal void StoreRemainder(int start, int read)
+        {
+            _start = start;
+            _length = Math.Max(0, read - start);
         }
     }
 

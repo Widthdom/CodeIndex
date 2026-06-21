@@ -20,6 +20,8 @@ internal static class JsonEnvelopeWrapper
     internal const string EnvelopeFlag = "--json-envelope";
     internal const int MaxCapturedOutputChars = 10 * 1024 * 1024;
     internal const int MaxRawJsonItemChars = 1024 * 1024;
+    internal const int MaxRawJsonItems = 10_000;
+    internal const int MaxRawJsonNodes = 16_384;
     internal const int MaxRawJsonItemDepth = 32;
 
     private static readonly HashSet<string> WrappableCommands = new(StringComparer.Ordinal)
@@ -152,6 +154,22 @@ internal static class JsonEnvelopeWrapper
             };
             results = [];
         }
+        catch (JsonEnvelopeRawJsonBudgetExceededException ex)
+        {
+            exitCode = CommandExitCodes.InvalidArgument;
+            var message = $"--json-envelope raw JSON {ex.BudgetName} exceeded {ex.MaxValue}.";
+            var hint = "Run the command with --json for streaming NDJSON output or reduce the result set with --limit/--top.";
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
+            CommandErrorWriter.WriteStderr($"Hint: {hint}");
+            parseError = new JsonObject
+            {
+                ["message"] = message,
+                ["hint"] = hint,
+                ["error_code"] = CommandErrorCodes.UsageError,
+                [ex.JsonPropertyName] = ex.MaxValue,
+            };
+            results = [];
+        }
         var envelope = BuildEnvelope(
             command,
             queryNormalized,
@@ -223,6 +241,7 @@ internal static class JsonEnvelopeWrapper
     private static JsonArray ParseRawJsonItems(string raw)
     {
         var array = new JsonArray();
+        var rawJsonNodeCount = 0;
         if (string.IsNullOrEmpty(raw))
             return array;
 
@@ -240,6 +259,8 @@ internal static class JsonEnvelopeWrapper
             }
             catch (JsonException)
             {
+                EnsureRawJsonItemBudget(array.Count);
+                rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, 1);
                 array.Add(line);
                 continue;
             }
@@ -249,10 +270,61 @@ internal static class JsonEnvelopeWrapper
             if (IsJsonStreamDoneSentinel(node))
                 continue;
 
+            EnsureRawJsonItemBudget(array.Count);
+            rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(node));
             array.Add(node);
         }
 
         return array;
+    }
+
+    private static void EnsureRawJsonItemBudget(int currentItemCount)
+    {
+        if (currentItemCount >= MaxRawJsonItems)
+        {
+            throw new JsonEnvelopeRawJsonBudgetExceededException(
+                "item count",
+                "max_items",
+                MaxRawJsonItems);
+        }
+    }
+
+    private static int AddRawJsonNodeCount(int currentNodeCount, int nodesToAdd)
+    {
+        if (nodesToAdd < 0 || currentNodeCount > MaxRawJsonNodes - nodesToAdd)
+        {
+            throw new JsonEnvelopeRawJsonBudgetExceededException(
+                "node count",
+                "max_nodes",
+                MaxRawJsonNodes);
+        }
+
+        return currentNodeCount + nodesToAdd;
+    }
+
+    private static int CountJsonNodes(JsonNode node)
+    {
+        var count = 0;
+        Count(node);
+        return count;
+
+        void Count(JsonNode? current)
+        {
+            if (current is null)
+                return;
+            count = AddRawJsonNodeCount(count, 1);
+            switch (current)
+            {
+                case JsonArray array:
+                    foreach (var child in array)
+                        Count(child);
+                    break;
+                case JsonObject obj:
+                    foreach (var property in obj)
+                        Count(property.Value);
+                    break;
+            }
+        }
     }
 
     private static IEnumerable<string> EnumerateRawLines(string raw)
@@ -388,5 +460,15 @@ internal static class JsonEnvelopeWrapper
     private sealed class JsonEnvelopeRawJsonItemLimitExceededException(int maxChars) : Exception
     {
         public int MaxChars { get; } = maxChars;
+    }
+
+    private sealed class JsonEnvelopeRawJsonBudgetExceededException(
+        string budgetName,
+        string jsonPropertyName,
+        int maxValue) : Exception
+    {
+        public string BudgetName { get; } = budgetName;
+        public string JsonPropertyName { get; } = jsonPropertyName;
+        public int MaxValue { get; } = maxValue;
     }
 }

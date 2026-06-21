@@ -54,6 +54,18 @@ public class SuggestionStore
     private static readonly Regex s_namedSecretRegex = new(@"(?i)(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]*(?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key|credential)[\p{L}\p{N}_-]*)=(?<value>[^&\s]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
     private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
 
+    internal sealed record ArchiveBuildResult(
+        IReadOnlyList<byte[]> Lines,
+        int DroppedByCapCount,
+        int OversizedDroppedCount,
+        long LargestOversizedRecordBytes);
+
+    private readonly record struct ArchiveWriteResult(
+        int ArchivedCount,
+        int DroppedByCapCount,
+        int OversizedDroppedCount,
+        long LargestOversizedRecordBytes);
+
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
     {
         "a",
@@ -359,7 +371,7 @@ public class SuggestionStore
             }
 
             var issueUrl = submitResult.IssueUrl;
-            StampSubmitResult(found, submitResult);
+            var persistedSubmitError = StampSubmitResult(found, submitResult);
             if (issueUrl != null)
                 MarkSubmitted(found, issueUrl, reservation.AttemptedAt.Value);
 
@@ -369,7 +381,7 @@ public class SuggestionStore
                 reservation.AlreadySubmitted,
                 found.Status,
                 issueUrl ?? found.UpstreamUrl,
-                submitResult.Error,
+                persistedSubmitError,
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
                 found.Hash);
@@ -378,10 +390,10 @@ public class SuggestionStore
 
     /// <summary>
     /// Load all suggestions from disk. Returns an empty list if the file
-    /// does not exist or is empty. Corrupt files are preserved as .bak.
+    /// does not exist or is empty. Corrupt files are preserved as .bak or a timestamped backup.
     /// Throws IOException on transient file access errors (fail-closed).
     /// ディスクから全提案を読み込む。ファイルが存在しないか空の場合は空リストを返す。
-    /// 破損ファイルは .bak として保存される。
+    /// 破損ファイルは .bak またはタイムスタンプ付きバックアップとして保存される。
     /// 一時的なファイルアクセスエラーでは IOException をスローする（fail-closed）。
     /// </summary>
     public List<SuggestionRecord> LoadAll()
@@ -490,8 +502,8 @@ public class SuggestionStore
         }
         catch (JsonException)
         {
-            // Corrupt file — preserve as .bak so history is not lost.
-            // 壊れたファイル — 履歴を失わないよう .bak として保存。
+            // Corrupt file — preserve a backup so history is not lost.
+            // 壊れたファイル — 履歴を失わないようバックアップとして保存。
             PreserveCorruptFile();
             return new List<SuggestionRecord>();
         }
@@ -761,10 +773,9 @@ public class SuggestionStore
                 continue;
             }
 
-            if (take.HasValue && results.Count >= take.Value)
-                continue;
-
             results.Add(record);
+            if (take.HasValue && results.Count >= take.Value)
+                break;
         }
 
         return results;
@@ -835,34 +846,56 @@ public class SuggestionStore
         var maxAge = ResolveMaxAge();
         var maxCount = ResolveMaxCount();
         var cutoff = GetUtcNow().Subtract(maxAge);
-        var pruned = records
-            .Where(record => record.CreatedAt != default && record.CreatedAt < cutoff)
-            .ToList();
+        var pruned = new List<SuggestionRecord>();
+        var retained = new List<SuggestionRecord>(records.Count);
 
-        foreach (var record in pruned)
-            records.Remove(record);
+        foreach (var record in records)
+        {
+            if (record.CreatedAt != default && record.CreatedAt < cutoff)
+            {
+                pruned.Add(record);
+                continue;
+            }
 
-        var overflow = records.Count - maxCount;
+            retained.Add(record);
+        }
+
+        var overflow = retained.Count - maxCount;
         if (overflow > 0)
         {
-            var excess = records
-                .OrderBy(record => record.CreatedAt == default ? DateTime.MinValue : record.CreatedAt)
+            var excess = retained
+                .Select((record, index) => (record, index))
+                .OrderBy(item => item.record.CreatedAt == default ? DateTime.MinValue : item.record.CreatedAt)
+                .ThenBy(item => item.index)
                 .Take(overflow)
-                .ToList();
-            pruned.AddRange(excess);
-            foreach (var record in excess)
-                records.Remove(record);
+                .ToArray();
+            pruned.AddRange(excess.Select(item => item.record));
+
+            var excessIndexes = excess
+                .Select(item => item.index)
+                .ToHashSet();
+            var compacted = new List<SuggestionRecord>(maxCount);
+            for (var i = 0; i < retained.Count; i++)
+            {
+                if (!excessIndexes.Contains(i))
+                    compacted.Add(retained[i]);
+            }
+
+            retained = compacted;
         }
 
         if (pruned.Count == 0)
             return false;
 
-        var archivedCount = ArchivePrunedRecords(pruned);
+        records.Clear();
+        records.AddRange(retained);
+
+        var archiveResult = ArchivePrunedRecords(pruned);
         try
         {
-            var message = archivedCount == pruned.Count
+            var message = archiveResult.ArchivedCount == pruned.Count
                 ? $"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}."
-                : $"[cdidx] Pruned {pruned.Count} stale suggestion record(s); archived latest {archivedCount} to {_archivePath} after applying the {MaxSuggestionArchiveBytes} byte archive cap.";
+                : BuildArchiveDropMessage(pruned.Count, archiveResult);
             ConsoleUi.TryWriteErrorLine(message);
         }
         catch (ObjectDisposedException)
@@ -872,17 +905,38 @@ public class SuggestionStore
         return true;
     }
 
-    private int ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)
+    private string BuildArchiveDropMessage(int prunedCount, ArchiveWriteResult archiveResult)
+    {
+        var droppedCount = prunedCount - archiveResult.ArchivedCount;
+        var archiveTarget = archiveResult.ArchivedCount == 0
+            ? "archived 0 record(s)"
+            : $"archived latest {archiveResult.ArchivedCount} to {_archivePath}";
+        var message = $"[cdidx] Pruned {prunedCount} stale suggestion record(s); {archiveTarget} and dropped {droppedCount} after applying the {MaxSuggestionArchiveBytes} byte archive cap.";
+        if (archiveResult.OversizedDroppedCount > 0)
+        {
+            message += $" Dropped {archiveResult.OversizedDroppedCount} oversized record(s) larger than the archive cap; largest serialized record was {archiveResult.LargestOversizedRecordBytes} bytes.";
+        }
+
+        return message;
+    }
+
+    private ArchiveWriteResult ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)
     {
         var dir = Path.GetDirectoryName(_archivePath);
         if (!string.IsNullOrEmpty(dir))
             DataDirectorySecurity.CreatePrivateDirectory(dir);
 
-        var archiveLines = BuildBoundedArchiveLines(records);
-        if (archiveLines.Count == 0)
-            return 0;
+        var archive = BuildBoundedArchiveLines(records);
+        if (archive.Lines.Count == 0)
+        {
+            return new ArchiveWriteResult(
+                0,
+                archive.DroppedByCapCount,
+                archive.OversizedDroppedCount,
+                archive.LargestOversizedRecordBytes);
+        }
 
-        var pendingBytes = archiveLines.Sum(line => (long)line.Length);
+        var pendingBytes = archive.Lines.Sum(line => (long)line.Length);
         RotateArchiveIfNeeded(pendingBytes);
 
         var options = new FileStreamOptions
@@ -896,27 +950,44 @@ public class SuggestionStore
 
         using var stream = new FileStream(_archivePath, options);
         DataDirectorySecurity.ApplyPrivateFileMode(_archivePath);
-        foreach (var line in archiveLines)
+        foreach (var line in archive.Lines)
             stream.Write(line, 0, line.Length);
 
-        return archiveLines.Count;
+        return new ArchiveWriteResult(
+            archive.Lines.Count,
+            archive.DroppedByCapCount,
+            archive.OversizedDroppedCount,
+            archive.LargestOversizedRecordBytes);
     }
 
-    private static List<byte[]> BuildBoundedArchiveLines(IEnumerable<SuggestionRecord> records)
+    internal static ArchiveBuildResult BuildBoundedArchiveLines(IEnumerable<SuggestionRecord> records)
     {
         var lines = new Queue<byte[]>();
         var totalBytes = 0L;
+        var droppedByCapCount = 0;
+        var oversizedDroppedCount = 0;
+        var largestOversizedRecordBytes = 0L;
         foreach (var record in records)
         {
             var line = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(record, s_jsonOptions) + Environment.NewLine);
+            if (line.Length > MaxSuggestionArchiveBytes)
+            {
+                oversizedDroppedCount++;
+                largestOversizedRecordBytes = Math.Max(largestOversizedRecordBytes, line.Length);
+                continue;
+            }
+
             lines.Enqueue(line);
             totalBytes += line.Length;
 
             while (totalBytes > MaxSuggestionArchiveBytes && lines.Count > 0)
+            {
                 totalBytes -= lines.Dequeue().Length;
+                droppedByCapCount++;
+            }
         }
 
-        return lines.ToList();
+        return new ArchiveBuildResult(lines.ToList(), droppedByCapCount, oversizedDroppedCount, largestOversizedRecordBytes);
     }
 
     private void RotateArchiveIfNeeded(long pendingBytes)
@@ -959,14 +1030,15 @@ public class SuggestionStore
     {
         record.LastSubmitAttempt = timestamp;
         record.SubmitAttemptCount++;
-        record.LastSubmitError = string.IsNullOrWhiteSpace(error) ? null : error;
+        record.LastSubmitError = RedactSubmitErrorForPersistence(error);
         record.NextRetryAt = nextRetryAt;
     }
 
-    private static void StampSubmitResult(SuggestionRecord record, SubmitAttemptResult result)
+    private static string? StampSubmitResult(SuggestionRecord record, SubmitAttemptResult result)
     {
-        record.LastSubmitError = string.IsNullOrWhiteSpace(result.Error) ? null : result.Error;
+        record.LastSubmitError = RedactSubmitErrorForPersistence(result.Error);
         record.NextRetryAt = result.NextRetryAt;
+        return record.LastSubmitError;
     }
 
     private static SuggestionRecord CloneForSubmit(SuggestionRecord record) => new()
@@ -1111,6 +1183,18 @@ public class SuggestionStore
         return RedactSensitiveText(value, out redactedTypes);
     }
 
+    private static string? RedactSubmitErrorForPersistence(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return null;
+
+        var redacted = RedactSensitiveText(error, out var redactedTypes);
+        if (redactedTypes.Count > 0)
+            WriteRedactionWarning(redactedTypes);
+
+        return redacted;
+    }
+
     private static void WriteRedactionWarning(IReadOnlyCollection<string> redactedTypes)
     {
         try
@@ -1177,11 +1261,7 @@ public class SuggestionStore
         // The lock is held for the lifetime of the FileStream (released on Dispose).
         // FileShare.None は全プラットフォームでプロセス間の排他アクセスを提供する。
         // ロックは FileStream の寿命の間保持される（Dispose で解放）。
-        using var lockFile = new FileStream(
-            _lockPath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.None);
+        using var lockFile = ExclusiveFileLock.Open(_lockPath);
 
         return action();
     }
@@ -1196,20 +1276,21 @@ public class SuggestionStore
     }
 
     /// <summary>
-    /// Preserve a corrupt suggestions file by renaming it to .bak.
+    /// Preserve a corrupt suggestions file by renaming it to .bak or a timestamped backup.
     /// This prevents silent data loss — the corrupt file can be inspected
-    /// or recovered manually.
-    /// 破損した suggestions ファイルを .bak にリネームして保存する。
+    /// or recovered manually, without overwriting previous corrupt evidence.
+    /// 破損した suggestions ファイルを .bak またはタイムスタンプ付きバックアップにリネームして保存する。
     /// サイレントなデータ消失を防ぐ — 破損ファイルは手動で検査・復旧できる。
+    /// 以前の破損証跡を上書きしない。
     /// </summary>
     private void PreserveCorruptFile()
     {
         try
         {
-            var backupPath = _filePath + ".bak";
+            var backupPath = GetCorruptBackupPath();
             if (File.Exists(LongPath.EnsureWindowsPrefix(_filePath)))
             {
-                File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: true);
+                File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: false);
                 DataDirectorySecurity.ApplyPrivateFileMode(backupPath);
             }
         }
@@ -1218,5 +1299,29 @@ public class SuggestionStore
             // Best-effort — if we can't rename, continue with empty list.
             // ベストエフォート — リネームできなければ空リストで続行。
         }
+    }
+
+    private string GetCorruptBackupPath()
+    {
+        var primary = _filePath + ".bak";
+        if (!PathExists(primary))
+            return primary;
+
+        var timestamp = _timeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMddHHmmssfffffff", CultureInfo.InvariantCulture);
+        for (var attempt = 0; attempt < 1000; attempt++)
+        {
+            var suffix = attempt == 0 ? timestamp : $"{timestamp}.{attempt}";
+            var candidate = $"{primary}.{suffix}";
+            if (!PathExists(candidate))
+                return candidate;
+        }
+
+        return $"{primary}.{timestamp}.{Guid.NewGuid():N}";
+    }
+
+    private static bool PathExists(string path)
+    {
+        var ioPath = LongPath.EnsureWindowsPrefix(path);
+        return File.Exists(ioPath) || Directory.Exists(ioPath);
     }
 }

@@ -40,6 +40,8 @@ public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
 [Collection("SQLite pool sensitive")]
 public class IndexCommandRunnerTests
 {
+    private static readonly TimeSpan LegacyEnvironmentHookWorkerBudget = TimeSpan.FromSeconds(30);
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -188,6 +190,20 @@ public class IndexCommandRunnerTests
         Assert.Contains("Regex extraction timed out after 2s", message);
         Assert.Contains("file was skipped", message);
         Assert.DoesNotContain("raw-sensitive", message);
+    }
+
+    [Fact]
+    public void FormatIndexFileException_GenericExceptionSanitizesRawMessage_Issue3796()
+    {
+        var secretPath = Path.Combine(Path.GetTempPath(), "secret-project-token-ghp_1234567890abcdef-private", "Generated.cs");
+        var ex = new IOException($"failed to read {secretPath} with payload token=ghp_1234567890abcdef_private");
+
+        var message = IndexCommandRunner.FormatIndexFileException(ex);
+
+        Assert.Equal("IOException", message);
+        Assert.DoesNotContain(secretPath, message);
+        Assert.DoesNotContain("ghp_1234567890abcdef", message);
+        Assert.DoesNotContain("Generated.cs", message);
     }
 
     [Fact]
@@ -350,7 +366,7 @@ public class IndexCommandRunnerTests
                     "public class App { }\n",
                     Path.Combine(projectRoot, "App.cs"),
                     projectRoot,
-                    TimeSpan.FromSeconds(5));
+                    LegacyEnvironmentHookWorkerBudget);
 
                 Assert.True(result.Success, result.WorkerError);
                 Assert.False(result.TimedOut);
@@ -504,6 +520,72 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void WorkerProtocol_RejectsExcessiveJsonProperties_Issue3759()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                WorkerProtocolJsonValidator.MaxJsonPropertiesForTesting = 1;
+                using var input = new StringReader("{\"FileId\":0,\"Lang\":\"csharp\"}\n");
+                using var output = new StringWriter();
+                using var error = new StringWriter();
+
+                var handled = SymbolExtractionWorker.TryRunCommand(
+                    [SymbolExtractionWorker.CommandName],
+                    input,
+                    output,
+                    error,
+                    out var exitCode);
+
+                Assert.True(handled);
+                Assert.Equal(0, exitCode);
+                Assert.Equal(string.Empty, error.ToString());
+                using var document = JsonDocument.Parse(output.ToString());
+                var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+                Assert.Equal("worker_protocol_error: json_property_limit_exceeded", workerError);
+            }
+            finally
+            {
+                WorkerProtocolJsonValidator.MaxJsonPropertiesForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkerProtocol_RejectsOversizedJsonStrings_Issue3759()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                WorkerProtocolJsonValidator.MaxStringCharactersForTesting = 4;
+                using var input = new StringReader("{\"Callback\":\"OnSymbolsExtracted\"}\n");
+                using var output = new StringWriter();
+                using var error = new StringWriter();
+
+                var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+                    [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+                    input,
+                    output,
+                    error,
+                    out var exitCode);
+
+                Assert.True(handled);
+                Assert.Equal(0, exitCode);
+                Assert.Equal(string.Empty, error.ToString());
+                using var document = JsonDocument.Parse(output.ToString());
+                var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+                Assert.Equal("worker_protocol_error: json_string_length_exceeded", workerError);
+            }
+            finally
+            {
+                WorkerProtocolJsonValidator.MaxStringCharactersForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
@@ -526,6 +608,30 @@ public class IndexCommandRunnerTests
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void IsolatedWorkers_StartInfo_ScrubsEnvironmentByAllowlist_Issue3759()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_TEST_WORKER_ALLOWLIST_3759",
+                "CDIDX_SECRET_WORKER_3759");
+            env.Set("CDIDX_TEST_WORKER_ALLOWLIST_3759", "allowed");
+            env.Set("CDIDX_SECRET_WORKER_3759", "secret");
+            var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+            var created = SymbolExtractionWorker.TryCreateStartInfo(
+                currentProcessPath,
+                runnerAssemblyPath: string.Empty,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal("allowed", startInfo.Environment["CDIDX_TEST_WORKER_ALLOWLIST_3759"]);
+            Assert.False(startInfo.Environment.ContainsKey("CDIDX_SECRET_WORKER_3759"));
+        }
     }
 
     [Fact]
@@ -3458,10 +3564,11 @@ public sealed class Caller
 
         var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "src/foo.cs", captured);
 
-        Assert.Equal("  [ERR ] src/foo.cs: simulated indexing failure", line);
+        Assert.Equal("  [ERR ] src/foo.cs: InvalidOperationException", line);
         Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain(captured.StackTrace!, line);
         Assert.DoesNotContain("FormatPerFileErrorLine_OmitsStackTrace", line);
+        Assert.DoesNotContain("simulated indexing failure", line);
         Assert.DoesNotContain(typeof(InvalidOperationException).FullName!, line);
     }
 
@@ -3479,7 +3586,9 @@ public sealed class Caller
 
         Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain("\r", line);
-        Assert.Equal("  [ERR ] weird  path.cs: first line at Internal.Type.Method() in /home/secret.cs:42", line);
+        Assert.Equal("  [ERR ] weird  path.cs: InvalidOperationException", line);
+        Assert.DoesNotContain("first line", line);
+        Assert.DoesNotContain("/home/secret.cs", line);
     }
 
     [Fact]

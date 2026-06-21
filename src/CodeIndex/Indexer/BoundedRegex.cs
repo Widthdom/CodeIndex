@@ -63,6 +63,12 @@ internal sealed class BoundedRegex : BclRegex
     internal static RegexTimeoutCaptureScope CaptureTimeouts(string? language, string patternFamily) =>
         new(language, patternFamily);
 
+    internal static BoundedRegex CreateExtractionRegex(string pattern, RegexOptions options) =>
+        CreateExtractionRegex(pattern, options, DefaultMatchTimeout);
+
+    internal static BoundedRegex CreateExtractionRegex(string pattern, RegexOptions options, TimeSpan matchTimeout) =>
+        new(pattern, options | RegexOptions.CultureInvariant, matchTimeout);
+
     public BoundedRegex(string pattern)
         : base(pattern, RegexOptions.None, DefaultMatchTimeout)
     {
