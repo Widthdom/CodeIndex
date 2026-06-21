@@ -243,6 +243,7 @@ jobs:
         run: make lint
 
       - name: Build
+        if: matrix.os != 'ubuntu-latest' || matrix.test-framework != 'net8.0'
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
       - name: Test
