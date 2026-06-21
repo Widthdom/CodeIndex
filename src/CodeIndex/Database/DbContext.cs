@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -24,6 +25,8 @@ public class DbContext : IDisposable
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
+    private const int MigrationDiagnosticTextLimit = 240;
+    private const int MigrationForeignKeyViolationSampleLimit = 5;
 
     private static readonly string[] RequiredCodeIndexTables =
     [
@@ -92,6 +95,9 @@ public class DbContext : IDisposable
     private bool _readOnlyFallback;
     private bool _walCheckpointAttempted;
     private bool _walCheckpointSucceeded;
+    private bool _readOnlyImmutableFallback;
+    private string? _walCheckpointSkippedReason;
+    private string? _walCheckpointFailureReason;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private bool _readMigrationInsideExternalTransaction;
@@ -108,6 +114,7 @@ public class DbContext : IDisposable
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedForeignKeysDisabledForTesting = new();
     private static readonly AsyncLocal<Action<string, long>?> ScopedForeignKeysRestoringForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteConnection, string>?> ScopedForeignKeyValidationBeforeCheckForTesting = new();
 
     internal static Action<string>? OptimizePragmaExecutedForTesting
     {
@@ -145,11 +152,20 @@ public class DbContext : IDisposable
         set => ScopedForeignKeysRestoringForTesting.Value = value;
     }
 
+    internal static Action<SqliteConnection, string>? ForeignKeyValidationBeforeCheckForTesting
+    {
+        get => ScopedForeignKeyValidationBeforeCheckForTesting.Value;
+        set => ScopedForeignKeyValidationBeforeCheckForTesting.Value = value;
+    }
+
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
     public bool ReadOnlyFallback => _readOnlyFallback;
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
+    public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
+    public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
+    public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
 
     public static string GetSymbolExtractorVersionMetaKey(string lang)
         => SymbolExtractorVersionMetaPrefix + lang;
@@ -186,15 +202,40 @@ public class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         CancellationToken cancellationToken = default)
+        => TryValidateExistingCodeIndexDb(
+            dbPath,
+            requireWritable: true,
+            requireSupportedUserVersion: false,
+            out message,
+            out isNotFound,
+            out _,
+            cancellationToken);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        bool requireWritable,
+        bool requireSupportedUserVersion,
+        out string message,
+        out bool isNotFound,
+        out bool isSchemaTooNew,
+        CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
             var builder = new SqliteConnectionStringBuilder
             {
                 DataSource = openTarget,
-                Mode = SqliteOpenMode.ReadWrite,
+                Mode = requireWritable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
             };
             return new SqliteConnection(builder.ConnectionString);
-        }, static connection => connection.Open(), null, out message, out isNotFound, cancellationToken);
+        },
+        static connection => connection.Open(),
+        null,
+        requireWritable,
+        requireSupportedUserVersion,
+        out message,
+        out isNotFound,
+        out isSchemaTooNew,
+        cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
         string dbPath,
@@ -204,9 +245,33 @@ public class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         CancellationToken cancellationToken = default)
+        => TryValidateExistingCodeIndexDb(
+            dbPath,
+            createConnection,
+            openConnection,
+            sleep,
+            requireWritable: true,
+            requireSupportedUserVersion: false,
+            out message,
+            out isNotFound,
+            out _,
+            cancellationToken);
+
+    private static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        Func<string, SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep,
+        bool requireWritable,
+        bool requireSupportedUserVersion,
+        out string message,
+        out bool isNotFound,
+        out bool isSchemaTooNew,
+        CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
+        isSchemaTooNew = false;
         cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
@@ -215,7 +280,7 @@ public class DbContext : IDisposable
             return false;
         }
 
-        if (SqliteFileUri.StartsWithFileScheme(dbPath) && SqliteFileUri.RequestsReadOnly(dbPath))
+        if (requireWritable && SqliteFileUri.StartsWithFileScheme(dbPath) && SqliteFileUri.RequestsReadOnly(dbPath))
         {
             message = $"database must be writable: {dbPath}";
             return false;
@@ -246,12 +311,14 @@ public class DbContext : IDisposable
 
         try
         {
-            using var connection = OpenSqliteConnectionWithRetry(
-                () => createConnection(openTarget),
-                openConnection,
-                sleep,
-                dbPath: dbPath,
-                cancellationToken: cancellationToken);
+            using var connection = requireWritable
+                ? OpenSqliteConnectionWithRetry(
+                    () => createConnection(openTarget),
+                    openConnection,
+                    sleep,
+                    dbPath: dbPath,
+                    cancellationToken: cancellationToken)
+                : OpenReadOnly(openTarget);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA application_id";
@@ -259,6 +326,19 @@ public class DbContext : IDisposable
             {
                 message = $"database is not an existing CodeIndex DB: {dbPath}";
                 return false;
+            }
+
+            if (requireSupportedUserVersion)
+            {
+                cmd.CommandText = "PRAGMA user_version";
+                var userVersion = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+                var unknownBits = userVersion & ~CurrentSchemaVersion;
+                if (unknownBits != 0)
+                {
+                    isSchemaTooNew = true;
+                    message = $"database was written by a newer cdidx schema stamp (user_version {userVersion}); this binary supports up to {CurrentSchemaVersion}: {dbPath}";
+                    return false;
+                }
             }
 
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
@@ -332,11 +412,15 @@ public class DbContext : IDisposable
 
             // Bare file: URI — normalize to a filesystem path and fall through.
             // immutable/mode=ro 指定のない file: URI はローカルパスに戻して通常経路で開く。
-            var normalized = TryGetLocalPath(dbPath);
-            if (normalized != null)
+            if (TryGetLocalPath(dbPath, out var normalized, out var pathFailureReason)
+                && normalized != null)
             {
                 dbPath = normalized;
                 _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
+            }
+            else
+            {
+                _walCheckpointSkippedReason = pathFailureReason;
             }
         }
 
@@ -382,7 +466,8 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _walCheckpointAttempted = true;
-            _walCheckpointSucceeded = TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken);
+            _walCheckpointSucceeded = _walCheckpointSkippedReason == null
+                && TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken, out _walCheckpointFailureReason);
             if (_walCheckpointSucceeded)
             {
                 try
@@ -449,7 +534,7 @@ public class DbContext : IDisposable
     private void OpenReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _connection = OpenReadOnly(dbPath);
+        _connection = OpenReadOnly(dbPath, out _readOnlyImmutableFallback);
         ApplyBusyTimeoutPragma();
         ApplyConnectionPerformancePragmas();
         RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
@@ -457,8 +542,12 @@ public class DbContext : IDisposable
         WarnIfBatchInProgress();
     }
 
-    private static bool TryCheckpointWalBeforeReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
+    private static bool TryCheckpointWalBeforeReadOnlyFallback(
+        string dbPath,
+        CancellationToken cancellationToken,
+        out string? failureReason)
     {
+        failureReason = null;
         try
         {
             var builder = new SqliteConnectionStringBuilder
@@ -479,9 +568,17 @@ public class DbContext : IDisposable
         }
         catch (Exception ex) when (ex is SqliteException or CodeIndexException)
         {
+            failureReason = FormatWalCheckpointFailureReason(ex);
             return false;
         }
     }
+
+    private static string FormatWalCheckpointFailureReason(Exception ex) => ex switch
+    {
+        SqliteException sqlite => $"sqlite_error_{sqlite.SqliteErrorCode.ToString(CultureInfo.InvariantCulture)}",
+        CodeIndexException codeIndexException => codeIndexException.Code,
+        _ => "wal_checkpoint_failed",
+    };
 
     public bool TryCheckpointWalTruncate()
     {
@@ -768,8 +865,14 @@ public class DbContext : IDisposable
     private static string? TryGetLocalPath(string uriText)
         => DbConnectionFactory.TryGetLocalPath(uriText);
 
+    private static bool TryGetLocalPath(string uriText, out string? localPath, out string? failureReason)
+        => DbConnectionFactory.TryGetLocalPath(uriText, out localPath, out failureReason);
+
     private static SqliteConnection OpenReadOnly(string dbPath)
         => DbConnectionFactory.OpenReadOnly(dbPath);
+
+    private static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
+        => DbConnectionFactory.OpenReadOnly(dbPath, out usedImmutableFallback);
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
     {
@@ -1580,6 +1683,8 @@ public class DbContext : IDisposable
     public void InitializeSchema()
     {
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
+        var foreignKeys = ReadPragmaLong("foreign_keys");
+        Execute("PRAGMA foreign_keys=OFF");
         Execute("PRAGMA legacy_alter_table=ON");
         try
         {
@@ -1820,6 +1925,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            Execute($"PRAGMA foreign_keys={foreignKeys}");
             Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
             _schemaCache?.Refresh();
         }
@@ -2082,8 +2188,10 @@ public class DbContext : IDisposable
             Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldReferenceLines}");
+            InvokeForeignKeyValidationBeforeCheckForTesting("reference_lines_context_key");
         });
 
+        ValidateForeignKeysAfterMigration("reference_lines_context_key");
         _schemaCache?.Refresh();
     }
 
@@ -2168,14 +2276,27 @@ public class DbContext : IDisposable
             """;
         const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
 
+        var rebuilt = false;
         RunWithForeignKeysDisabledForMigration("EnsureKindCheckConstraintsCurrent", () =>
         {
             if (!TableCheckContainsAll("symbols", SymbolKindCatalog.SymbolKinds))
+            {
                 RebuildTableWithCurrentKindChecks("symbols", "_symbols_kind_check", symbolsCreateSql, symbolsColumns);
+                rebuilt = true;
+            }
 
             if (!TableCheckContainsAll("symbol_references", SymbolKindCatalog.SymbolKinds.Concat(SymbolKindCatalog.ReferenceKinds)))
+            {
                 RebuildTableWithCurrentKindChecks("symbol_references", "_symbol_references_kind_check", symbolReferencesCreateSql, symbolReferencesColumns);
+                rebuilt = true;
+            }
+
+            if (rebuilt)
+                InvokeForeignKeyValidationBeforeCheckForTesting("kind_check_constraints");
         });
+
+        if (rebuilt)
+            ValidateForeignKeysAfterMigration("kind_check_constraints");
     }
 
     private void RunWithForeignKeysDisabledForMigration(string operation, Action action)
@@ -2211,6 +2332,62 @@ public class DbContext : IDisposable
 
         operationFailure?.Throw();
     }
+
+    private void InvokeForeignKeyValidationBeforeCheckForTesting(string phase)
+    {
+        var boundedPhase = DiagnosticRedactor.BoundDiagnosticText(phase, MigrationDiagnosticTextLimit);
+        ForeignKeyValidationBeforeCheckForTesting?.Invoke(_connection, boundedPhase);
+    }
+
+    private void ValidateForeignKeysAfterMigration(string phase)
+    {
+        var boundedPhase = DiagnosticRedactor.BoundDiagnosticText(phase, MigrationDiagnosticTextLimit);
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "PRAGMA foreign_key_check";
+
+        var violations = new List<string>();
+        var violationCount = 0;
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            violationCount++;
+            if (violations.Count < MigrationForeignKeyViolationSampleLimit)
+                violations.Add(FormatForeignKeyViolation(reader));
+        }
+
+        if (violationCount == 0)
+            return;
+
+        var sample = string.Join("; ", violations);
+        var truncated = violationCount > violations.Count
+            ? $" (showing {violations.Count.ToString(CultureInfo.InvariantCulture)})"
+            : string.Empty;
+        throw new CodeIndexException(
+            code: CommandErrorCodes.DbIntegrityFailed,
+            category: CodeIndexExceptionCategory.Database,
+            message: $"Foreign key validation failed after schema migration phase '{boundedPhase}' with {violationCount.ToString(CultureInfo.InvariantCulture)} violation(s){truncated}: {sample}.",
+            hint: "Run `cdidx db --integrity-check --db <db>` and rebuild the index on writable storage if violations persist.");
+    }
+
+    private static string FormatForeignKeyViolation(SqliteDataReader reader)
+    {
+        var table = FormatForeignKeyCheckValue(reader.IsDBNull(0) ? "<unknown>" : reader.GetString(0));
+        var rowId = reader.IsDBNull(1)
+            ? "<null>"
+            : Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        var parent = FormatForeignKeyCheckValue(reader.IsDBNull(2) ? "<unknown>" : reader.GetString(2));
+        var fkId = reader.IsDBNull(3)
+            ? "<null>"
+            : Convert.ToInt64(reader.GetValue(3), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        return $"table={table}, rowid={rowId}, parent={parent}, fkid={fkId}";
+    }
+
+    private static string FormatForeignKeyCheckValue(string value)
+        => DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(value, redactPaths: true),
+            MigrationDiagnosticTextLimit);
 
     private bool TableCheckContainsAll(string tableName, IEnumerable<string> allowedValues)
     {
@@ -2417,6 +2594,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            _activeMigrationTransaction = null;
             // Migration may have added columns or indexes the schema cache had already
             // resolved as missing; drop the cache so the next DbReader sees the new shape.
             // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
@@ -2488,7 +2666,7 @@ public class DbContext : IDisposable
         var failure = new DbMigrationFailure(
             description,
             exception.SqliteErrorCode,
-            exception.Message,
+            FormatMigrationSqliteMessage(exception),
             BuildMigrationSuggestedAction(exception.SqliteErrorCode));
         LastMigrationFailure = failure;
         EmitMigrationFailureWarning(failure);
@@ -2639,10 +2817,7 @@ public class DbContext : IDisposable
         // 8/10/14 は restricted mount 系の典型シグネチャ。書き込み可能な場所での再実行を案内する。
         if (sqliteErrorCode is 8 or 10 or 14)
         {
-            var dbDir = TryGetDbDirectoryForSuggestion();
-            return dbDir is null
-                ? "Re-run cdidx on writable storage, or grant write access to the database directory (e.g. chmod +w on the .cdidx directory), so the schema migration can complete."
-                : $"Re-run cdidx on writable storage, or grant write access to '{dbDir}' (e.g. chmod +w '{dbDir}'), so the schema migration can complete.";
+            return "Re-run cdidx on writable storage, or grant write access to <db directory> (for example, chmod +w <db directory>), so the schema migration can complete.";
         }
 
         // Unknown SQLite codes — surface the code itself and point at integrity check.
@@ -2650,20 +2825,10 @@ public class DbContext : IDisposable
         return $"Inspect the database with 'sqlite3 <db> \"PRAGMA integrity_check\"' (SQLite error code {sqliteErrorCode}).";
     }
 
-    private string? TryGetDbDirectoryForSuggestion()
-    {
-        try
-        {
-            var dataSource = _connection.DataSource;
-            if (string.IsNullOrEmpty(dataSource)) return null;
-            var fullPath = Path.GetFullPath(dataSource);
-            return Path.GetDirectoryName(fullPath);
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private static string FormatMigrationSqliteMessage(SqliteException exception)
+        => DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(exception.Message, redactPaths: true),
+            MigrationDiagnosticTextLimit);
 
     private static void EmitMigrationFailureWarning(DbMigrationFailure failure)
     {
