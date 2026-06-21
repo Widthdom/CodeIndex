@@ -17,6 +17,7 @@ public class McpAuditLogTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _auditPath;
+    private AuditLogSink? _activeAuditSink;
 
     public McpAuditLogTests()
     {
@@ -35,11 +36,17 @@ public class McpAuditLogTests : IDisposable
         }
     }
 
-    private McpServer CreateServer(AuditLogSink sink) =>
-        new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
+    private McpServer CreateServer(AuditLogSink sink)
+    {
+        _activeAuditSink = sink;
+        return new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
+    }
 
-    private McpServer CreateServerWithFilter(AuditLogSink sink, McpToolFilter filter) =>
-        new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, serializeResponse: null, authenticator: null, toolFilter: filter, auditLog: sink);
+    private McpServer CreateServerWithFilter(AuditLogSink sink, McpToolFilter filter)
+    {
+        _activeAuditSink = sink;
+        return new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, serializeResponse: null, authenticator: null, toolFilter: filter, auditLog: sink);
+    }
 
     [Fact]
     public void ToolsCall_Ping_EmitsAuditRecordWithCallerFromInitialize()
@@ -97,7 +104,7 @@ public class McpAuditLogTests : IDisposable
         var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
         _ = server.HandleMessage(ping);
 
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain(name, rawLog, StringComparison.Ordinal);
         Assert.DoesNotContain(version, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
@@ -151,7 +158,7 @@ public class McpAuditLogTests : IDisposable
         AssertJsonNullId(response);
         if (File.Exists(_auditPath))
         {
-            var rawLog = File.ReadAllText(_auditPath);
+            var rawLog = ReadAuditText();
             Assert.DoesNotContain(oversizedId, rawLog, StringComparison.Ordinal);
             Assert.True(string.IsNullOrWhiteSpace(rawLog), "oversized request ids must be rejected before tool audit emission");
         }
@@ -252,7 +259,7 @@ public class McpAuditLogTests : IDisposable
         var response = server.HandleMessage(request)!;
 
         Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain(toolName, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
         Assert.Equal(display.Text, record.GetProperty("tool").GetString());
@@ -288,7 +295,7 @@ public class McpAuditLogTests : IDisposable
 
         Assert.False(response.AsObject().ContainsKey("error"));
         Assert.NotNull(response["result"]);
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain(argumentName, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
         Assert.Equal(display.Text, record.GetProperty("arg_keys")[1].GetString());
@@ -341,7 +348,7 @@ public class McpAuditLogTests : IDisposable
         };
         _ = server.HandleMessage(unknown);
 
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain(token, rawLog, StringComparison.Ordinal);
         Assert.DoesNotContain("user:pass", rawLog, StringComparison.Ordinal);
 
@@ -379,7 +386,7 @@ public class McpAuditLogTests : IDisposable
 
         _ = server.HandleMessage(request);
 
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain(longQuery, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
         Assert.True(record.GetProperty("arg_values_truncated").GetBoolean());
@@ -488,7 +495,7 @@ public class McpAuditLogTests : IDisposable
 
         Assert.False(response.AsObject().ContainsKey("error"));
         Assert.NotNull(response["result"]);
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain("request_id_truncated", rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
         Assert.Equal(serializedId, record.GetProperty("request_id").GetString());
@@ -570,12 +577,46 @@ public class McpAuditLogTests : IDisposable
 
         _ = server.HandleMessage(request);
 
-        var rawLog = File.ReadAllText(_auditPath);
+        var rawLog = ReadAuditText();
         Assert.DoesNotContain(secret, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
         Assert.Equal(display.Text, record.GetProperty("arg_keys")[0].GetString());
         Assert.Equal(AuditLogSink.RedactedValue, record.GetProperty("arg_values").GetProperty(display.Text).GetString());
         Assert.True(record.GetProperty("arg_values_redacted").GetBoolean());
+    }
+
+    [Fact]
+    public void Record_DropsWhenQueueSaturated_Issue3747()
+    {
+        using var writerEntered = new ManualResetEventSlim();
+        using var releaseWriter = new ManualResetEventSlim();
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false, queueCapacity: 1);
+        sink.BeforeWriteForTests = () =>
+        {
+            writerEntered.Set();
+            releaseWriter.Wait();
+        };
+
+        try
+        {
+            sink.Record(CreateAuditEvent("first"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
+
+            sink.Record(CreateAuditEvent("second"));
+            sink.Record(CreateAuditEvent("third"));
+
+            var diagnostics = WaitForAuditQueueFullDrop(sink);
+            Assert.True(diagnostics.DroppedRecordCount > 0);
+            Assert.True(diagnostics.QueueFullDropCount > 0);
+            Assert.Equal(1, diagnostics.QueueCapacity);
+            Assert.True(diagnostics.QueueDepth > 0);
+            Assert.Contains("queue_full", diagnostics.LastDropReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            Assert.True(sink.WaitForIdle(TimeSpan.FromSeconds(5)), "audit log writer did not drain after release");
+        }
     }
 
     [Fact]
@@ -662,10 +703,55 @@ public class McpAuditLogTests : IDisposable
 
     private JsonElement ReadOnlyRecord()
     {
+        WaitForAuditLogIdle();
         var lines = File.ReadAllLines(_auditPath);
         Assert.Single(lines);
         return JsonDocument.Parse(lines[0]).RootElement.Clone();
     }
+
+    private string ReadAuditText()
+    {
+        WaitForAuditLogIdle();
+        return File.ReadAllText(_auditPath);
+    }
+
+    private void WaitForAuditLogIdle()
+    {
+        if (_activeAuditSink is not null)
+            Assert.True(_activeAuditSink.WaitForIdle(TimeSpan.FromSeconds(5)), "audit log writer did not drain within the expected timeout");
+    }
+
+    private static AuditLogSink.AuditLogDiagnostics WaitForAuditQueueFullDrop(AuditLogSink sink)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        AuditLogSink.AuditLogDiagnostics diagnostics;
+        do
+        {
+            diagnostics = sink.SnapshotDiagnostics();
+            if (diagnostics.QueueFullDropCount > 0)
+                return diagnostics;
+
+            Thread.Sleep(10);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        Assert.Fail("Expected audit log queue saturation to drop at least one record.");
+        return diagnostics;
+    }
+
+    private static AuditLogSink.AuditEvent CreateAuditEvent(string tool) => new(
+        Timestamp: DateTimeOffset.UtcNow,
+        Tool: tool,
+        CallerName: null,
+        CallerVersion: null,
+        RequestId: null,
+        ArgKeys: Array.Empty<string>(),
+        ArgLengths: Array.Empty<KeyValuePair<string, int>>(),
+        ArgValues: null,
+        ResultCount: null,
+        ElapsedMs: 0,
+        ErrorCode: 0,
+        ErrorType: null);
 
     private static void AssertJsonNullId(JsonNode response)
     {

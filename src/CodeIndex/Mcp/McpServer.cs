@@ -1545,11 +1545,12 @@ public partial class McpServer : IDisposable
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
         var httpResponseCleanupDegraded = httpTransport?.ResponseCleanupDegraded ?? false;
+        var httpRequestLogDegraded = httpTransport?.RequestLogDegraded ?? false;
         var auditLogDiagnostics = _auditLog?.SnapshotDiagnostics();
         var auditLogDegraded = IsAuditLogDegraded(auditLogDiagnostics);
         var result = new JsonObject
         {
-            ["status"] = dbOpen && !httpResponseCleanupDegraded && !auditLogDegraded ? "ok" : "degraded",
+            ["status"] = dbOpen && !httpResponseCleanupDegraded && !httpRequestLogDegraded && !auditLogDegraded ? "ok" : "degraded",
             ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
             ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["db_open"] = dbOpen,
@@ -1563,6 +1564,14 @@ public partial class McpServer : IDisposable
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
             result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
             result["http_request_queue_limit"] = httpTransport.MaxQueuedRequests;
+            result["http_request_log_queue_depth"] = httpTransport.RequestLogQueueDepth;
+            result["http_request_log_queue_capacity"] = httpTransport.RequestLogQueueCapacity;
+            result["http_request_log_dropped_count"] = httpTransport.RequestLogDroppedCount;
+            result["http_request_log_queue_full_drop_count"] = httpTransport.RequestLogQueueFullDropCount;
+            result["http_request_log_callback_failure_count"] = httpTransport.RequestLogCallbackFailureCount;
+            result["http_request_log_degraded"] = httpRequestLogDegraded;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastRequestLogDropReason))
+                result["http_request_log_last_drop_reason"] = httpTransport.LastRequestLogDropReason;
             result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
             result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
             result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;
