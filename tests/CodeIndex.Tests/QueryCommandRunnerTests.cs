@@ -4111,6 +4111,111 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_WorkspaceDbRejectsNonCodeIndexDatabase_Issue3737()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_non_codeindex_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_non_codeindex_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = Path.Combine(memberRoot, "plain.sqlite");
+            CreatePlainSqliteDatabase(memberDb);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("attached workspace database cannot be used for cross-database dependency query", stderr);
+            Assert.Contains("database is not an existing CodeIndex DB", stderr);
+            Assert.DoesNotContain("no such table", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_WorkspaceDbRejectsNewerSchemaStamp_Issue3737()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_new_schema_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_new_schema_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            var unsupportedUserVersion = DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1);
+            SetDatabaseUserVersion(memberDb, unsupportedUserVersion);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.SchemaTooNew, stderr);
+            Assert.Contains($"user_version {unsupportedUserVersion}", stderr);
+            Assert.Contains("run the query with a current cdidx binary", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_WorkspaceDbValidationUsesReadOnlyFallbackPath_Issue3737()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_member");
+        var originalOpenReadOnly = DbConnectionFactory.OpenReadOnlyForTesting;
+        var validatedMemberThroughReadOnlyFactory = false;
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
+            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+
+            var memberFullPath = Path.GetFullPath(memberDb);
+            DbConnectionFactory.OpenReadOnlyForTesting = dbPath =>
+            {
+                validatedMemberThroughReadOnlyFactory |=
+                    string.Equals(Path.GetFullPath(dbPath), memberFullPath, StringComparison.Ordinal);
+                var builder = new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                };
+                var connection = new SqliteConnection(builder.ConnectionString);
+                connection.Open();
+                return connection;
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(validatedMemberThroughReadOnlyFactory);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            DbConnectionFactory.OpenReadOnlyForTesting = originalOpenReadOnly;
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_WorkspaceDbJson_CapsCrossDatabaseSymbolSample_Issue3155()
     {
         var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_primary");
@@ -4294,6 +4399,28 @@ public partial class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkCSharpSymbolNameContractReady();
+    }
+
+    private static void CreatePlainSqliteDatabase(string dbPath)
+    {
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        using var connection = new SqliteConnection(builder.ConnectionString);
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "CREATE TABLE unrelated (id INTEGER PRIMARY KEY)";
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void SetDatabaseUserVersion(string dbPath, int userVersion)
+    {
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        using var connection = new SqliteConnection(builder.ConnectionString);
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA user_version = {userVersion}";
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 
 

@@ -1,4 +1,5 @@
 using System.Runtime.Loader;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -17,12 +18,13 @@ public static partial class ExtractorPluginRegistry
     internal const int MaxPluginAssemblyCandidatesPerDirectory = 128;
     internal const int MaxPluginAssemblyCandidatesTotal = 256;
     internal const long MaxPluginAssemblyBytes = 64 * 1024 * 1024;
+    internal const int MaxExtensionAssemblyTypes = 4096;
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
-    private static readonly HashSet<string> LoadedPluginAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly List<string> LoadedPluginAssemblyPaths = [];
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
@@ -34,6 +36,7 @@ public static partial class ExtractorPluginRegistry
     private static int diagnosticTotalCount;
     private static int loadedPatternRuleCount;
     private static bool pluginsLoaded;
+    internal static int? TypeInspectionLimitForTesting { get; set; }
 
     public static IReadOnlyCollection<string> SymbolLanguages
     {
@@ -136,6 +139,7 @@ public static partial class ExtractorPluginRegistry
             diagnosticTotalCount = 0;
             loadedPatternRuleCount = 0;
             pluginsLoaded = true;
+            TypeInspectionLimitForTesting = null;
         }
     }
 
@@ -155,6 +159,7 @@ public static partial class ExtractorPluginRegistry
             diagnosticTotalCount = 0;
             loadedPatternRuleCount = 0;
             pluginsLoaded = false;
+            TypeInspectionLimitForTesting = null;
         }
     }
 
@@ -181,6 +186,12 @@ public static partial class ExtractorPluginRegistry
 
     internal static void LoadPluginForTests(string pluginPath)
         => TryLoadPlugin(pluginPath);
+
+    internal static bool TryMarkPluginAssemblyPathLoadedForTests(string pluginPath)
+    {
+        lock (Gate)
+            return TryMarkPluginAssemblyPathLoaded(Path.GetFullPath(pluginPath));
+    }
 
     internal static void LoadPluginsForProjectRoot(string? projectRoot)
     {
@@ -237,6 +248,18 @@ public static partial class ExtractorPluginRegistry
             pluginsLoaded = true;
         }
     }
+
+    private static bool TryMarkPluginAssemblyPathLoaded(string fullPath)
+    {
+        if (LoadedPluginAssemblyPaths.Any(path => string.Equals(path, fullPath, PathCasing.ComparisonFor(fullPath))))
+            return false;
+
+        LoadedPluginAssemblyPaths.Add(fullPath);
+        return true;
+    }
+
+    private static int ResolveTypeInspectionLimit()
+        => TypeInspectionLimitForTesting is > 0 ? TypeInspectionLimitForTesting.Value : MaxExtensionAssemblyTypes;
 
     private static void AddLanguageExtensions(
         Dictionary<string, string> target,

@@ -89,7 +89,7 @@ public static partial class ExtractorPluginRegistry
 
                             if (value.Length > MaxPatternRegexLength)
                             {
-                                ReportPatternConfigRejected(path, $"regex for kind '{pendingKind}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
+                                ReportPatternConfigRejected(path, $"regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
                                 return;
                             }
 
@@ -112,7 +112,8 @@ public static partial class ExtractorPluginRegistry
 
                             patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
                                 pendingKind,
-                                regex));
+                                regex,
+                                path));
                             pendingKind = null;
                         }
                     }
