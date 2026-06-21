@@ -1991,6 +1991,7 @@ cdidx helps AI tools by replacing repeated repo-wide scans with a reusable local
 - `status --json`, `map --json`, and `inspect --json` expose freshness and git-state signals so an agent can decide whether the index is trustworthy.
 - `unused --json` and MCP `unused_symbols` expose bucketed dead-code triage metadata plus graph-support signals, so machine clients can distinguish likely-private cleanup from public/config/reflection suspects and from unsupported-language empty pages.
 - `cdidx mcp` gives Claude Code, Cursor, Windsurf, Copilot, and Codex a native MCP server instead of forcing them to scrape shell text.
+- MCP `tools/list` includes `result._meta` discovery metadata with a first-time AI guide, capability groups, recommended workflows, and the contract that disabled tools are omitted from both `tools` and `_meta`.
 
 For the full MCP tool list, JSON field contracts, exact-match metadata, and fallback behavior on legacy databases, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
@@ -4551,6 +4552,7 @@ cdidx が AI ワークフローで効く最大の理由は、毎ターン同じ�
 - `status --json`、`map --json`、`inspect --json` は鮮度と Git 状態のシグナルを返すため、AI がインデックスを信用してよいか判断できます。
 - `unused --json` と MCP `unused_symbols` は、bucket 化されたデッドコード候補と graph-support シグナルを返すため、private cleanup 候補と public/config/reflection suspect、未対応言語の空ページを機械的に区別できます。
 - `cdidx mcp` を使えば、Claude Code、Cursor、Windsurf、Copilot、Codex からシェル出力を無理に解釈せずにネイティブ接続できます。
+- MCP `tools/list` は `result._meta` discovery metadata として、初回 AI 向けガイド、機能グループ、推奨ワークフロー、無効化済みツールが `tools` と `_meta` の両方から省かれる契約を返します。
 
 MCP ツール一覧、JSON フィールド契約、`--exact` まわりのメタデータ、旧 DB フォールバック時の挙動は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) を参照してください。
 
