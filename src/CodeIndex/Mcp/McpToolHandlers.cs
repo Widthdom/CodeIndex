@@ -5948,7 +5948,10 @@ public partial class McpServer
             try
             {
                 requestToken.ThrowIfCancellationRequested();
-                var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath, requestToken);
+                var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, requestToken);
+                var record = loaded.Record;
+                var content = loaded.Content;
+                var rawBytes = loaded.RawBytes;
                 var existingId = writer.GetUnchangedFileId(
                     record.Path,
                     record.Modified,
@@ -6000,7 +6003,7 @@ public partial class McpServer
                     writer.InsertSymbols([]);
                     writer.InsertReferences([]);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
-                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
                         generatedSuppressionIssue);
                     writer.InsertIssues(fileId, issues);
                     WriteProjectRootOnce();
@@ -6061,7 +6064,7 @@ public partial class McpServer
                     writer.InsertReferences(references);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection);
                     if (symbolRegexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)

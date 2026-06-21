@@ -1544,6 +1544,7 @@ public static partial class IndexCommandRunner
         FileRecord? Record,
         string? Content,
         byte[]? RawBytes,
+        FileContentInspection? Inspection,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
         IReadOnlyList<SymbolRecord>? Symbols,
@@ -1556,20 +1557,21 @@ public static partial class IndexCommandRunner
             FileRecord record,
             string content,
             byte[] rawBytes,
+            FileContentInspection? inspection,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
             IReadOnlyList<SymbolRecord>? symbols,
             IReadOnlyList<ReferenceRecord>? references,
             IReadOnlyList<FileIssue>? issues)
         {
-            return new FullScanFileWorkItem(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues, null);
+            return new FullScanFileWorkItem(filePath, record, content, rawBytes, inspection, warning, chunks, symbols, references, issues, null);
         }
 
         public static FullScanFileWorkItem Failure(string filePath, Exception exception)
-            => new(filePath, null, null, null, null, null, null, null, null, exception);
+            => new(filePath, null, null, null, null, null, null, null, null, null, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string warning)
-            => new(filePath, null, null, null, warning, null, null, null, null, null);
+            => new(filePath, null, null, null, null, warning, null, null, null, null, null);
     }
 
     private sealed record FoldOnlyRemediation(

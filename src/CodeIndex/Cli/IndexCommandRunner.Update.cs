@@ -604,7 +604,11 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath, cancellationToken);
+                    var loaded = indexer.BuildLoadedRecordWithRawBytes(absPath, cancellationToken);
+                    var record = loaded.Record;
+                    var content = loaded.Content;
+                    var rawBytes = loaded.RawBytes;
+                    var warning = loaded.Warning;
 
                     if (warning != null && !options.Json && !options.Quiet)
                     {
@@ -682,7 +686,7 @@ public static partial class IndexCommandRunner
                         writer.InsertReferences([]);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         var generatedIssues = AppendIssueIfMissing(
-                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
                             generatedSuppressionIssue);
                         writer.InsertIssues(fileId, generatedIssues);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
@@ -776,7 +780,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection);
                     if (symbolRegexTimeoutIssue != null)
                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (referenceRegexTimeoutIssue != null)

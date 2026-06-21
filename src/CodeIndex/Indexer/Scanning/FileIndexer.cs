@@ -3449,8 +3449,8 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath, CancellationToken cancellationToken = default)
     {
-        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath, cancellationToken);
-        return (record, content, warning);
+        var loaded = BuildLoadedRecordWithRawBytes(absolutePath, cancellationToken);
+        return (loaded.Record, loaded.Content, loaded.Warning);
     }
 
     /// <summary>
@@ -3460,6 +3460,12 @@ public class FileIndexer
     /// 呼び出し側は再読込なしでエンコーディング検証できる。
     /// </summary>
     public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
+    {
+        var loaded = BuildLoadedRecordWithRawBytes(absolutePath, cancellationToken);
+        return (loaded.Record, loaded.Content, loaded.RawBytes, loaded.Warning);
+    }
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
@@ -3488,7 +3494,7 @@ public class FileIndexer
             Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
-        return (record, loaded.Content, loaded.RawBytes, loaded.Warning);
+        return new LoadedFileRecord(record, loaded.Content, loaded.RawBytes, loaded.Warning, loaded.Inspection);
     }
 
     public FileRecord BuildSkippedFileRecord(string absolutePath)
@@ -3698,10 +3704,18 @@ public class FileIndexer
     /// ファイル内容のエンコーディング問題を検証する。
     /// </summary>
     public static List<FileIssue> ValidateContent(string relativePath, byte[] rawBytes, string content, string? language = null)
+        => ValidateContent(relativePath, rawBytes, content, language, FileContentInspection.Inspect(rawBytes));
+
+    internal static List<FileIssue> ValidateContent(
+        string relativePath,
+        byte[] rawBytes,
+        string content,
+        string? language,
+        FileContentInspection inspection)
     {
         var issues = new List<FileIssue>();
 
-        if (IsGitLfsPointer(rawBytes))
+        if (inspection.IsGitLfsPointer)
         {
             issues.Add(new FileIssue
             {
@@ -3723,7 +3737,9 @@ public class FileIndexer
         // (UTF-16 LE では ASCII 部の片バイトが NUL、CRLF は 0D 00 0A 00)。代わりに
         // `utf16_bom` 1 件を出して `validate` が「UTF-16 として解釈した」ことを示し、
         // 不正サロゲートペアに備え content 側 U+FFFD 走査は継続する。Closes #1540.
-        var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+        var isUtf16 = inspection.IsUtf16;
+        var utf16BigEndian = inspection.Utf16BigEndian;
+        var hasUtf16Bom = inspection.HasUtf16Bom;
 
         if (isUtf16)
         {

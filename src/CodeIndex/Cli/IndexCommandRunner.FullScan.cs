@@ -1178,7 +1178,11 @@ public static partial class IndexCommandRunner
                         {
                             var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
-                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, extractionCancellationToken);
+                            var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, extractionCancellationToken);
+                            var record = loaded.Record;
+                            var content = loaded.Content;
+                            var rawBytes = loaded.RawBytes;
+                            var warning = loaded.Warning;
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
@@ -1194,10 +1198,10 @@ public static partial class IndexCommandRunner
                                     references = [];
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                     issues = AppendIssueIfMissing(
-                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
                                         generatedSuppressionIssue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
+                                        FullScanFileWorkItem.Success(filePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1221,7 +1225,7 @@ public static partial class IndexCommandRunner
                                         ? [issue]
                                         : AppendIssue([symbolRegexTimeoutIssue], issue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, issue.Message, [], [], [], capIssues),
+                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, loaded.Inspection, issue.Message, [], [], [], capIssues),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1249,7 +1253,7 @@ public static partial class IndexCommandRunner
                                     referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection);
                                 if (symbolRegexTimeoutIssue != null)
                                     issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                                 if (referenceRegexTimeoutIssue != null)
@@ -1264,7 +1268,7 @@ public static partial class IndexCommandRunner
                                 }
                             }
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
+                                FullScanFileWorkItem.Success(filePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
                                 extractionCancellationToken);
                         }
                         catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
@@ -1276,7 +1280,7 @@ public static partial class IndexCommandRunner
                             var record = indexer.BuildSkippedFileRecord(filePath);
                             var issue = BuildNullByteIssue(ex);
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
+                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
                                 extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
@@ -1290,7 +1294,7 @@ public static partial class IndexCommandRunner
                                 Message = ex.Message,
                             };
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
+                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
                                 extractionCancellationToken);
                         }
                         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -1559,7 +1563,7 @@ public static partial class IndexCommandRunner
                     writer.InsertSymbols(symbols);
                     if (symbolRegexTimeoutIssue != null)
                     {
-                        var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                        var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
                         item = item with { Issues = AppendIssue(baseIssues, symbolRegexTimeoutIssue) };
                     }
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
@@ -1594,12 +1598,12 @@ public static partial class IndexCommandRunner
                         postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                         if (regexTimeoutIssue != null)
                         {
-                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
                             item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
                         }
                         if (referenceExtraction != null)
                         {
-                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
                             item = item with
                             {
                                 Issues = AppendReferenceExtractionDiagnosticIssues(baseIssues, record.Path, referenceExtraction.Diagnostics),
@@ -1609,7 +1613,7 @@ public static partial class IndexCommandRunner
                         {
                             var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
                             references = [];
-                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
                             item = item with { Issues = AppendIssue(baseIssues, issue) };
                         }
                     }
@@ -1617,7 +1621,7 @@ public static partial class IndexCommandRunner
                     if (references.Count > 0)
                         mutualRecursionRefreshNeeded = true;
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
-                    var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                    var issues = item.Issues ?? ValidateWorkItemContent(item, record);
                     writer.InsertIssues(fileId, issues);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                     WriteProjectRootOnce();
@@ -2051,6 +2055,15 @@ public static partial class IndexCommandRunner
             return mutable;
 
         throw new InvalidOperationException("Post-extraction hooks require mutable extraction result lists.");
+    }
+
+    private static List<FileIssue> ValidateWorkItemContent(FullScanFileWorkItem item, FileRecord record)
+    {
+        var rawBytes = item.RawBytes!;
+        var content = item.Content!;
+        return item.Inspection is { } inspection
+            ? FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, inspection)
+            : FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
     }
 
     private static int AddPostExtractionHookWarnings(PostExtractionHookRunner runner, List<CliJsonMessage> warningList)

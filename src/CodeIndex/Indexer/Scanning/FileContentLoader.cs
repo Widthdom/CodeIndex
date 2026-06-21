@@ -22,6 +22,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             cancellationToken);
         if (IsGitLfsPointer(bytes))
         {
+            var lfsInspection = FileContentInspection.GitLfsPointer();
             return new LoadedFileContent(
                 string.Empty,
                 bytes,
@@ -29,10 +30,11 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
                 modifiedUtc,
                 0,
                 ComputeChecksum(bytes),
-                null);
+                null,
+                lfsInspection);
         }
 
-        var (content, warning) = DecodeIndexableContent(bytes, relativePath);
+        var (content, warning, inspection) = DecodeIndexableContent(bytes, relativePath);
         var normalized = NormalizeForIndexing(content);
         var checksum = ComputeChecksumFromNormalizedContent(normalized.Content);
 
@@ -43,7 +45,8 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             modifiedUtc,
             normalized.LineCount,
             checksum,
-            warning);
+            warning,
+            inspection);
     }
 
     private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
@@ -187,9 +190,14 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         return resized;
     }
 
-    private (string Content, string? Warning) DecodeIndexableContent(byte[] bytes, string relativePath)
+    private (string Content, string? Warning, FileContentInspection Inspection) DecodeIndexableContent(byte[] bytes, string relativePath)
     {
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+        var inspection = new FileContentInspection(
+            IsGitLfsPointer: false,
+            IsUtf16: isUtf16Encoded,
+            Utf16BigEndian: utf16BigEndian,
+            HasUtf16Bom: hasUtf16Bom);
 
         if (!isUtf16Encoded && TryFindNullByte(bytes, out var nullByteOffset))
             throw new FileIndexer.BinaryFileSkippedException(
@@ -204,17 +212,17 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             var warning = hasUtf16Bom
                 ? null
                 : $"{relativePath}: decoded as {(utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
-            return (content, warning);
+            return (content, warning, inspection);
         }
 
         try
         {
-            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null);
+            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null, inspection);
         }
         catch (DecoderFallbackException)
         {
             var content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
-            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
+            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)", inspection);
         }
     }
 
@@ -682,4 +690,5 @@ internal readonly record struct LoadedFileContent(
     DateTime ModifiedUtc,
     int LineCount,
     string Checksum,
-    string? Warning);
+    string? Warning,
+    FileContentInspection Inspection);
