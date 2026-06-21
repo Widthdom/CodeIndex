@@ -1,7 +1,10 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class IndexFreshnessCheckerTests
 {
     [Fact]
@@ -36,5 +39,33 @@ public class IndexFreshnessCheckerTests
         var sample = IndexFreshnessChecker.FormatScanFailureSample("src/Broken.cs", exception);
 
         Assert.Equal("src/Broken.cs: probe-failed", sample);
+    }
+
+    [Fact]
+    public void Check_StampedPathCaseSensitivityAvoidsFilesystemWriteProbe_Issue3828()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_case_stamp");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousGitProbe = GitHelper.FileSystemIgnoreCaseProbeForTesting;
+        var previousIndexerProbe = FileIndexer.FileSystemIgnoreCaseProbeForTesting;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var reader = new DbReader(db);
+            GitHelper.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("git case probe should not run");
+            FileIndexer.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("indexer case probe should not run");
+
+            var result = IndexFreshnessChecker.Check(reader, projectRoot, pathCaseSensitive: true);
+
+            Assert.True(result.Checked);
+        }
+        finally
+        {
+            GitHelper.FileSystemIgnoreCaseProbeForTesting = previousGitProbe;
+            FileIndexer.FileSystemIgnoreCaseProbeForTesting = previousIndexerProbe;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 }

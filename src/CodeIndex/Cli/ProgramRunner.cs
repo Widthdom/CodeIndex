@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.ComponentModel;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -26,6 +27,7 @@ internal static partial class ProgramRunner
     private const string ReleaseAssetUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/download/{0}/{1}";
     private const string ReleasePageUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/tag/{0}";
     private const string InstallerScriptAssetName = "install.sh";
+    private const string UpgradeInstallerDirectoryPrefix = "cdidx-install-";
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
@@ -45,7 +47,6 @@ internal static partial class ProgramRunner
     };
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
-    private const string UpgradeInstallerDirectoryPrefix = "cdidx-install-";
     private static readonly HashSet<string> NonLogGlobalOptionNames =
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
     private static readonly HashSet<string> TopLevelValueOptionNames =
@@ -3067,6 +3068,7 @@ internal static partial class ProgramRunner
                 CommandErrorWriter.WriteStderr($"Error: install directory is not writable: {installDir}");
                 if (installDirectoryError != null)
                     CommandErrorWriter.WriteStderr($"Reason: {installDirectoryError}");
+                WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
             }
             return CommandExitCodes.UsageError;
@@ -3148,6 +3150,7 @@ internal static partial class ProgramRunner
             else
             {
                 CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
+                WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
             }
             return CommandExitCodes.InstallError;
@@ -3246,6 +3249,9 @@ internal static partial class ProgramRunner
     private static bool IsPrereleaseTag(string releaseTag)
         => releaseTag.Contains('-', StringComparison.Ordinal);
 
+    private static void WriteUpgradeInstallerTrustDiagnostic()
+        => CommandErrorWriter.WriteStderr($"Installer verification: {UpgradeInstallerVerification}; {UpgradeInstallerTrustBoundary}");
+
     internal static UpgradeHandoff CreateWindowsUpgradeHandoff(string releaseTag, Architecture processArchitecture)
     {
         var normalizedTag = releaseTag.Trim();
@@ -3307,12 +3313,14 @@ internal static partial class ProgramRunner
 
     internal static ProcessStartInfo CreateInstallerProcessStartInfo(string scriptPath, string releaseTag, string installDir)
     {
+        var fullScriptPath = Path.GetFullPath(scriptPath);
         var startInfo = new ProcessStartInfo
         {
             FileName = ResolveTrustedBashPath(),
             UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(fullScriptPath) ?? string.Empty,
         };
-        startInfo.ArgumentList.Add(scriptPath);
+        startInfo.ArgumentList.Add(fullScriptPath);
         startInfo.ArgumentList.Add(releaseTag);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
@@ -3351,28 +3359,75 @@ internal static partial class ProgramRunner
             startInfo.RedirectStandardError = true;
         }
 
-        using var process = Process.Start(startInfo);
-        if (process == null)
+        Process? process;
+        try
+        {
+            process = Process.Start(startInfo);
+        }
+        catch (Exception ex) when (IsInstallerProcessStartException(ex))
         {
             if (!suppressOutput)
-                CommandErrorWriter.WriteStderr("Error: failed to start install.sh for upgrade.");
+            {
+                CommandErrorWriter.WriteStderr($"Error: failed to start install.sh for upgrade ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+            }
             return InstallerProcessResult.Failure(CommandExitCodes.InstallError);
         }
 
-        var outputDrainTask = suppressOutput
-            ? DrainSuppressedInstallerOutputAsync(process)
-            : Task.FromResult(SuppressedInstallerOutputResult.Empty);
-
-        try
+        if (process == null)
         {
-            var waitTask = process.WaitForExitAsync(cancellationToken);
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
-            var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
-            if (completedTask == waitTask)
+            if (!suppressOutput)
             {
-                timeoutCts.Cancel();
-                waitTask.GetAwaiter().GetResult();
+                CommandErrorWriter.WriteStderr("Error: failed to start install.sh for upgrade.");
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+            }
+            return InstallerProcessResult.Failure(CommandExitCodes.InstallError);
+        }
+
+        using (process)
+        {
+            var outputDrainTask = suppressOutput
+                ? DrainSuppressedInstallerOutputAsync(process)
+                : Task.FromResult(SuppressedInstallerOutputResult.Empty);
+
+            try
+            {
+                var waitTask = process.WaitForExitAsync(cancellationToken);
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout), timeoutCts.Token);
+                var completedTask = Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult();
+                if (completedTask == waitTask)
+                {
+                    timeoutCts.Cancel();
+                    waitTask.GetAwaiter().GetResult();
+                    var output = outputDrainTask.GetAwaiter().GetResult();
+                    return new InstallerProcessResult(
+                        process.ExitCode,
+                        output.StdoutTail,
+                        output.StderrTail,
+                        output.Truncated);
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                    waitTask.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                TryKillProcessTree(process);
+                if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
+                {
+                    if (!suppressOutput)
+                        CommandErrorWriter.WriteStderr("Error: install.sh was cancelled and did not exit after cancellation.");
+                }
+                else
+                {
+                    outputDrainTask.GetAwaiter().GetResult();
+                }
+                throw;
+            }
+
+            if (process.HasExited)
+            {
                 var output = outputDrainTask.GetAwaiter().GetResult();
                 return new InstallerProcessResult(
                     process.ExitCode,
@@ -3381,57 +3436,37 @@ internal static partial class ProgramRunner
                     output.Truncated);
             }
 
-            if (cancellationToken.IsCancellationRequested)
-                waitTask.GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
             TryKillProcessTree(process);
             if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
             {
                 if (!suppressOutput)
-                    CommandErrorWriter.WriteStderr("Error: install.sh was cancelled and did not exit after cancellation.");
+                    CommandErrorWriter.WriteStderr("Error: install.sh timed out and did not exit after cancellation.");
             }
             else
             {
                 outputDrainTask.GetAwaiter().GetResult();
+                if (!suppressOutput)
+                    CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
             }
-            throw;
-        }
-
-        if (process.HasExited)
-        {
-            var output = outputDrainTask.GetAwaiter().GetResult();
+            if (!suppressOutput)
+                CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
+            var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
+                ? outputDrainTask.GetAwaiter().GetResult()
+                : SuppressedInstallerOutputResult.Empty;
             return new InstallerProcessResult(
-                process.ExitCode,
-                output.StdoutTail,
-                output.StderrTail,
-                output.Truncated);
+                CommandExitCodes.InstallError,
+                timeoutOutput.StdoutTail,
+                timeoutOutput.StderrTail,
+                timeoutOutput.Truncated);
         }
-
-        TryKillProcessTree(process);
-        if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
-        {
-            if (!suppressOutput)
-                CommandErrorWriter.WriteStderr("Error: install.sh timed out and did not exit after cancellation.");
-        }
-        else
-        {
-            outputDrainTask.GetAwaiter().GetResult();
-            if (!suppressOutput)
-                CommandErrorWriter.WriteStderr($"Error: install.sh timed out after {FormatDuration(timeout)}.");
-        }
-        if (!suppressOutput)
-            CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
-        var timeoutOutput = outputDrainTask.IsCompletedSuccessfully
-            ? outputDrainTask.GetAwaiter().GetResult()
-            : SuppressedInstallerOutputResult.Empty;
-        return new InstallerProcessResult(
-            CommandExitCodes.InstallError,
-            timeoutOutput.StdoutTail,
-            timeoutOutput.StderrTail,
-            timeoutOutput.Truncated);
     }
+
+    private static bool IsInstallerProcessStartException(Exception ex)
+        => ex is Win32Exception
+            or InvalidOperationException
+            or FileNotFoundException
+            or DirectoryNotFoundException
+            or UnauthorizedAccessException;
 
     private static async Task<SuppressedInstallerOutputResult> DrainSuppressedInstallerOutputAsync(Process process)
     {
@@ -3555,7 +3590,7 @@ internal static partial class ProgramRunner
         }
     }
 
-    private static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
+    internal static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
         string path,
         out string fullPath,
         out string failureReason)
@@ -3582,10 +3617,13 @@ internal static partial class ProgramRunner
             var longPath = LongPath.EnsureWindowsPrefix(fullPath);
             if (Directory.Exists(longPath))
             {
-                var attributes = File.GetAttributes(longPath);
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+                var directoryInfo = new DirectoryInfo(fullPath);
+                directoryInfo.Refresh();
+                var attributes = directoryInfo.Attributes;
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
+                    || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
                 {
-                    failureReason = "target is not a regular temporary directory";
+                    failureReason = "target is a symbolic link, reparse point, or device";
                     return false;
                 }
             }
@@ -3770,8 +3808,20 @@ internal static partial class ProgramRunner
         var createdProbe = false;
         try
         {
-            Directory.CreateDirectory(directory);
-            probe = Path.Combine(directory, $".cdidx-write-test-{Guid.NewGuid():N}");
+            if (!TryResolveUpgradeInstallDirectory(directory, out var fullDirectory, out diagnostic))
+                return false;
+
+            Directory.CreateDirectory(fullDirectory);
+            if (!TryValidateExistingUpgradeInstallDirectory(fullDirectory, out diagnostic))
+                return false;
+
+            probe = Path.GetFullPath(Path.Combine(fullDirectory, $".cdidx-write-test-{Guid.NewGuid():N}"));
+            if (!IsPathEqualOrChildNoProbe(fullDirectory, probe) || string.Equals(fullDirectory, probe, InstallDirectoryPathComparison))
+            {
+                diagnostic = "install directory write probe escaped the install directory.";
+                return false;
+            }
+
             FileWriteProbe.WriteEmptyFile(probe, Encoding.UTF8);
             createdProbe = true;
             return true;
@@ -3786,6 +3836,97 @@ internal static partial class ProgramRunner
             if (createdProbe && probe != null)
                 TryDeleteInstallDirectoryWriteProbe(probe);
         }
+    }
+
+    private static bool TryResolveUpgradeInstallDirectory(string directory, out string fullDirectory, out string? diagnostic)
+    {
+        fullDirectory = string.Empty;
+        diagnostic = null;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            diagnostic = "install directory is empty.";
+            return false;
+        }
+
+        try
+        {
+            fullDirectory = NormalizeDirectoryBoundaryPath(Path.GetFullPath(directory));
+            var root = Path.GetPathRoot(fullDirectory);
+            if (!string.IsNullOrEmpty(root) && string.Equals(fullDirectory, NormalizeDirectoryBoundaryPath(root), InstallDirectoryPathComparison))
+            {
+                diagnostic = "install directory must not be the filesystem root.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            diagnostic = CommandErrorWriter.FormatSanitizedException(ex);
+            return false;
+        }
+    }
+
+    private static bool TryValidateExistingUpgradeInstallDirectory(string fullDirectory, out string? diagnostic)
+    {
+        diagnostic = null;
+        try
+        {
+            var directoryInfo = new DirectoryInfo(fullDirectory);
+            directoryInfo.Refresh();
+            if (!directoryInfo.Exists)
+            {
+                diagnostic = "install directory does not exist after creation.";
+                return false;
+            }
+
+            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
+            {
+                diagnostic = "install directory must not be a symbolic link or reparse point.";
+                return false;
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(fullDirectory);
+                if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+                {
+                    diagnostic = "install directory must not be group- or world-writable.";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            diagnostic = CommandErrorWriter.FormatSanitizedException(ex);
+            return false;
+        }
+    }
+
+    private static string NormalizeDirectoryBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, InstallDirectoryPathComparison))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static StringComparison InstallDirectoryPathComparison
+        => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+    private static bool IsPathEqualOrChildNoProbe(string normalizedParent, string normalizedChild)
+    {
+        if (string.Equals(normalizedParent, normalizedChild, InstallDirectoryPathComparison))
+            return true;
+
+        var trimmedParent = normalizedParent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedChild.StartsWith(trimmedParent + Path.DirectorySeparatorChar, InstallDirectoryPathComparison)
+            || normalizedChild.StartsWith(trimmedParent + Path.AltDirectorySeparatorChar, InstallDirectoryPathComparison);
     }
 
     private static void TryDeleteInstallDirectoryWriteProbe(string probePath)

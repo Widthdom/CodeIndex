@@ -91,7 +91,15 @@ internal static class PathCasing
     {
         if (string.IsNullOrEmpty(workspaceRoot))
             return;
-        var anchor = ResolveAnchor(workspaceRoot);
+        SeedFromReferencePath(workspaceRoot, ignoreCase);
+        SeedFromReferencePath(Path.Combine(workspaceRoot, CaseSensitivityProbeDirectory.DataDirectoryName), ignoreCase);
+    }
+
+    public static void SeedFromReferencePath(string referencePath, bool ignoreCase)
+    {
+        if (string.IsNullOrEmpty(referencePath))
+            return;
+        var anchor = ResolveAnchor(referencePath);
         _ignoreCaseByAnchor[anchor] = ignoreCase;
     }
 
