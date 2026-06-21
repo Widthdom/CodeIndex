@@ -1585,6 +1585,22 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("--json=array is not supported with --list-recipes", stderr);
     }
 
+    [Theory]
+    [InlineData("NaN:1:0")]
+    [InlineData("Infinity:1:0")]
+    [InlineData("1:-1:0")]
+    [InlineData("1:1:-1")]
+    public void RunSearch_RecipeInvalidCursorDomain_ReturnsUsageError_Issue3837(string cursor)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/raw-diagnostic-echo", "--cursor", cursor],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--cursor", stderr, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RunSearch_RecipeJsonRunsBuiltInQueries_Issue3144()
     {

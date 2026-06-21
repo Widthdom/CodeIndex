@@ -86,6 +86,21 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void StopObservedJsonPhaseHeartbeat_CancelsPendingTaskWithoutBlocking_Issue3771()
+    {
+        var cts = new CancellationTokenSource();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopwatch = Stopwatch.StartNew();
+
+        IndexCommandRunner.StopObservedJsonPhaseHeartbeat((cts, pending.Task));
+
+        stopwatch.Stop();
+        Assert.True(cts.IsCancellationRequested);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        pending.SetResult();
+    }
+
+    [Fact]
     public void ParseArgs_HelpFlagSetsShowHelp()
     {
         var options = IndexCommandRunner.ParseArgs(["--help"]);

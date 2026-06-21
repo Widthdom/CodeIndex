@@ -111,6 +111,50 @@ public class McpServerTests : IDisposable
         Assert.False(MethodCallsType(method!, typeof(SpinWait)));
     }
 
+    [Fact]
+    public void PruneCompletedRequestTasks_RemovesCompletedTasks_Issue3837()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task>
+        {
+            Task.CompletedTask,
+            pending.Task,
+            Task.FromCanceled(cts.Token),
+        };
+
+        var removed = McpServer.PruneCompletedRequestTasks(tasks);
+
+        Assert.Equal(2, removed);
+        Assert.Same(pending.Task, Assert.Single(tasks));
+    }
+
+    [Fact]
+    public void PruneCompletedRequestTasks_ObservesFaultedTasks_Issue3837()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = Task.FromException(new InvalidOperationException("boom"));
+        var tasks = new List<Task> { pending.Task, faulted };
+        var originalError = Console.Error;
+        using var stderr = new StringWriter();
+        Console.SetError(stderr);
+
+        int removed;
+        try
+        {
+            removed = McpServer.PruneCompletedRequestTasks(tasks);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.Equal(1, removed);
+        Assert.Same(pending.Task, Assert.Single(tasks));
+        Assert.Contains("In-flight request ended before EOF drain (InvalidOperationException)", stderr.ToString(), StringComparison.Ordinal);
+    }
+
     private static bool MethodCallsType(MethodInfo method, Type declaringType)
     {
         var body = method.GetMethodBody()?.GetILAsByteArray();

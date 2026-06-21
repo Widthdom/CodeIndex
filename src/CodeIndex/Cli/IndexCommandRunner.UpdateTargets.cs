@@ -184,18 +184,32 @@ public static partial class IndexCommandRunner
     }
 
     private static void StopIndexJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
+        => StopObservedJsonPhaseHeartbeat(heartbeat);
+
+    internal static void StopObservedJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
     {
         if (heartbeat == null)
             return;
 
-        heartbeat.Value.Cts.Cancel();
-        try
+        var cts = heartbeat.Value.Cts;
+        var task = heartbeat.Value.Task;
+        cts.Cancel();
+        if (task.IsCompleted)
         {
-            heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
+            cts.Dispose();
+            return;
         }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-        {
-        }
-        heartbeat.Value.Cts.Dispose();
+
+        _ = task.ContinueWith(
+            static (completedTask, state) =>
+            {
+                if (completedTask.IsFaulted)
+                    _ = completedTask.Exception;
+                ((CancellationTokenSource)state!).Dispose();
+            },
+            cts,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }

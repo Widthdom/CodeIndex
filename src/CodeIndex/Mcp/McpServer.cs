@@ -599,6 +599,7 @@ public partial class McpServer : IDisposable
 
         while (_running)
         {
+            PruneCompletedRequestTasks(tasks);
             string? frame;
             try
             {
@@ -745,6 +746,38 @@ public partial class McpServer : IDisposable
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    internal static int PruneCompletedRequestTasks(List<Task> tasks)
+    {
+        var removed = 0;
+        for (var i = tasks.Count - 1; i >= 0; i--)
+        {
+            var task = tasks[i];
+            if (!task.IsCompleted)
+                continue;
+
+            ObserveCompletedRequestTask(task);
+            tasks.RemoveAt(i);
+            removed++;
+        }
+
+        return removed;
+    }
+
+    private static void ObserveCompletedRequestTask(Task task)
+    {
+        if (!task.IsFaulted)
+            return;
+
+        try
+        {
+            task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended before EOF drain ({ex.GetType().Name}).");
+        }
     }
 
     internal async Task DrainInFlightTasksAsync(
@@ -955,6 +988,8 @@ public partial class McpServer : IDisposable
     /// sync-over-async blocking を避けるため <see cref="ProcessFrameAsync"/> を await する (#3770)。
     /// </summary>
     internal string? ProcessFrame(string line)
+        // Synchronous callers are compatibility entry points for tests and non-async hosts;
+        // transport loops use ProcessFrameAsync directly so request handling stays async.
         => ProcessFrameAsync(line).GetAwaiter().GetResult();
 
     internal async Task<string?> ProcessFrameAsync(string line)
@@ -1333,6 +1368,8 @@ public partial class McpServer : IDisposable
     /// <see cref="HandleMessageAsync(JsonNode)"/> を優先する (#3770)。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
+        // Keep this sync wrapper for existing in-process callers; async transports call
+        // HandleMessageAsync so server loops do not need a sync-over-async bridge.
         => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
 
     internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
