@@ -2427,14 +2427,15 @@ public static partial class ReferenceExtractor
         var result = line;
         if (lang == "rust")
             result = MaskRustLifetimeTokens(result);
-        if (lang != "cobol")
+        if (lang != "cobol" && MayContainStringLiteralDelimiter(lang, result))
         {
             var stringLiteralRegex = lang is "kotlin" or "r"
                 ? NonBacktickStringLiteralRegex
                 : StringLiteralRegex;
             result = stringLiteralRegex.Replace(result, "\"\"");
         }
-        result = InlineBlockCommentRegex.Replace(result, " ");
+        if (result.Contains("/*", StringComparison.Ordinal))
+            result = InlineBlockCommentRegex.Replace(result, " ");
 
         if (UsesHashComments(lang))
         {
@@ -2487,6 +2488,11 @@ public static partial class ReferenceExtractor
 
         return result;
     }
+
+    private static bool MayContainStringLiteralDelimiter(string lang, string line)
+        => line.IndexOf('"') >= 0
+            || line.IndexOf('\'') >= 0
+            || (lang is not ("kotlin" or "r") && line.IndexOf('`') >= 0);
 
     private static int FindRHashCommentStart(string line)
     {

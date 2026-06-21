@@ -4239,6 +4239,34 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpReferencePreparation_MasksStringsAndLineComments()
+    {
+        const string content = """
+            public class Worker
+            {
+                public void Execute()
+                {
+                    var text = "Log()";
+                    Log(); // Hidden()
+                }
+
+                private void Log() {}
+                private void Hidden() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(1, references.Count(reference =>
+            reference.SymbolName == "Log"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Hidden"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CSharpUsingAlias_DoesNotRewritePlainCall()
     {
         const string content = """
