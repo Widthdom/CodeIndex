@@ -4,6 +4,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 
 namespace CodeIndex.Database;
 
@@ -112,6 +113,8 @@ public class DbContext : IDisposable
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedForeignKeysDisabledForTesting = new();
+    private static readonly AsyncLocal<Action<string, long>?> ScopedForeignKeysRestoringForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?> ScopedForeignKeyValidationBeforeCheckForTesting = new();
 
     internal static Action<string>? OptimizePragmaExecutedForTesting
@@ -142,6 +145,18 @@ public class DbContext : IDisposable
     {
         get => ScopedMaintenanceProgressForTesting.Value;
         set => ScopedMaintenanceProgressForTesting.Value = value;
+    }
+
+    internal static Action<string>? ForeignKeysDisabledForTesting
+    {
+        get => ScopedForeignKeysDisabledForTesting.Value;
+        set => ScopedForeignKeysDisabledForTesting.Value = value;
+    }
+
+    internal static Action<string, long>? ForeignKeysRestoringForTesting
+    {
+        get => ScopedForeignKeysRestoringForTesting.Value;
+        set => ScopedForeignKeysRestoringForTesting.Value = value;
     }
 
     internal static Action<SqliteConnection, string>? ForeignKeyValidationBeforeCheckForTesting

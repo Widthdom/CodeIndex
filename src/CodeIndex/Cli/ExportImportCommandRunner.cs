@@ -13,12 +13,15 @@ internal static class ExportImportCommandRunner
 {
     private const string ManifestEntryName = "manifest.json";
     private const string DatabaseEntryName = "codeindex.db";
+    private static readonly string[] ExpectedImportArchiveEntryNames = [ManifestEntryName, DatabaseEntryName];
     internal const int MaxImportManifestBytes = 64 * 1024;
     internal const int MaxImportManifestJsonDepth = 16;
     internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
+    internal const long MaxImportDatabaseCompressionRatio = 1000;
     private const int ImportCopyBufferSize = 81920;
     private const int ManifestUnknownExtensionFileLimit = DbContext.UnknownExtensionFilePathSampleLimit;
     private const int ManifestUnknownExtensionPathCharLimit = 4096;
+    private const int ManifestUnknownExtensionFilesTotalCharLimit = 32 * 1024;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
     private const string ImportCommandName = "import";
@@ -35,10 +38,11 @@ internal static class ExportImportCommandRunner
     private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]";
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]";
 
-    public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
-        => RunExport(args, jsonOptions, appVersion, CancellationToken.None);
-
-    public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion, CancellationToken cancellationToken)
+    public static int RunExport(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken = default)
     {
         if (args.Length > 0 && args[0] == "ctags")
             return RunExportCtags(args[1..], jsonOptions);
@@ -46,10 +50,7 @@ internal static class ExportImportCommandRunner
         return RunExportArchive(args, jsonOptions, appVersion, cancellationToken);
     }
 
-    public static int RunImport(string[] args, JsonSerializerOptions jsonOptions)
-        => RunImport(args, jsonOptions, CancellationToken.None);
-
-    public static int RunImport(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
+    public static int RunImport(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken = default)
     {
         string? archivePath = null;
         string? dbPath = null;
@@ -125,10 +126,25 @@ internal static class ExportImportCommandRunner
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 AddImportValidationPhase(validationPhases, PhaseOpenArchive);
+                if (!TryValidateImportArchiveEntries(
+                        archive,
+                        out var manifestEntry,
+                        out var dbEntry,
+                        out var entryValidationPhase,
+                        out var entryValidationErrorCode,
+                        out var entryValidationMessage))
+                {
+                    return WriteImportError(
+                        wantsJson,
+                        jsonOptions,
+                        entryValidationPhase,
+                        entryValidationErrorCode,
+                        entryValidationMessage,
+                        "use an archive produced by `cdidx export <archive>`.",
+                        ImportUsage);
+                }
+
                 phase = PhaseManifest;
-                var manifestEntry = archive.GetEntry(ManifestEntryName);
-                if (manifestEntry == null)
-                    return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_missing", "archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError, cancellationToken))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_invalid", $"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
@@ -137,9 +153,8 @@ internal static class ExportImportCommandRunner
                 AddImportValidationPhase(validationPhases, PhaseManifest);
 
                 phase = PhaseDatabaseEntry;
-                var dbEntry = archive.GetEntry(DatabaseEntryName);
                 if (dbEntry == null)
-                    return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_missing", "archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
+                    return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_missing", $"archive is missing {DatabaseEntryName}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
                 if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
                     return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_too_large", sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", ImportUsage);
 
@@ -711,6 +726,67 @@ internal static class ExportImportCommandRunner
         return hash;
     }
 
+    private static bool TryValidateImportArchiveEntries(
+        ZipArchive archive,
+        out ZipArchiveEntry manifestEntry,
+        out ZipArchiveEntry? databaseEntry,
+        out string phase,
+        out string errorCode,
+        out string message)
+    {
+        manifestEntry = null!;
+        databaseEntry = null!;
+        phase = PhaseOpenArchive;
+        errorCode = string.Empty;
+        message = string.Empty;
+
+        var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
+        foreach (var entry in archive.Entries)
+        {
+            if (!IsExpectedImportArchiveEntryName(entry.FullName))
+            {
+                errorCode = "import_archive_unexpected_entry";
+                message = $"archive contains unexpected entry {ConsoleUi.FormatBoundedValue(entry.FullName)}; expected only {FormatExpectedImportArchiveEntryNames()}.";
+                return false;
+            }
+
+            if (entries.ContainsKey(entry.FullName))
+            {
+                phase = GetImportArchiveEntryPhase(entry.FullName);
+                errorCode = "import_archive_duplicate_entry";
+                message = $"archive contains duplicate entry {ConsoleUi.FormatBoundedValue(entry.FullName)}.";
+                return false;
+            }
+
+            entries.Add(entry.FullName, entry);
+        }
+
+        if (!entries.TryGetValue(ManifestEntryName, out var foundManifestEntry))
+        {
+            phase = PhaseManifest;
+            errorCode = "import_manifest_missing";
+            message = $"archive is missing {ManifestEntryName}.";
+            return false;
+        }
+
+        manifestEntry = foundManifestEntry;
+        entries.TryGetValue(DatabaseEntryName, out databaseEntry);
+        return true;
+    }
+
+    private static bool IsExpectedImportArchiveEntryName(string name)
+        => Array.Exists(ExpectedImportArchiveEntryNames, expected => string.Equals(expected, name, StringComparison.Ordinal));
+
+    private static string GetImportArchiveEntryPhase(string name)
+        => string.Equals(name, ManifestEntryName, StringComparison.Ordinal)
+            ? PhaseManifest
+            : string.Equals(name, DatabaseEntryName, StringComparison.Ordinal)
+                ? PhaseDatabaseEntry
+                : PhaseOpenArchive;
+
+    private static string FormatExpectedImportArchiveEntryNames()
+        => string.Join(", ", ExpectedImportArchiveEntryNames.Select(name => $"`{name}`"));
+
     internal static string FormatImportManifestReadException(Exception ex)
         => CommandErrorWriter.FormatSanitizedException(ex);
 
@@ -860,11 +936,25 @@ internal static class ExportImportCommandRunner
 
         if (manifest.UnknownExtensionFiles != null)
         {
+            var totalPathChars = 0;
             foreach (var path in manifest.UnknownExtensionFiles)
             {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    message = "unknown_extension_files contains an empty path";
+                    return false;
+                }
+
                 if (path.Length > ManifestUnknownExtensionPathCharLimit)
                 {
                     message = $"unknown_extension_files contains a path longer than {ManifestUnknownExtensionPathCharLimit} characters";
+                    return false;
+                }
+
+                totalPathChars += path.Length;
+                if (totalPathChars > ManifestUnknownExtensionFilesTotalCharLimit)
+                {
+                    message = $"unknown_extension_files total path text exceeds the manifest limit of {ManifestUnknownExtensionFilesTotalCharLimit} characters";
                     return false;
                 }
             }
@@ -1084,6 +1174,18 @@ internal static class ExportImportCommandRunner
             return false;
         }
 
+        if (uncompressedLength > 0 && compressedLength == 0)
+        {
+            message = "archive codeindex.db compression metadata is invalid: non-empty entry has zero compressed bytes";
+            return false;
+        }
+
+        if (compressedLength > 0 && uncompressedLength > compressedLength * MaxImportDatabaseCompressionRatio)
+        {
+            message = $"archive codeindex.db compression ratio exceeds the import limit of {MaxImportDatabaseCompressionRatio}:1";
+            return false;
+        }
+
         message = string.Empty;
         return true;
     }
@@ -1099,27 +1201,41 @@ internal static class ExportImportCommandRunner
     internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
         => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName);
 
-    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes, CancellationToken cancellationToken)
-        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
+    internal static long CopyToWithLimit(
+        Stream source,
+        Stream target,
+        long maxBytes,
+        CancellationToken cancellationToken,
+        IProgress<long>? progress = null)
+        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken, progress);
 
     private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName)
         => CopyToWithLimit(source, target, maxBytes, entryName, CancellationToken.None);
 
-    private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName, CancellationToken cancellationToken)
+    private static long CopyToWithLimit(
+        Stream source,
+        Stream target,
+        long maxBytes,
+        string entryName,
+        CancellationToken cancellationToken = default,
+        IProgress<long>? progress = null)
     {
         var buffer = new byte[ImportCopyBufferSize];
         long totalBytes = 0;
         int bytesRead;
-        cancellationToken.ThrowIfCancellationRequested();
-        while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            bytesRead = source.Read(buffer, 0, buffer.Length);
+            if (bytesRead == 0)
+                break;
+
             if (totalBytes > maxBytes - bytesRead)
                 throw new InvalidDataException($"archive {entryName} exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
 
             target.Write(buffer, 0, bytesRead);
             totalBytes += bytesRead;
-            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(totalBytes);
         }
 
         return totalBytes;

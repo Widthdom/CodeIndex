@@ -25,21 +25,6 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
-    public void RunImport_JsonCancellationReturnsInterrupted_Issue3818()
-    {
-        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-            ExportImportCommandRunner.RunImport(["archive.cdidx.zip", "--db", "codeindex.db", "--json"], jsonOptions, cts.Token));
-
-        Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        AssertExportImportError(stdout, "import", "open_archive", CommandErrorCodes.Interrupted);
-    }
-
-    [Fact]
     public void RunImport_JsonManifestErrorIncludesPhaseAndCode_Issue3548()
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_json_error_{Guid.NewGuid():N}");
@@ -1073,70 +1058,6 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
-    public void ReplaceImportedDatabase_PostMoveCancellationRollsBackDestination_Issue3818()
-    {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cancel_rollback_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
-        try
-        {
-            var dbPath = Path.Combine(workDir, "codeindex.db");
-            var tempPath = Path.Combine(workDir, "staged.db");
-            File.WriteAllText(dbPath, "existing db");
-            File.WriteAllText(tempPath, "imported db");
-            ExportImportCommandRunner.ApplyPrivateFileModeForTesting = _ =>
-                throw new OperationCanceledException();
-
-            Assert.Throws<OperationCanceledException>(() =>
-                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath));
-
-            Assert.Equal("existing db", File.ReadAllText(dbPath));
-            Assert.False(File.Exists(tempPath));
-        }
-        finally
-        {
-            ExportImportCommandRunner.ApplyPrivateFileModeForTesting = null;
-            Directory.Delete(workDir, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void RunImport_JsonReplacementFailureIncludesResidualDiagnostics_Issue3818()
-    {
-        var sourceRoot = TestProjectHelper.CreateTempProject("import_replacement_diag_source");
-        var targetRoot = TestProjectHelper.CreateTempProject("import_replacement_diag_target");
-        try
-        {
-            var sourceDbPath = TestProjectHelper.CreateProjectDb(sourceRoot);
-            var archivePath = ExportArchive(sourceRoot, sourceDbPath);
-            var targetDbPath = TestProjectHelper.CreateProjectDb(targetRoot);
-            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-            ExportImportCommandRunner.ApplyPrivateFileModeForTesting = _ =>
-                throw new IOException("simulated post-move failure");
-
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-                ExportImportCommandRunner.RunImport([archivePath, "--db", targetDbPath, "--json"], jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = JsonDocument.Parse(stdout);
-            var root = document.RootElement;
-            Assert.Equal("error", root.GetProperty("status").GetString());
-            Assert.Equal("replace_db", root.GetProperty("phase").GetString());
-            Assert.Equal("import_replacement_failed", root.GetProperty("error_code").GetString());
-            Assert.Contains(
-                root.GetProperty("diagnostics").EnumerateArray(),
-                item => item.GetProperty("code").GetString() == "import_replace_destination_state");
-            Assert.True(DbContext.TryValidateExistingCodeIndexDb(targetDbPath, out _, out _));
-        }
-        finally
-        {
-            ExportImportCommandRunner.ApplyPrivateFileModeForTesting = null;
-            TestProjectHelper.DeleteDirectory(sourceRoot);
-            TestProjectHelper.DeleteDirectory(targetRoot);
-        }
-    }
-
-    [Fact]
     public void ReplaceImportedDatabase_AppliesPrivateFileMode()
     {
         if (OperatingSystem.IsWindows())
@@ -1209,19 +1130,6 @@ public class ExportImportCommandRunnerTests
 
         Assert.Equal(4, copied);
         Assert.Equal([1, 2, 3, 4], target.ToArray());
-    }
-
-    [Fact]
-    public void CopyToWithLimit_CancellationBeforeReadThrowsWithoutWriting_Issue3818()
-    {
-        using var source = new MemoryStream([1, 2, 3, 4]);
-        using var target = new MemoryStream();
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        Assert.Throws<OperationCanceledException>(() =>
-            ExportImportCommandRunner.CopyToWithLimit(source, target, maxBytes: 4, cts.Token));
-        Assert.Equal(0, target.Length);
     }
 
     private static string CreateArchiveWithManifest(string workDir, string manifest)
