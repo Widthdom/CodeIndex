@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -103,6 +104,92 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("--depth must be less than or equal to 64", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("impact")}", stderr);
         Assert.DoesNotContain("database not found", stderr);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_MaxDepthBoundaryProbeBudgetTerminatesStably_Issue3820()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_boundary_probe_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/Dense.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+
+            var references = new List<ReferenceRecord>();
+            for (var i = 0; i < ImpactBoundaryCallerProbeSourceCount(); i++)
+            {
+                references.Add(new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "Root",
+                    ReferenceKind = "call",
+                    Line = i + 1,
+                    Column = 1,
+                    Context = $"Caller{i}();",
+                    ContainerKind = "function",
+                    ContainerName = $"Caller{i}",
+                });
+
+                if (i == 0)
+                    continue;
+
+                references.Add(new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "Caller0",
+                    ReferenceKind = "call",
+                    Line = i + 1,
+                    Column = 1,
+                    Context = $"Caller{i}();",
+                    ContainerKind = "function",
+                    ContainerName = $"Caller{i}",
+                });
+            }
+
+            writer.InsertReferences(references);
+            writer.MarkGraphReady();
+            using var reader = new DbReader(db.Connection);
+            var visited = Enumerable.Range(1, ImpactBoundaryCallerProbeSourceCount() - 1)
+                .Select(i => $"src/Dense.cs:Caller{i}:call")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var method = typeof(DbReader).GetMethod("InspectBoundaryCallers", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+
+            var inspection = method!.Invoke(reader,
+            [
+                "Caller0",
+                "Root",
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                visited,
+                new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase),
+                new List<ImpactCycleResult>(),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                "csharp",
+                null,
+                null,
+                false,
+            ]);
+            Assert.NotNull(inspection);
+            var type = inspection!.GetType();
+
+            Assert.True((bool)type.GetProperty("HasUnvisitedCaller")!.GetValue(inspection)!);
+            Assert.True((bool)type.GetProperty("ProbeBudgetHit")!.GetValue(inspection)!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static int ImpactBoundaryCallerProbeSourceCount() => DbReader.ImpactBoundaryCallerProbeBudget + 100;
     }
 
     [Theory]

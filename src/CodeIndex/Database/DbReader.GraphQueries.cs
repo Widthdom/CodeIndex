@@ -1090,6 +1090,9 @@ public partial class DbReader
     // impact --with-paths が 1 caller につき保持する経路数の上限。ダイヤモンド型で多経路が
     // 収束する場合に JSON 膨張を抑える役割があり、超過時は PathsTruncated で通知する。
     private const int DefaultImpactPathsPerResult = 10;
+    internal const int DefaultImpactGraphStateEntryBudget = 10_000;
+    internal const int ImpactBoundaryCallerProbeBudget = 512;
+    private const int ImpactBoundaryCallerProbePageSize = 64;
 
     /// <summary>
     /// Compute transitive callers of a symbol using BFS with exact matching.
@@ -1139,6 +1142,9 @@ public partial class DbReader
         string? truncatedReason = null;
         // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
         const int maxFetchIterations = 1000;
+        var graphStateEntryBudget = GetImpactGraphStateEntryBudget(limit);
+        var graphStateBudgetHit = false;
+        var boundaryProbeBudgetHit = false;
 
         // Path tracking state is allocated only when callers opt in. We collapse parent edges by
         // caller name (rather than path:name) so that diamond chains converging on the same name
@@ -1156,7 +1162,7 @@ public partial class DbReader
             ? new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        while (queue.Count > 0 && results.Count < limit)
+        while (queue.Count > 0 && results.Count < limit && !graphStateBudgetHit && !boundaryProbeBudgetHit)
         {
             var (currentSymbol, depth) = queue.Dequeue();
 
@@ -1169,7 +1175,7 @@ public partial class DbReader
             var pageSize = Math.Max(1, needed + 1);
             var fetchIterations = 0;
 
-            while (results.Count < limit && fetchIterations < maxFetchIterations)
+            while (results.Count < limit && fetchIterations < maxFetchIterations && !graphStateBudgetHit && !boundaryProbeBudgetHit)
             {
                 fetchIterations++;
                 var page = GetCallersExact(currentSymbol, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -1199,6 +1205,13 @@ public partial class DbReader
                         cycleParentsByName[callerName] = cycleParentSet;
                     }
                     cycleParentSet.Add(currentSymbol);
+                    if (ImpactGraphStateEntryCount(parentsByName, cycleParentsByName, depthByName, resultIndicesByName) > graphStateEntryBudget)
+                    {
+                        graphStateBudgetHit = true;
+                        truncated = true;
+                        truncatedReason = ImpactTruncatedReasons.GraphStateBudget;
+                        break;
+                    }
 
                     if (!visited.Add(key))
                     {
@@ -1212,6 +1225,13 @@ public partial class DbReader
                             && existingDepth == depth + 1)
                         {
                             parentsByName[callerName].Add(currentSymbol);
+                            if (ImpactGraphStateEntryCount(parentsByName, cycleParentsByName, depthByName, resultIndicesByName) > graphStateEntryBudget)
+                            {
+                                graphStateBudgetHit = true;
+                                truncated = true;
+                                truncatedReason = ImpactTruncatedReasons.GraphStateBudget;
+                                break;
+                            }
                         }
                         continue;
                     }
@@ -1252,6 +1272,13 @@ public partial class DbReader
                         parentsByName[callerName] = parentSet;
                     }
                     parentSet.Add(currentSymbol);
+                    if (ImpactGraphStateEntryCount(parentsByName, cycleParentsByName, depthByName, resultIndicesByName) > graphStateEntryBudget)
+                    {
+                        graphStateBudgetHit = true;
+                        truncated = true;
+                        truncatedReason = ImpactTruncatedReasons.GraphStateBudget;
+                        break;
+                    }
 
                     // Only recurse if the just-added caller (at depth + 1) is strictly below
                     // maxDepth, so that the next BFS step can reach depth + 2 ≤ maxDepth.
@@ -1269,7 +1296,7 @@ public partial class DbReader
                              && caller.CallerName != SyntheticTopLevelCallerName
                              && depth + 1 == maxDepth)
                     {
-                        maxDepthReached |= InspectBoundaryCallers(
+                        var boundaryInspection = InspectBoundaryCallers(
                             caller.CallerName,
                             resolvedName,
                             rootDefinitionPaths,
@@ -1281,6 +1308,14 @@ public partial class DbReader
                             pathPatterns,
                             excludePathPatterns,
                             excludeTests);
+                        maxDepthReached |= boundaryInspection.HasUnvisitedCaller;
+                        if (boundaryInspection.ProbeBudgetHit)
+                        {
+                            boundaryProbeBudgetHit = true;
+                            truncated = true;
+                            truncatedReason = ImpactTruncatedReasons.BoundaryProbeBudget;
+                            break;
+                        }
                     }
                 }
 
@@ -1322,6 +1357,8 @@ public partial class DbReader
 
         var terminationReason = truncatedReason switch
         {
+            ImpactTruncatedReasons.GraphStateBudget => ImpactTerminationReasons.GraphStateBudget,
+            ImpactTruncatedReasons.BoundaryProbeBudget => ImpactTerminationReasons.BoundaryProbeBudget,
             ImpactTruncatedReasons.SafetyCap => ImpactTerminationReasons.SafetyCap,
             ImpactTruncatedReasons.UserLimit => ImpactTerminationReasons.RowLimitTruncated,
             _ when cycles.Count > 0 => ImpactTerminationReasons.CycleDetected,
@@ -1332,7 +1369,32 @@ public partial class DbReader
         return (results, truncated, truncatedReason, terminationReason, cycles);
     }
 
-    private bool InspectBoundaryCallers(
+    private static int GetImpactGraphStateEntryBudget(int limit)
+    {
+        var limitScaled = Math.Max(1, limit) * 200;
+        return Math.Max(1024, Math.Min(DefaultImpactGraphStateEntryBudget, limitScaled));
+    }
+
+    private static int ImpactGraphStateEntryCount(
+        Dictionary<string, HashSet<string>> parentsByName,
+        Dictionary<string, HashSet<string>> cycleParentsByName,
+        Dictionary<string, int> depthByName,
+        Dictionary<string, List<int>>? resultIndicesByName)
+    {
+        var count = depthByName.Count + parentsByName.Count + cycleParentsByName.Count + (resultIndicesByName?.Count ?? 0);
+        foreach (var parents in parentsByName.Values)
+            count += parents.Count;
+        foreach (var parents in cycleParentsByName.Values)
+            count += parents.Count;
+        if (resultIndicesByName != null)
+            foreach (var indices in resultIndicesByName.Values)
+                count += indices.Count;
+        return count;
+    }
+
+    private readonly record struct ImpactBoundaryInspection(bool HasUnvisitedCaller, bool ProbeBudgetHit);
+
+    private ImpactBoundaryInspection InspectBoundaryCallers(
         string symbolName,
         string resolvedName,
         HashSet<string> rootDefinitionPaths,
@@ -1345,13 +1407,18 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        const int pageSize = 1;
         var offset = 0;
+        var probes = 0;
         while (true)
         {
+            if (probes >= ImpactBoundaryCallerProbeBudget)
+                return new ImpactBoundaryInspection(HasUnvisitedCaller: true, ProbeBudgetHit: true);
+
+            var pageSize = Math.Min(ImpactBoundaryCallerProbePageSize, ImpactBoundaryCallerProbeBudget - probes);
             var page = GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
             if (page.Count == 0)
-                return false;
+                return new ImpactBoundaryInspection(HasUnvisitedCaller: false, ProbeBudgetHit: false);
+            probes += page.Count;
 
             foreach (var caller in page)
             {
@@ -1372,11 +1439,11 @@ public partial class DbReader
 
                 var key = BuildImpactVisitedKey(caller, callerName);
                 if (!visited.Contains(key))
-                    return true;
+                    return new ImpactBoundaryInspection(HasUnvisitedCaller: true, ProbeBudgetHit: false);
             }
 
             if (page.Count < pageSize)
-                return false;
+                return new ImpactBoundaryInspection(HasUnvisitedCaller: false, ProbeBudgetHit: false);
             offset += page.Count;
         }
     }

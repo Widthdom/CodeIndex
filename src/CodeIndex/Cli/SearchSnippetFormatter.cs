@@ -11,6 +11,8 @@ public static class SearchSnippetFormatter
 {
     public const int DefaultSnippetLines = 8;
     public const int MaxSnippetLines = 20;
+    internal const int MaxPreferredMatchScanLines = 4096;
+    internal const int MaxPreferredMatchScanChars = 1024 * 1024;
 
     public static SearchSnippetQueryContext PrepareQueryContext(string query)
     {
@@ -251,8 +253,10 @@ public static class SearchSnippetFormatter
         var tokens = queryForLanguage.Tokens;
         var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
 
-        var maxTrackedWindowLines = preferredMatchLine.HasValue ? int.MaxValue : maxLines;
-        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines);
+        var maxTrackedWindowLines = preferredMatchLine.HasValue ? MaxPreferredMatchScanLines : maxLines;
+        var maxScannedLines = preferredMatchLine.HasValue ? MaxPreferredMatchScanLines : int.MaxValue;
+        var maxScannedChars = preferredMatchLine.HasValue ? MaxPreferredMatchScanChars : int.MaxValue;
+        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines, maxScannedLines, maxScannedChars);
         var lineCount = matchScan.LineCount;
         if (lineCount == 0)
         {
@@ -618,11 +622,12 @@ public static class SearchSnippetFormatter
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static SearchSnippetLineMatchScan FindMatchingLineIndexes(string content, string query, string[] tokens, bool caseSensitive, bool normalizeCSharpVerbatimNames, int maxTrackedWindowLines)
+    private static SearchSnippetLineMatchScan FindMatchingLineIndexes(string content, string query, string[] tokens, bool caseSensitive, bool normalizeCSharpVerbatimNames, int maxTrackedWindowLines, int maxScannedLines = int.MaxValue, int maxScannedChars = int.MaxValue)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var matches = new List<int>();
         var lineCount = 0;
+        var scannedChars = 0;
         var totalMatchCount = 0;
         int? focusStart = null;
         int? firstDroppedMatchIndex = null;
@@ -631,7 +636,10 @@ public static class SearchSnippetFormatter
         {
             foreach (var (i, rawLine) in EnumerateContentLines(content))
             {
+                if (ShouldStopPreferredMatchScan(lineCount, scannedChars, maxScannedLines, maxScannedChars))
+                    break;
                 lineCount++;
+                scannedChars += rawLine.Length + 1;
                 var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
                 if (line.Contains(query, comparison))
                     AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount, ref firstDroppedMatchIndex);
@@ -647,12 +655,16 @@ public static class SearchSnippetFormatter
 
         matches.Clear();
         lineCount = 0;
+        scannedChars = 0;
         totalMatchCount = 0;
         focusStart = null;
         firstDroppedMatchIndex = null;
         foreach (var (i, rawLine) in EnumerateContentLines(content))
         {
+            if (ShouldStopPreferredMatchScan(lineCount, scannedChars, maxScannedLines, maxScannedChars))
+                break;
             lineCount++;
+            scannedChars += rawLine.Length + 1;
             var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
             if (tokens.Any(token => line.Contains(token, comparison)))
                 AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount, ref firstDroppedMatchIndex);
@@ -660,6 +672,9 @@ public static class SearchSnippetFormatter
 
         return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount, firstDroppedMatchIndex);
     }
+
+    private static bool ShouldStopPreferredMatchScan(int lineCount, int scannedChars, int maxScannedLines, int maxScannedChars)
+        => lineCount >= maxScannedLines || scannedChars >= maxScannedChars;
 
     private static void AddTrackedMatchIndex(List<int> matches, int lineIndex, int maxTrackedWindowLines, ref int? focusStart, ref int totalMatchCount, ref int? firstDroppedMatchIndex)
     {
