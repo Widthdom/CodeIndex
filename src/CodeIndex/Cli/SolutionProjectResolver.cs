@@ -49,6 +49,8 @@ internal static class SolutionProjectResolver
     internal const long MaxSolutionFileBytes = 8L * 1024 * 1024;
     internal const int MaxSolutionLineChars = 16 * 1024;
     internal const int MaxSolutionProjectReferences = 4096;
+    internal static Func<string, IEnumerable<string>>? EnumerateDirectoriesForTesting { get; set; }
+    internal static Func<string, IEnumerable<string>>? EnumerateFilesForTesting { get; set; }
 
     public static IReadOnlyList<DotNetProjectInfo> ResolveProjects(string workspaceRoot, string? solutionPath = null)
         => ResolveProjects(workspaceRoot, solutionPath, SolutionProjectResolverLimits.Default);
@@ -258,7 +260,7 @@ internal static class SolutionProjectResolver
     }
 
     private static bool IsExpectedFilesystemDiscoveryException(Exception ex)
-        => ex is IOException or UnauthorizedAccessException or NotSupportedException;
+        => FileSystemTraversalFailure.IsExpected(ex);
 
     private static void AddAutomaticSolutionDiscoveryDiagnostic(
         string workspaceRoot,
@@ -267,12 +269,7 @@ internal static class SolutionProjectResolver
         SolutionProjectResolverLimits limits,
         IList<string>? traversalDiagnostics)
     {
-        var reason = ex switch
-        {
-            UnauthorizedAccessException => "permissions",
-            NotSupportedException => "an unsupported path",
-            _ => "an I/O error",
-        };
+        var reason = FileSystemTraversalFailure.DescribeReason(ex);
         AddTraversalDiagnostic(
             workspaceRoot,
             directory,
@@ -400,13 +397,15 @@ internal static class SolutionProjectResolver
 
             return indexer.EvaluatePathFilter(directory, isDirectory: true).ShouldSkip;
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
-            AddTraversalDiagnostic(workspaceRoot, directory, "directory filters", "permissions", limits, traversalDiagnostics);
-        }
-        catch (IOException)
-        {
-            AddTraversalDiagnostic(workspaceRoot, directory, "directory filters", "an I/O error", limits, traversalDiagnostics);
+            AddTraversalDiagnostic(
+                workspaceRoot,
+                directory,
+                "directory filters",
+                FileSystemTraversalFailure.DescribeReason(ex),
+                limits,
+                traversalDiagnostics);
         }
 
         return true;
@@ -423,13 +422,15 @@ internal static class SolutionProjectResolver
         {
             return !indexer.EvaluatePathFilter(file).ShouldSkip;
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
-            AddTraversalDiagnostic(workspaceRoot, file, "file filters", "permissions", limits, traversalDiagnostics);
-        }
-        catch (IOException)
-        {
-            AddTraversalDiagnostic(workspaceRoot, file, "file filters", "an I/O error", limits, traversalDiagnostics);
+            AddTraversalDiagnostic(
+                workspaceRoot,
+                file,
+                "file filters",
+                FileSystemTraversalFailure.DescribeReason(ex),
+                limits,
+                traversalDiagnostics);
         }
 
         return false;
@@ -446,7 +447,7 @@ internal static class SolutionProjectResolver
             directory,
             "subdirectories",
             ProjectTraversalEntryKind.Directory,
-            Directory.EnumerateDirectories,
+            EnumerateDirectoriesForTesting ?? Directory.EnumerateDirectories,
             limits,
             budget,
             traversalDiagnostics);
@@ -462,7 +463,7 @@ internal static class SolutionProjectResolver
             directory,
             "files",
             ProjectTraversalEntryKind.File,
-            Directory.EnumerateFiles,
+            EnumerateFilesForTesting ?? Directory.EnumerateFiles,
             limits,
             budget,
             traversalDiagnostics);
@@ -482,14 +483,15 @@ internal static class SolutionProjectResolver
         {
             entries = enumerate(LongPath.EnsureWindowsPrefix(directory));
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
-            AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "permissions", limits, traversalDiagnostics);
-            yield break;
-        }
-        catch (IOException)
-        {
-            AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "an I/O error", limits, traversalDiagnostics);
+            AddTraversalDiagnostic(
+                workspaceRoot,
+                directory,
+                entryKind,
+                FileSystemTraversalFailure.DescribeReason(ex),
+                limits,
+                traversalDiagnostics);
             yield break;
         }
 
@@ -503,14 +505,15 @@ internal static class SolutionProjectResolver
                     yield break;
                 entry = LongPath.RemoveWindowsPrefix(enumerator.Current);
             }
-            catch (UnauthorizedAccessException)
+            catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
             {
-                AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "permissions", limits, traversalDiagnostics);
-                yield break;
-            }
-            catch (IOException)
-            {
-                AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "an I/O error", limits, traversalDiagnostics);
+                AddTraversalDiagnostic(
+                    workspaceRoot,
+                    directory,
+                    entryKind,
+                    FileSystemTraversalFailure.DescribeReason(ex),
+                    limits,
+                    traversalDiagnostics);
                 yield break;
             }
 

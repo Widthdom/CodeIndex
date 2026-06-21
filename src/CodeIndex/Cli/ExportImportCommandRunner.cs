@@ -1356,11 +1356,7 @@ internal static class ExportImportCommandRunner
     }
 
     private static bool IsRecoverableReplacementException(Exception ex)
-        => ex is IOException
-            or UnauthorizedAccessException
-            or ArgumentException
-            or NotSupportedException
-            or PathTooLongException;
+        => FileSystemTraversalFailure.IsExpected(ex);
 
     private static void DeleteSqliteSidecars(string dbPath, string? cleanupDescription = null)
     {
@@ -1382,7 +1378,7 @@ internal static class ExportImportCommandRunner
             else
                 File.Delete(path);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
             if (!string.IsNullOrWhiteSpace(cleanupDescription))
                 CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
@@ -1398,7 +1394,7 @@ internal static class ExportImportCommandRunner
 
             Directory.Delete(path);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
             if (!string.IsNullOrWhiteSpace(cleanupDescription))
                 CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");

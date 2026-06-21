@@ -1981,19 +1981,13 @@ public class FileIndexer
                     pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(subDir, activeIgnoreRules, IsProjectRoot: false));
                 }
             }
-            catch (UnauthorizedAccessException)
+            catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
             {
-                AddProjectMarkerTraversalWarning(errors, currentDirectory, nameof(UnauthorizedAccessException));
+                var exceptionType = FileSystemTraversalFailure.ExceptionTypeName(ex);
+                AddProjectMarkerTraversalWarning(errors, currentDirectory, exceptionType);
                 MarkProjectMarkerTraversalTruncated(
                     traversalState,
-                    $"traversal failed with {nameof(UnauthorizedAccessException)}");
-            }
-            catch (IOException)
-            {
-                AddProjectMarkerTraversalWarning(errors, currentDirectory, nameof(IOException));
-                MarkProjectMarkerTraversalTruncated(
-                    traversalState,
-                    $"traversal failed with {nameof(IOException)}");
+                    $"traversal failed with {exceptionType}");
             }
         }
     }
@@ -2446,16 +2440,11 @@ public class FileIndexer
             RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
             fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
-            // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
-            scanState.Errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
-            fullyScanned = false;
-        }
-        catch (IOException)
-        {
-            // Skip on I/O errors / I/Oエラー時はスキップ
-            scanState.Errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
+            scanState.Errors.Add(new ScanError(
+                ToRelativePath(dir),
+                $"Could not scan directory due to {FileSystemTraversalFailure.DescribeReason(ex)}."));
             fullyScanned = false;
         }
 
