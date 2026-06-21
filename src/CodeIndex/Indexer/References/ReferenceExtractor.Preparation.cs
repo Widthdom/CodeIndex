@@ -76,7 +76,7 @@ public static partial class ReferenceExtractor
             : content;
         var lines = maskedContent.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines, out var jsTaggedTemplateHits);
-        var csharpLineState = language == "csharp"
+        var csharpLineState = language == "csharp" && MightContainCSharpXmlDocComment(content)
             ? BuildCSharpLineStateMasks(lines)
             : (MultilineStringContent: null, BlockComment: null);
         var csharpLinesInsideMultilineStringContent = csharpLineState.MultilineStringContent;
@@ -136,6 +136,10 @@ public static partial class ReferenceExtractor
             GroupJsTaggedTemplatesByLine(jsTaggedTemplateHits));
         return true;
     }
+
+    private static bool MightContainCSharpXmlDocComment(string content) =>
+        content.Contains("///", StringComparison.Ordinal)
+        || content.Contains("/**", StringComparison.Ordinal);
 
     private static string[] PrepareReferenceLines(string language, string[] referenceStructuralLines)
     {

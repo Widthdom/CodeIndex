@@ -610,9 +610,93 @@ public partial class McpServer
             filtered.Add(tool!.DeepClone());
         }
 
-        var result = new JsonObject { ["tools"] = filtered };
+        var result = new JsonObject
+        {
+            ["tools"] = filtered,
+            ["_meta"] = BuildToolsListCatalogMeta(filtered),
+        };
         return CreateSuccessResponse(id, result);
     }
+
+    private static JsonObject BuildToolsListCatalogMeta(JsonArray tools)
+    {
+        var enabledToolNames = GetAdvertisedToolNames(tools);
+        return new JsonObject
+        {
+            ["catalog_version"] = "cdidx.mcp.tools.v1",
+            ["purpose"] = "Help first-time AI clients discover cdidx capabilities from tools/list without guessing from a flat tool array.",
+            ["first_time_ai_guide"] = new JsonArray
+            {
+                "Start with status to verify index freshness and graph readiness before trusting search or graph answers.",
+                "Use map and languages to orient on repository shape and supported extraction depth.",
+                "Use search for broad discovery, then definition or excerpt for focused source context.",
+                "Use references, callers, callees, and impact_analysis when graph_supported or language readiness indicates graph data is available.",
+                "Use batch_query to combine independent read-only lookups under one response budget.",
+                "Use suggest_improvement when an extraction, ranking, or output gap is observed; never include source code in that report.",
+            },
+            ["capability_groups"] = new JsonObject
+            {
+                ["workspace_health"] = ToolNameArray(enabledToolNames, "status", "validate", "languages", "ping"),
+                ["discovery"] = ToolNameArray(enabledToolNames, "search", "map", "files", "symbols", "outline", "deps"),
+                ["symbol_navigation"] = ToolNameArray(enabledToolNames, "definition", "references", "callers", "callees", "analyze_symbol", "impact_analysis"),
+                ["file_reading"] = ToolNameArray(enabledToolNames, "excerpt", "find_in_file"),
+                ["batching"] = ToolNameArray(enabledToolNames, "batch_query"),
+                ["analysis"] = ToolNameArray(enabledToolNames, "unused_symbols", "symbol_hotspots"),
+                ["index_maintenance"] = ToolNameArray(enabledToolNames, "index", "backfill_fold"),
+                ["feedback"] = ToolNameArray(enabledToolNames, "suggest_improvement"),
+            },
+            ["recommended_workflows"] = new JsonArray
+            {
+                WorkflowMeta(enabledToolNames, "first_pass_orientation", "Check whether the existing index can be trusted, then inspect repository shape.", "status", "map", "languages", "search"),
+                WorkflowMeta(enabledToolNames, "go_to_implementation", "Find candidate code and retrieve the smallest useful implementation context.", "search", "definition", "excerpt"),
+                WorkflowMeta(enabledToolNames, "trace_call_graph", "Move from a symbol to usage, callers/callees, and blast-radius analysis.", "references", "callers", "callees", "impact_analysis"),
+                WorkflowMeta(enabledToolNames, "safe_file_review", "Locate files and read constrained excerpts without dumping whole large files.", "files", "find_in_file", "excerpt"),
+                WorkflowMeta(enabledToolNames, "large_question_batch", "Bundle independent read-only lookups while respecting response budgets.", "batch_query"),
+                WorkflowMeta(enabledToolNames, "index_freshness_repair", "Diagnose stale or partial indexes and refresh only when needed.", "status", "index", "backfill_fold", "validate"),
+                WorkflowMeta(enabledToolNames, "report_capability_gap", "Report missing or poor extraction/ranking behavior in natural language.", "suggest_improvement"),
+            },
+            ["discovery_contract"] = new JsonObject
+            {
+                ["tools_list_is_authoritative"] = true,
+                ["disabled_tools_are_omitted"] = true,
+                ["input_schemas_are_authoritative"] = true,
+                ["annotations_describe_read_only_or_mutating_behavior"] = true,
+                ["respect_tool_filtering"] = true,
+            },
+        };
+    }
+
+    private static HashSet<string> GetAdvertisedToolNames(JsonArray tools)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tool in tools)
+        {
+            var name = tool?["name"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(name))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static JsonArray ToolNameArray(HashSet<string> enabledToolNames, params string[] toolNames)
+    {
+        var result = new JsonArray();
+        foreach (var toolName in toolNames)
+        {
+            if (enabledToolNames.Contains(toolName))
+                result.Add(toolName);
+        }
+
+        return result;
+    }
+
+    private static JsonObject WorkflowMeta(HashSet<string> enabledToolNames, string name, string description, params string[] toolNames) => new()
+    {
+        ["name"] = name,
+        ["description"] = description,
+        ["tools"] = ToolNameArray(enabledToolNames, toolNames),
+    };
 
     private static JsonObject StringOrArraySchema(string description) => new()
     {

@@ -886,6 +886,7 @@ public static partial class ReferenceExtractor
             }
 
             if (language == "csharp"
+                && csharpLinesInsideMultilineStringContent != null
                 && !(csharpLinesInsideMultilineStringContent?[i] ?? false)
                 && TryGetCSharpXmlDocCommentSpan(
                     originalLine,

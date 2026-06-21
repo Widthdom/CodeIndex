@@ -76,6 +76,9 @@ internal static class StructuralLineMasker
     internal static string[] MaskLines(string? lang, string[] originalLines, out List<JsTaggedTemplateHit>? jsTaggedTemplateHits)
     {
         jsTaggedTemplateHits = null;
+        if (!RequiresStructuralMasking(lang))
+            return originalLines;
+
         var maskedLines = (string[])originalLines.Clone();
 
         switch (lang)
@@ -110,6 +113,17 @@ internal static class StructuralLineMasker
 
         return maskedLines;
     }
+
+    private static bool RequiresStructuralMasking(string? lang) => lang is
+        "csharp"
+        or "python"
+        or "rust"
+        or "javascript"
+        or "typescript"
+        or "kotlin"
+        or "swift"
+        or "scala"
+        or "perl";
 
     private static void MaskPerlPodSections(string[] lines)
     {

@@ -26,7 +26,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
 - `FsCheck.Xunit` is reserved for property-based tests that assert universal invariants (never-throws contracts, idempotence, "output is parseable by downstream consumer") across randomly generated inputs. Use it to complement, not replace, the example-based `[Fact]` / `[Theory]` tests — pick FsCheck when the property is a universally quantified claim, and an example test when a specific concrete case is the contract.
 - Test parallelism: enabled by default across independent test classes. Tests that touch process-global state such as SQLite pool resets, environment variables, or current-directory overrides must use an explicit non-parallel collection, and tests that swap `Console.Out` / `Console.Error` must lock on `TestConsoleLock.Gate`.
-- CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. XPlat Code Coverage collection is limited to the `ubuntu-latest` / `net8.0` lane so every OS/framework lane still exercises the full suite without paying collector overhead.
+- CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. XPlat Code Coverage collection is limited to the `ubuntu-latest` / `net8.0` lane so every OS/framework lane still exercises the full suite without paying collector overhead. Test execution runs with `--no-restore --no-build` after the locked restore and Release build steps. The `ubuntu-latest` / `net8.0` lane also reuses the earlier Release solution build instead of running the per-framework test-project build again, and uses `make lint` as the single formatting verifier.
 
 ## Test Layout
 
@@ -116,11 +116,13 @@ Use the inventory below before adding or moving a test class:
 Prefer the existing helper before writing new setup code.
 
 - `CreateTempProject(prefix)` creates a unique temp workspace.
+- Use `CreateTempProject(prefix)` instead of adding local `Path.GetTempPath()` / `Guid.NewGuid()` directory helpers; keep any local wrapper as a thin prefix-specific delegate only when it preserves existing call-site readability.
 - `InitializeGitRepo(projectRoot)` initializes git and sets repo-local `user.name` and `user.email`.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db`, initializes schema, and seeds `codeindex_meta.indexed_project_root` to match the project root.
 - `InsertIndexedFile(...)` inserts a realistic indexed file with content-derived checksum, chunks, symbols, and references, and now passes the file path into Python symbol extraction so `__init__.py`-based re-export tests can exercise qualified package names.
 - `RunGit(...)` executes git without shell quoting issues.
 - `DeleteDirectory(path)` retries temp-project cleanup and normalizes attributes. To avoid process-global cross-test interference, it only requests SQLite pool cleanup through `SqlitePoolCleanup` as a Windows-specific retry fallback after a delete failure.
+- Use `DeleteDirectory(path)` in temp-workspace `finally` / `Dispose` cleanup paths, including tests that intentionally remove the workspace earlier in the scenario.
 - `DeleteFile(path)` retries standalone temp-DB cleanup and uses the same Windows-specific SQLite pool release fallback when pooled handles block deletion.
 - `SqlitePoolCleanup` centralizes the Windows SQLite pool workaround for tests. Tests that own a temporary SQLite file for their whole lifetime can enter an exclusive owner lease and dispose it idempotently before deleting the file, instead of calling `SqliteConnection.ClearAllPools()` directly from `Dispose`.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
@@ -238,7 +240,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
 - `FsCheck.Xunit` はランダム生成入力に対する普遍的不変条件（never-throws、idempotence、"出力が downstream consumer で parse 可能" 等）を表明する property-based テスト専用です。例ベースの `[Fact]` / `[Theory]` を置き換えるのではなく補完するもので、普遍量化された主張なら FsCheck、特定の具体ケースが契約なら例ベースという形で使い分けてください。
 - テスト並列実行: 独立したテストクラス間ではデフォルトで有効です。SQLite pool の解放、環境変数の変更、カレントディレクトリの上書きのような process-global 状態を触るテストは、明示的な non-parallel collection に入れてください。`Console.Out` / `Console.Error` を差し替えるテストは `TestConsoleLock.Gate` で lock してください。
-- CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。XPlat Code Coverage の収集は `ubuntu-latest` / `net8.0` lane に限定し、すべての OS/framework lane で full suite を実行しつつ collector overhead を避けます。
+- CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。XPlat Code Coverage の収集は `ubuntu-latest` / `net8.0` lane に限定し、すべての OS/framework lane で full suite を実行しつつ collector overhead を避けます。テスト実行は locked restore と Release build の後に `--no-restore --no-build` で走らせます。`ubuntu-latest` / `net8.0` lane では、直前の Release solution build を再利用し、per-framework の test-project build は再実行しません。また、formatting verifier は `make lint` だけを使います。
 
 ## テスト構成
 
@@ -329,11 +331,13 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 新しいセットアップコードを書く前に、既存ヘルパーを優先してください。
 
 - `CreateTempProject(prefix)` は一意な一時ワークスペースを作成します。
+- 独自に `Path.GetTempPath()` / `Guid.NewGuid()` を組み合わせた directory helper を増やさず、`CreateTempProject(prefix)` を使ってください。既存呼び出し側の読みやすさを保つ場合だけ、local wrapper は prefix 固有の薄い委譲に留めます。
 - `InitializeGitRepo(projectRoot)` は git を初期化し、repo-local の `user.name` と `user.email` を設定します。
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化したうえで `codeindex_meta.indexed_project_root` に project root を書き込みます。
 - `InsertIndexedFile(...)` は内容由来の checksum、chunks、symbols、references を含む現実的なインデックス済みファイルを挿入し、Python の symbol extraction には file path も渡すため、`__init__.py` ベースの再エクスポートテストで package 修飾名を扱えます。
 - `RunGit(...)` は shell の quoting 問題に依存せず git を実行します。
 - `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
+- 一時 workspace の `finally` / `Dispose` cleanup では、そのテストシナリオ内で workspace を意図的に先に削除する場合も含めて、`DeleteDirectory(path)` を使ってください。
 - `DeleteFile(path)` は standalone な temp DB cleanup をリトライし、pooled handle が削除を妨げる場合は同じ Windows 向け SQLite pool 解放フォールバックを使います。
 - `SqlitePoolCleanup` は Windows 向け SQLite pool workaround を集約します。テストの生存期間中ずっと一時 SQLite ファイルを所有するテストは、`SqliteConnection.ClearAllPools()` を直接呼ぶ代わりに exclusive owner lease に入り、削除前に冪等に dispose できます。
 - `SqliteConnection.ClearAllPools()` を意図的に呼ぶテスト、process-global な環境変数を変更するテスト、プロセスのカレントディレクトリを上書きするテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。これらのハザードを持つ新しいテストも、この collection に入れて無関係なクラスとの並列実行を避けてください。

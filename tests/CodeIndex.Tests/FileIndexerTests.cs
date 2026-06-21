@@ -272,7 +272,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -297,7 +297,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -328,7 +328,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -358,7 +358,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -391,7 +391,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -425,7 +425,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -662,7 +662,7 @@ public class FileIndexerTests
             {
                 Environment.CurrentDirectory = originalDirectory;
                 if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                    TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -937,7 +937,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -958,7 +958,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -984,7 +984,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1013,7 +1013,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1050,7 +1050,7 @@ public class FileIndexerTests
         {
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1081,7 +1081,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1112,14 +1112,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void GetFamilyScopeKey_MsbuildProjectFileIgnoresDirectoryBuildMarkersForScope()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var srcDir = Path.Combine(tempDir, "src");
@@ -1135,17 +1135,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_OverExplicitMaxFileBytes_ThrowsActionableOverrideMessage()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "Program.cs");
             File.WriteAllText(path, "class Program {}\n");
 
@@ -1159,17 +1158,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_ExplicitMaxFileBytes_AllowsLargerSourceFile()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "Program.cs");
             File.WriteAllText(path, "class Program {}\n");
 
@@ -1185,7 +1183,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1221,10 +1219,9 @@ public class FileIndexerTests
     [InlineData("script", "#!/usr/bin/env pwsh\nWrite-Host hi\n", "powershell")]
     public void DetectLanguage_ExtensionlessShebangScripts_ReturnCorrectLang(string fileName, string content, string expected)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, fileName);
             File.WriteAllText(path, content);
 
@@ -1232,7 +1229,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1243,10 +1240,9 @@ public class FileIndexerTests
     [InlineData("data", new byte[] { (byte)'#', (byte)'!', (byte)'/', (byte)'b', (byte)'i', (byte)'n', (byte)'/', (byte)'s', (byte)'h', 0x00 })]
     public void DetectLanguage_ExtensionlessBinaryLikeFiles_ReturnsNull(string fileName, byte[] bytes)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, fileName);
             File.WriteAllBytes(path, bytes);
 
@@ -1254,17 +1250,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessOverCapShebangLine_ReturnsNull()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "tool");
             File.WriteAllText(path, "#!/usr/bin/env " + new string('x', 256));
 
@@ -1272,17 +1267,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessNonScript_ReturnsNull()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "README");
             File.WriteAllText(path, "Hello world\n");
 
@@ -1290,17 +1284,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void DetectLanguage_UnknownExtensionWithShebang_ReturnsNull()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "notes.txt");
             File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
 
@@ -1308,17 +1301,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void DetectLanguage_LeadingWhitespacePseudoShebang_ReturnsNull()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "tool");
             File.WriteAllText(path, "  #!/usr/bin/env bash\necho hi\n");
 
@@ -1326,7 +1318,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1337,10 +1329,9 @@ public class FileIndexerTests
         // .htm and Dockerfile.* / Makefile.* prefix variants are all indexed (not silently dropped).
         // Issue #189 のリプロを網羅。Ruby / Docker / Makefile / .pyi / .less / .mk / .htm と
         // Dockerfile.* / Makefile.* のプレフィックス変種が黙って落ちないことをロックする。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var files = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["Gemfile"] = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
@@ -1367,7 +1358,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1416,10 +1407,9 @@ public class FileIndexerTests
     [Fact]
     public void ScanFiles_IndexesDependencyManifests()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "package.json"), "{\"dependencies\":{}}\n");
             File.WriteAllText(Path.Combine(tempDir, "pyproject.toml"), "[project]\nname = 'sample'\n");
             File.WriteAllText(Path.Combine(tempDir, "requirements.txt"), "pytest\n");
@@ -1436,7 +1426,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1565,10 +1555,9 @@ public class FileIndexerTests
     [Fact]
     public void ScanFiles_IndexesCobolExtensions()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var files = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["hello.cbl"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
@@ -1588,7 +1577,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1601,10 +1590,9 @@ public class FileIndexerTests
         // Issue #205 で黙って落ちていた拡張子を固定する。
         // Groovy / assembly / CUDA / GPU shaders / HDL / Common Lisp / Racket / Pascal / Ada /
         // Fortran / Raku / Perl test scripts が scan 時のフィルタを通過することを確認する。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var files = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["build.groovy"] = "println 'hello'\n",
@@ -1639,7 +1627,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1648,10 +1636,9 @@ public class FileIndexerTests
     {
         // Gradle Kotlin DSL files must be indexed as Kotlin, not silently skipped.
         // Gradle Kotlin DSL ファイルは Kotlin として index され、黙って落ちてはいけない。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "build.gradle.kts");
             var content = """
                 plugins {
@@ -1673,17 +1660,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_CppStyleHeaderContentIsDetectedAsCpp()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "widget.h");
             var content = """
                 #pragma once
@@ -1710,17 +1696,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_CStyleHeaderContentStaysC()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "legacy.h");
             var content = """
                 #ifndef LEGACY_H
@@ -1746,7 +1731,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1755,10 +1740,9 @@ public class FileIndexerTests
     {
         // Create a temp directory structure to test scanning
         // テスト用の一時ディレクトリ構造を作成
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
 
             var nodeModules = Path.Combine(tempDir, "node_modules");
@@ -1773,7 +1757,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1784,7 +1768,7 @@ public class FileIndexerTests
     [InlineData("bin", "app.cs")]
     public void ScanFiles_IndexesExplicitRootEvenWhenRootNameIsSkipped(string rootDirName, string fileName)
     {
-        var tempParentDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempParentDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var rootDir = Path.Combine(tempParentDir, rootDirName);
         try
         {
@@ -1811,10 +1795,9 @@ public class FileIndexerTests
     [Fact]
     public void ScanFiles_SkipsExcludedFiles()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
             File.WriteAllText(Path.Combine(tempDir, ".DS_Store"), "metadata");
             File.WriteAllText(Path.Combine(tempDir, "Thumbs.db"), "metadata");
@@ -1829,17 +1812,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_IndexesDependencyLockfiles()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "package-lock.json"), "{}");
             File.WriteAllText(Path.Combine(tempDir, "npm-shrinkwrap.json"), "{}");
             File.WriteAllText(Path.Combine(tempDir, "yarn.lock"), "# yarn");
@@ -1872,7 +1854,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1882,10 +1864,9 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "ok.cs"), "class Ok { }\n");
             File.WriteAllText(Path.Combine(tempDir, "bad\nname.cs"), "class Bad { }\n");
 
@@ -1904,17 +1885,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_RejectsControlCharacterPathBeforeIo()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var indexer = new FileIndexer(tempDir);
 
             var ex = Assert.Throws<InvalidOperationException>(
@@ -1924,17 +1904,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void EvaluatePathFilter_RejectsControlCharacterPathBeforeNormalization()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var indexer = new FileIndexer(tempDir);
 
             var filter = indexer.EvaluatePathFilter(Path.Combine(tempDir, "bad\0name.cs"));
@@ -1948,7 +1927,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1960,10 +1939,9 @@ public class FileIndexerTests
         // they appear in the tree, including nested directories.
         // AppleDouble (`._*`) は原ファイルと同じ拡張子に見えるバイナリメタデータで、ツリーの
         // どこに置かれていても index 対象にしてはならない。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
             File.WriteAllText(Path.Combine(tempDir, "._app.js"), "\x00\x05\x16\x07AppleDouble");
             File.WriteAllText(Path.Combine(tempDir, "._.gitignore"), "\x00\x05\x16\x07AppleDouble");
@@ -1983,7 +1961,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1994,10 +1972,9 @@ public class FileIndexerTests
         // .gitignore, .editorconfig, and .cdidxrc.json — they do not start with `._`.
         // AppleDouble の除外は `._` 接頭辞のみで判定するため、.gitignore / .editorconfig /
         // .cdidxrc.json などの既知 dotfile は引き続き走査対象に残る必要がある。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "node_modules\n");
             File.WriteAllText(Path.Combine(tempDir, ".editorconfig"), "root = true\n");
             File.WriteAllText(Path.Combine(tempDir, ".cdidxrc.json"), "{}");
@@ -2014,7 +1991,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2025,10 +2002,9 @@ public class FileIndexerTests
         // re-indexing an AppleDouble path explicitly does not bypass the default skip.
         // --files / --commits の更新モードでも AppleDouble を明示的に対象に含められないよう、
         // walker と同じ既定除外を返すこと。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var appleDouble = Path.Combine(tempDir, "._app.js");
             File.WriteAllText(appleDouble, "\x00\x05\x16\x07AppleDouble");
 
@@ -2040,7 +2016,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2050,7 +2026,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var outsideDir = Path.Combine(Path.GetTempPath(), $"codeindex_outside_{Guid.NewGuid():N}");
         try
         {
@@ -2070,7 +2046,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(outsideDir))
                 Directory.Delete(outsideDir, true);
         }
@@ -2082,7 +2058,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var subDir = Path.Combine(tempDir, "sub");
@@ -2103,7 +2079,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2113,7 +2089,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var subDir = Path.Combine(tempDir, "sub");
@@ -2145,17 +2121,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_ExcessiveDirectoryDepth_SkipsSubtreeWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var current = tempDir;
             for (var i = 0; i < 130; i++)
             {
@@ -2176,7 +2151,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2186,7 +2161,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var nested = Path.Combine(tempDir, "a", "b", "c");
@@ -2213,7 +2188,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2223,7 +2198,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
         try
         {
@@ -2256,7 +2231,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(externalDir))
                 Directory.Delete(externalDir, true);
         }
@@ -2268,7 +2243,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
         try
         {
@@ -2298,7 +2273,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(externalDir))
                 Directory.Delete(externalDir, true);
         }
@@ -2310,7 +2285,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var skippedTargetDir = Path.Combine(tempDir, "node_modules");
@@ -2339,7 +2314,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2388,10 +2363,9 @@ public class FileIndexerTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "visible.py"), "print('visible')\n");
 
             var hiddenFile = Path.Combine(tempDir, "hidden.py");
@@ -2432,10 +2406,9 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "real.py"), "def real(): pass\n");
             // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
             // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
@@ -2453,17 +2426,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignorePatternsAndNegation()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "secret.py\nbuild_output/\n*.generated.js\n!keep.generated.js\n");
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
             File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
@@ -2482,17 +2454,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_TrimsLeadingWhitespaceBeforeParsingIgnoreLines()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
             File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
@@ -2509,17 +2480,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_ReportsOverlongIgnorePatternAndContinues()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
             File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
@@ -2538,17 +2508,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsCdidxignoreAndNestedGitignore()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "src"));
             Directory.CreateDirectory(Path.Combine(tempDir, "fixtures"));
             File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "fixtures/\n*.cache.js\n");
@@ -2569,17 +2538,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_ReadsGitignoreAndCdidxignoreAsUtf8()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "資料"));
             Directory.CreateDirectory(Path.Combine(tempDir, "cafe"));
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "資料/\n", Encoding.UTF8);
@@ -2598,14 +2566,14 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsWorkspaceConfigCdidxignore()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, ".codeindex"));
@@ -2626,14 +2594,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_SkipsNestedGitRepositoryBoundary()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
@@ -2653,14 +2621,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void EvaluatePathFilter_SkipsNestedGitRepositoryBoundary()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
@@ -2676,17 +2644,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecord_NormalizesRelativePathToNfc()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var nfdName = "Cafe\u0301.cs";
             var filePath = Path.Combine(tempDir, nfdName);
             File.WriteAllText(filePath, "class Cafe { }");
@@ -2700,7 +2667,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2710,7 +2677,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var ignorePath = Path.Combine(tempDir, ".gitignore");
         UnixFileMode? originalMode = null;
         try
@@ -2742,7 +2709,7 @@ public class FileIndexerTests
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2752,7 +2719,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var nestedDir = Path.Combine(tempDir, "src");
         var ignorePath = Path.Combine(nestedDir, ".gitignore");
         UnixFileMode? originalMode = null;
@@ -2785,14 +2752,14 @@ public class FileIndexerTests
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_LoadsFullAncestorIgnoreChainAndReportsIt()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var workspace = Path.Combine(tempDir, "workspace");
@@ -2818,7 +2785,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2828,7 +2795,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var projects = Path.Combine(tempDir, "workspace", "projects");
         UnixFileMode? originalMode = null;
         try
@@ -2855,7 +2822,7 @@ public class FileIndexerTests
             if (originalMode.HasValue)
                 SetUnixPermissions(projects, originalMode.Value);
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2865,7 +2832,7 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var srcDir = Path.Combine(tempDir, "src");
         var blockedDir = Path.Combine(srcDir, "blocked");
         UnixFileMode? originalMode = null;
@@ -2897,14 +2864,14 @@ public class FileIndexerTests
             if (originalMode.HasValue && Directory.Exists(blockedDir))
                 SetUnixPermissions(blockedDir, originalMode.Value);
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_CheckpointedDirectories_AreSkippedAndCarriedForward()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "cached"));
@@ -2928,17 +2895,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "root_only_dir"));
             Directory.CreateDirectory(Path.Combine(tempDir, "src"));
             Directory.CreateDirectory(Path.Combine(tempDir, "src", "root_only_dir"));
@@ -2959,17 +2925,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGlobstarPrefixPatternAtProjectRoot()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "nested"));
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "**/*.min.js\n");
             File.WriteAllText(Path.Combine(tempDir, "app.min.js"), "export const ignored = true;");
@@ -2986,17 +2951,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_HandlesGitIgnoreWhitespaceLikeGit()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitignore"),
                 "  #*.py\n  *.py\n*.cs\t\n");
@@ -3016,17 +2980,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGlobstarMiddlePatternWithZeroOrMoreDirectories()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
             Directory.CreateDirectory(Path.Combine(tempDir, "foo", "deep"));
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/bar.py\n");
@@ -3044,17 +3007,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsTrailingGlobstarWithoutIgnoringRootDirectoryItself()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
             Directory.CreateDirectory(Path.Combine(tempDir, "foo", "nested"));
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**\n!foo/bar.py\n");
@@ -3071,17 +3033,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsTrailingGlobstarDirectoryPatternWithoutIgnoringRootDirectoryItself()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
             Directory.CreateDirectory(Path.Combine(tempDir, "foo", "bar"));
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/\n!foo/bar.py\n");
@@ -3099,17 +3060,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_TreatsNonSpecialDoubleStarAsSingleSegmentWildcard()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             Directory.CreateDirectory(Path.Combine(tempDir, "dir"));
             Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a"));
             Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a", "x"));
@@ -3128,17 +3088,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitIgnoreCaseSettingFromRepository()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             RunGit(tempDir, "init");
             RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
             RunGit(tempDir, "config", "user.email", "tests@example.com");
@@ -3157,17 +3116,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitIgnoreCaseSettingForAsciiOnly()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             RunGit(tempDir, "init");
             RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
             RunGit(tempDir, "config", "user.email", "tests@example.com");
@@ -3189,14 +3147,14 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var projectRoot = Path.Combine(tempDir, "subproj");
         try
         {
@@ -3219,14 +3177,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignoreDirectoryRule()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var projectRoot = Path.Combine(tempDir, "subproj");
         try
         {
@@ -3248,14 +3206,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_ProjectRootNamedNodeModules_IsIndexedButNestedSkipDirsRemainSkipped()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var projectRoot = Path.Combine(tempDir, "node_modules");
         try
         {
@@ -3275,17 +3233,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreBracketCharacterClassesAndRanges()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[ab].cs\nfile[0-9].py\n");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
             File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
@@ -3303,17 +3260,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClass()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].cs\n");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
             File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
@@ -3329,17 +3285,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreBracketCharacterClassWithLeadingLiteralRightBracket()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[]].cs\n");
             File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Ignored { }");
             File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
@@ -3354,17 +3309,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreAsciiPosixDigitBracketCharacterClass()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
             File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
             File.WriteAllText(Path.Combine(tempDir, "١.py"), "print('kept non-ascii digit')");
@@ -3380,17 +3334,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreAsciiPosixUpperBracketCharacterClass()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:upper:]].cs\n");
             File.WriteAllText(Path.Combine(tempDir, "A.cs"), "class Ignored { }");
             File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
@@ -3406,17 +3359,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignorePosixPunctBracketCharacterClass()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:punct:]].cs\n");
             File.WriteAllText(Path.Combine(tempDir, "!.cs"), "class Ignored { }");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Kept { }");
@@ -3431,17 +3383,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClassWithLeadingLiteralRightBracket()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!]].cs\n");
             File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Kept { }");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Ignored { }");
@@ -3456,17 +3407,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreBracketNegationPrefixesAndLiteralCaret()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].js\n[^a].py\n[a^b].cs\n[\\^a].rb\n");
             File.WriteAllText(Path.Combine(tempDir, "a.js"), "export const kept = true;");
             File.WriteAllText(Path.Combine(tempDir, "b.js"), "export const ignored = true;");
@@ -3489,17 +3439,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreEscapedLiteralCharacters()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo\\ bar.py\nliteral\\[name\\].js\n\\#literal.txt\n\\!important.cs\n");
             File.WriteAllText(Path.Combine(tempDir, "foo bar.py"), "print('ignored')");
             File.WriteAllText(Path.Combine(tempDir, "literal[name].js"), "export const ignored = true;");
@@ -3517,17 +3466,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_SkipsMalformedIgnoreRulesWithoutAborting()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n");
             File.WriteAllText(Path.Combine(tempDir, "[a.py"), "print('kept malformed literal')");
             File.WriteAllText(Path.Combine(tempDir, "ignored.py"), "print('ignored')");
@@ -3549,17 +3497,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_SeparatesUnknownExtensionsFromOtherNonIndexableFiles()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.mystery\n");
             File.WriteAllText(Path.Combine(tempDir, "app.cs"), "class App { }\n");
             File.WriteAllText(Path.Combine(tempDir, "Dockerfile.dev"), "FROM scratch\n");
@@ -3578,17 +3525,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_TreatsSolutionAndManifestAsKnownStructuralFiles_Issue3662()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "App.sln"), """
                 Microsoft Visual Studio Solution File, Format Version 12.00
                 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
@@ -3616,17 +3562,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessShebangs_HonorsUnicodeBomEncodings()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
 
             var files = new Dictionary<string, Encoding>
             {
@@ -3649,17 +3594,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_IncludesModernNodeModuleExtensions()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "index.mjs"), "export const run = () => {};");
             File.WriteAllText(Path.Combine(tempDir, "cli.cjs"), "module.exports = {};");
             File.WriteAllText(Path.Combine(tempDir, "types.cts"), "export type Config = {};");
@@ -3673,17 +3617,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_IncludesExtensionlessShebangScripts()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "rbenv-init"), "#!/usr/bin/env bash\necho init\n");
             File.WriteAllText(Path.Combine(tempDir, "python-tool"), "#!/usr/bin/python3\nprint('hi')\n");
             File.WriteAllText(Path.Combine(tempDir, "plain-text"), "Hello world\n");
@@ -3699,17 +3642,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_ExcludesUnknownExtensionEvenWhenShebangLooksSupported()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "#!/usr/bin/env bash\necho hi\n");
             File.WriteAllText(Path.Combine(tempDir, "script"), "#!/usr/bin/env bash\necho hi\n");
 
@@ -3723,7 +3665,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3733,10 +3675,9 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var extensionlessFifo = Path.Combine(tempDir, "tool");
             var extensionFifo = Path.Combine(tempDir, "tool.sh");
             var knownNameFifo = Path.Combine(tempDir, "Dockerfile");
@@ -3758,7 +3699,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3767,10 +3708,9 @@ public class FileIndexerTests
     {
         // Files with Unicode/CJK characters in content should be indexed correctly
         // Unicode/CJK文字を含むファイルが正しくインデックスされること
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var content = "// コメント: 日本語テスト\npublic class 日本語クラス\n{\n    public string 名前 { get; set; }\n    // 中文注释\n    // 한국어 주석\n}\n";
             var filePath = Path.Combine(tempDir, "unicode.cs");
             File.WriteAllText(filePath, content);
@@ -3787,7 +3727,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3798,10 +3738,9 @@ public class FileIndexerTests
     [InlineData("\uFEFF", 0)]
     public void BuildRecord_CountsPhysicalLinesAfterLineLeadingInvisibleStripping(string content, int expectedLines)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "physical.cs");
             File.WriteAllText(filePath, content);
 
@@ -3812,7 +3751,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3854,7 +3793,7 @@ public class FileIndexerTests
     {
         // Ensure Windows-style backslashes are converted to forward slashes
         // Windows形式のバックスラッシュがフォワードスラッシュに変換されることを確認
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var subDir = Path.Combine(tempDir, "src", "models");
@@ -3873,7 +3812,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3887,10 +3826,9 @@ public class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "back\\slash.py");
             File.WriteAllText(filePath, "def hu(): pass\n");
 
@@ -3902,7 +3840,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3928,10 +3866,9 @@ public class FileIndexerTests
     [Fact]
     public void ScanFiles_IncludesFileNameBasedLanguages()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "Dockerfile"), "FROM alpine");
             File.WriteAllText(Path.Combine(tempDir, "Makefile"), "all: build");
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
@@ -3945,7 +3882,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4000,7 +3937,7 @@ public class FileIndexerTests
     [Fact]
     public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "src"));
@@ -4019,17 +3956,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void GetFamilyScopeKey_MarkerlessRootLevelFilesShareRootScope()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
 
             var firstFile = Path.Combine(tempDir, "Api.Part1.cs");
             var secondFile = Path.Combine(tempDir, "Api.Part2.cs");
@@ -4044,14 +3980,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void GetFamilyScopeKey_IgnoresIgnoredProjectMarkers()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var libDir = Path.Combine(tempDir, "src", "Lib");
@@ -4075,14 +4011,14 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var srcDir = Path.Combine(tempDir, "src");
@@ -4107,17 +4043,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecord_CreatesCorrectRecord()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "main.py");
             File.WriteAllText(filePath, "def main():\n    print('hello')\n");
 
@@ -4131,7 +4066,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4140,10 +4075,9 @@ public class FileIndexerTests
     {
         // SkipDirs should be case-insensitive (e.g. "Build" matches "build")
         // SkipDirsは大文字小文字を区別しない（例: "Build"は"build"にマッチ）
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
 
             var buildDir = Path.Combine(tempDir, "Build");
@@ -4158,7 +4092,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4195,7 +4129,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
 
         static IEnumerable<string> DeleteBeforeProbe(string path)
@@ -4231,7 +4165,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4282,7 +4216,7 @@ public class FileIndexerTests
         {
             FileIndexer.ResolveDirectoryLinkTargetForTesting = null;
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4324,7 +4258,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(externalDir))
                 Directory.Delete(externalDir, true);
         }
@@ -4364,7 +4298,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4402,7 +4336,7 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4415,10 +4349,9 @@ public class FileIndexerTests
         // SkipDirs 名のディレクトリ配下に .gitmodules で宣言された submodule（例: vendor/foo）は
         // 可視化される必要がある。SkipDirs は submodule までの経路でのみ上書きされ、SkipDirs
         // 祖先自身の無関係なファイルは引き続き除外される。Closes #1511.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
 
             // .gitmodules at project root declaring submodule path "vendor/foo"
@@ -4450,17 +4383,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_OversizedGitmodulesSkipsSubmodulePassthroughWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
             File.WriteAllText(Path.Combine(tempDir, ".gitmodules"), new string('x', 300 * 1024));
 
@@ -4484,17 +4416,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFiles_GitmodulesQuotedPathPreservesCommentCharacters_Issue3819()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitmodules"),
                 """
@@ -4515,17 +4446,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_GitmodulesSubmodulePathCapWarns_Issue3819()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
 
             var maxPaths = FileIndexer.MaxGitmodulesSubmodulePaths;
@@ -4558,17 +4488,16 @@ public class FileIndexerTests
         finally
         {
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void PurgeFilesOutsideRetainedSet_UsesNfcRetainedPaths()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
             var nfcPath = "Caf\u00e9.cs";
             var nfdPath = "Cafe\u0301.cs";
@@ -4598,10 +4527,9 @@ public class FileIndexerTests
     [Fact]
     public void PurgeFilesOutsideRetainedSetWithinListedDirectories_UsesNfcPrunedDirectories()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
             TestProjectHelper.InsertIndexedFile(dbPath, "Caf\u00e9/src/File.cs", "csharp", "class NestedCafe { }\n");
 
@@ -4629,10 +4557,9 @@ public class FileIndexerTests
     [Fact]
     public void IndexFilesUpdate_UsesOriginalUnicodePathForIoAndNfcPathForDb()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var nfdPath = "Cafe\u0301.cs";
             File.WriteAllText(Path.Combine(tempDir, nfdPath), "class FirstCafe { }\n");
 
@@ -4663,10 +4590,9 @@ public class FileIndexerTests
         // build artifacts inside the submodule remain excluded.
         // 可視化された submodule も自身の .gitignore を尊重し、submodule 配下のビルド成果物などは
         // 引き続き除外されること。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitmodules"),
                 "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
@@ -4686,7 +4612,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4697,10 +4623,9 @@ public class FileIndexerTests
         // SkipDir-named directories. vendor/ without a declared submodule stays skipped.
         // .gitmodules が別の場所の submodule を宣言していても、無関係な SkipDirs 名ディレクトリ
         // (submodule が宣言されていない vendor/ 等) は引き続きスキップされること。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitmodules"),
                 "[submodule \"foo\"]\n\tpath = third_party/foo\n\turl = https://example.invalid/foo.git\n");
@@ -4722,14 +4647,14 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_GitmodulesReadFailureReportsWarning_Issue3473()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         var previousReader = FileIndexer.ReadGitmodulesLinesForTesting;
         try
         {
@@ -4750,7 +4675,7 @@ public class FileIndexerTests
         {
             FileIndexer.ReadGitmodulesLinesForTesting = previousReader;
             if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4765,10 +4690,9 @@ public class FileIndexerTests
         // 配下のファイルは、祖先が SkipDirs に該当しても ExcludedByDefaultDirectory に
         // 分類されない。これにより --files / --commits のような更新モードでも
         // フルスキャンと挙動が一致する。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitmodules"),
                 "[submodule \"foo\"]\n\tpath = vendor/foo\n");
@@ -4787,7 +4711,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4796,10 +4720,9 @@ public class FileIndexerTests
     {
         // CRLF line endings in files should be normalized to LF
         // ファイル内のCRLF改行はLFに正規化される
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "crlf.py");
             File.WriteAllBytes(filePath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
 
@@ -4811,7 +4734,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4836,10 +4759,9 @@ public class FileIndexerTests
         // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は chunk
         // に保存される canonical content と同じ内容から算出し、行メタデータとのずれを防ぐ。
         // Closes #183/#1467.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "bom.cs");
             var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF }
                 .Concat(System.Text.Encoding.UTF8.GetBytes("using System;\nnamespace BomTest;\n"))
@@ -4863,7 +4785,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4879,10 +4801,9 @@ public class FileIndexerTests
         // しても checksum が一致する必要がある。さもないと cross-OS clone や共有 NAS で
         // 初回索引時に全ファイルが「変更あり」扱いとなり再索引が走ってしまう。standalone
         // CR (旧 Mac classic) も同様に LF へ畳む。Closes #1544.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var lfPath = Path.Combine(tempDir, "lf.py");
             var crlfPath = Path.Combine(tempDir, "crlf.py");
             var crPath = Path.Combine(tempDir, "cr.py");
@@ -4908,7 +4829,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4921,10 +4842,9 @@ public class FileIndexerTests
         // BOM のみの差分は chunk / excerpt が見る canonical content と同じ内容として
         // hash される。別のバイト列から作られた行メタデータを freshness が受け入れる
         // ずれを防ぐ。Closes #1467.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var bomPath = Path.Combine(tempDir, "bom.cs");
             var noBomPath = Path.Combine(tempDir, "nobom.cs");
             var payload = System.Text.Encoding.UTF8.GetBytes("using System;\n");
@@ -4939,17 +4859,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void FileContentLoader_Load_CanonicalizesContentBeforeChecksum()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var path = Path.Combine(tempDir, "sample.cs");
             File.WriteAllBytes(path, Encoding.UTF8.GetBytes("a\r\n\uFEFFb\r"));
 
@@ -4963,7 +4882,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4982,6 +4901,19 @@ public class FileIndexerTests
         Assert.Equal(
             FileIndexer.ComputeChecksum(lfOnly),
             FileIndexer.ComputeChecksum(mixed));
+    }
+
+    [Fact]
+    public void ComputeChecksumFromNormalizedContent_MatchesUtf8ByteChecksumAcrossChunks()
+    {
+        var content = new string('a', 1023)
+            + char.ConvertFromUtf32(0x1F680)
+            + new string('b', 4097)
+            + "\uD800";
+
+        var expected = FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(content));
+
+        Assert.Equal(expected, FileContentLoader.ComputeChecksumFromNormalizedContent(content));
     }
 
     [Fact]
@@ -5021,10 +4953,9 @@ public class FileIndexerTests
         // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルも、正規化後に
         // chunk/extraction へ渡す canonical content が空になるため、保存する行数も
         // その入力と一致させる。Closes #1467/#1890.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "bomonly.cs");
             File.WriteAllBytes(filePath, new byte[] { 0xEF, 0xBB, 0xBF });
 
@@ -5036,7 +4967,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5048,10 +4979,9 @@ public class FileIndexerTests
         // a phantom glyph. Closes #183.
         // mid-file UTF-8 BOM (ファイル連結やツール挿入) もデコード後の content から
         // 剥がし、search / excerpt に幽霊グリフを漏らさないようにする。Closes #183.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "midbom.cs");
             var rawBytes = System.Text.Encoding.UTF8.GetBytes("using System;\n")
                 .Concat(new byte[] { 0xEF, 0xBB, 0xBF })
@@ -5067,7 +4997,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5080,10 +5010,9 @@ public class FileIndexerTests
         // UTF-16 LE BOM (FF FE) 付きで書かれたソースは UTF-8 fallback ではなく UTF-16 で
         // デコードしなければならない。UTF-8 経路では 1 バイトおきに U+FFFD / NUL に
         // 化けてシンボル抽出が壊れる。Closes #1540.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "utf16le.cs");
             var payload = "using System;\nnamespace Utf16Le;\n";
             var rawBytes = new byte[] { 0xFF, 0xFE }
@@ -5100,7 +5029,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5111,10 +5040,9 @@ public class FileIndexerTests
         // big-endian Windows or by legacy tooling keep their symbols intact. Closes #1540.
         // UTF-16 BE BOM (FE FF) も UTF-16 BE でデコードし、ビッグエンディアン Windows
         // やレガシツール由来のソースが壊れないようにする。Closes #1540.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "utf16be.cs");
             var payload = "using System;\nnamespace Utf16Be;\n";
             var rawBytes = new byte[] { 0xFE, 0xFF }
@@ -5131,7 +5059,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5144,10 +5072,9 @@ public class FileIndexerTests
         // 古い Windows ツールは BOM なし UTF-16 LE でソースを保存することがある。
         // 1 バイトおきの NUL パターンはバイナリ混入ではなくエンコーディングのシグナルとして扱う。
         // Closes #1829.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "utf16le-nobom.cs");
             var payload = "using System;\nnamespace Utf16LeNoBom;\n";
             File.WriteAllBytes(filePath, System.Text.Encoding.Unicode.GetBytes(payload));
@@ -5163,7 +5090,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5174,10 +5101,9 @@ public class FileIndexerTests
         // to little-endian Windows output only. Closes #1829.
         // BOM なし UTF-16 BE テキストも扱い、little-endian Windows 出力だけに限定しない。
         // Closes #1829.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "utf16be-nobom.cs");
             var payload = "using System;\nnamespace Utf16BeNoBom;\n";
             File.WriteAllBytes(filePath, System.Text.Encoding.BigEndianUnicode.GetBytes(payload));
@@ -5193,7 +5119,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5244,10 +5170,9 @@ public class FileIndexerTests
     [Fact]
     public void BuildRecord_NonUtf16NullByte_ThrowsOffsetDiagnostic()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "binary.cs");
             File.WriteAllBytes(filePath, [(byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', 0x00]);
 
@@ -5260,7 +5185,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5440,10 +5365,9 @@ public class FileIndexerTests
     [Fact]
     public void BuildRecord_ChecksumUsesCanonicalContentAfterLineLeadingBomStrip()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var plainPath = Path.Combine(tempDir, "plain.cs");
             var bomPath = Path.Combine(tempDir, "bom.cs");
             File.WriteAllText(plainPath, "class Plain\n{\n}\n");
@@ -5459,17 +5383,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecord_GitLfsPointerIndexesEmptyBodyAndValidationIssue()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "asset.cs");
             var pointer = """
                 version https://git-lfs.github.com/spec/v1
@@ -5492,14 +5415,14 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecord_ConfiguredGeneratedPatternBuildsExtractionIssueWithoutGeneratedFlag()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
             var generatedDir = Path.Combine(tempDir, "src", "generated");
@@ -5526,17 +5449,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecord_GitLfsVersionLineWithoutPointerShapePreservesContent()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "example.txt");
             var text = """
                 version https://git-lfs.github.com/spec/v1
@@ -5553,7 +5475,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5562,10 +5484,9 @@ public class FileIndexerTests
     {
         // Files exceeding the default cap should carry structured skip metadata.
         // 既定上限を超えるファイルは structured skip metadata を持つ例外を投げる。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "large.py");
             // Create a sparse file just over the default cap without allocating a matching test buffer.
             // 既定上限を少し超える sparse file を作り、同サイズのテスト用 buffer 確保を避ける。
@@ -5580,7 +5501,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5592,10 +5513,9 @@ public class FileIndexerTests
         // 10 MiB byte array on the LOH.
         // #1695 の回帰: 10 MiB の source file は stream length の確認時点で拒否し、
         // インデクサが LOH 上に連続した 10 MiB byte 配列を累積しないことを固定する。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "large.py");
             using (var stream = File.Create(filePath))
                 stream.SetLength(10 * 1024 * 1024);
@@ -5611,7 +5531,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5625,10 +5545,9 @@ public class FileIndexerTests
         // #1529 のリグレッション: TOCTOU 修正で 1 本の FileStream を通して MaxFileSize で
         // 累積バッファを打ち切る実装にした際、ちょうど既定上限のファイルは引き続き受け
         // 入れる必要がある (>上限 が throw / ==上限 が成功という対称契約を維持)。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "boundary.py");
             // Exactly MaxFileSize bytes — ASCII so UTF-8 decode succeeds without warning.
             // ちょうど MaxFileSize バイト — ASCII なら UTF-8 デコードで警告無く成功する。
@@ -5645,7 +5564,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -5662,10 +5581,9 @@ public class FileIndexerTests
         // 込んだバイト数を反映しなければならない。`record.Size` をバイト数と突き合わ
         // せることで、status や freshness check の下流が実際に取り込まれた値と一致
         // することを契約として固定する。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "sized.py");
             var payload = "print('hello world')\n"u8.ToArray();
             File.WriteAllBytes(filePath, payload);
@@ -5677,17 +5595,16 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void BuildRecord_ExtensionlessShebangScriptUsesDetectedLanguage()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var filePath = Path.Combine(tempDir, "rbenv-hooks");
             File.WriteAllText(filePath, "#!/usr/bin/env bash\necho hooks\n");
 
@@ -5699,7 +5616,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 

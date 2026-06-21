@@ -16,6 +16,26 @@ namespace CodeIndex.Tests;
 public partial class ReferenceExtractorTests
 {
     [Fact]
+    public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForUnmaskedLanguage()
+    {
+        var lines = new[] { "package main", "func main() {}" };
+
+        var masked = StructuralLineMasker.MaskLines("go", lines);
+
+        Assert.Same(lines, masked);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_ClonesForMaskedLanguage()
+    {
+        var lines = new[] { "var value = \"literal\";" };
+
+        var masked = StructuralLineMasker.MaskLines("csharp", lines);
+
+        Assert.NotSame(lines, masked);
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();
@@ -4236,6 +4256,34 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "BoundedRegex"
             && reference.ReferenceKind == "instantiate"
             && reference.Context.Contains("\"plain\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharpReferencePreparation_MasksStringsAndLineComments()
+    {
+        const string content = """
+            public class Worker
+            {
+                public void Execute()
+                {
+                    var text = "Log()";
+                    Log(); // Hidden()
+                }
+
+                private void Log() {}
+                private void Hidden() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(1, references.Count(reference =>
+            reference.SymbolName == "Log"
+            && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Hidden"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]

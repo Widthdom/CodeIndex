@@ -12,12 +12,7 @@ namespace CodeIndex.Tests;
 /// </summary>
 public sealed class InstallScriptTests : IDisposable
 {
-    private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_install_script_{Guid.NewGuid():N}");
-
-    public InstallScriptTests()
-    {
-        Directory.CreateDirectory(_tempRoot);
-    }
+    private readonly string _tempRoot = TestProjectHelper.CreateTempProject("cdidx_install_script");
 
     public void Dispose()
     {

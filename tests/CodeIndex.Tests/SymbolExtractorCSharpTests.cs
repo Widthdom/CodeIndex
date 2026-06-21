@@ -89,6 +89,58 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MethodRangeIgnoresJsonLiteralBracesInsideLambda()
+    {
+        const string content = """
+            public static class JsonWriter
+            {
+                private static void WriteCompactLocations()
+                {
+                    WriteArray(
+                        (writer, location) =>
+                        {
+                            writer.Write("{\"file\":");
+                            writer.Write('}');
+                        });
+                }
+
+                private static void Next()
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WriteCompactLocations"));
+        Assert.Equal(11, method.EndLine);
+        Assert.Equal(4, method.BodyStartLine);
+        Assert.Equal(11, method.BodyEndLine);
+
+        var next = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Next"));
+        Assert.Equal(15, next.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_QueryCommandRunnerFormattingMethodEndsBeforeNextCommand()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "CodeIndex",
+            "Cli",
+            "QueryCommandRunner.cs"));
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", source);
+
+        var compactLocations = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WriteCompactLocations"));
+        var runGoto = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "RunGoto"));
+        Assert.True(
+            compactLocations.EndLine < runGoto.StartLine,
+            $"WriteCompactLocations ended at line {compactLocations.EndLine}, but RunGoto starts at {runGoto.StartLine}.");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsAssignedLambdaAsLambda()
     {
         var content = """
@@ -4977,6 +5029,25 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Values");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Build");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SkipsLineCommentDeclarationsWithoutSkippingInlineComments()
+    {
+        const string content = """
+            namespace Demo;
+
+            // public class Phantom {}
+            public class Fixture
+            {
+                public void Real() { var text = "// not a comment-only line"; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Fixture");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real");
+        Assert.DoesNotContain(symbols, s => s.Name == "Phantom");
     }
 
     [Fact]

@@ -2580,7 +2580,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var line = lines[i];
-            if (lang == "csharp" && line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            if (lang == "csharp" && IsCSharpLineCommentOnly(line))
                 continue;
 
             if (lang == "go"
@@ -3128,7 +3128,13 @@ public static partial class SymbolExtractor
                                 : scalaBracelessClassEndLine.HasValue
                                         ? (scalaBracelessClassEndLine.Value + 1, null, null)
                                         : lang == "csharp" && pattern.BodyStyle == BodyStyle.Brace && csharpMatchLines != null
-                                            ? FindCSharpBraceRange(csharpMatchLines, i, absoluteStartColumn, linesAreSanitized: true)
+                                            ? FindCSharpPatternBraceRange(
+                                                lines,
+                                                csharpMatchLines,
+                                                csharpLineStartStates,
+                                                i,
+                                                absoluteStartColumn,
+                                                csharpGateRawStartColumn)
                                             : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                         if (fortranContinuationCandidate != null)
                             endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);

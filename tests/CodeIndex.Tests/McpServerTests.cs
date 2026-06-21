@@ -4478,6 +4478,39 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ToolsList_MetaAdvertisesFirstTimeAiDiscoveryCatalog()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var meta = response["result"]!["_meta"]!;
+        Assert.Equal("cdidx.mcp.tools.v1", meta["catalog_version"]!.GetValue<string>());
+
+        var guide = meta["first_time_ai_guide"]!.AsArray()
+            .Select(entry => entry!.GetValue<string>())
+            .ToArray();
+        Assert.Contains(guide, entry => entry.Contains("status", StringComparison.Ordinal));
+        Assert.Contains(guide, entry => entry.Contains("batch_query", StringComparison.Ordinal));
+
+        var groups = meta["capability_groups"]!;
+        var discovery = groups["discovery"]!.AsArray().Select(entry => entry!.GetValue<string>()).ToArray();
+        var navigation = groups["symbol_navigation"]!.AsArray().Select(entry => entry!.GetValue<string>()).ToArray();
+        var maintenance = groups["index_maintenance"]!.AsArray().Select(entry => entry!.GetValue<string>()).ToArray();
+        Assert.Contains("search", discovery);
+        Assert.Contains("definition", navigation);
+        Assert.Contains("index", maintenance);
+
+        var workflows = meta["recommended_workflows"]!.AsArray();
+        Assert.Contains(workflows, workflow =>
+            workflow!["name"]!.GetValue<string>() == "first_pass_orientation"
+            && workflow["tools"]!.AsArray().Any(tool => tool!.GetValue<string>() == "status"));
+
+        var contract = meta["discovery_contract"]!;
+        Assert.True(contract["tools_list_is_authoritative"]!.GetValue<bool>());
+        Assert.True(contract["disabled_tools_are_omitted"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void ToolsList_EveryDescriptionIncludesLanguageSupportClause()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -5208,6 +5241,29 @@ public sealed class Caller
         Assert.DoesNotContain("suggest_improvement", names);
         Assert.Contains("search", names);
         Assert.Contains("references", names);
+    }
+
+    [Fact]
+    public void ToolsList_FilteredMetaDoesNotAdvertiseDeniedTools()
+    {
+        var deny = McpToolFilter.Parse(null, "index,backfill_fold,suggest_improvement");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = server.HandleMessage(request)!;
+        var groups = response["result"]!["_meta"]!["capability_groups"]!;
+
+        var maintenance = groups["index_maintenance"]!.AsArray()
+            .Select(tool => tool!.GetValue<string>())
+            .ToArray();
+        var feedback = groups["feedback"]!.AsArray()
+            .Select(tool => tool!.GetValue<string>())
+            .ToArray();
+
+        Assert.DoesNotContain("index", maintenance);
+        Assert.DoesNotContain("backfill_fold", maintenance);
+        Assert.DoesNotContain("suggest_improvement", feedback);
+        Assert.Contains("search", groups["discovery"]!.AsArray().Select(tool => tool!.GetValue<string>()));
     }
 
     [Fact]
