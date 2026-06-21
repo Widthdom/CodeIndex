@@ -2386,7 +2386,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
+        return EnumerateDirectory(dir, relativeDir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -2400,6 +2400,7 @@ public class FileIndexer
 
     private bool EnumerateDirectory(
         string dir,
+        string relativeDir,
         DirectoryScanState scanState,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
@@ -2426,7 +2427,7 @@ public class FileIndexer
             if (directoryIgnoreCase != _ignoreCase)
             {
                 scanState.Errors.Add(new ScanError(
-                    ToRelativePath(dir),
+                    relativeDir,
                     "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
                     ScanIssueSeverity.Warning));
             }
@@ -2438,20 +2439,20 @@ public class FileIndexer
             // Child subtree failures must not revoke that authority for sibling-file purge.
             // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
             // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
-            scanState.ListedDirectories.Add(ToRelativePath(dir));
+            scanState.ListedDirectories.Add(relativeDir);
             RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
             fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
             scanState.Errors.Add(new ScanError(
-                ToRelativePath(dir),
+                relativeDir,
                 $"Could not scan directory due to {FileSystemTraversalFailure.DescribeReason(ex)}."));
             fullyScanned = false;
         }
 
         if (fullyScanned)
-            scanState.FullyScannedDirectories.Add(ToRelativePath(dir));
+            scanState.FullyScannedDirectories.Add(relativeDir);
 
         return fullyScanned;
     }
