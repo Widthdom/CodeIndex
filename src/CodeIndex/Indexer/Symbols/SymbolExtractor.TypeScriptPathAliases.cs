@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Indexer;
 
@@ -56,8 +57,9 @@ public static partial class SymbolExtractor
 
         if (moduleName.Length > MaxTypeScriptPathAliasModuleSpecifierLength)
         {
-            ReportTypeScriptPathAliasWarningOnce(
-                $"Skipped TypeScript path alias resolution in config {config.ConfigPath} for module specifiers longer than {MaxTypeScriptPathAliasModuleSpecifierLength} characters.");
+            ReportTypeScriptPathAliasConfigWarningOnce(
+                config.ConfigPath,
+                $"Skipped TypeScript path alias resolution in config {DiagnosticSanitizer.ForPath(config.ConfigPath)} for module specifiers longer than {MaxTypeScriptPathAliasModuleSpecifierLength} characters.");
             return moduleName;
         }
 
@@ -70,8 +72,9 @@ public static partial class SymbolExtractor
             {
                 if (!TrySubstituteTypeScriptPathAliasTarget(target, wildcard, out var substituted))
                 {
-                    ReportTypeScriptPathAliasWarningOnce(
-                        $"Skipped TypeScript path alias target substitution in config {config.ConfigPath} longer than {MaxTypeScriptPathAliasSubstitutedTargetLength} characters.");
+                    ReportTypeScriptPathAliasConfigWarningOnce(
+                        config.ConfigPath,
+                        $"Skipped TypeScript path alias target substitution in config {DiagnosticSanitizer.ForPath(config.ConfigPath)} longer than {MaxTypeScriptPathAliasSubstitutedTargetLength} characters.");
                     continue;
                 }
 
@@ -136,11 +139,10 @@ public static partial class SymbolExtractor
 
         if (depth > MaxTypeScriptPathAliasExtendsDepth)
         {
-            ReportTypeScriptPathAliasWarningOnce(
-                FormatTypeScriptPathAliasConfigSkippedMessage(
-                    configPath,
-                    TypeScriptPathAliasDiagnosticDepthLimit,
-                    $"the extends depth exceeds {MaxTypeScriptPathAliasExtendsDepth}"));
+            ReportTypeScriptPathAliasConfigSkippedWarning(
+                configPath,
+                TypeScriptPathAliasDiagnosticDepthLimit,
+                $"the extends depth exceeds {MaxTypeScriptPathAliasExtendsDepth}");
             return null;
         }
 
@@ -153,8 +155,7 @@ public static partial class SymbolExtractor
                     out var configText,
                     out var skippedReason))
             {
-                ReportTypeScriptPathAliasWarningOnce(
-                    FormatTypeScriptPathAliasConfigSkippedMessage(configPath, skippedReason));
+                ReportTypeScriptPathAliasConfigSkippedWarning(configPath, skippedReason);
                 return null;
             }
 
@@ -164,20 +165,18 @@ public static partial class SymbolExtractor
         }
         catch (JsonException)
         {
-            ReportTypeScriptPathAliasWarningOnce(
-                FormatTypeScriptPathAliasConfigSkippedMessage(
-                    configPath,
-                    TypeScriptPathAliasDiagnosticJsonInvalid,
-                    $"it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit"));
+            ReportTypeScriptPathAliasConfigSkippedWarning(
+                configPath,
+                TypeScriptPathAliasDiagnosticJsonInvalid,
+                $"it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit");
             return null;
         }
         catch
         {
-            ReportTypeScriptPathAliasWarningOnce(
-                FormatTypeScriptPathAliasConfigSkippedMessage(
-                    configPath,
-                    TypeScriptPathAliasDiagnosticReadFailed,
-                    "it could not be read"));
+            ReportTypeScriptPathAliasConfigSkippedWarning(
+                configPath,
+                TypeScriptPathAliasDiagnosticReadFailed,
+                "it could not be read");
             return null;
         }
 
@@ -268,26 +267,30 @@ public static partial class SymbolExtractor
 
                     if (rulesTruncated)
                     {
-                        ReportTypeScriptPathAliasWarningOnce(
-                            $"Truncated TypeScript path alias rules in config {configPath} to {MaxTypeScriptPathAliasRules} entries.");
+                        ReportTypeScriptPathAliasConfigWarningOnce(
+                            configPath,
+                            $"Truncated TypeScript path alias rules in config {DiagnosticSanitizer.ForPath(configPath)} to {MaxTypeScriptPathAliasRules} entries.");
                     }
 
                     if (targetsTruncated)
                     {
-                        ReportTypeScriptPathAliasWarningOnce(
-                            $"Truncated TypeScript path alias targets in config {configPath} to {MaxTypeScriptPathAliasTotalTargets} total entries and {MaxTypeScriptPathAliasTargetsPerRule} entries per rule.");
+                        ReportTypeScriptPathAliasConfigWarningOnce(
+                            configPath,
+                            $"Truncated TypeScript path alias targets in config {DiagnosticSanitizer.ForPath(configPath)} to {MaxTypeScriptPathAliasTotalTargets} total entries and {MaxTypeScriptPathAliasTargetsPerRule} entries per rule.");
                     }
 
                     if (ignoredLongPattern)
                     {
-                        ReportTypeScriptPathAliasWarningOnce(
-                            $"Ignored TypeScript path alias rules in config {configPath} with patterns longer than {MaxTypeScriptPathAliasPatternLength} characters.");
+                        ReportTypeScriptPathAliasConfigWarningOnce(
+                            configPath,
+                            $"Ignored TypeScript path alias rules in config {DiagnosticSanitizer.ForPath(configPath)} with patterns longer than {MaxTypeScriptPathAliasPatternLength} characters.");
                     }
 
                     if (ignoredLongTarget)
                     {
-                        ReportTypeScriptPathAliasWarningOnce(
-                            $"Ignored TypeScript path alias targets in config {configPath} longer than {MaxTypeScriptPathAliasTargetLength} characters.");
+                        ReportTypeScriptPathAliasConfigWarningOnce(
+                            configPath,
+                            $"Ignored TypeScript path alias targets in config {DiagnosticSanitizer.ForPath(configPath)} longer than {MaxTypeScriptPathAliasTargetLength} characters.");
                     }
                 }
             }
@@ -370,16 +373,29 @@ public static partial class SymbolExtractor
         FormatTypeScriptPathAliasConfigSkippedMessage(configPath, reason.Code, reason.Reason);
 
     private static string FormatTypeScriptPathAliasConfigSkippedMessage(string configPath, string code, string reason) =>
-        $"Skipped TypeScript path alias config {configPath} [{code}] because {reason}.";
+        $"Skipped TypeScript path alias config {DiagnosticSanitizer.ForPath(configPath)} [{DiagnosticSanitizer.ForMessage(code)}] because {DiagnosticSanitizer.ForMessage(reason)}.";
+
+    private static void ReportTypeScriptPathAliasConfigSkippedWarning(
+        string configPath,
+        TypeScriptPathAliasConfigSkippedReason reason) =>
+        ReportTypeScriptPathAliasConfigSkippedWarning(configPath, reason.Code, reason.Reason);
+
+    private static void ReportTypeScriptPathAliasConfigSkippedWarning(string configPath, string code, string reason)
+        => ReportTypeScriptPathAliasWarningOnce(
+            FormatTypeScriptPathAliasConfigSkippedMessage(configPath, code, reason),
+            $"{configPath}\n{code}\n{reason}");
 
     private static bool IsTypeScriptPathAliasConfigReadException(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or NotSupportedException;
 
-    private static void ReportTypeScriptPathAliasWarningOnce(string message)
+    private static void ReportTypeScriptPathAliasConfigWarningOnce(string configPath, string message)
+        => ReportTypeScriptPathAliasWarningOnce(message, $"{configPath}\n{message}");
+
+    private static void ReportTypeScriptPathAliasWarningOnce(string message, string? dedupeKey = null)
     {
         lock (TypeScriptPathAliasWarningLock)
         {
-            if (!TypeScriptPathAliasReportedWarnings.Add(message))
+            if (!TypeScriptPathAliasReportedWarnings.Add(dedupeKey ?? message))
                 return;
         }
 

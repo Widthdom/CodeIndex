@@ -734,6 +734,56 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void LanguageMapOverrides_OverlongLineSkipsOverridesWithWarning_Issue3706()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_line_length_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var overlongLinePath = Path.Combine(tempDir, "long-line-langmap.yaml");
+            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+            File.WriteAllText(overlongLinePath, new string('x', 16 * 1024 + 1));
+            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { overlongLinePath, fallbackPath },
+                warnings.Add);
+
+            Assert.Equal("ruby", map[".ok"]);
+            Assert.Contains(warnings, warning => warning.Contains("line 1 exceeds", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_WarningsSanitizeConfigPath_Issue3819()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_sanitize_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var configPath = Path.Combine(tempDir, "secret-langmap.yaml");
+            File.WriteAllText(configPath, new string('x', 16 * 1024 + 1));
+
+            var warnings = new List<string>();
+            _ = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting([configPath], warnings.Add);
+
+            var warning = Assert.Single(warnings);
+            Assert.Contains("secret-langmap.yaml", warning, StringComparison.Ordinal);
+            Assert.DoesNotContain(tempDir, warning, StringComparison.Ordinal);
+            Assert.DoesNotContain(tempDir.Replace('\\', '/'), warning, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_EntryCountCapTruncatesRemainingOverridesWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_entries_{Guid.NewGuid():N}");
@@ -4379,6 +4429,80 @@ public class FileIndexerTests
                 error => error.Path == ".gitmodules"
                     && error.Severity == FileIndexer.ScanIssueSeverity.Warning
                     && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_GitmodulesQuotedPathPreservesCommentCharacters_Issue3819()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitmodules"),
+                """
+                [submodule "quoted"]
+                    path = "vendor/hash#semi;module" # trailing comment
+                """);
+
+            var submoduleDir = Path.Combine(tempDir, "vendor", "hash#semi;module");
+            Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/quoted\n");
+            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def quoted(): pass");
+
+            var files = new FileIndexer(tempDir).ScanFiles();
+            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+
+            Assert.Contains("vendor/hash#semi;module/lib.py", rel);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_GitmodulesSubmodulePathCapWarns_Issue3819()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+
+            var maxPaths = FileIndexer.MaxGitmodulesSubmodulePaths;
+            var gitmodules = new StringBuilder();
+            for (var i = 0; i <= maxPaths; i++)
+            {
+                gitmodules.AppendLine($"[submodule \"m{i}\"]");
+                gitmodules.AppendLine($"    path = vendor/m{i}");
+            }
+
+            File.WriteAllText(Path.Combine(tempDir, ".gitmodules"), gitmodules.ToString());
+
+            var overflowDir = Path.Combine(tempDir, "vendor", $"m{maxPaths}");
+            Directory.CreateDirectory(overflowDir);
+            File.WriteAllText(Path.Combine(overflowDir, ".git"), $"gitdir: ../../.git/modules/m{maxPaths}\n");
+            File.WriteAllText(Path.Combine(overflowDir, "lib.py"), "def over_cap(): pass");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var rel = result.Files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+
+            Assert.Contains("app.py", rel);
+            Assert.DoesNotContain($"vendor/m{maxPaths}/lib.py", rel);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitmodules"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains($"after {maxPaths}", StringComparison.Ordinal));
             Assert.False(result.HadErrors);
         }
         finally

@@ -112,6 +112,8 @@ public class FileIndexer
     private const int GitLfsPointerMaxBytes = 1024;
     private const int MaxGitmodulesBytes = 256 * 1024;
     private const int MaxGitmodulesLines = 4096;
+    private const int MaxGitmodulesLineChars = 16 * 1024;
+    internal const int MaxGitmodulesSubmodulePaths = 1024;
     private const int MaxProjectMarkerTraversalWarnings = 32;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private const int MaxIgnoreFileBytes = 256 * 1024;
@@ -3072,8 +3074,21 @@ public class FileIndexer
                     MaxIgnoreFileBytes,
                     MaxIgnoreFileLines,
                     out var lines,
-                    out var skippedReason))
+                    out var skippedReason,
+                    out var readFailure))
             {
+                if (readFailure.ExceptionType is nameof(FileNotFoundException) or nameof(DirectoryNotFoundException))
+                    return true;
+
+                if (readFailure.ExceptionType == nameof(UnauthorizedAccessException))
+                {
+                    if (!File.Exists(prefixedIgnorePath))
+                        throw new UnauthorizedAccessException(readFailure.Reason);
+
+                    errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
+                    return true;
+                }
+
                 errors.Add(new ScanError(
                     ToRelativePath(ignorePath),
                     $"Could not safely read {ignoreFileName} because {skippedReason}."));
@@ -3226,7 +3241,8 @@ public class FileIndexer
                         MaxGitmodulesBytes,
                         MaxGitmodulesLines,
                         out lines,
-                        out var skippedReason))
+                        out var skippedReason,
+                        out _))
                 {
                     warnings.Add(new ScanError(
                         NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
@@ -3236,6 +3252,7 @@ public class FileIndexer
                 }
             }
 
+            var submodulePathCount = 0;
             foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
             {
                 string absolute;
@@ -3256,10 +3273,22 @@ public class FileIndexer
                     continue;
                 }
 
-                submodulePaths.Add(relativeToProject);
-                var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                for (var i = 1; i < segments.Length; i++)
-                    ancestorPaths.Add(string.Join('/', segments, 0, i));
+                if (submodulePathCount >= MaxGitmodulesSubmodulePaths)
+                {
+                    warnings.Add(new ScanError(
+                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        $"Stopped parsing .gitmodules submodule paths after {MaxGitmodulesSubmodulePaths} entries.",
+                        ScanIssueSeverity.Warning));
+                    break;
+                }
+
+                submodulePathCount++;
+                if (submodulePaths.Add(relativeToProject))
+                {
+                    var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    for (var i = 1; i < segments.Length; i++)
+                        ancestorPaths.Add(string.Join('/', segments, 0, i));
+                }
             }
         }
         catch (IOException ex)
@@ -3291,61 +3320,18 @@ public class FileIndexer
         int maxBytes,
         int maxLines,
         out IReadOnlyList<string> lines,
-        out string skippedReason)
+        out string skippedReason,
+        out BoundedTextFileReadFailure failure)
     {
-        lines = [];
-        skippedReason = string.Empty;
-
-        using var stream = new FileStream(
+        var success = BoundedLineReader.TryReadUtf8File(
             path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            bufferSize: 8192,
-            useAsync: false);
-
-        if (stream.Length > maxBytes)
-        {
-            skippedReason = $"it exceeds {maxBytes} bytes";
-            return false;
-        }
-
-        using var accumulator = new MemoryStream((int)Math.Min(stream.Length, maxBytes));
-        var buffer = new byte[8192];
-        long total = 0;
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-        {
-            total += read;
-            if (total > maxBytes)
-            {
-                skippedReason = $"it exceeds {maxBytes} bytes";
-                return false;
-            }
-
-            accumulator.Write(buffer, 0, read);
-        }
-
-        var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
-        var result = new List<string>();
-        using var reader = new StringReader(text);
-        string? line;
-        while ((line = reader.ReadLine()) != null)
-        {
-            if (result.Count == 0 && line.Length > 0 && line[0] == '\uFEFF')
-                line = line[1..];
-
-            if (result.Count >= maxLines)
-            {
-                skippedReason = $"it exceeds {maxLines} lines";
-                return false;
-            }
-
-            result.Add(line);
-        }
-
-        lines = result;
-        return true;
+            maxBytes,
+            maxLines,
+            MaxGitmodulesLineChars,
+            out lines,
+            out failure);
+        skippedReason = success ? string.Empty : failure.Reason;
+        return success;
     }
 
     // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.
@@ -3392,10 +3378,7 @@ public class FileIndexer
             if (!string.Equals(key, "path", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var value = line[(equalsIndex + 1)..].Trim();
-            var commentIndex = value.IndexOfAny(['#', ';']);
-            if (commentIndex >= 0)
-                value = value[..commentIndex].Trim();
+            var value = StripGitmodulesInlineComment(line[(equalsIndex + 1)..]);
             if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
                 value = value[1..^1];
             if (value.Length == 0)
@@ -3405,6 +3388,38 @@ public class FileIndexer
 
             yield return value;
         }
+    }
+
+    private static string StripGitmodulesInlineComment(string value)
+    {
+        var inQuotes = false;
+        var escaping = false;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (escaping)
+            {
+                escaping = false;
+                continue;
+            }
+
+            if (inQuotes && ch == '\\')
+            {
+                escaping = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (!inQuotes && ch is '#' or ';')
+                return value[..i].Trim();
+        }
+
+        return value.Trim();
     }
 
     internal static string NormalizeIgnorePath(string path)
