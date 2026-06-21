@@ -294,7 +294,7 @@ public static partial class SymbolExtractor
         added = true;
         var signatureIndex = Math.Clamp(line - 1, 0, Math.Max(0, lines.Length - 1));
         var signature = lines.Length == 0 ? message : $"{message} {lines[signatureIndex].Trim()}";
-        symbols.Add(new SymbolRecord
+        var diagnostic = new SymbolRecord
         {
             FileId = fileId,
             Kind = "extraction_diagnostic",
@@ -303,7 +303,12 @@ public static partial class SymbolExtractor
             StartLine = Math.Max(1, line),
             EndLine = Math.Max(1, line),
             Signature = LimitStructuredDataSignature(signature),
-        });
+        };
+
+        if (symbols.Count >= StructuredDataMaxSymbols)
+            symbols[^1] = diagnostic;
+        else
+            symbols.Add(diagnostic);
     }
 
     private static List<SymbolRecord> TrimStructuredDataSymbols(
