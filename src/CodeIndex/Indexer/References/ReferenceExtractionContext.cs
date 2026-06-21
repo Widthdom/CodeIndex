@@ -15,4 +15,5 @@ public sealed record ReferenceExtractionContext(
     IReadOnlyList<SymbolRecord>? WorkspaceSymbols = null,
     string? RequestedLanguage = null,
     CancellationToken CancellationToken = default,
-    int? MaxReferenceCount = null);
+    int? MaxReferenceCount = null,
+    Action<ReferenceExtractionDiagnostic>? ReportDiagnostic = null);

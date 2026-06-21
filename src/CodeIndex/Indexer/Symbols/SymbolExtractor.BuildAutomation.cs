@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Xml;
 using CodeIndex.Models;
 
@@ -104,7 +105,10 @@ public static partial class SymbolExtractor
         return symbols;
     }
 
-    internal static bool TryGetXmlStructureIssue(string content, out XmlStructureIssue issue)
+    internal static bool TryGetXmlStructureIssue(
+        string content,
+        out XmlStructureIssue issue,
+        [CallerMemberName] string? callerMemberName = null)
     {
         issue = default;
         var elementCount = 0;
@@ -133,6 +137,10 @@ public static partial class SymbolExtractor
 
                 if (elementCount > XmlExtractionMaxElements)
                 {
+                    // XAML symbol extraction has its own capped diagnostic path; content validation still reports the XML file issue.
+                    if (string.Equals(callerMemberName, nameof(ExtractXmlSymbols), StringComparison.Ordinal))
+                        return false;
+
                     issue = new XmlStructureIssue(
                         "xml_structure_budget_exceeded",
                         lineNumber,

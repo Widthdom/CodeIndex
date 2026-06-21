@@ -170,6 +170,111 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CustomReferencePlugin_ReceivesReferenceBudget_Issue3744()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.Register(new BudgetReportingReferenceExtractor());
+
+                var result = ReferenceExtractor.ExtractDetailed(
+                    3,
+                    "budgetdsl",
+                    "call Widget",
+                    [],
+                    "demo.budget",
+                    maxReferenceCount: 7);
+
+                var reference = Assert.Single(result.References);
+                Assert.Equal("budget:7", reference.SymbolName);
+                Assert.Empty(result.Diagnostics);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void Extract_CustomReferencePlugin_TruncatesOversizedPluginOutput_Issue3744()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.Register(new NoisyReferenceExtractor(5));
+
+                var result = ReferenceExtractor.ExtractDetailed(
+                    3,
+                    "noisydsl",
+                    "call Widget",
+                    [],
+                    "demo.noisy",
+                    maxReferenceCount: 2);
+
+                Assert.Equal(2, result.References.Count);
+                Assert.Equal(new[] { "Ref0", "Ref1" }, result.References.Select(reference => reference.SymbolName));
+                var diagnostic = Assert.Single(result.Diagnostics);
+                Assert.Equal("plugin_reference_count_truncated", diagnostic.Kind);
+                Assert.Contains("materialization budget", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void Extract_HighFanoutSymbols_ReportsLookupBudgetDiagnostics_Issue3783()
+    {
+        var symbols = Enumerable
+            .Range(0, ReferenceExtractor.MaxReferenceLookupSymbols + 5)
+            .Select(index => new SymbolRecord
+            {
+                Kind = "function",
+                Name = $"Generated{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                BodyStartLine = index + 1,
+                BodyEndLine = index + 1,
+            })
+            .ToList();
+
+        var result = ReferenceExtractor.ExtractDetailed(1, "python", "def use():\n    pass\n", symbols);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_definition_lookup_symbol_budget_exceeded");
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_all_definition_lookup_symbol_budget_exceeded");
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_container_candidate_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_SwiftHighFanoutProperties_ReportsPropertyLookupBudgetDiagnostics_Issue3783()
+    {
+        var symbols = Enumerable
+            .Range(0, ReferenceExtractor.MaxSwiftPropertyDefinitionsPerLine + 5)
+            .Select(index => new SymbolRecord
+            {
+                Kind = "property",
+                Name = $"value{index}",
+                Line = 1,
+                StartLine = 1,
+                StartColumn = index + 1,
+                EndLine = 1,
+            })
+            .ToList();
+
+        var result = ReferenceExtractor.ExtractDetailed(1, "swift", "let use = value0\n", symbols);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_swift_property_line_name_budget_exceeded");
+    }
+
+    [Fact]
     public void Extract_Solution_IndexesProjectPathReferences_Issue3662()
     {
         const string content = """
@@ -16314,6 +16419,42 @@ public partial class ReferenceExtractorTests
         && (type.Name.Contains("Reference", StringComparison.Ordinal)
             || type.Name == "StructuralLineMasker"
             || type.Name == "SqlNameResolver");
+
+    private sealed class BudgetReportingReferenceExtractor : CodeIndex.Indexer.Extensibility.IReferenceExtractor
+    {
+        public string Language => "budgetdsl";
+
+        public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
+            =>
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = $"budget:{context.MaxReferenceCount}",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                },
+            ];
+    }
+
+    private sealed class NoisyReferenceExtractor(int referenceCount) : CodeIndex.Indexer.Extensibility.IReferenceExtractor
+    {
+        public string Language => "noisydsl";
+
+        public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
+            => Enumerable
+                .Range(0, referenceCount)
+                .Select(index => new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = $"Ref{index}",
+                    ReferenceKind = "call",
+                    Line = index + 1,
+                    Column = 1,
+                })
+                .ToList();
+    }
 
     private static IEnumerable<(string Path, Regex Regex)> EnumerateStaticRegexValues(IEnumerable<Type> types)
     {

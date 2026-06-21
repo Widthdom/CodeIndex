@@ -14,6 +14,7 @@ public class PostExtractionHookTests
     internal const string SlowConstructorHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_CTOR_POST_EXTRACTION_HOOK_MS";
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
+    internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
 
     [Fact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
@@ -331,11 +332,70 @@ public class PostExtractionHookTests
 
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds((double)int.MaxValue + 1);
                 using var capped = PostExtractionHookRunner.Discover(null);
-                Assert.Equal(int.MaxValue, (long)Math.Round(capped.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero));
+                Assert.Equal(
+                    PostExtractionHookRunner.MaxCallbackBudgetMilliseconds,
+                    (long)Math.Round(capped.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero));
+                var diagnostic = Assert.Single(capped.Diagnostics);
+                Assert.Equal("hook_callback_budget_clamped", diagnostic.Category);
+                Assert.Contains("clamped", diagnostic.Message, StringComparison.Ordinal);
             }
             finally
             {
                 PostExtractionHookRunner.CallbackBudgetForTesting = originalBudget;
+            }
+        }
+    }
+
+    [Fact]
+    public void Discover_ClampsOversizedDiscoveryLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-limit-clamp");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalLimit = PostExtractionHookRunner.DiscoveryLimitForTesting;
+            try
+            {
+                PostExtractionHookRunner.DiscoveryLimitForTesting = () => PostExtractionHookRunner.MaxDiscoveryLimit + 1;
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+                var diagnostic = Assert.Single(runner.Diagnostics);
+                Assert.Equal("hook_discovery_limit_clamped", diagnostic.Category);
+                Assert.Contains(PostExtractionHookRunner.MaxDiscoveryLimit.ToString(), diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                PostExtractionHookRunner.DiscoveryLimitForTesting = originalLimit;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void Discover_ClampsOversizedDiscoveryMaxBytes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-bytes-clamp");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMaxBytes = PostExtractionHookRunner.DiscoveryMaxBytesForTesting;
+            try
+            {
+                PostExtractionHookRunner.DiscoveryMaxBytesForTesting = () => PostExtractionHookRunner.MaxDiscoveryMaxBytes + 1;
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+                var diagnostic = Assert.Single(runner.Diagnostics);
+                Assert.Equal("hook_discovery_bytes_clamped", diagnostic.Category);
+                Assert.Contains(PostExtractionHookRunner.MaxDiscoveryMaxBytes.ToString(), diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                PostExtractionHookRunner.DiscoveryMaxBytesForTesting = originalMaxBytes;
+                TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
     }
@@ -479,6 +539,49 @@ public class PostExtractionHookTests
             finally
             {
                 PostExtractionHookRunner.DiscoveryMaxBytesForTesting = originalMaxBytes;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void Callbacks_TruncateHookMaterializationAndReportDiagnostics_Issue3744()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-materialization-cap");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExpandingHookEnvironmentVariable);
+            try
+            {
+                env.Set(ExpandingHookEnvironmentVariable, "1");
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+
+                using var runner = PostExtractionHookRunner.Discover(
+                    hooksDir,
+                    maxSymbolCount: 2,
+                    maxReferenceCount: 2);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                var symbols = new List<SymbolRecord>();
+                var references = new List<ReferenceRecord>();
+
+                runner.OnSymbolsExtracted(context, symbols);
+                runner.OnReferencesExtracted(context, references);
+
+                Assert.True(symbols.Count <= 2);
+                Assert.True(references.Count <= 2);
+                Assert.Contains(
+                    runner.Diagnostics,
+                    diagnostic => diagnostic.Category == "hook_symbol_count_truncated"
+                                  && diagnostic.Message.Contains("materialization budget", StringComparison.Ordinal));
+                Assert.Contains(
+                    runner.Diagnostics,
+                    diagnostic => diagnostic.Category == "hook_reference_count_truncated"
+                                  && diagnostic.Message.Contains("materialization budget", StringComparison.Ordinal));
+            }
+            finally
+            {
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
@@ -752,5 +855,44 @@ public sealed class LoadContextReportingPostExtractionHook : IPostExtractionHook
 
     public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
     {
+    }
+}
+
+public sealed class ExpandingPostExtractionHook : IPostExtractionHook
+{
+    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
+    {
+        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.ExpandingHookEnvironmentVariable) != "1")
+            return;
+
+        for (var index = 0; index < 5; index++)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                Kind = "domain_tag",
+                Name = $"ExpandedHookSymbol{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            });
+        }
+    }
+
+    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
+    {
+        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.ExpandingHookEnvironmentVariable) != "1")
+            return;
+
+        for (var index = 0; index < 5; index++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                SymbolName = $"ExpandedHookSymbol{index}",
+                ReferenceKind = "domain_reference",
+                Line = index + 1,
+                Column = 1,
+                Context = context.Path,
+            });
+        }
     }
 }

@@ -11,6 +11,7 @@ public static partial class SymbolExtractor
     internal const int StructuredDataMaxJsonDepth = 64;
     internal const int StructuredDataMaxYamlDepth = 64;
     internal const int StructuredDataMaxSymbols = 4096;
+    internal const int StructuredDataMaxTraversalNodes = 8192;
     internal const int StructuredDataMaxPathLength = 1024;
     internal const int StructuredDataMaxSignatureLength = 512;
     internal const int StructuredDataMaxJsonParseChars = 1_000_000;
@@ -19,14 +20,14 @@ public static partial class SymbolExtractor
     {
         AllowTrailingCommas = true,
         CommentHandling = JsonCommentHandling.Skip,
-        MaxDepth = StructuredDataMaxJsonDepth,
+        MaxDepth = StructuredDataMaxJsonDepth + 2,
     };
 
     private static readonly JsonReaderOptions StructuredJsonReaderOptions = new()
     {
         AllowTrailingCommas = true,
         CommentHandling = JsonCommentHandling.Skip,
-        MaxDepth = StructuredDataMaxJsonDepth,
+        MaxDepth = StructuredDataMaxJsonDepth + 2,
     };
 
     private static readonly Regex JsonFallbackPropertyRegex = new(
@@ -43,13 +44,13 @@ public static partial class SymbolExtractor
     {
         // JsonDocument.Parse builds a full DOM, so large JSON files use the capped line fallback.
         if (content.Length > StructuredDataMaxJsonParseChars)
-        {
             return ExtractJsonFallbackSymbols(fileId, lines);
-        }
 
         var symbols = new List<SymbolRecord>();
         var lineStarts = BuildLineStarts(lines);
         var searchOffset = 0;
+        var traversalNodes = 0;
+        var truncated = false;
 
         try
         {
@@ -67,7 +68,10 @@ public static partial class SymbolExtractor
                     parentPath: null,
                     ref searchOffset,
                     symbols,
-                    propertyLines);
+                    propertyLines,
+                    depth: 0,
+                    ref traversalNodes,
+                    ref truncated);
             }
 
             return symbols;
@@ -87,13 +91,26 @@ public static partial class SymbolExtractor
         string? parentPath,
         ref int searchOffset,
         List<SymbolRecord> symbols,
-        Dictionary<string, Queue<int>> propertyLines)
+        Dictionary<string, Queue<int>> propertyLines,
+        int depth,
+        ref int traversalNodes,
+        ref bool truncated)
     {
+        if (depth >= StructuredDataMaxJsonDepth)
+        {
+            AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_depth_budget_exceeded", line: 1, lines, "Structured data traversal exceeded the maximum depth; nested symbols were truncated.", ref truncated);
+            return;
+        }
+
         foreach (var property in element.EnumerateObject())
         {
-            if (symbols.Count >= StructuredDataMaxSymbols)
+            if (traversalNodes >= StructuredDataMaxTraversalNodes)
+            {
+                AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_traversal_budget_exceeded", line: 1, lines, "Structured data traversal exceeded the per-file node budget; remaining nodes were truncated.", ref truncated);
                 return;
+            }
 
+            traversalNodes++;
             var name = string.IsNullOrEmpty(parentPath)
                 ? property.Name
                 : parentPath + "." + property.Name;
@@ -111,22 +128,23 @@ public static partial class SymbolExtractor
                 ? "namespace"
                 : "property";
 
-            if (!TryAddStructuredDataSymbol(fileId, kind, name, line, lines, parentPath, symbols))
+            if (!TryAddStructuredDataSymbol(fileId, kind, name, line, lines, parentPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
                 return;
 
             if (property.Value.ValueKind == JsonValueKind.Object)
             {
-                ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines);
+                ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                if (truncated)
+                    return;
             }
             else if (property.Value.ValueKind == JsonValueKind.Array)
             {
                 foreach (var item in property.Value.EnumerateArray())
                 {
-                    if (symbols.Count >= StructuredDataMaxSymbols)
-                        return;
-
                     if (item.ValueKind == JsonValueKind.Object)
-                        ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, item, name, ref searchOffset, symbols, propertyLines);
+                        ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, item, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                    if (truncated)
+                        return;
                 }
             }
         }
@@ -152,11 +170,9 @@ public static partial class SymbolExtractor
     private static List<SymbolRecord> ExtractJsonFallbackSymbols(long fileId, string[] lines)
     {
         var symbols = new List<SymbolRecord>();
+        var truncated = false;
         for (var i = 0; i < lines.Length; i++)
         {
-            if (symbols.Count >= StructuredDataMaxSymbols)
-                break;
-
             var match = JsonFallbackPropertyRegex.Match(lines[i]);
             if (!match.Success)
                 continue;
@@ -168,7 +184,8 @@ public static partial class SymbolExtractor
             if (name.Length > StructuredDataMaxPathLength)
                 continue;
 
-            _ = TryAddStructuredDataSymbol(fileId, "property", name, i + 1, lines, parentPath: null, symbols);
+            if (!TryAddStructuredDataSymbol(fileId, "property", name, i + 1, lines, parentPath: null, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
+                break;
         }
 
         return symbols;
@@ -179,11 +196,16 @@ public static partial class SymbolExtractor
         var symbols = new List<SymbolRecord>();
         var stack = new List<YamlPathFrame>();
         int? blockScalarIndent = null;
+        var traversalNodes = 0;
+        var truncated = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
-            if (symbols.Count >= StructuredDataMaxSymbols)
+            if (traversalNodes >= StructuredDataMaxTraversalNodes)
+            {
+                AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_traversal_budget_exceeded", i + 1, lines, "Structured data traversal exceeded the per-file node budget; remaining nodes were truncated.", ref truncated);
                 break;
+            }
 
             var line = lines[i];
             if (string.IsNullOrWhiteSpace(line))
@@ -221,7 +243,8 @@ public static partial class SymbolExtractor
             var isContainer = value.Length == 0 || value is "|" or ">" or "|-" or ">-" or "|+" or ">+";
             var kind = isContainer ? "namespace" : "property";
 
-            if (!TryAddStructuredDataSymbol(fileId, kind, path, i + 1, lines, parentPath, symbols))
+            traversalNodes++;
+            if (!TryAddStructuredDataSymbol(fileId, kind, path, i + 1, lines, parentPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
                 break;
 
             if (isContainer)
@@ -242,13 +265,72 @@ public static partial class SymbolExtractor
         int line,
         string[] lines,
         string? parentPath,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        string category,
+        ref bool truncated)
     {
-        if (symbols.Count >= StructuredDataMaxSymbols)
-            return false;
+        if (symbols.Count < StructuredDataMaxSymbols)
+        {
+            symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath));
+            return true;
+        }
 
-        symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath));
-        return true;
+        AddStructuredDataDiagnosticSymbol(symbols, fileId, category, line, lines, "Structured data symbol extraction exceeded the per-file symbol budget; remaining symbols were truncated.", ref truncated);
+        return false;
+    }
+
+    private static void AddStructuredDataDiagnosticSymbol(
+        List<SymbolRecord> symbols,
+        long fileId,
+        string category,
+        int line,
+        string[] lines,
+        string message,
+        ref bool added)
+    {
+        if (added)
+            return;
+
+        added = true;
+        var signatureIndex = Math.Clamp(line - 1, 0, Math.Max(0, lines.Length - 1));
+        var signature = lines.Length == 0 ? message : $"{message} {lines[signatureIndex].Trim()}";
+        var diagnostic = new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "extraction_diagnostic",
+            Name = category,
+            Line = Math.Max(1, line),
+            StartLine = Math.Max(1, line),
+            EndLine = Math.Max(1, line),
+            Signature = LimitStructuredDataSignature(signature),
+        };
+
+        if (symbols.Count >= StructuredDataMaxSymbols)
+            symbols[^1] = diagnostic;
+        else
+            symbols.Add(diagnostic);
+    }
+
+    private static List<SymbolRecord> TrimStructuredDataSymbols(
+        List<SymbolRecord> symbols,
+        long fileId,
+        string category,
+        string[] lines)
+    {
+        if (symbols.Count <= StructuredDataMaxSymbols)
+            return symbols;
+
+        var retained = symbols.Take(StructuredDataMaxSymbols).ToList();
+        var added = false;
+        AddStructuredDataDiagnosticSymbol(
+            retained,
+            fileId,
+            category,
+            line: 1,
+            lines,
+            "Structured data symbol extraction exceeded the per-file symbol budget; remaining symbols were truncated.",
+            ref added);
+        return retained;
     }
 
     private static SymbolRecord CreateStructuredDataSymbol(

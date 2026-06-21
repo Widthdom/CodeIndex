@@ -10,6 +10,7 @@ internal static class LanguageMapOverrides
     private const int MaxOverrideFileLines = 16384;
     private const int MaxOverrideLineChars = 16 * 1024;
     private const int MaxOverrideEntries = 4096;
+    private const int MaxOverridePatterns = 8192;
     private static readonly object WarningLock = new();
     private static readonly HashSet<string> ReportedWarnings = new(StringComparer.Ordinal);
 
@@ -84,6 +85,7 @@ internal static class LanguageMapOverrides
 
         string? pendingExtension = null;
         var entryCount = 0;
+        var patternCount = 0;
         foreach (var rawLine in lines)
         {
             var line = rawLine.Trim();
@@ -92,7 +94,14 @@ internal static class LanguageMapOverrides
 
             if (TryReadScalar(line.TrimStart('-').Trim(), "extension", out var value))
             {
+                if (patternCount >= MaxOverridePatterns)
+                {
+                    reportWarning?.Invoke($"Ignored remaining language-map override patterns in {path} because the pattern count exceeds {MaxOverridePatterns}.");
+                    return;
+                }
+
                 pendingExtension = NormalizeExtension(value);
+                patternCount++;
                 continue;
             }
 

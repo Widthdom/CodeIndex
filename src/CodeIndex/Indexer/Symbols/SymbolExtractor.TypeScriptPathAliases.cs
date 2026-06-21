@@ -14,6 +14,7 @@ public static partial class SymbolExtractor
     private const int MaxTypeScriptPathAliasRules = 1024;
     private const int MaxTypeScriptPathAliasTargetsPerRule = 32;
     private const int MaxTypeScriptPathAliasTotalTargets = 2048;
+    private const int MaxTypeScriptPathAliasExpansionCandidates = 1024;
     private const int MaxTypeScriptPathAliasPatternLength = 512;
     private const int MaxTypeScriptPathAliasTargetLength = 1024;
     private const int MaxTypeScriptPathAliasModuleSpecifierLength = 4096;
@@ -22,6 +23,7 @@ public static partial class SymbolExtractor
     private const string TypeScriptPathAliasDiagnosticJsonInvalid = "tsconfig_json_invalid";
     private const string TypeScriptPathAliasDiagnosticSizeLimit = "tsconfig_size_limit";
     private const string TypeScriptPathAliasDiagnosticDepthLimit = "path_alias_depth_limit";
+    private const string TypeScriptPathAliasDiagnosticExpansionCandidateLimit = "path_alias_expansion_candidate_limit";
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
     private static readonly JsonDocumentOptions TypeScriptPathAliasConfigJsonOptions = new()
@@ -63,6 +65,8 @@ public static partial class SymbolExtractor
             return moduleName;
         }
 
+        var remainingExpansionCandidates = MaxTypeScriptPathAliasExpansionCandidates;
+        var expansionCandidatesTruncated = false;
         foreach (var rule in config.Rules)
         {
             if (!TryMatchTypeScriptPathAliasPattern(rule.Pattern, moduleName, out var wildcard))
@@ -82,15 +86,44 @@ public static partial class SymbolExtractor
                     ? substituted
                     : Path.Combine(rule.BaseDirectory, substituted);
 
-                if (TryResolveTypeScriptModuleFile(candidate, out var resolvedPath))
+                if (TryResolveTypeScriptModuleFile(
+                        candidate,
+                        ref remainingExpansionCandidates,
+                        out var resolvedPath,
+                        out var candidateBudgetExhausted))
+                {
                     return NormalizeTypeScriptResolvedModulePath(projectRoot ?? config.ProjectDirectory, resolvedPath);
+                }
+
+                if (candidateBudgetExhausted)
+                {
+                    expansionCandidatesTruncated = true;
+                    break;
+                }
             }
+
+            if (expansionCandidatesTruncated)
+                break;
         }
 
-        if (config.HasBaseUrl
-            && TryResolveTypeScriptModuleFile(Path.Combine(config.BaseDirectory, moduleName), out var baseUrlResolvedPath))
+        if (config.HasBaseUrl && !expansionCandidatesTruncated)
         {
-            return NormalizeTypeScriptResolvedModulePath(projectRoot ?? config.ProjectDirectory, baseUrlResolvedPath);
+            if (TryResolveTypeScriptModuleFile(
+                    Path.Combine(config.BaseDirectory, moduleName),
+                    ref remainingExpansionCandidates,
+                    out var baseUrlResolvedPath,
+                    out var baseUrlBudgetExhausted))
+            {
+                return NormalizeTypeScriptResolvedModulePath(projectRoot ?? config.ProjectDirectory, baseUrlResolvedPath);
+            }
+
+            expansionCandidatesTruncated = baseUrlBudgetExhausted;
+        }
+
+        if (expansionCandidatesTruncated)
+        {
+            ReportTypeScriptPathAliasWarningOnce(
+                $"Truncated TypeScript path alias expansion candidates in config {config.ConfigPath} [{TypeScriptPathAliasDiagnosticExpansionCandidateLimit}] to {MaxTypeScriptPathAliasExpansionCandidates} probes.");
         }
 
         return moduleName;
@@ -474,10 +507,22 @@ public static partial class SymbolExtractor
         return true;
     }
 
-    private static bool TryResolveTypeScriptModuleFile(string candidate, out string resolvedPath)
+    private static bool TryResolveTypeScriptModuleFile(
+        string candidate,
+        ref int remainingCandidateBudget,
+        out string resolvedPath,
+        out bool budgetExhausted)
     {
+        budgetExhausted = false;
         foreach (var path in EnumerateTypeScriptModuleCandidates(candidate))
         {
+            if (remainingCandidateBudget <= 0)
+            {
+                budgetExhausted = true;
+                break;
+            }
+
+            remainingCandidateBudget--;
             if (File.Exists(path))
             {
                 resolvedPath = Path.GetFullPath(path);
