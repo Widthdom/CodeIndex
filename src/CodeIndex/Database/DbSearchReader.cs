@@ -67,7 +67,7 @@ public partial class DbReader
             return FtsQueryDiagnostics.None;
 
         var normalizedQuery = NormalizeLiteralSearchQuery(query, NormalizeQueryLanguage(lang));
-        var tokens = SplitLiteralSearchTokens(normalizedQuery)
+        var tokens = SplitLiteralSearchTokens(normalizedQuery, validateLimits: false)
             .Select(token => token.Length > 1 && token.EndsWith('*') ? token[..^1] : token)
             .Where(token => token.Length > 0)
             .ToArray();
@@ -1146,7 +1146,7 @@ public partial class DbReader
             $"literal search query is too long ({query.Length} characters); maximum is {MaxLiteralSearchQueryLength}. Split generated input into smaller queries.");
     }
 
-    internal static string[] SplitLiteralSearchTokens(string query)
+    internal static string[] SplitLiteralSearchTokens(string query, bool validateLimits = true)
     {
         var tokens = new List<string>();
         for (var i = 0; i < query.Length;)
@@ -1162,7 +1162,8 @@ public partial class DbReader
                 while (i < query.Length && !char.IsWhiteSpace(query[i]))
                     i++;
                 var token = query[start..i];
-                ValidateLiteralSearchTokenLength(token);
+                if (validateLimits)
+                    ValidateLiteralSearchTokenLength(token);
                 tokens.Add(token);
             }
             else
@@ -1185,18 +1186,19 @@ public partial class DbReader
                     }
 
                     phrase.Append(query[i]);
-                    if (phrase.Length > MaxLiteralSearchTokenLength)
+                    if (validateLimits && phrase.Length > MaxLiteralSearchTokenLength)
                         throw new SearchQueryLimitException(
                             $"literal search phrase is too long ({phrase.Length} characters); maximum is {MaxLiteralSearchTokenLength}. Split generated input into smaller queries.");
                     i++;
                 }
 
                 var token = phrase.Length == 0 ? "\"" : phrase.ToString();
-                ValidateLiteralSearchTokenLength(token);
+                if (validateLimits)
+                    ValidateLiteralSearchTokenLength(token);
                 tokens.Add(token);
             }
 
-            if (tokens.Count > MaxLiteralSearchTokenCount)
+            if (validateLimits && tokens.Count > MaxLiteralSearchTokenCount)
                 throw new SearchQueryLimitException(
                     $"literal search query has too many terms ({tokens.Count}); maximum is {MaxLiteralSearchTokenCount}. Split generated input into smaller queries.");
         }
