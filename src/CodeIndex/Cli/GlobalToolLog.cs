@@ -303,8 +303,7 @@ internal static class GlobalToolLog
                 return fullPath;
         }
 
-        var fallback = Path.Combine(Path.GetTempPath(), "cdidx", "logs");
-        return Path.GetFullPath(fallback);
+        return ResolveTempFallbackLogDirectory();
     }
 
     internal static bool TryNormalizeLogDirectoryCandidate(string candidate, out string fullPath)
@@ -357,8 +356,13 @@ internal static class GlobalToolLog
         if (!string.IsNullOrWhiteSpace(fallback))
             yield return Path.Combine(fallback, "cdidx", "logs");
 
-        yield return Path.Combine(Path.GetTempPath(), "cdidx", "logs");
+        yield return ResolveTempFallbackLogDirectory();
     }
+
+    internal static string ResolveTempFallbackLogDirectoryForTesting() => ResolveTempFallbackLogDirectory();
+
+    private static string ResolveTempFallbackLogDirectory()
+        => DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("logs");
 
     private static bool CanWriteProbe(string directory)
     {

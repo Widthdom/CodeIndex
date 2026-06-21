@@ -1341,6 +1341,27 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void Sha256StreamHasher_CancellationDuringRead_ThrowsOperationCanceled_Issue3797()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var stream = new CancelAfterFirstReadStream([1, 2, 3, 4], cancellation);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            Sha256StreamHasher.ComputeHex(stream, cancellation.Token));
+    }
+
+    [Fact]
+    public void CopyToWithLimit_CancellationDuringRead_ThrowsOperationCanceled_Issue3797()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var source = new CancelAfterFirstReadStream([1, 2, 3, 4], cancellation);
+        using var target = new MemoryStream();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            ExportImportCommandRunner.CopyToWithLimit(source, target, maxBytes: 8, cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
     public void CopyToWithLimit_ReportsProgressAndHonorsCancellation_Issue3766()
     {
         using var source = new MemoryStream([1, 2, 3, 4]);
@@ -1474,6 +1495,43 @@ public class ExportImportCommandRunnerTests
         command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
         command.Parameters.AddWithValue("@key", key);
         return command.ExecuteScalar() as string;
+    }
+
+    private sealed class CancelAfterFirstReadStream(byte[] data, CancellationTokenSource cancellation) : Stream
+    {
+        private int offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+        public override long Position
+        {
+            get => offset;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int bufferOffset, int count)
+        {
+            if (offset >= data.Length)
+                return 0;
+
+            var read = Math.Min(count, data.Length - offset);
+            Array.Copy(data, offset, buffer, bufferOffset, read);
+            offset += read;
+            cancellation.Cancel();
+            return read;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long seekOffset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int bufferOffset, int count) => throw new NotSupportedException();
     }
 
     private sealed class RecordingProgress : IProgress<long>

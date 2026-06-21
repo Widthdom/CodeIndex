@@ -125,6 +125,34 @@ public class MetricsSinkTests
     }
 
     [Fact]
+    public void Run_WithMetricsFlag_OnUnixCreatesPrivateParentDirectory_Issue3686()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_private_parent_{Guid.NewGuid():N}");
+        var metricsDirectory = Path.Combine(root, "metrics");
+        var metricsPath = Path.Combine(metricsDirectory, "events.jsonl");
+        try
+        {
+            var (exitCode, _, _) = CaptureConsole(() => ProgramRunner.Run(
+                ["--metrics", metricsPath, "definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(metricsDirectory) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(metricsPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Record_RotatesMetricsLogAtMaxBytes()
     {
         var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_rotate_{Guid.NewGuid():N}.jsonl");
@@ -163,6 +191,88 @@ public class MetricsSinkTests
                 if (File.Exists(path))
                     File.Delete(path);
             }
+        }
+    }
+
+    [Fact]
+    public void Record_RotatesBeforeNextEventWouldExceedMaxBytes_Issue3824()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_pre_rotate_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var first = new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "search",
+                Source: "cli",
+                ElapsedMs: 1.0,
+                ExitCode: 0,
+                Error: new string('x', 600));
+            var second = new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "status",
+                Source: "cli",
+                ElapsedMs: 1.0,
+                ExitCode: 0);
+            var firstBytes = Encoding.UTF8.GetByteCount(MetricsSink.SerializeEvent(first) + Environment.NewLine);
+            var secondBytes = Encoding.UTF8.GetByteCount(MetricsSink.SerializeEvent(second) + Environment.NewLine);
+
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: firstBytes + secondBytes - 1);
+            Assert.NotNull(session);
+
+            MetricsSink.Record(first);
+            Assert.False(File.Exists(metricsPath + ".1"));
+
+            MetricsSink.Record(second);
+
+            Assert.Contains("\"tool\":\"search\"", File.ReadAllText(metricsPath + ".1"), StringComparison.Ordinal);
+            Assert.Contains("\"tool\":\"status\"", File.ReadAllText(metricsPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            foreach (var path in new[] { metricsPath, metricsPath + ".1", metricsPath + ".2" })
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void Record_DisablesSessionAfterRepeatedWriteFailures_Issue3824()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_failure_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            File.Delete(metricsPath);
+            Directory.CreateDirectory(metricsPath);
+
+            for (var i = 0; i < MetricsSink.MaxConsecutiveFailures + 2; i++)
+            {
+                MetricsSink.Record(new MetricsEvent(
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Tool: "search",
+                    Source: "cli",
+                    ElapsedMs: 1.0,
+                    ExitCode: 0));
+            }
+
+            var diagnostics = Assert.IsType<MetricsDiagnostics>(MetricsSink.SnapshotDiagnosticsForTesting());
+            Assert.True(diagnostics.DisabledForFailures);
+            Assert.Equal(MetricsSink.MaxConsecutiveFailures, diagnostics.ConsecutiveFailureCount);
+            Assert.Equal(MetricsSink.MaxConsecutiveFailures, diagnostics.DroppedEventCount);
+            Assert.Equal(MetricsSink.MaxConsecutiveFailures, diagnostics.WriteFailureCount);
+            Assert.Equal(0, diagnostics.RotationFailureCount);
+            Assert.StartsWith("write_failure:", diagnostics.LastFailure!, StringComparison.Ordinal);
+            Assert.True(diagnostics.LastFailure!.Length <= 192);
+        }
+        finally
+        {
+            if (File.Exists(metricsPath))
+                File.Delete(metricsPath);
+            if (Directory.Exists(metricsPath))
+                Directory.Delete(metricsPath);
         }
     }
 

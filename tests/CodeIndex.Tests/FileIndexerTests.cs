@@ -6230,6 +6230,16 @@ public class FileIndexerTests
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "// This file is not auto-generated.\nclass Foo { }\n"));
     }
 
+    [Fact]
+    public void TryComputeChecksum_CancellationDuringRead_ThrowsOperationCanceled_Issue3784()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var stream = new CancelAfterFirstReadStream(Encoding.UTF8.GetBytes("first\nsecond\n"), cancellation);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            FileContentLoader.TryComputeChecksum(stream, long.MaxValue, out _, cancellation.Token));
+    }
+
     private static void WriteFileIndexerPatternConfig(string projectRoot, string fileName, string content)
     {
         var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
@@ -6282,5 +6292,42 @@ public class FileIndexerTests
         cmd.Parameters.AddWithValue("@path", filePath);
         cmd.Parameters.AddWithValue("@kind", kind);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private sealed class CancelAfterFirstReadStream(byte[] data, CancellationTokenSource cancellation) : Stream
+    {
+        private int offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+        public override long Position
+        {
+            get => offset;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int bufferOffset, int count)
+        {
+            if (offset >= data.Length)
+                return 0;
+
+            var read = Math.Min(count, data.Length - offset);
+            Array.Copy(data, offset, buffer, bufferOffset, read);
+            offset += read;
+            cancellation.Cancel();
+            return read;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long seekOffset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int bufferOffset, int count) => throw new NotSupportedException();
     }
 }

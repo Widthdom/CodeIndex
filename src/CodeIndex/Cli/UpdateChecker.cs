@@ -219,22 +219,21 @@ internal static class UpdateChecker
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        requestCts.CancelAfter(timeout);
+        using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUrl);
         GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
 
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            requestCts.Token).ConfigureAwait(false);
+            requestCancellation.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            await ThrowIfRateLimitedAsync(response, requestCts.Token).ConfigureAwait(false);
+            await ThrowIfRateLimitedAsync(response, requestCancellation.Token).ConfigureAwait(false);
             return null;
         }
 
-        return await ReadLatestReleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+        return await ReadLatestReleaseTagAsync(response.Content, requestCancellation.Token).ConfigureAwait(false);
     }
 
     internal static async Task<string?> FetchLatestPrereleaseTagAsync(
@@ -242,22 +241,21 @@ internal static class UpdateChecker
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        requestCts.CancelAfter(timeout);
+        using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
         GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
 
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            requestCts.Token).ConfigureAwait(false);
+            requestCancellation.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            await ThrowIfRateLimitedAsync(response, requestCts.Token).ConfigureAwait(false);
+            await ThrowIfRateLimitedAsync(response, requestCancellation.Token).ConfigureAwait(false);
             return null;
         }
 
-        return await ReadLatestPrereleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+        return await ReadLatestPrereleaseTagAsync(response.Content, requestCancellation.Token).ConfigureAwait(false);
     }
 
     private static async Task ThrowIfRateLimitedAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -330,6 +328,11 @@ internal static class UpdateChecker
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
+        return ResolveDefaultCachePath(xdgCacheHome, home, localAppData);
+    }
+
+    internal static string ResolveDefaultCachePath(string? xdgCacheHome, string? home, string? localAppData)
+    {
         if (TryResolveCacheRoot(xdgCacheHome, "XDG_CACHE_HOME", out var xdgRoot))
             return Path.Combine(xdgRoot, "cdidx", "update-check.json");
 
@@ -339,7 +342,7 @@ internal static class UpdateChecker
         if (TryResolveCacheRoot(localAppData, "local application data", out var localAppDataRoot))
             return Path.Combine(localAppDataRoot, "cdidx", "update-check.json");
 
-        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "cache"));
+        var root = DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("cache");
         return Path.Combine(root, "update-check.json");
     }
 

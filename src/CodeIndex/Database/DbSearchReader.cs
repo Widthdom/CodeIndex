@@ -13,11 +13,14 @@ public partial class DbReader
     internal const string AllTokensFilteredByLengthReason = "all_tokens_filtered_by_length";
     internal const int MaxLiteralSearchQueryLength = 1000;
     internal const int MaxLiteralSearchTokenCount = 128;
+    internal const int MaxLiteralSearchTokenLength = 1000;
     internal const int MaxRawFtsQueryLength = 2000;
     internal const int MaxRawFtsBooleanOperators = 64;
     internal const int MaxRawFtsNearOperators = 16;
     internal const int MaxRawFtsParenthesisDepth = 16;
     internal const int MaxRawFtsNearDistance = 100;
+    internal const int MaxRawFtsColumnListCount = 16;
+    internal const int MaxRawFtsColumnTokenLength = 64;
     internal const int DefaultSearchGuardWindow = 8;
     internal const int MaxSearchGuardWindow = 200;
     internal const int MaxSearchGuardFilters = 8;
@@ -64,7 +67,7 @@ public partial class DbReader
             return FtsQueryDiagnostics.None;
 
         var normalizedQuery = NormalizeLiteralSearchQuery(query, NormalizeQueryLanguage(lang));
-        var tokens = SplitLiteralSearchTokens(normalizedQuery)
+        var tokens = SplitLiteralSearchTokens(normalizedQuery, validateLimits: false)
             .Select(token => token.Length > 1 && token.EndsWith('*') ? token[..^1] : token)
             .Where(token => token.Length > 0)
             .ToArray();
@@ -540,6 +543,117 @@ public partial class DbReader
         }
 
         return new QueryCountResult(count, keptFiles.Count);
+    }
+
+    public List<SearchFileCountResult> CountSearchResultsByFile(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        if (guardFilters is { Count: > 0 })
+        {
+            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
+            return guardedResults
+                .GroupBy(result => result.Path, StringComparer.Ordinal)
+                .Select(group => new SearchFileCountResult(group.Key, group.Count()))
+                .OrderByDescending(group => group.Count)
+                .ThenBy(group => group.Path, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        if (!rawQuery)
+            ValidateLiteralSearchQueryLength(query);
+
+        lang = NormalizeQueryLanguage(lang);
+        var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
+        var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
+        using var cmd = _conn.CreateCommand();
+        string sql;
+
+        if (exact)
+        {
+            sql = $@"
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
+                       0.0 AS rank
+                FROM chunks c
+                JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
+                WHERE instr(
+                    {GetExactSearchTextSql("c.content", "f.lang")},
+                    {GetExactSearchTextSql("@exactQuery", "f.lang")}
+                ) > 0";
+        }
+        else
+        {
+            var sanitizedQuery = rawQuery ? ValidateRawFtsQuery(query) : SanitizeFtsQuery(normalizedQuery, prefix);
+            if (rawQuery)
+                ValidateRawFtsNearDistance(sanitizedQuery);
+            sql = $@"
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
+                       rank
+                FROM fts_chunks
+                JOIN chunks c ON fts_chunks.rowid = c.id
+                JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
+            sql += " WHERE fts_chunks MATCH @query";
+            cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+        }
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost: false)}";
+
+        cmd.CommandText = sql;
+        if (exact)
+            cmd.Parameters.AddWithValue("@exactQuery", query);
+        cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
+        cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
+        AddSearchCoverageParameters(cmd, coverageTokens);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+        var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
+        var matchContext = deduplicate ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang) : null;
+        var countsByPath = new Dictionary<string, int>(StringComparer.Ordinal);
+        try
+        {
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var path = reader.GetString(0);
+                if (deduplicate)
+                {
+                    var result = new SearchResult
+                    {
+                        Path = path,
+                        Lang = GetNullableString(reader, 1),
+                        StartLine = reader.GetInt32(2),
+                        EndLine = reader.GetInt32(3),
+                        Content = reader.GetString(4),
+                    };
+                    if (!AddSearchResultDedupCoverage(result, matchContext!, keptMatchLines, keptIntervals))
+                        continue;
+                }
+
+                countsByPath[path] = countsByPath.TryGetValue(path, out var count) ? count + 1 : 1;
+            }
+        }
+        catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
+        {
+            throw new FtsQuerySyntaxException(ex.Message, ex);
+        }
+
+        return countsByPath
+            .Select(kv => new SearchFileCountResult(kv.Key, kv.Value))
+            .OrderByDescending(group => group.Count)
+            .ThenBy(group => group.Path, StringComparer.Ordinal)
+            .ToList();
     }
 
     private List<SearchResult> FilterBySearchGuards(
@@ -1032,7 +1146,7 @@ public partial class DbReader
             $"literal search query is too long ({query.Length} characters); maximum is {MaxLiteralSearchQueryLength}. Split generated input into smaller queries.");
     }
 
-    internal static string[] SplitLiteralSearchTokens(string query)
+    internal static string[] SplitLiteralSearchTokens(string query, bool validateLimits = true)
     {
         var tokens = new List<string>();
         for (var i = 0; i < query.Length;)
@@ -1047,7 +1161,10 @@ public partial class DbReader
                 var start = i;
                 while (i < query.Length && !char.IsWhiteSpace(query[i]))
                     i++;
-                tokens.Add(query[start..i]);
+                var token = query[start..i];
+                if (validateLimits)
+                    ValidateLiteralSearchTokenLength(token);
+                tokens.Add(token);
             }
             else
             {
@@ -1069,18 +1186,33 @@ public partial class DbReader
                     }
 
                     phrase.Append(query[i]);
+                    if (validateLimits && phrase.Length > MaxLiteralSearchTokenLength)
+                        throw new SearchQueryLimitException(
+                            $"literal search phrase is too long ({phrase.Length} characters); maximum is {MaxLiteralSearchTokenLength}. Split generated input into smaller queries.");
                     i++;
                 }
 
-                tokens.Add(phrase.Length == 0 ? "\"" : phrase.ToString());
+                var token = phrase.Length == 0 ? "\"" : phrase.ToString();
+                if (validateLimits)
+                    ValidateLiteralSearchTokenLength(token);
+                tokens.Add(token);
             }
 
-            if (tokens.Count > MaxLiteralSearchTokenCount)
+            if (validateLimits && tokens.Count > MaxLiteralSearchTokenCount)
                 throw new SearchQueryLimitException(
                     $"literal search query has too many terms ({tokens.Count}); maximum is {MaxLiteralSearchTokenCount}. Split generated input into smaller queries.");
         }
 
         return tokens.ToArray();
+    }
+
+    private static void ValidateLiteralSearchTokenLength(string token)
+    {
+        if (token.Length <= MaxLiteralSearchTokenLength)
+            return;
+
+        throw new SearchQueryLimitException(
+            $"literal search token is too long ({token.Length} characters); maximum is {MaxLiteralSearchTokenLength}. Split generated input into smaller queries.");
     }
 
     internal static string ValidateRawFtsQuery(string query)
@@ -1221,6 +1353,9 @@ public partial class DbReader
 
         var columns = query[(start + 1)..(colonIndex - 1)]
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (columns.Length > MaxRawFtsColumnListCount)
+            throw new FtsQuerySyntaxException(
+                $"raw FTS5 column list has too many columns ({columns.Length}); maximum is {MaxRawFtsColumnListCount}. The fts_chunks index only exposes the 'content' column.");
         foreach (var column in columns)
             ValidateRawFtsColumn(column);
     }
@@ -1228,6 +1363,9 @@ public partial class DbReader
     private static void ValidateRawFtsColumn(string column)
     {
         const string validColumn = "content";
+        if (column.Length > MaxRawFtsColumnTokenLength)
+            throw new FtsQuerySyntaxException(
+                $"raw FTS5 column qualifier is too long ({column.Length} characters); maximum is {MaxRawFtsColumnTokenLength}. The fts_chunks index only exposes the '{validColumn}' column.");
         if (string.Equals(column, validColumn, StringComparison.OrdinalIgnoreCase))
             return;
 

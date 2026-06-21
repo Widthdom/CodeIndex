@@ -108,9 +108,7 @@ internal sealed class AuditLogSink : IDisposable
         _maxBytes = maxBytes;
         _includeValues = includeValues;
         _queueCapacity = ResolveQueueCapacity(queueCapacity);
-        var directory = System.IO.Path.GetDirectoryName(_path);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
+        DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(_path);
 
         // Probe-open at construction so misconfigured paths (existing directory, read-only
         // file, denied parent) fail loudly before ProgramRunner claims auditing is on.

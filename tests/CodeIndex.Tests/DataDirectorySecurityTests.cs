@@ -61,6 +61,44 @@ public class DataDirectorySecurityTests
     }
 
     [Fact]
+    public void CreateSensitiveParentDirectoryForFile_OnPosix_Forces0700Mode_Issue3775()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_parent_security_{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "audit", "events.jsonl");
+        try
+        {
+            var directory = DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(path);
+
+            Assert.NotNull(directory);
+            Assert.Equal(Path.GetDirectoryName(path), directory.FullName);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(directory.FullName) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CreateSensitiveParentDirectoryForFile_OnExistingTempRoot_DoesNotHardenSharedRoot_Issue3775()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_direct_parent_{Guid.NewGuid():N}.jsonl");
+
+        var directory = DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(path);
+
+        Assert.NotNull(directory);
+        Assert.Equal(
+            Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            directory.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    }
+
+    [Fact]
     public void CreateSensitiveTempDirectory_OnPosix_Forces0700Mode()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -80,6 +118,84 @@ public class DataDirectorySecurityTests
         {
             if (tempDir != null && Directory.Exists(tempDir.FullName))
                 Directory.Delete(tempDir.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSensitiveTempFallbackDirectory_UsesUserScopedCdidxRoot_Issue3675()
+    {
+        var directory = DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("cache");
+
+        Assert.StartsWith(
+            Path.Combine(Path.GetTempPath(), "cdidx-u"),
+            directory,
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            Path.Combine("", "cache"),
+            directory,
+            StringComparison.Ordinal);
+        Assert.NotEqual(
+            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "cache")),
+            directory);
+    }
+
+    [Fact]
+    public void CreateSensitiveDirectory_OnExistingTempFallbackScopeRoot_HardensRoot_Issue3675()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var directory = DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory($"scope-{Guid.NewGuid():N}");
+        var scopeRoot = Directory.GetParent(directory)!.FullName;
+        if (Directory.Exists(scopeRoot) || File.Exists(scopeRoot))
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(scopeRoot);
+            File.SetUnixFileMode(scopeRoot, DataDirectorySecurity.PermissionBits);
+
+            DataDirectorySecurity.CreateSensitiveDirectory(directory);
+
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(scopeRoot) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(directory) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            DeletePathOrSymlink(scopeRoot);
+        }
+    }
+
+    [Fact]
+    public void CreateSensitiveDirectory_OnSymlinkedTempFallbackScopeRoot_RejectsRoot_Issue3675()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var directory = DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory($"symlink-{Guid.NewGuid():N}");
+        var scopeRoot = Directory.GetParent(directory)!.FullName;
+        if (Directory.Exists(scopeRoot) || File.Exists(scopeRoot))
+            return;
+
+        var attackRoot = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_fallback_attack_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(attackRoot);
+            File.CreateSymbolicLink(scopeRoot, attackRoot);
+
+            var ex = Assert.Throws<IOException>(() => DataDirectorySecurity.CreateSensitiveDirectory(directory));
+
+            Assert.Contains("symbolic link or reparse point", ex.Message, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            DeletePathOrSymlink(scopeRoot);
+            DeletePathOrSymlink(attackRoot);
         }
     }
 
@@ -149,5 +265,27 @@ public class DataDirectorySecurityTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static void DeletePathOrSymlink(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                File.Delete(path);
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return;
+        }
+
+        if (Directory.Exists(path))
+            Directory.Delete(path, recursive: true);
+        else if (File.Exists(path))
+            File.Delete(path);
     }
 }

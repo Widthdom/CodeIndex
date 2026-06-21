@@ -21,7 +21,7 @@ public class AtomicFileWriterTests
             AtomicFileWriter.WriteText(path, "new", Utf8NoBom);
 
             Assert.Equal("new", File.ReadAllText(path, Utf8NoBom));
-            Assert.Empty(Directory.GetFiles(projectRoot, ".settings.json.*.tmp"));
+            Assert.Empty(Directory.GetFiles(projectRoot, "*.tmp"));
         }
         finally
         {
@@ -53,7 +53,7 @@ public class AtomicFileWriterTests
             Assert.NotNull(modePath);
             Assert.NotEqual(path, modePath);
             Assert.Equal("old", File.ReadAllText(path, Utf8NoBom));
-            Assert.Empty(Directory.GetFiles(projectRoot, ".settings.json.*.tmp"));
+            Assert.Empty(Directory.GetFiles(projectRoot, "*.tmp"));
         }
         finally
         {
@@ -75,6 +75,7 @@ public class AtomicFileWriterTests
                 AtomicFileWriter.WriteText(path, "new", Utf8NoBom));
 
             Assert.Contains("Atomic replace completed", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("target file was already replaced", ex.Message, StringComparison.Ordinal);
             Assert.Contains("parent directory could not be flushed", ex.Message, StringComparison.Ordinal);
             Assert.Equal("new", File.ReadAllText(path, Utf8NoBom));
         }
@@ -102,7 +103,7 @@ public class AtomicFileWriterTests
 
             Assert.Equal(projectRoot, flushedDirectory);
             Assert.Contains("\"current_head\"", File.ReadAllText(path, Utf8NoBom), StringComparison.Ordinal);
-            Assert.Empty(Directory.GetFiles(projectRoot, ".scan-checkpoint.json.*.tmp"));
+            Assert.Empty(Directory.GetFiles(projectRoot, "*.tmp"));
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
@@ -113,6 +114,32 @@ public class AtomicFileWriterTests
         finally
         {
             AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void BuildTempPathForTesting_BoundsTempFileNameForLongTargets_Issue3776()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_long_name");
+        try
+        {
+            var targetName = new string('a', 240) + ".json";
+            var path = Path.Combine(projectRoot, targetName);
+
+            var tempPath = AtomicFileWriter.BuildTempPathForTesting(path);
+            var tempName = Path.GetFileName(tempPath);
+
+            Assert.Equal(projectRoot, Path.GetDirectoryName(tempPath));
+            Assert.StartsWith(".cdidx-", tempName, StringComparison.Ordinal);
+            Assert.EndsWith(".tmp", tempName, StringComparison.Ordinal);
+            Assert.True(
+                tempName.Length <= AtomicFileWriter.MaxTempFileNameChars,
+                $"temp file name was {tempName.Length} chars: {tempName}");
+            Assert.DoesNotContain(targetName, tempName, StringComparison.Ordinal);
+        }
+        finally
+        {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

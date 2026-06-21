@@ -805,7 +805,7 @@ public class SuggestionStore
     {
         var dir = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+            DataDirectorySecurity.CreateSensitiveDirectory(dir);
 
         NormalizeRecordDefaults(records);
         AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions, AtomicFileWriter.WriteProfile.Sensitive);
@@ -924,7 +924,7 @@ public class SuggestionStore
     {
         var dir = Path.GetDirectoryName(_archivePath);
         if (!string.IsNullOrEmpty(dir))
-            DataDirectorySecurity.CreatePrivateDirectory(dir);
+            DataDirectorySecurity.CreateSensitiveDirectory(dir);
 
         var archive = BuildBoundedArchiveLines(records);
         if (archive.Lines.Count == 0)
@@ -1255,7 +1255,7 @@ public class SuggestionStore
     {
         var dir = Path.GetDirectoryName(_lockPath);
         if (!string.IsNullOrEmpty(dir))
-            DataDirectorySecurity.CreatePrivateDirectory(dir);
+            DataDirectorySecurity.CreateSensitiveDirectory(dir);
 
         // FileShare.None provides exclusive access across processes on all platforms.
         // The lock is held for the lifetime of the FileStream (released on Dispose).

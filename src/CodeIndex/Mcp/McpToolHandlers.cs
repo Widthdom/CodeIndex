@@ -1183,19 +1183,26 @@ public partial class McpServer
 
     private JsonArray BuildTopFileHistogram<T>(IEnumerable<T> results, Func<T, string?> pathSelector)
     {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var result in results)
+        {
+            var path = pathSelector(result);
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            counts[path] = counts.TryGetValue(path, out var count) ? count + 1 : 1;
+        }
+
         var histogram = new JsonArray();
-        foreach (var group in results
-            .Select(pathSelector)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .GroupBy(path => path!, StringComparer.Ordinal)
-            .OrderByDescending(group => group.Count())
-            .ThenBy(group => group.Key, StringComparer.Ordinal)
+        foreach (var (path, count) in counts
+            .OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key, StringComparer.Ordinal)
             .Take(5))
         {
             histogram.Add(new JsonObject
             {
-                ["path"] = group.Key,
-                ["count"] = group.Count(),
+                ["path"] = path,
+                ["count"] = count,
             });
         }
 

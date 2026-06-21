@@ -1730,7 +1730,9 @@ exit 7
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Empty(stdout);
-                Assert.Empty(stderr);
+                Assert.Equal(
+                    $"Verifying install.sh checksum...{Environment.NewLine}Verified install.sh checksum.{Environment.NewLine}",
+                    stderr.ToString());
                 Assert.Equal([true, true], observedCanBeCanceled);
             }
             finally

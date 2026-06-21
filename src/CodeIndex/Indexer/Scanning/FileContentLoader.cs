@@ -382,13 +382,16 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         return FinishChecksum(hasher);
     }
 
-    internal static bool TryComputeChecksum(string filePath, long maxBytes, out string checksum)
+    internal static bool TryComputeChecksum(
+        string filePath,
+        long maxBytes,
+        out string checksum,
+        CancellationToken cancellationToken = default)
     {
         if (maxBytes < 0)
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
 
         checksum = string.Empty;
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var stream = new FileStream(
             filePath,
             FileMode.Open,
@@ -396,12 +399,26 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             FileShare.Read,
             bufferSize: 81920,
             options: FileOptions.SequentialScan);
+        return TryComputeChecksum(stream, maxBytes, out checksum, cancellationToken);
+    }
 
+    internal static bool TryComputeChecksum(
+        Stream stream,
+        long maxBytes,
+        out string checksum,
+        CancellationToken cancellationToken = default)
+    {
+        if (maxBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
+
+        checksum = string.Empty;
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[81920];
         var pendingCarriageReturn = false;
         long total = 0;
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var read = stream.Read(buffer, 0, buffer.Length);
             if (read == 0)
                 break;

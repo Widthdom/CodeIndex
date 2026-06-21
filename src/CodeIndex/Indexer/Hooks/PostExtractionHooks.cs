@@ -379,12 +379,14 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     public TimeSpan CallbackBudget => callbackBudget;
 
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
+    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
 
         foreach (var hook in hooks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var workingSymbols = CloneSymbols(symbols, maxSymbolCount, out var inputTruncated);
             if (inputTruncated && maxSymbolCount is { } symbolLimit)
             {
@@ -403,19 +405,22 @@ public sealed class PostExtractionHookRunner : IDisposable
                     workingSymbols,
                     null,
                     maxSymbolCount,
-                    null))
+                    null,
+                    cancellationToken))
             {
                 ReplaceList(symbols, workingSymbols);
             }
         }
     }
 
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
+    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
 
         foreach (var hook in hooks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var workingReferences = CloneReferences(references, maxReferenceCount, out var inputTruncated);
             if (inputTruncated && maxReferenceCount is { } referenceLimit)
             {
@@ -434,7 +439,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                     null,
                     workingReferences,
                     null,
-                    maxReferenceCount))
+                    maxReferenceCount,
+                    cancellationToken))
             {
                 ReplaceList(references, workingReferences);
             }
@@ -449,11 +455,13 @@ public sealed class PostExtractionHookRunner : IDisposable
         List<SymbolRecord>? symbols,
         List<ReferenceRecord>? references,
         int? maxSymbols,
-        int? maxReferences)
+        int? maxReferences,
+        CancellationToken cancellationToken)
     {
         if (disabledHooks.ContainsKey(hook.Info.TypeName))
             return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = hook.Worker.Invoke(
             kind,
             callback,
@@ -462,7 +470,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             references,
             callbackBudget,
             maxSymbols,
-            maxReferences);
+            maxReferences,
+            cancellationToken);
         if (result.TimedOut)
         {
             disabledHooks.TryAdd(hook.Info.TypeName, 0);
