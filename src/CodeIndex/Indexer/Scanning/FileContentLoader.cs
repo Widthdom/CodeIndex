@@ -86,25 +86,11 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
                         maxFileSizeBytes,
                         BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
 
-                var initialCapacity = (int)Math.Min(initialLength, maxFileSizeBytes);
-                using var accumulator = new MemoryStream(initialCapacity);
-                var buffer = new byte[81920];
-                long total = 0;
-                int read;
-                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    total += read;
-                    if (total > maxFileSizeBytes)
-                        throw new FileIndexer.FileTooLargeSkippedException(
-                            normalizedRelativePath,
-                            total,
-                            maxFileSizeBytes,
-                            BuildFileTooLargeMessage(total, grewDuringRead: true));
-                    accumulator.Write(buffer, 0, read);
-                }
-                bytes = accumulator.ToArray();
-                sizeBytes = total;
+                (bytes, sizeBytes) = ReadStreamBytesWithKnownInitialLength(
+                    stream,
+                    initialLength,
+                    normalizedRelativePath,
+                    cancellationToken);
             }
             modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
             if (modifiedUtc == modifiedBeforeRead || attempt > 0)
@@ -112,6 +98,93 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         }
 
         return (bytes, sizeBytes, modifiedUtc);
+    }
+
+    private (byte[] Bytes, long SizeBytes) ReadStreamBytesWithKnownInitialLength(
+        FileStream stream,
+        long initialLength,
+        string normalizedRelativePath,
+        CancellationToken cancellationToken)
+    {
+        var expectedLength = (int)initialLength;
+        var bytes = expectedLength == 0 ? Array.Empty<byte>() : new byte[expectedLength];
+        var total = 0;
+
+        while (total < expectedLength)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(bytes, total, expectedLength - total);
+            if (read == 0)
+                return (ResizeReadBuffer(bytes, total), total);
+            total += read;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var extra = stream.ReadByte();
+        if (extra < 0)
+            return (bytes, total);
+
+        return ReadStreamBytesAfterGrowth(
+            stream,
+            bytes,
+            total,
+            (byte)extra,
+            normalizedRelativePath,
+            cancellationToken);
+    }
+
+    private (byte[] Bytes, long SizeBytes) ReadStreamBytesAfterGrowth(
+        FileStream stream,
+        byte[] prefix,
+        int prefixLength,
+        byte firstExtraByte,
+        string normalizedRelativePath,
+        CancellationToken cancellationToken)
+    {
+        var total = (long)prefixLength + 1;
+        if (total > maxFileSizeBytes)
+            throw new FileIndexer.FileTooLargeSkippedException(
+                normalizedRelativePath,
+                total,
+                maxFileSizeBytes,
+                BuildFileTooLargeMessage(total, grewDuringRead: true));
+
+        var initialCapacity = (int)Math.Min(
+            maxFileSizeBytes,
+            Math.Max(total, prefixLength + 81920L));
+        using var accumulator = new MemoryStream(initialCapacity);
+        if (prefixLength > 0)
+            accumulator.Write(prefix, 0, prefixLength);
+        accumulator.WriteByte(firstExtraByte);
+
+        var buffer = new byte[81920];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            total += read;
+            if (total > maxFileSizeBytes)
+                throw new FileIndexer.FileTooLargeSkippedException(
+                    normalizedRelativePath,
+                    total,
+                    maxFileSizeBytes,
+                    BuildFileTooLargeMessage(total, grewDuringRead: true));
+            accumulator.Write(buffer, 0, read);
+        }
+
+        return (accumulator.ToArray(), total);
+    }
+
+    private static byte[] ResizeReadBuffer(byte[] bytes, int length)
+    {
+        if (length == bytes.Length)
+            return bytes;
+        if (length == 0)
+            return [];
+
+        var resized = new byte[length];
+        Buffer.BlockCopy(bytes, 0, resized, 0, length);
+        return resized;
     }
 
     private (string Content, string? Warning) DecodeIndexableContent(byte[] bytes, string relativePath)
