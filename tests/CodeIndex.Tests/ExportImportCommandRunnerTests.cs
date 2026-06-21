@@ -550,6 +550,20 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void FormatImportManifestReadException_SanitizesRawMessage_Issue3796()
+    {
+        var secretPath = Path.Combine(Path.GetTempPath(), "secret-import-token-ghp_1234567890abcdef-private", "manifest.json");
+        var ex = new InvalidDataException($"archive manifest stream failed near {secretPath} payload token=ghp_abcdef1234567890_private");
+
+        var message = ExportImportCommandRunner.FormatImportManifestReadException(ex);
+
+        Assert.Equal("InvalidDataException", message);
+        Assert.DoesNotContain(secretPath, message);
+        Assert.DoesNotContain("ghp_abcdef1234567890", message);
+        Assert.DoesNotContain("manifest.json", message);
+    }
+
+    [Fact]
     public void RunImport_TemporaryDatabaseCleanupFailureWarnsAndPreservesImportError_Issue3032()
     {
         var workDir = TestProjectHelper.CreateTempProject("import_temp_cleanup_warning");

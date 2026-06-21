@@ -73,6 +73,18 @@ public static partial class ExtractorPluginRegistry
             category: category);
     }
 
+    internal static void ReportPatternExtractorTimeout(string path, string language, string kind)
+    {
+        RecordDiagnostic(
+            "pattern",
+            path,
+            typeName: null,
+            severity: "warning",
+            $"Pattern extractor timeout: language '{DiagnosticSanitizer.ForMessage(language)}' kind '{DiagnosticSanitizer.ForMessage(kind)}'.",
+            countsAsSkippedFile: false,
+            category: "pattern_regex_timeout");
+    }
+
     private static void RecordDiagnostic(
         string kind,
         string path,
@@ -87,14 +99,22 @@ public static partial class ExtractorPluginRegistry
             diagnosticTotalCount++;
             if (countsAsSkippedFile)
                 skippedFileCount++;
+            var diagnostic = new ExtractorRegistryDiagnostic(
+                DiagnosticSanitizer.ForMessage(kind),
+                DiagnosticSanitizer.ForPath(path),
+                DiagnosticSanitizer.ForOptionalLabel(typeName),
+                DiagnosticSanitizer.ForMessage(severity),
+                DiagnosticSanitizer.ForMessage(category),
+                DiagnosticSanitizer.ForMessage(message));
             if (Diagnostics.Count < DiagnosticLimit)
-                Diagnostics.Add(new ExtractorRegistryDiagnostic(
-                    DiagnosticSanitizer.ForMessage(kind),
-                    DiagnosticSanitizer.ForPath(path),
-                    DiagnosticSanitizer.ForOptionalLabel(typeName),
-                    DiagnosticSanitizer.ForMessage(severity),
-                    DiagnosticSanitizer.ForMessage(category),
-                    DiagnosticSanitizer.ForMessage(message)));
+            {
+                Diagnostics.Add(diagnostic);
+            }
+            else if (category.EndsWith("_candidate_limit_exceeded", StringComparison.Ordinal)
+                     && !Diagnostics.Any(item => item.Category == diagnostic.Category && item.Path == diagnostic.Path))
+            {
+                Diagnostics[^1] = diagnostic;
+            }
         }
     }
 }
