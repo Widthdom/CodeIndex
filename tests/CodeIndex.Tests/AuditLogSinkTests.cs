@@ -226,6 +226,18 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_BoundsNonStringScalarSerialization_Issue3740()
+    {
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("count", JsonValue.Create(123456789L), state);
+
+        Assert.False(state.Truncated);
+        Assert.Empty(state.TruncationReasons);
+        Assert.Equal(123456789L, sanitized!.GetValue<long>());
+    }
+
+    [Fact]
     public void SerializeEvent_DropsArgValues_WhenRecordExceedsEventBudget_Issue3237_Issue3107()
     {
         var evt = new AuditLogSink.AuditEvent(

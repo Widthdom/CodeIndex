@@ -149,16 +149,16 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
-    public void LoadPage_TooManyRecordsAfterPage_PreservesBackupAndReturnsEmpty()
+    public void LoadPage_TakeStopsBeforeLaterExcessRecords()
     {
         var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
         WriteEmptyRecordStore(path, SuggestionStore.MaxSuggestionStoreRecords + 1);
 
         var records = _store.Load(skip: 0, take: 1);
 
-        Assert.Empty(records);
-        Assert.False(File.Exists(path));
-        Assert.True(File.Exists(path + ".bak"));
+        Assert.Single(records);
+        Assert.True(File.Exists(path));
+        Assert.False(File.Exists(path + ".bak"));
     }
 
     // --- TryAdd tests / TryAdd テスト ---
@@ -568,6 +568,23 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAddAndSubmit_Failure_RedactsAndBoundsPersistedSubmitError()
+    {
+        var record = MakeRecord("other", null, "Submission stores redacted error");
+        var tailSecret = "tail-secret-should-not-persist";
+        var error = "api_key=" + new string('a', SuggestionStore.RedactionFieldLengthLimit) + tailSecret;
+
+        var result = _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.Failure(error));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("api_key=[REDACTED:credential]", stored.LastSubmitError);
+        Assert.Contains(SuggestionStore.RedactionTruncationMarker, stored.LastSubmitError);
+        Assert.DoesNotContain(tailSecret, stored.LastSubmitError);
+        Assert.Equal(stored.LastSubmitError, result.SubmissionError);
+    }
+
+    [Fact]
     public async Task TryAddAndSubmit_SlowSubmission_DoesNotHoldFileLock()
     {
         var record = MakeRecord("other", null, "Slow remote submission");
@@ -951,6 +968,26 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void CorruptFile_ExistingBackupIsNotOverwritten()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(backupPath, "first corrupt backup");
+        File.WriteAllText(filePath, "{second corrupt json[[[");
+
+        var all = _store.LoadAll();
+
+        Assert.Empty(all);
+        Assert.Equal("first corrupt backup", File.ReadAllText(backupPath));
+        var timestampedBackup = Assert.Single(
+            Directory
+                .EnumerateFiles(_tempDir, "suggestions-codeindex.json.bak.*")
+                .Where(path => !string.Equals(path, backupPath, StringComparison.Ordinal)));
+        Assert.Contains("{second corrupt json[[[", File.ReadAllText(timestampedBackup));
+        Assert.False(File.Exists(filePath), "Original corrupt file should be removed");
+    }
+
+    [Fact]
     public void CorruptFile_OnPosixHardensBackupFileMode()
     {
         if (OperatingSystem.IsWindows())
@@ -1076,6 +1113,22 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal(SuggestionStore.MaxSuggestionArchiveBytes, new FileInfo(rotatedPath).Length);
         Assert.Contains("Old suggestion", File.ReadAllText(archivePath));
         Assert.True(new FileInfo(archivePath).Length <= SuggestionStore.MaxSuggestionArchiveBytes);
+    }
+
+    [Fact]
+    public void BuildBoundedArchiveLines_DropsOversizedRecordWithBoundedDiagnostics()
+    {
+        var oversized = MakeRecord(
+            "other",
+            null,
+            new string('x', SuggestionStore.MaxSuggestionArchiveBytes + 1));
+
+        var archive = SuggestionStore.BuildBoundedArchiveLines([oversized]);
+
+        Assert.Empty(archive.Lines);
+        Assert.Equal(0, archive.DroppedByCapCount);
+        Assert.Equal(1, archive.OversizedDroppedCount);
+        Assert.True(archive.LargestOversizedRecordBytes > SuggestionStore.MaxSuggestionArchiveBytes);
     }
 
     [Fact]

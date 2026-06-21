@@ -2199,15 +2199,24 @@ conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
 Open buffers sent through `textDocument/didOpen`, `textDocument/didChange`, and
-`textDocument/didClose` are kept in a bounded in-memory cache. Position-based
-requests read the live buffer first, so unsaved edits can drive token lookup
-without writing back to the CodeIndex database.
+`textDocument/didClose` are kept in a bounded in-memory cache: each document is
+capped at 4194304 bytes, the session holds at most 64 live documents and
+16777216 aggregate live-document bytes, and older entries are evicted when a
+budget is exceeded. `textDocument/didChange` processes only the last 64 change
+entries in an oversized `contentChanges` array, preserving the latest full-text
+update without retaining unbounded intermediate edits. Position-based requests
+read the live buffer first, so unsaved edits can drive token lookup without
+writing back to the CodeIndex database.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
 frame parsing also rejects more than 64 header lines, more than 65536 aggregate
-header bytes, any one header line above 8192 bytes, duplicate `Content-Length`
-headers, or a body above 8388608 bytes before reading the message body.
+header bytes, any one header line above 8192 bytes, duplicate, negative,
+malformed, or body-over-limit `Content-Length` headers, and bodies above
+8388608 bytes before reading the message body. JSON parse errors report only
+sanitized payload-size and max-depth context, not payload text. Outgoing LSP
+responses are also capped at 8388608 body bytes; an oversized result is replaced
+with a bounded JSON-RPC error.
 The stdio loop observes the CLI cancellation token while reading headers and
 message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
 instead of waiting for another complete request.
@@ -2223,6 +2232,9 @@ hierarchical `DocumentSymbol` children when container metadata is available,
 returns at most 1000 indexed symbols, truncates each `detail` string to 512
 characters with `...`, and trims the tree before the result array exceeds
 524288 JSON bytes.
+`textDocument/hover` renders indexed paths relative to the project/workspace
+root when possible and uses `[outside workspace]` for absolute paths outside the
+known roots.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
 `textDocument/references` honors `context.includeDeclaration`; when true, the
@@ -4750,15 +4762,21 @@ indexed symbols / references で答えられる範囲に限定した `hover`、`
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
 `textDocument/didOpen`、`textDocument/didChange`、`textDocument/didClose` で送られた
-open buffer は上限付きの in-memory cache に保持されます。position-based request は
-live buffer を先に読むため、未保存の編集内容でも CodeIndex database に書き戻さず token lookup に
-利用できます。
+open buffer は上限付きの in-memory cache に保持されます。各 document は 4194304 bytes、
+session 全体では最大 64 live documents / 16777216 aggregate live-document bytes に制限され、
+budget を超えた場合は古い entry から evict されます。`textDocument/didChange` は過大な
+`contentChanges` array では最後の 64 change entries だけを処理し、unbounded な intermediate edit を
+保持せずに最新の full-text update を維持します。position-based request は live buffer を先に読むため、
+未保存の編集内容でも CodeIndex database に書き戻さず token lookup に利用できます。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
 LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
-超える header、8192 bytes を超える単一 header 行、重複した `Content-Length` header、
-8388608 bytes を超える body を拒否します。
+超える header、8192 bytes を超える単一 header 行、重複・負数・不正形式・body 上限超過の
+`Content-Length` header、8388608 bytes を超える body を拒否します。JSON parse error は
+payload 本文ではなく、sanitized された payload size と max depth context だけを報告します。送信する
+LSP response も body 8388608 bytes で上限をかけ、過大な result は bounded な JSON-RPC error に
+置き換えます。
 stdio loop は header / message body 読み取り中も CLI cancellation token を監視するため、
 Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
@@ -4771,6 +4789,8 @@ invalid request として拒否します。
 clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
 `DocumentSymbol` children を返し、最大 1000 件の indexed symbol を返し、各 `detail` string を
 `...` 付きの 512 文字に切り詰め、result tree が 524288 JSON bytes を超える前に trim します。
+`textDocument/hover` は indexed path を可能な場合は project / workspace root からの相対 path として
+表示し、既知の root 外の absolute path は `[outside workspace]` に置き換えます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
 `textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を

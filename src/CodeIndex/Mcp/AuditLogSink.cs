@@ -47,6 +47,10 @@ internal sealed class AuditLogSink : IDisposable
     private static readonly Regex SecretValuePattern = new(
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly JsonDocumentOptions ArgValueScalarJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxArgValueDepth + 1,
+    };
 
     private readonly object _gate = new();
     private readonly string _path;
@@ -642,7 +646,7 @@ internal sealed class AuditLogSink : IDisposable
             var json = value.ToJsonString();
             if (!state.TryReserveSerializedBytes(Encoding.UTF8.GetByteCount(json)))
                 return CreateTruncatedValue();
-            return JsonNode.Parse(json) ?? CreateTruncatedValue();
+            return JsonNode.Parse(json, documentOptions: ArgValueScalarJsonDocumentOptions) ?? CreateTruncatedValue();
         }
         catch
         {

@@ -51,6 +51,9 @@ public partial class DbReader : IDisposable
     private readonly bool _readOnlyFallback;
     private readonly bool _walCheckpointAttempted;
     private readonly bool _walCheckpointSucceeded;
+    private readonly bool _readOnlyImmutableFallback;
+    private readonly string? _walCheckpointSkippedReason;
+    private readonly string? _walCheckpointFailureReason;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
     private readonly HashSet<string> _fileColumns;
@@ -435,7 +438,10 @@ public partial class DbReader : IDisposable
                context.PreparedCommands,
                context.ReadOnlyFallback,
                context.WalCheckpointAttempted,
-               context.WalCheckpointSucceeded)
+               context.WalCheckpointSucceeded,
+               context.ReadOnlyImmutableFallback,
+               context.WalCheckpointSkippedReason,
+               context.WalCheckpointFailureReason)
     {
     }
 
@@ -453,7 +459,10 @@ public partial class DbReader : IDisposable
                context.PreparedCommands,
                context.ReadOnlyFallback,
                context.WalCheckpointAttempted,
-               context.WalCheckpointSucceeded)
+               context.WalCheckpointSucceeded,
+               context.ReadOnlyImmutableFallback,
+               context.WalCheckpointSkippedReason,
+               context.WalCheckpointFailureReason)
     {
     }
 
@@ -487,7 +496,10 @@ public partial class DbReader : IDisposable
         PreparedCommandCache? commandCache,
         bool readOnlyFallback = false,
         bool walCheckpointAttempted = false,
-        bool walCheckpointSucceeded = false)
+        bool walCheckpointSucceeded = false,
+        bool readOnlyImmutableFallback = false,
+        string? walCheckpointSkippedReason = null,
+        string? walCheckpointFailureReason = null)
     {
         _conn = connection;
         _commandCache = commandCache;
@@ -500,6 +512,9 @@ public partial class DbReader : IDisposable
         _readOnlyFallback = readOnlyFallback;
         _walCheckpointAttempted = walCheckpointAttempted;
         _walCheckpointSucceeded = walCheckpointSucceeded;
+        _readOnlyImmutableFallback = readOnlyImmutableFallback;
+        _walCheckpointSkippedReason = walCheckpointSkippedReason;
+        _walCheckpointFailureReason = walCheckpointFailureReason;
         _schemaCache = schemaCache;
         _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
@@ -1013,6 +1028,17 @@ public partial class DbReader : IDisposable
             return _schemaCache.HasTable(tableName);
         return DbSchemaCache.QueryHasTable(_conn, tableName);
     }
+
+    public bool ReadOnlyFallback => _readOnlyFallback;
+    public bool WalCheckpointAttempted => _walCheckpointAttempted;
+    public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
+    public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
+    public bool WalStaleSnapshotRisk => _readOnlyImmutableFallback && !_walCheckpointSucceeded;
+    public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
+    public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
+    public string? WalStaleSnapshotReason => WalStaleSnapshotRisk
+        ? _walCheckpointSkippedReason ?? _walCheckpointFailureReason ?? "immutable_read_only_fallback"
+        : null;
 
     private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);
     private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);

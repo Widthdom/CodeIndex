@@ -6,8 +6,7 @@ public static partial class ExtractorPluginRegistry
 {
     private static void LoadPluginAssemblies(IEnumerable<string> directories)
     {
-        var pluginPaths = EnumeratePluginAssemblyPaths(directories).ToArray();
-        foreach (var pluginPath in pluginPaths)
+        foreach (var pluginPath in EnumeratePluginAssemblyPaths(directories))
             TryLoadPlugin(pluginPath);
     }
 
@@ -20,7 +19,7 @@ public static partial class ExtractorPluginRegistry
             fullPath = Path.GetFullPath(pluginPath);
             lock (Gate)
             {
-                if (!LoadedPluginAssemblyPaths.Add(fullPath))
+                if (!TryMarkPluginAssemblyPathLoaded(fullPath))
                     return;
             }
 
@@ -77,6 +76,9 @@ public static partial class ExtractorPluginRegistry
                     category: diagnostic.Category);
                 return;
             }
+
+            if (!PluginAssemblyTypesAreWithinBudget(fullPath, types))
+                return;
 
             lock (Gate)
             {
@@ -180,6 +182,23 @@ public static partial class ExtractorPluginRegistry
         }
 
         return true;
+    }
+
+    private static bool PluginAssemblyTypesAreWithinBudget(string fullPath, IReadOnlyCollection<Type> types)
+    {
+        var limit = ResolveTypeInspectionLimit();
+        if (types.Count <= limit)
+            return true;
+
+        RecordDiagnostic(
+            "plugin",
+            fullPath,
+            typeName: null,
+            severity: "skipped",
+            $"Plugin assembly skipped: too many loadable types ({types.Count}; maximum {limit}).",
+            countsAsSkippedFile: true,
+            category: "plugin_type_limit_exceeded");
+        return false;
     }
 
     private static void TryRegisterPluginType(Type type, string pluginPath)

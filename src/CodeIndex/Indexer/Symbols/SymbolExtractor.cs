@@ -760,14 +760,6 @@ public static partial class SymbolExtractor
         $@"^(?:async\s+)?(?:\([^)]*\)|{JavaScriptTypeScriptIdentifierPattern})\s*=>",
         RegexOptions.Compiled);
 
-    private static readonly Regex JavaScriptTypeScriptExportedObjectLiteralPropertyRegex = new(
-        $@"^\s*(?<name>{JavaScriptTypeScriptIdentifierPattern})\s*:",
-        RegexOptions.Compiled);
-
-    private static readonly Regex JavaScriptTypeScriptExportedObjectLiteralShorthandPropertyRegex = new(
-        $@"^\s*(?<name>{JavaScriptTypeScriptIdentifierPattern})\s*(?:(?=,)|(?=}})|$)",
-        RegexOptions.Compiled);
-
     private static readonly Regex SvelteReactivePropertyRegex = new(
         @"^\s*\$:\s*(?<name>\w+)\s*=",
         RegexOptions.Compiled);
