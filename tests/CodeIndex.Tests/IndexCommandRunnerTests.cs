@@ -40,6 +40,8 @@ public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
 [Collection("SQLite pool sensitive")]
 public class IndexCommandRunnerTests
 {
+    private static readonly TimeSpan LegacyEnvironmentHookWorkerBudget = TimeSpan.FromSeconds(30);
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -188,6 +190,20 @@ public class IndexCommandRunnerTests
         Assert.Contains("Regex extraction timed out after 2s", message);
         Assert.Contains("file was skipped", message);
         Assert.DoesNotContain("raw-sensitive", message);
+    }
+
+    [Fact]
+    public void FormatIndexFileException_GenericExceptionSanitizesRawMessage_Issue3796()
+    {
+        var secretPath = Path.Combine(Path.GetTempPath(), "secret-project-token-ghp_1234567890abcdef-private", "Generated.cs");
+        var ex = new IOException($"failed to read {secretPath} with payload token=ghp_1234567890abcdef_private");
+
+        var message = IndexCommandRunner.FormatIndexFileException(ex);
+
+        Assert.Equal("IOException", message);
+        Assert.DoesNotContain(secretPath, message);
+        Assert.DoesNotContain("ghp_1234567890abcdef", message);
+        Assert.DoesNotContain("Generated.cs", message);
     }
 
     [Fact]
@@ -350,7 +366,7 @@ public class IndexCommandRunnerTests
                     "public class App { }\n",
                     Path.Combine(projectRoot, "App.cs"),
                     projectRoot,
-                    TimeSpan.FromSeconds(5));
+                    LegacyEnvironmentHookWorkerBudget);
 
                 Assert.True(result.Success, result.WorkerError);
                 Assert.False(result.TimedOut);
@@ -3568,10 +3584,11 @@ public sealed class Caller
 
         var line = IndexCommandRunner.FormatPerFileErrorLine("ERR ", "src/foo.cs", captured);
 
-        Assert.Equal("  [ERR ] src/foo.cs: simulated indexing failure", line);
+        Assert.Equal("  [ERR ] src/foo.cs: InvalidOperationException", line);
         Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain(captured.StackTrace!, line);
         Assert.DoesNotContain("FormatPerFileErrorLine_OmitsStackTrace", line);
+        Assert.DoesNotContain("simulated indexing failure", line);
         Assert.DoesNotContain(typeof(InvalidOperationException).FullName!, line);
     }
 
@@ -3589,7 +3606,9 @@ public sealed class Caller
 
         Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain("\r", line);
-        Assert.Equal("  [ERR ] weird  path.cs: first line at Internal.Type.Method() in /home/secret.cs:42", line);
+        Assert.Equal("  [ERR ] weird  path.cs: InvalidOperationException", line);
+        Assert.DoesNotContain("first line", line);
+        Assert.DoesNotContain("/home/secret.cs", line);
     }
 
     [Fact]
