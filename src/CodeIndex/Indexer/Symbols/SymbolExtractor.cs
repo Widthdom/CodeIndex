@@ -3121,10 +3121,6 @@ public static partial class SymbolExtractor
                         var scalaBracelessClassEndLine = lang == "scala" && pattern.Kind == "class"
                             ? TryFindScalaBracelessClassEndLine(lines, i, absoluteStartColumn)
                             : null;
-                        var csharpUseRawBraceRange = lang == "csharp"
-                            && pattern.BodyStyle == BodyStyle.Brace
-                            && csharpLineStartStates != null
-                            && IsCSharpRootCodeLineStart(csharpLineStartStates[i]);
                         var (endLine, bodyStartLine, bodyEndLine) = lang is "kotlin" or "scala"
                             && pattern.Kind == "function"
                             && TryFindKotlinScalaExpressionBodyEndLine(line, absoluteStartColumn)
@@ -3132,9 +3128,13 @@ public static partial class SymbolExtractor
                                 : scalaBracelessClassEndLine.HasValue
                                         ? (scalaBracelessClassEndLine.Value + 1, null, null)
                                         : lang == "csharp" && pattern.BodyStyle == BodyStyle.Brace && csharpMatchLines != null
-                                            ? csharpUseRawBraceRange
-                                                ? FindCSharpBraceRange(lines, i, Math.Min(csharpGateRawStartColumn, line.Length))
-                                                : FindCSharpBraceRange(csharpMatchLines, i, absoluteStartColumn, linesAreSanitized: true)
+                                            ? FindCSharpPatternBraceRange(
+                                                lines,
+                                                csharpMatchLines,
+                                                csharpLineStartStates,
+                                                i,
+                                                absoluteStartColumn,
+                                                csharpGateRawStartColumn)
                                             : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                         if (fortranContinuationCandidate != null)
                             endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
@@ -6662,11 +6662,6 @@ public static partial class SymbolExtractor
 
         return result;
     }
-
-    private static bool IsCSharpRootCodeLineStart(CSharpLexState lineStartState)
-        => lineStartState.Mode == CSharpLexMode.Code
-            && lineStartState.InterpolationReturnMode == CSharpLexMode.Code
-            && lineStartState.InterpolationBraceDepth == 0;
 
     private static bool IsCSharpRootCodePosition(string line, CSharpLexState lineStartState, int rawColumn)
     {
