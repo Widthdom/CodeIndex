@@ -382,7 +382,7 @@ public partial class McpServer
 
     private static int ReadLimit(JsonNode? args, int defaultLimit, ArgumentAdjustmentCollector adjustments)
     {
-        var requested = args?["limit"]?.GetValue<int>();
+        var requested = ReadOptionalIntArgument(args, "limit");
         var effective = Math.Clamp(requested ?? defaultLimit, 1, MaxLimit);
         if (requested.HasValue && requested.Value != effective)
             adjustments.AddClamped("limit", requested.Value, effective, 1, MaxLimit);
@@ -391,7 +391,7 @@ public partial class McpServer
 
     private static int ReadOffset(JsonNode? args, ArgumentAdjustmentCollector adjustments)
     {
-        var requested = args?["offset"]?.GetValue<int>();
+        var requested = ReadOptionalIntArgument(args, "offset");
         var effective = Math.Clamp(requested ?? 0, 0, MaxMcpPaginationOffset);
         if (requested.HasValue && requested.Value != effective)
             adjustments.AddClamped("offset", requested.Value, effective, 0, MaxMcpPaginationOffset);
@@ -400,7 +400,7 @@ public partial class McpServer
 
     private static int ReadSnippetLines(JsonNode? args, int defaultSnippetLines, ArgumentAdjustmentCollector adjustments)
     {
-        var requested = args?["snippetLines"]?.GetValue<int>();
+        var requested = ReadOptionalIntArgument(args, "snippetLines");
         var effective = SearchSnippetFormatter.ClampSnippetLines(requested ?? defaultSnippetLines);
         if (requested.HasValue && requested.Value != effective)
             adjustments.AddClamped("snippetLines", requested.Value, effective, 1, SearchSnippetFormatter.MaxSnippetLines);
@@ -409,7 +409,7 @@ public partial class McpServer
 
     private static int? ReadMapDepth(JsonNode? args, ArgumentAdjustmentCollector adjustments)
     {
-        var requested = args?["depth"]?.GetValue<int>();
+        var requested = ReadOptionalIntArgument(args, "depth");
         if (!requested.HasValue)
             return null;
         if (requested.Value < 0)
@@ -423,6 +423,11 @@ public partial class McpServer
             adjustments.AddClamped("depth", requested.Value, effective, 0, MaxMcpMapDepth);
         return effective;
     }
+
+    private static int? ReadOptionalIntArgument(JsonNode? args, string propertyName)
+        => args?[propertyName] is JsonValue value && value.TryGetValue<int>(out var parsed)
+            ? parsed
+            : null;
 
     private static string ReadResponseFormat(JsonNode? args)
         => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
@@ -510,7 +515,7 @@ public partial class McpServer
 
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
-        var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
+        var maxLineWidthValue = ReadOptionalIntArgument(args, propertyName);
         if (maxLineWidthValue.HasValue && maxLineWidthValue.Value < 0)
         {
             maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
@@ -1777,7 +1782,7 @@ public partial class McpServer
             return guardError;
         if (TryReadSearchGuardScope(id, args, out var guardScope) is JsonNode guardScopeError)
             return guardScopeError;
-        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        var guardWindow = ReadOptionalIntArgument(args, "guardWindow") ?? DbReader.DefaultSearchGuardWindow;
         if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
             return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
         var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exact, prefix);
@@ -1950,7 +1955,7 @@ public partial class McpServer
             return guardError;
         if (TryReadSearchGuardScope(id, args, out var guardScope) is JsonNode guardScopeError)
             return guardScopeError;
-        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        var guardWindow = ReadOptionalIntArgument(args, "guardWindow") ?? DbReader.DefaultSearchGuardWindow;
         if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
             return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
 
@@ -3060,7 +3065,7 @@ public partial class McpServer
     private JsonNode ExecuteStatus(JsonNode? id, JsonNode? args)
     {
         var checkWorkspace = args?["check"]?.GetValue<bool>() ?? false;
-        var staleAfterSeconds = args?["staleAfterSeconds"]?.GetValue<int>() ?? (int)TimeSpan.FromDays(1).TotalSeconds;
+        var staleAfterSeconds = ReadOptionalIntArgument(args, "staleAfterSeconds") ?? (int)TimeSpan.FromDays(1).TotalSeconds;
         if (staleAfterSeconds <= 0)
             return CreateToolErrorResponse(id, "staleAfterSeconds must be greater than or equal to 1");
         var explain = args?["explain"]?.GetValue<string>()?.Trim().ToLowerInvariant();
@@ -3495,7 +3500,10 @@ public partial class McpServer
             ["max_bytes"] = diagnostics.MaxBytes,
             ["bytes_written"] = diagnostics.BytesWritten,
             ["disposed"] = diagnostics.Disposed,
+            ["queue_capacity"] = diagnostics.QueueCapacity,
+            ["queue_depth"] = diagnostics.QueueDepth,
             ["dropped_record_count"] = diagnostics.DroppedRecordCount,
+            ["queue_full_drop_count"] = diagnostics.QueueFullDropCount,
             ["serialization_failure_count"] = diagnostics.SerializationFailureCount,
             ["write_failure_count"] = diagnostics.WriteFailureCount,
             ["rotation_failure_count"] = diagnostics.RotationFailureCount,
@@ -3582,28 +3590,28 @@ public partial class McpServer
         if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
-        var startLine = args?["startLine"]?.GetValue<int>();
+        var startLine = ReadOptionalIntArgument(args, "startLine");
         if (startLine == null || startLine <= 0)
             return CreateToolErrorResponse(id, "Missing or invalid required parameter: startLine");
 
-        var endLine = args?["endLine"]?.GetValue<int>() ?? startLine.Value;
+        var endLine = ReadOptionalIntArgument(args, "endLine") ?? startLine.Value;
         if (endLine < startLine.Value)
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
-        var beforeValue = args?["before"]?.GetValue<int>();
+        var beforeValue = ReadOptionalIntArgument(args, "before");
         if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, $"before must be in [0, {MaxContextLines}]");
         var before = ClampContextLines(beforeValue ?? 0);
 
-        var afterValue = args?["after"]?.GetValue<int>();
+        var afterValue = ReadOptionalIntArgument(args, "after");
         if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, $"after must be in [0, {MaxContextLines}]");
         var after = ClampContextLines(afterValue ?? 0);
         var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
 
-        var focusLine = args?["focusLine"]?.GetValue<int>();
-        var focusColumn = args?["focusColumn"]?.GetValue<int>();
-        var focusLengthValue = args?["focusLength"]?.GetValue<int>();
+        var focusLine = ReadOptionalIntArgument(args, "focusLine");
+        var focusColumn = ReadOptionalIntArgument(args, "focusColumn");
+        var focusLengthValue = ReadOptionalIntArgument(args, "focusLength");
         if (focusLengthValue.HasValue && focusLengthValue.Value <= 0)
             return CreateToolErrorResponse(id, "focusLength must be greater than or equal to 1");
         var focusLength = focusLengthValue ?? 1;
@@ -3699,7 +3707,11 @@ public partial class McpServer
         error = null;
         if (args?["maxOutputBytes"] is not JsonNode node)
             return true;
-        var requested = node.GetValue<int>();
+        if (node is not JsonValue value || !value.TryGetValue<int>(out var requested))
+        {
+            error = "maxOutputBytes must be an integer";
+            return false;
+        }
         if (requested <= 0)
         {
             error = "maxOutputBytes must be greater than or equal to 1";
@@ -3836,17 +3848,17 @@ public partial class McpServer
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var beforeValue = args?["before"]?.GetValue<int>();
+        var beforeValue = ReadOptionalIntArgument(args, "before");
         if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
         var before = ClampContextLines(beforeValue ?? 0);
 
-        var afterValue = args?["after"]?.GetValue<int>();
+        var afterValue = ReadOptionalIntArgument(args, "after");
         if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
         var after = ClampContextLines(afterValue ?? 0);
         var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
-        var snippetLinesValue = args?["snippetLines"]?.GetValue<int>();
+        var snippetLinesValue = ReadOptionalIntArgument(args, "snippetLines");
         if (snippetLinesValue.HasValue && (snippetLinesValue.Value <= 0 || snippetLinesValue.Value > SearchSnippetFormatter.MaxSnippetLines))
             return CreateToolErrorResponse(id, $"snippetLines must be in [1, {SearchSnippetFormatter.MaxSnippetLines}]");
         if (snippetLinesValue.HasValue)
@@ -3934,8 +3946,12 @@ public partial class McpServer
 
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
     {
-        var queries = args?["queries"]?.AsArray();
-        if (queries == null || queries.Count == 0)
+        var queriesNode = args?["queries"];
+        if (queriesNode is null)
+            return CreateToolErrorResponse(id, "Missing or empty required parameter: queries");
+        if (queriesNode is not JsonArray queries)
+            return CreateToolErrorResponse(id, "Invalid type for argument 'queries' on tool 'batch_query'. Expected array.");
+        if (queries.Count == 0)
             return CreateToolErrorResponse(id, "Missing or empty required parameter: queries");
 
         if (queries.Count > MaxBatchQuerySize)
@@ -4464,7 +4480,7 @@ public partial class McpServer
     private static int ReadBatchQueryResponseByteLimit(JsonNode? args, ArgumentAdjustmentCollector adjustments)
     {
         var serverLimit = GetBatchQueryResponseByteLimit();
-        var requested = args?["maxResponseBytes"]?.GetValue<int>();
+        var requested = ReadOptionalIntArgument(args, "maxResponseBytes");
         if (!requested.HasValue)
             return serverLimit;
         var effective = Math.Min(requested.Value, serverLimit);
@@ -4816,7 +4832,7 @@ public partial class McpServer
         var deprecatedMaxDepthNode = args?["maxDepth"];
         var usedDeprecatedMaxDepth = deprecatedMaxDepthNode != null;
         var adjustments = new ArgumentAdjustmentCollector();
-        var maxDepthRequested = maxHopsNode?.GetValue<int>() ?? deprecatedMaxDepthNode?.GetValue<int>() ?? 5;
+        var maxDepthRequested = ReadOptionalIntArgument(args, "maxHops") ?? ReadOptionalIntArgument(args, "maxDepth") ?? 5;
         var maxDepth = Math.Clamp(maxDepthRequested, 0, MaxImpactDepth);
         string? maxDepthClampWarning = null;
         string? maxDepthDeprecationWarning = null;
@@ -5601,12 +5617,12 @@ public partial class McpServer
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
         var dryRun = args?["dryRun"]?.GetValue<bool>() ?? args?["dry_run"]?.GetValue<bool>() ?? false;
         var memoryTrace = args?["memoryTrace"]?.GetValue<bool>() ?? false;
-        var requestedParallelism = args?["parallelism"]?.GetValue<int>();
-        var requestedDebounce = args?["debounce"]?.GetValue<int>();
-        var maxSymbolsPerFile = args?["maxSymbolsPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
+        var requestedParallelism = ReadOptionalIntArgument(args, "parallelism");
+        var requestedDebounce = ReadOptionalIntArgument(args, "debounce");
+        var maxSymbolsPerFile = ReadOptionalIntArgument(args, "maxSymbolsPerFile") ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
         if (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit)
             return CreateToolErrorResponse(id, $"maxSymbolsPerFile must be between 1 and {IndexCommandRunner.MaxSymbolsPerFileLimit}");
-        var maxReferencesPerFile = args?["maxReferencesPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxReferencesPerFile;
+        var maxReferencesPerFile = ReadOptionalIntArgument(args, "maxReferencesPerFile") ?? IndexCommandRunner.DefaultMaxReferencesPerFile;
         if (maxReferencesPerFile <= 0 || maxReferencesPerFile > IndexCommandRunner.MaxReferencesPerFileLimit)
             return CreateToolErrorResponse(id, $"maxReferencesPerFile must be between 1 and {IndexCommandRunner.MaxReferencesPerFileLimit}");
         if (!TryReadMcpIndexSymlinkPolicy(args, out var symlinkPolicy, out var symlinkPolicyError))
@@ -7382,9 +7398,7 @@ public partial class McpServer
         var createdProbe = false;
         try
         {
-            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-            }
+            FileWriteProbe.WriteEmptyFile(probePath);
             createdProbe = true;
             error = null;
             return true;

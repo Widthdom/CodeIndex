@@ -48,6 +48,18 @@ internal static class PathCasing
         return string.Equals(left, right, ComparisonFor(anchor));
     }
 
+    public static string NormalizeBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    public static bool IsFullPathEqualOrParent(string parent, string child)
+        => IsPathEqualOrParent(NormalizeBoundaryPath(parent), NormalizeBoundaryPath(child));
+
     /// <summary>
     /// Return true when <paramref name="normalizedChild"/> is the same path as
     /// <paramref name="normalizedParent"/> or a descendant of it, using the
@@ -62,6 +74,8 @@ internal static class PathCasing
             return true;
 
         var trimmedParent = normalizedParent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (trimmedParent.Length == 0)
+            return Path.IsPathFullyQualified(normalizedChild);
         return normalizedChild.StartsWith(trimmedParent + Path.DirectorySeparatorChar, comparison)
             || normalizedChild.StartsWith(trimmedParent + Path.AltDirectorySeparatorChar, comparison);
     }
@@ -77,7 +91,15 @@ internal static class PathCasing
     {
         if (string.IsNullOrEmpty(workspaceRoot))
             return;
-        var anchor = ResolveAnchor(workspaceRoot);
+        SeedFromReferencePath(workspaceRoot, ignoreCase);
+        SeedFromReferencePath(Path.Combine(workspaceRoot, CaseSensitivityProbeDirectory.DataDirectoryName), ignoreCase);
+    }
+
+    public static void SeedFromReferencePath(string referencePath, bool ignoreCase)
+    {
+        if (string.IsNullOrEmpty(referencePath))
+            return;
+        var anchor = ResolveAnchor(referencePath);
         _ignoreCaseByAnchor[anchor] = ignoreCase;
     }
 

@@ -39,6 +39,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const int DefaultMaxEventStreams = 16;
     internal const int MaxConfiguredEventStreams = 1024;
     internal const int MaxRequestLogFieldCharacters = 256;
+    internal const int DefaultRequestLogQueueCapacity = 1024;
+    internal const int MaxConfiguredRequestLogQueueCapacity = 16 * 1024;
     internal const int MaxHealthJsonBytes = 64 * 1024;
     internal const int MaxSseEventFrameBytes = 64 * 1024;
     internal const string RequestLogTruncationMarker = "...<truncated>";
@@ -63,7 +65,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
-    private readonly object _requestLoggerGate = new();
+    private readonly int _requestLogQueueCapacity;
+    private readonly Channel<HttpRequestLogRecord>? _requestLogQueue;
+    private readonly Task? _requestLogTask;
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue;
@@ -84,7 +88,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly byte[]? _bearerTokenHash;
     private PendingRequest? _pendingRequest;
     private int _queuedRequestCount;
+    private int _pendingRequestLogCount;
     private int _eventStreamCount;
+    private long _requestLogDroppedCount;
+    private long _requestLogQueueFullDropCount;
+    private long _requestLogCallbackFailureCount;
     private long _responseAbortCleanupFailureCount;
     private long _responseCloseCleanupFailureCount;
     private long _concurrentHandlerLimitRejectionCount;
@@ -92,6 +100,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private long _eventStreamLimitRejectionCount;
     private string? _lastResponseAbortCleanupFailure;
     private string? _lastResponseCloseCleanupFailure;
+    private string? _lastRequestLogDropReason;
     private bool _disposed;
 
     /// <summary>
@@ -113,7 +122,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         int? maxResponseBodyBytes = null,
         int? maxQueuedRequests = null,
         int? maxConcurrentHandlers = null,
-        int? maxEventStreams = null)
+        int? maxEventStreams = null,
+        int? requestLogQueueCapacity = null)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(
             maxRequestBodyBytes,
@@ -150,6 +160,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             DefaultMaxEventStreams,
             MaxConfiguredEventStreams,
             "HTTP MCP event stream limit");
+        _requestLogQueueCapacity = ResolveRequestLogQueueCapacity(requestLogQueueCapacity);
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
             SingleReader = true,
@@ -173,6 +184,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         _listener.Prefixes.Add(prefix);
         _listener.Start();
         _requestLogger = requestLogger;
+        if (_requestLogger is not null)
+        {
+            _requestLogQueue = Channel.CreateBounded<HttpRequestLogRecord>(new BoundedChannelOptions(_requestLogQueueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait,
+                AllowSynchronousContinuations = false,
+            });
+            _requestLogTask = BackgroundTaskObserver.Run(DrainRequestLogQueueAsync, "cdidx-mcp-http", "request log writer");
+        }
         _endpoint = $"http://{host}:{boundPort}/";
         _acceptLoop = BackgroundTaskObserver.Run(
             token => AcceptLoopAsync(token),
@@ -213,9 +235,19 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal int MaxEventStreams => _maxEventStreams;
 
+    internal int RequestLogQueueCapacity => _requestLogQueue is null ? 0 : _requestLogQueueCapacity;
+
     internal int QueuedRequestCount => Volatile.Read(ref _queuedRequestCount);
 
+    internal int RequestLogQueueDepth => _requestLogQueue is null ? 0 : Math.Max(0, Volatile.Read(ref _pendingRequestLogCount));
+
     internal int EventStreamCount => Volatile.Read(ref _eventStreamCount);
+
+    internal long RequestLogDroppedCount => Interlocked.Read(ref _requestLogDroppedCount);
+
+    internal long RequestLogQueueFullDropCount => Interlocked.Read(ref _requestLogQueueFullDropCount);
+
+    internal long RequestLogCallbackFailureCount => Interlocked.Read(ref _requestLogCallbackFailureCount);
 
     internal long ResponseAbortCleanupFailureCount => Interlocked.Read(ref _responseAbortCleanupFailureCount);
 
@@ -228,6 +260,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal long EventStreamLimitRejectionCount => Interlocked.Read(ref _eventStreamLimitRejectionCount);
 
     internal bool ResponseCleanupDegraded => ResponseAbortCleanupFailureCount > 0 || ResponseCloseCleanupFailureCount > 0;
+
+    internal bool RequestLogDegraded => RequestLogDroppedCount > 0;
+
+    internal string? LastRequestLogDropReason => Volatile.Read(ref _lastRequestLogDropReason);
 
     internal string? LastResponseAbortCleanupFailure => Volatile.Read(ref _lastResponseAbortCleanupFailure);
 
@@ -376,6 +412,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
 
         return defaultValue;
+    }
+
+    private static int ResolveRequestLogQueueCapacity(int? explicitValue)
+    {
+        var capacity = explicitValue ?? DefaultRequestLogQueueCapacity;
+        if (capacity <= 0 || capacity > MaxConfiguredRequestLogQueueCapacity)
+            throw new ArgumentOutOfRangeException(
+                nameof(explicitValue),
+                capacity,
+                $"HTTP MCP request log queue depth must be between 1 and {MaxConfiguredRequestLogQueueCapacity.ToString(CultureInfo.InvariantCulture)}.");
+        return capacity;
     }
 
     public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
@@ -1150,6 +1197,20 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         if (acceptLoopCompleted)
             _acceptCts.Dispose();
+        if (_requestLogQueue is not null)
+        {
+            _requestLogQueue.Writer.TryComplete();
+            try
+            {
+                if (_requestLogTask is not null)
+                    await _requestLogTask.WaitAsync(DisposeAcceptLoopTimeout).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Request logging is best-effort; shutdown must not wait indefinitely.
+                // request log は best-effort。shutdown を無期限に待たせない。
+            }
+        }
     }
 
     private void MarkRejected(PendingRequest request, string reason)
@@ -1202,32 +1263,70 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private void LogRequest(PendingRequest request, int statusCode)
     {
-        if (_requestLogger is null || request.Logged)
+        if (_requestLogger is null || _requestLogQueue is null || request.Logged)
             return;
 
         request.Logged = true;
-        try
+        var record = new HttpRequestLogRecord(
+            request.CorrelationId,
+            request.RequestId,
+            request.RemotePeer,
+            request.Method,
+            request.Path,
+            statusCode,
+            request.Elapsed.TotalMilliseconds,
+            request.AuthOutcome,
+            request.RejectionReason,
+            request.Diagnostic);
+        Interlocked.Increment(ref _pendingRequestLogCount);
+        if (_requestLogQueue.Writer.TryWrite(record))
+            return;
+
+        Interlocked.Decrement(ref _pendingRequestLogCount);
+        if (!_disposed)
+            RecordRequestLogDrop("queue_full", null);
+    }
+
+    private async Task DrainRequestLogQueueAsync()
+    {
+        if (_requestLogger is null || _requestLogQueue is null)
+            return;
+
+        await foreach (var record in _requestLogQueue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
-            var record = new HttpRequestLogRecord(
-                    request.CorrelationId,
-                    request.RequestId,
-                    request.RemotePeer,
-                    request.Method,
-                    request.Path,
-                    statusCode,
-                    request.Elapsed.TotalMilliseconds,
-                    request.AuthOutcome,
-                    request.RejectionReason,
-                    request.Diagnostic);
-            lock (_requestLoggerGate)
+            try
             {
                 _requestLogger(record);
             }
+            catch (Exception ex)
+            {
+                RecordRequestLogDrop("callback_failure", ex);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _pendingRequestLogCount);
+            }
         }
-        catch
+    }
+
+    private void RecordRequestLogDrop(string reason, Exception? exception)
+    {
+        Interlocked.Increment(ref _requestLogDroppedCount);
+        switch (reason)
         {
-            // Logging is best-effort and must not affect the HTTP wire path.
+            case "queue_full":
+                Interlocked.Increment(ref _requestLogQueueFullDropCount);
+                break;
+            case "callback_failure":
+                Interlocked.Increment(ref _requestLogCallbackFailureCount);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(reason), reason, "Expected queue_full or callback_failure.");
         }
+
+        var category = exception is null ? "resource" : DiagnosticRedactor.ClassifyException(exception);
+        var exceptionType = exception?.GetType().Name ?? "RequestLogQueueFull";
+        Volatile.Write(ref _lastRequestLogDropReason, $"{reason}:{category}:{exceptionType}");
     }
 
     private static string? TryExtractJsonRpcId(string body)

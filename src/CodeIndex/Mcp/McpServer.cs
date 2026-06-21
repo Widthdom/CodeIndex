@@ -599,6 +599,7 @@ public partial class McpServer : IDisposable
 
         while (_running)
         {
+            PruneCompletedRequestTasks(tasks);
             string? frame;
             try
             {
@@ -745,6 +746,38 @@ public partial class McpServer : IDisposable
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    internal static int PruneCompletedRequestTasks(List<Task> tasks)
+    {
+        var removed = 0;
+        for (var i = tasks.Count - 1; i >= 0; i--)
+        {
+            var task = tasks[i];
+            if (!task.IsCompleted)
+                continue;
+
+            ObserveCompletedRequestTask(task);
+            tasks.RemoveAt(i);
+            removed++;
+        }
+
+        return removed;
+    }
+
+    private static void ObserveCompletedRequestTask(Task task)
+    {
+        if (!task.IsFaulted)
+            return;
+
+        try
+        {
+            task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended before EOF drain ({ex.GetType().Name}).");
+        }
     }
 
     internal async Task DrainInFlightTasksAsync(
@@ -955,6 +988,8 @@ public partial class McpServer : IDisposable
     /// sync-over-async blocking を避けるため <see cref="ProcessFrameAsync"/> を await する (#3770)。
     /// </summary>
     internal string? ProcessFrame(string line)
+        // Synchronous callers are compatibility entry points for tests and non-async hosts;
+        // transport loops use ProcessFrameAsync directly so request handling stays async.
         => ProcessFrameAsync(line).GetAwaiter().GetResult();
 
     internal async Task<string?> ProcessFrameAsync(string line)
@@ -1333,6 +1368,8 @@ public partial class McpServer : IDisposable
     /// <see cref="HandleMessageAsync(JsonNode)"/> を優先する (#3770)。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
+        // Keep this sync wrapper for existing in-process callers; async transports call
+        // HandleMessageAsync so server loops do not need a sync-over-async bridge.
         => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
 
     internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
@@ -1508,11 +1545,12 @@ public partial class McpServer : IDisposable
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
         var httpResponseCleanupDegraded = httpTransport?.ResponseCleanupDegraded ?? false;
+        var httpRequestLogDegraded = httpTransport?.RequestLogDegraded ?? false;
         var auditLogDiagnostics = _auditLog?.SnapshotDiagnostics();
         var auditLogDegraded = IsAuditLogDegraded(auditLogDiagnostics);
         var result = new JsonObject
         {
-            ["status"] = dbOpen && !httpResponseCleanupDegraded && !auditLogDegraded ? "ok" : "degraded",
+            ["status"] = dbOpen && !httpResponseCleanupDegraded && !httpRequestLogDegraded && !auditLogDegraded ? "ok" : "degraded",
             ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
             ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["db_open"] = dbOpen,
@@ -1526,6 +1564,14 @@ public partial class McpServer : IDisposable
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
             result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
             result["http_request_queue_limit"] = httpTransport.MaxQueuedRequests;
+            result["http_request_log_queue_depth"] = httpTransport.RequestLogQueueDepth;
+            result["http_request_log_queue_capacity"] = httpTransport.RequestLogQueueCapacity;
+            result["http_request_log_dropped_count"] = httpTransport.RequestLogDroppedCount;
+            result["http_request_log_queue_full_drop_count"] = httpTransport.RequestLogQueueFullDropCount;
+            result["http_request_log_callback_failure_count"] = httpTransport.RequestLogCallbackFailureCount;
+            result["http_request_log_degraded"] = httpRequestLogDegraded;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastRequestLogDropReason))
+                result["http_request_log_last_drop_reason"] = httpTransport.LastRequestLogDropReason;
             result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
             result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
             result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;

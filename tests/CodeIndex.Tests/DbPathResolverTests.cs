@@ -492,6 +492,39 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ResolveProjectRootForQuery_StampedProjectLocalReadOnlyUriAvoidsPathCasingProbe_Issue3828()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_case_stamp");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+                writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
+            }
+
+            PathCasing.ResetCacheForTests();
+            PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("path casing probe should not run");
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
+
+            Assert.Equal(projectRoot, resolved);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_ProjectLocalDbPrefersCdidxSiblingOverStoredMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local");

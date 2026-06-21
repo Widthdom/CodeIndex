@@ -137,11 +137,75 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
-    public void WorktreeWithoutCommonDir_FallsBackToWorktreeGitDir()
+    public void WorktreeWithMissingGitDirTarget_ReturnsNull_Issue3813()
     {
-        // Arrange: worktree git dir exists but has no commondir file / commondirファイルがない場合のフォールバック
-        var worktreeGitDir = Path.Combine(_tempDir, "fake-git-dir");
+        var projectRoot = Path.Combine(_tempDir, "project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, ".git"), $"gitdir: {Path.Combine(_tempDir, "missing-git-dir")}");
+
+        var result = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void WorktreeWithEscapingCommonDir_ReturnsNull_Issue3813()
+    {
+        var mainGitDir = Path.Combine(_tempDir, "main_repo", ".git");
+        var worktreeGitDir = Path.Combine(mainGitDir, "worktrees", "escaping");
+        var outside = Path.Combine(_tempDir, "outside");
         Directory.CreateDirectory(worktreeGitDir);
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(worktreeGitDir, "commondir"), Path.GetRelativePath(worktreeGitDir, outside));
+
+        var projectRoot = Path.Combine(_tempDir, "project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, ".git"), $"gitdir: {worktreeGitDir}");
+
+        var result = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void WorktreeWithDirectoryCommonDir_ReturnsNull_Issue3813()
+    {
+        var worktreeGitDir = Path.Combine(_tempDir, "fake-git-dir");
+        Directory.CreateDirectory(Path.Combine(worktreeGitDir, "commondir"));
+
+        var projectRoot = Path.Combine(_tempDir, "project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, ".git"), $"gitdir: {worktreeGitDir}");
+
+        var result = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void WorktreeWithExistingUnshapedGitDirTarget_ReturnsNull_Issue3813()
+    {
+        var unshapedGitDir = Path.Combine(_tempDir, "writable-target");
+        Directory.CreateDirectory(unshapedGitDir);
+
+        var projectRoot = Path.Combine(_tempDir, "project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, ".git"), $"gitdir: {unshapedGitDir}");
+
+        var result = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void WorktreeWithoutCommonDirAndValidGitDirShape_FallsBackToWorktreeGitDir()
+    {
+        // Arrange: gitdir exists without commondir but has a real git-dir shape.
+        // commondir はないが、実際の git-dir 形状を持つ場合のフォールバック。
+        var worktreeGitDir = Path.Combine(_tempDir, "fake-git-dir");
+        Directory.CreateDirectory(Path.Combine(worktreeGitDir, "objects"));
+        Directory.CreateDirectory(Path.Combine(worktreeGitDir, "refs"));
+        File.WriteAllText(Path.Combine(worktreeGitDir, "HEAD"), "ref: refs/heads/main\n");
 
         var projectRoot = Path.Combine(_tempDir, "project");
         Directory.CreateDirectory(projectRoot);

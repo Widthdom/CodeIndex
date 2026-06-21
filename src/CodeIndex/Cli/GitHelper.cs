@@ -225,6 +225,9 @@ public static class GitHelper
                 : null;
         }
 
+        if (!IsRegularGitMetadataFile(ioDotGit))
+            return null;
+
         var gitFileContent = DataDirectorySecurity.ReadTextWithinLimit(ioDotGit, MaxGitMetadataFileBytes);
         if (gitFileContent is null)
             return null;
@@ -232,25 +235,112 @@ public static class GitHelper
         gitFileContent = gitFileContent.Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
 
-        var worktreeGitDir = gitFileContent["gitdir:".Length..].Trim();
-        if (!Path.IsPathRooted(worktreeGitDir))
-            worktreeGitDir = Path.GetFullPath(Path.Combine(projectRoot, worktreeGitDir));
+        var worktreeGitDirValue = gitFileContent["gitdir:".Length..].Trim();
+        if (!TryResolveGitMetadataPath(projectRoot, worktreeGitDirValue, out var worktreeGitDir))
+            return null;
+        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(worktreeGitDir)))
+            return null;
 
         // Read commondir to find the shared .git directory / commondirを読んで共有.gitディレクトリを見つける
         var commonDirFile = Path.Combine(worktreeGitDir, "commondir");
         var ioCommonDirFile = LongPath.EnsureWindowsPrefix(commonDirFile);
-        if (File.Exists(ioCommonDirFile))
+        if (GitMetadataPathExists(ioCommonDirFile))
         {
+            if (!IsRegularGitMetadataFile(ioCommonDirFile))
+                return null;
+
             var commonDirRelative = DataDirectorySecurity.ReadTextWithinLimit(ioCommonDirFile, MaxGitMetadataFileBytes);
             if (commonDirRelative is null)
                 return null;
 
             commonDirRelative = commonDirRelative.Trim();
-            return Path.GetFullPath(Path.Combine(worktreeGitDir, commonDirRelative));
+            if (!TryResolveGitMetadataPath(worktreeGitDir, commonDirRelative, out var commonDir))
+                return null;
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(commonDir)))
+                return null;
+            if (PathCasing.PathsEqual(commonDir, worktreeGitDir)
+                || !PathCasing.IsPathEqualOrParent(commonDir, worktreeGitDir))
+                return null;
+            return commonDir;
         }
 
-        // Fallback: use worktreeGitDir itself (e.g. submodules) / フォールバック: worktreeGitDir自体を使用
+        // Fallback only for a real git-dir shape (e.g. submodules), not any directory.
+        // 任意のディレクトリではなく、実際の git-dir 形状（例: submodule）の場合だけフォールバックする。
+        if (!IsValidGitDirectoryShape(worktreeGitDir))
+            return null;
         return worktreeGitDir;
+    }
+
+    private static bool GitMetadataPathExists(string path)
+        => File.Exists(path) || Directory.Exists(path);
+
+    private static bool TryResolveGitMetadataPath(string baseDirectory, string value, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        try
+        {
+            var fullPath = Path.IsPathRooted(value)
+                ? Path.GetFullPath(value)
+                : Path.GetFullPath(Path.Combine(baseDirectory, value));
+            resolvedPath = PathCasing.NormalizeBoundaryPath(fullPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRegularGitMetadataFile(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            return (attributes & FileAttributes.Directory) == 0
+                   && (attributes & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsValidGitDirectoryShape(string gitDir)
+    {
+        try
+        {
+            var ioGitDir = LongPath.EnsureWindowsPrefix(gitDir);
+            if (!Directory.Exists(ioGitDir))
+                return false;
+
+            var headPath = LongPath.EnsureWindowsPrefix(Path.Combine(gitDir, "HEAD"));
+            if (!IsRegularGitMetadataFile(headPath))
+                return false;
+
+            return IsGitMetadataDirectory(Path.Combine(gitDir, "objects"))
+                   && IsGitMetadataDirectory(Path.Combine(gitDir, "refs"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsGitMetadataDirectory(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
+            return (attributes & FileAttributes.Directory) != 0
+                   && (attributes & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
