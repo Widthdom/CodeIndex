@@ -7398,9 +7398,7 @@ public partial class McpServer
         var createdProbe = false;
         try
         {
-            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-            }
+            FileWriteProbe.WriteEmptyFile(probePath);
             createdProbe = true;
             error = null;
             return true;

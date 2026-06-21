@@ -503,6 +503,36 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void ActiveWorkspaceEnvironment_RelativeDbPath_DoesNotOverrideQueryResolution_Issue3825()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_env_relative_project");
+        const string RelativeDbPath = "relative_active_workspace_SENTINEL_3825.db";
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, RelativeDbPath);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
+            Assert.Contains("value must be an absolute database path", stderr);
+            Assert.DoesNotContain(RelativeDbPath, stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void MalformedActiveWorkspaceState_DoesNotOverrideQueryResolution()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_malformed_project");
@@ -528,6 +558,85 @@ public class WorkspaceCommandRunnerTests
             Assert.DoesNotContain(ActiveWorkspace.StatePath, stderr);
             Assert.DoesNotContain("LineNumber", stderr);
             Assert.Contains("invalid JSON", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ActiveWorkspaceState_ControlCharacterName_DoesNotOverrideQueryResolution_Issue3825()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_bad_name_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_bad_name_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
+                {
+                  "name": "bad\nname",
+                  "root": {{JsonSerializer.Serialize(projectRoot)}},
+                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+                }
+                """);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.Contains("`name` must not contain control characters", stderr);
+            Assert.DoesNotContain("bad", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ActiveWorkspaceState_OversizedName_DoesNotOverrideQueryResolution_Issue3825()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_long_name_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_long_name_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
+                {
+                  "name": {{JsonSerializer.Serialize(new string('n', ActiveWorkspace.MaxWorkspaceNameChars + 1))}},
+                  "root": {{JsonSerializer.Serialize(projectRoot)}},
+                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+                }
+                """);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.Contains($"`name` exceeds {ActiveWorkspace.MaxWorkspaceNameChars} characters", stderr);
             Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
         }
@@ -920,6 +1029,91 @@ public class WorkspaceCommandRunnerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifest_EscapingMemberDiagnosticDoesNotLeakMemberPath_Issue3805()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_escape");
+        const string SentinelMember = "../SECRET_MEMBER_SENTINEL_3805";
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(SentinelMember)}}] }""");
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path escapes the manifest root", ex.Message);
+            Assert.DoesNotContain(SentinelMember, ex.Message);
+            Assert.DoesNotContain("SECRET_MEMBER_SENTINEL_3805", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifest_LongMemberPathDiagnosticDoesNotLeakMemberValue_Issue3805()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_long_member");
+        try
+        {
+            var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1) + "TAIL_SENTINEL_3805";
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(longMember)}}] }""");
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"exceeds the {WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
+            Assert.DoesNotContain("TAIL_SENTINEL_3805", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUse_CaseSensitiveMemberSelectionDistinguishesCaseOnlyBasenames_Issue3805()
+    {
+        PathCasing.ResetCacheForTests();
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive_config");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "App"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "app"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "src/app"] }""");
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            PathCasing.SeedFromWorkspace(root, ignoreCase: false);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                var state = ActiveWorkspace.Load();
+                Assert.NotNull(state);
+                Assert.Equal("App", state.Name);
+                Assert.Equal(Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "src", "App")), state.Root);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(root);
             TestProjectHelper.DeleteDirectory(configHome);
         }

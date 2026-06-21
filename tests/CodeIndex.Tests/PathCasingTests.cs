@@ -167,6 +167,52 @@ public class PathCasingTests
     }
 
     [Fact]
+    public void NormalizeBoundaryPath_TrimsTrailingSeparatorsButKeepsRoot_Issue3682()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_pathcasing_normalize_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var withSeparator = tempDir + Path.DirectorySeparatorChar;
+
+            Assert.Equal(Path.GetFullPath(tempDir), PathCasing.NormalizeBoundaryPath(withSeparator));
+
+            var root = Path.GetPathRoot(Path.GetFullPath(tempDir));
+            Assert.False(string.IsNullOrEmpty(root));
+            Assert.Equal(root, PathCasing.NormalizeBoundaryPath(root!));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsFullPathEqualOrParent_UsesSeededCaseSensitivity_Issue3682()
+    {
+        PathCasing.ResetCacheForTests();
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_pathcasing_full_parent_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var parent = Path.Combine(tempDir, "Project") + Path.DirectorySeparatorChar;
+            var child = Path.Combine(tempDir, "project", "src", "App.cs");
+
+            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
+            Assert.False(PathCasing.IsFullPathEqualOrParent(parent, child));
+
+            PathCasing.ResetCacheForTests();
+            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
+            Assert.True(PathCasing.IsFullPathEqualOrParent(parent, child));
+        }
+        finally
+        {
+            PathCasing.ResetCacheForTests();
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void PathsEqual_NullEitherSide_IsFalse()
     {
         Assert.False(PathCasing.PathsEqual(null, "/tmp"));

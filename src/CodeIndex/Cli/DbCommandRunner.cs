@@ -1551,8 +1551,8 @@ public static class DbCommandRunner
         failureReason = string.Empty;
         try
         {
-            fullPath = NormalizeBoundaryPath(Path.GetFullPath(path));
-            var normalizedRoot = NormalizeBoundaryPath(Path.GetFullPath(safeRoot));
+            fullPath = PathCasing.NormalizeBoundaryPath(path);
+            var normalizedRoot = PathCasing.NormalizeBoundaryPath(safeRoot);
             if (string.Equals(fullPath, normalizedRoot, PathCasing.ComparisonFor(normalizedRoot))
                 || !PathCasing.IsPathEqualOrParent(normalizedRoot, fullPath))
             {
@@ -1589,15 +1589,6 @@ public static class DbCommandRunner
             failureReason = "target path is invalid";
             return false;
         }
-    }
-
-    private static string NormalizeBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)
