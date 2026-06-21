@@ -4876,7 +4876,7 @@ public class FileIndexerTests
             var loaded = loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
 
             Assert.Equal("a\nb\n", loaded.Content);
-            Assert.Equal(FileIndexer.CountPhysicalLines(loaded.Content), loaded.LineCount);
+            Assert.Equal(2, loaded.LineCount);
             Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(loaded.Content)), loaded.Checksum);
             Assert.Null(loaded.Warning);
         }
@@ -4884,6 +4884,24 @@ public class FileIndexerTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
+    }
+
+    [Theory]
+    [InlineData("", "", 0)]
+    [InlineData("a\nb\n", "a\nb\n", 2)]
+    [InlineData("\n\n", "\n\n", 2)]
+    [InlineData("a\r\n\uFEFFb\rc", "a\nb\nc", 3)]
+    [InlineData("\uFEFF\u200B", "", 0)]
+    [InlineData("a\n\uFEFF\u200Bb", "a\nb", 2)]
+    public void FileContentLoader_NormalizeForIndexing_NormalizesContentAndCountsLines(
+        string content,
+        string expectedContent,
+        int expectedLineCount)
+    {
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
+
+        Assert.Equal(expectedContent, normalized.Content);
+        Assert.Equal(expectedLineCount, normalized.LineCount);
     }
 
     [Fact]

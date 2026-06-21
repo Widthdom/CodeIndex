@@ -8,6 +8,8 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     private const int GitLfsPointerMaxBytes = 1024;
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
 
+    internal readonly record struct NormalizedIndexableContent(string Content, int LineCount);
+
     internal LoadedFileContent Load(
         string absolutePath,
         string normalizedRelativePath,
@@ -18,22 +20,28 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             absolutePath,
             normalizedRelativePath,
             cancellationToken);
+        if (IsGitLfsPointer(bytes))
+        {
+            return new LoadedFileContent(
+                string.Empty,
+                bytes,
+                sizeBytes,
+                modifiedUtc,
+                0,
+                ComputeChecksum(bytes),
+                null);
+        }
+
         var (content, warning) = DecodeIndexableContent(bytes, relativePath);
-        content = NormalizeLineEndings(content);
-        content = StripLineLeadingInvisibles(content);
-        var isGitLfsPointer = IsGitLfsPointer(bytes);
-        if (isGitLfsPointer)
-            content = string.Empty;
-        var checksum = isGitLfsPointer
-            ? ComputeChecksum(bytes)
-            : ComputeChecksumFromNormalizedContent(content);
+        var normalized = NormalizeForIndexing(content);
+        var checksum = ComputeChecksumFromNormalizedContent(normalized.Content);
 
         return new LoadedFileContent(
-            content,
+            normalized.Content,
             bytes,
             sizeBytes,
             modifiedUtc,
-            FileIndexer.CountPhysicalLines(content),
+            normalized.LineCount,
             checksum,
             warning);
     }
@@ -219,6 +227,60 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     }
 
     private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
+
+    internal static NormalizedIndexableContent NormalizeForIndexing(string content)
+    {
+        if (content.Length == 0)
+            return new NormalizedIndexableContent(content, 0);
+
+        StringBuilder? builder = null;
+        var outputLength = 0;
+        var lineCount = 0;
+        var previousOutputWasLineBreak = false;
+        var atLineStart = true;
+
+        StringBuilder EnsureBuilder(int sourceIndex)
+        {
+            builder ??= new StringBuilder(content.Length).Append(content, 0, sourceIndex);
+            return builder;
+        }
+
+        void CountOutputChar(char c)
+        {
+            if (outputLength == 0)
+                lineCount = 1;
+            else if (previousOutputWasLineBreak)
+                lineCount++;
+
+            outputLength++;
+            previousOutputWasLineBreak = c == '\n';
+            atLineStart = c == '\n';
+        }
+
+        for (var i = 0; i < content.Length; i++)
+        {
+            var c = content[i];
+            if (IsLineLeadingInvisible(c) && atLineStart)
+            {
+                EnsureBuilder(i);
+                continue;
+            }
+
+            if (c == '\r')
+            {
+                EnsureBuilder(i).Append('\n');
+                CountOutputChar('\n');
+                if (i + 1 < content.Length && content[i + 1] == '\n')
+                    i++;
+                continue;
+            }
+
+            builder?.Append(c);
+            CountOutputChar(c);
+        }
+
+        return new NormalizedIndexableContent(builder?.ToString() ?? content, lineCount);
+    }
 
     internal static bool IsGitLfsPointer(byte[] rawBytes)
     {
