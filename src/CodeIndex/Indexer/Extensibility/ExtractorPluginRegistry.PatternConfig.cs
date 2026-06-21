@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Diagnostics;
 using Microsoft.Win32.SafeHandles;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -89,7 +90,7 @@ public static partial class ExtractorPluginRegistry
 
                             if (value.Length > MaxPatternRegexLength)
                             {
-                                ReportPatternConfigRejected(path, $"regex for kind '{pendingKind}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
+                                ReportPatternConfigRejected(path, $"regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
                                 return;
                             }
 
@@ -99,9 +100,9 @@ public static partial class ExtractorPluginRegistry
                             Regex regex;
                             try
                             {
-                                regex = new Regex(
+                                regex = Regex.CreateExtractionRegex(
                                     value,
-                                    RegexOptions.Compiled | RegexOptions.CultureInvariant,
+                                    RegexOptions.Compiled,
                                     PatternRegexTimeout);
                             }
                             catch (ArgumentException)
@@ -112,7 +113,8 @@ public static partial class ExtractorPluginRegistry
 
                             patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
                                 pendingKind,
-                                regex));
+                                regex,
+                                path));
                             pendingKind = null;
                         }
                     }

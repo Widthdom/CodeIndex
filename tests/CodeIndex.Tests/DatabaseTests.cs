@@ -509,86 +509,7 @@ public class DatabaseTests : IDisposable
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_kind_check_{Guid.NewGuid():N}.db");
         try
         {
-            var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
-            using (var conn = new SqliteConnection(builder.ConnectionString))
-            {
-                conn.Open();
-                ExecuteNonQuery(conn, """
-                    CREATE TABLE files (
-                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                        path        TEXT NOT NULL UNIQUE,
-                        lang        TEXT,
-                        size        INTEGER,
-                        lines       INTEGER,
-                        checksum    TEXT,
-                        modified    DATETIME,
-                        generated   INTEGER NOT NULL DEFAULT 0,
-                        indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """);
-                ExecuteNonQuery(conn, """
-                    CREATE TABLE chunks (
-                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                        file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                        chunk_index INTEGER NOT NULL,
-                        start_line  INTEGER,
-                        end_line    INTEGER,
-                        content     TEXT,
-                        UNIQUE(file_id, chunk_index)
-                    )
-                    """);
-                ExecuteNonQuery(conn, """
-                    CREATE TABLE reference_lines (
-                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                        file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                        line        INTEGER NOT NULL,
-                        context     TEXT NOT NULL,
-                        UNIQUE(file_id, line, context)
-                    )
-                    """);
-                ExecuteNonQuery(conn, """
-                    CREATE TABLE symbols (
-                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                        file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                        kind            TEXT CHECK (kind IN ('class','function','module')),
-                        sub_kind        TEXT,
-                        name            TEXT,
-                        line            INTEGER,
-                        start_line      INTEGER,
-                        start_column    INTEGER,
-                        end_line        INTEGER,
-                        body_start_line INTEGER,
-                        body_end_line   INTEGER,
-                        signature       TEXT,
-                        container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ('class','function','module')),
-                        container_name  TEXT,
-                        container_qualified_name TEXT,
-                        family_key      TEXT,
-                        visibility      TEXT,
-                        return_type     TEXT,
-                        is_metadata_target INTEGER,
-                        name_folded     TEXT
-                    )
-                    """);
-                ExecuteNonQuery(conn, """
-                    CREATE TABLE symbol_references (
-                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                        file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                        symbol_name     TEXT,
-                        reference_kind  TEXT CHECK (reference_kind IN ('call','type_reference')),
-                        line            INTEGER,
-                        column_number   INTEGER,
-                        context         TEXT,
-                        reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
-                        container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ('class','function','module')),
-                        container_name  TEXT,
-                        symbol_name_folded TEXT,
-                        container_name_folded TEXT,
-                        is_self_reference INTEGER NOT NULL DEFAULT 0,
-                        is_mutual_recursion INTEGER NOT NULL DEFAULT 0
-                    )
-                    """);
-            }
+            SeedLegacyKindCheckSchema(dbPath);
 
             using var db = new DbContext(dbPath);
             db.InitializeSchema();
@@ -633,6 +554,41 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void InitializeSchema_ForeignKeyCheckDetectsRebuildViolations_Issue3717()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fk_check_{Guid.NewGuid():N}.db");
+        try
+        {
+            SeedLegacyKindCheckSchema(dbPath);
+            DbContext.ForeignKeyValidationBeforeCheckForTesting = (connection, phase) =>
+            {
+                if (!string.Equals(phase, "kind_check_constraints", StringComparison.Ordinal))
+                    return;
+
+                ExecuteNonQuery(connection, """
+                    INSERT INTO symbol_references (file_id, symbol_name, reference_kind, line, column_number, context)
+                    VALUES (9999, 'Dangling', 'call', 1, 1, 'Dangling()')
+                    """);
+            };
+
+            using var db = new DbContext(dbPath);
+            var ex = Assert.Throws<CodeIndexException>(db.InitializeSchema);
+
+            Assert.Equal(CommandErrorCodes.DbIntegrityFailed, ex.Code);
+            Assert.Contains("kind_check_constraints", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("symbol_references", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("files", ex.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(dbPath, ex.Message, StringComparison.Ordinal);
+            Assert.Contains("integrity-check", ex.Hint, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbContext.ForeignKeyValidationBeforeCheckForTesting = null;
             DeleteDbFiles(dbPath);
         }
     }
@@ -3094,5 +3050,87 @@ public class DatabaseTests : IDisposable
         using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static void SeedLegacyKindCheckSchema(string dbPath)
+    {
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        using var conn = new SqliteConnection(builder.ConnectionString);
+        conn.Open();
+        ExecuteNonQuery(conn, """
+            CREATE TABLE files (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                path        TEXT NOT NULL UNIQUE,
+                lang        TEXT,
+                size        INTEGER,
+                lines       INTEGER,
+                checksum    TEXT,
+                modified    DATETIME,
+                generated   INTEGER NOT NULL DEFAULT 0,
+                indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """);
+        ExecuteNonQuery(conn, """
+            CREATE TABLE chunks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                start_line  INTEGER,
+                end_line    INTEGER,
+                content     TEXT,
+                UNIQUE(file_id, chunk_index)
+            )
+            """);
+        ExecuteNonQuery(conn, """
+            CREATE TABLE reference_lines (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                line        INTEGER NOT NULL,
+                context     TEXT NOT NULL,
+                UNIQUE(file_id, line, context)
+            )
+            """);
+        ExecuteNonQuery(conn, """
+            CREATE TABLE symbols (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT CHECK (kind IN ('class','function','module')),
+                sub_kind        TEXT,
+                name            TEXT,
+                line            INTEGER,
+                start_line      INTEGER,
+                start_column    INTEGER,
+                end_line        INTEGER,
+                body_start_line INTEGER,
+                body_end_line   INTEGER,
+                signature       TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ('class','function','module')),
+                container_name  TEXT,
+                container_qualified_name TEXT,
+                family_key      TEXT,
+                visibility      TEXT,
+                return_type     TEXT,
+                is_metadata_target INTEGER,
+                name_folded     TEXT
+            )
+            """);
+        ExecuteNonQuery(conn, """
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ('call','type_reference')),
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ('class','function','module')),
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """);
     }
 }

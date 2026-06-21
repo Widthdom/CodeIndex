@@ -24,7 +24,7 @@ public static partial class IndexCommandRunner
         {
             RegexMatchTimeoutException timeoutException => RuntimeSafety.FormatRegexTimeout(timeoutException),
             IndexExtractionStalledException stalledException => FormatExtractionStalledMessage(stalledException),
-            _ => ex.Message,
+            _ => CommandErrorWriter.FormatSanitizedException(ex),
         };
 
     private static string FormatExtractionStalledMessage(IndexExtractionStalledException ex)

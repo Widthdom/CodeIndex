@@ -711,6 +711,9 @@ internal static class ExportImportCommandRunner
         return hash;
     }
 
+    internal static string FormatImportManifestReadException(Exception ex)
+        => CommandErrorWriter.FormatSanitizedException(ex);
+
     private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message, CancellationToken cancellationToken)
     {
         if (!TryValidateManifestEntrySize(manifestEntry, out message))
@@ -742,7 +745,7 @@ internal static class ExportImportCommandRunner
         catch (InvalidDataException ex)
         {
             manifest = null!;
-            message = ex.Message;
+            message = FormatImportManifestReadException(ex);
             return false;
         }
         catch (JsonException ex)
