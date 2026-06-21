@@ -279,17 +279,47 @@ public static partial class IndexCommandRunner
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
         => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode);
 
-    private static int WriteInterruptedResult(bool json, JsonSerializerOptions jsonOptions, int filesProcessed, int? filesTotal)
+    private static bool InterruptedProgressIsPersisted(string mode, long filesProcessed)
+        => string.Equals(mode, "update", StringComparison.Ordinal) && filesProcessed > 0;
+
+    private static string BuildInterruptedRecoveryHint(string mode, bool progressPersisted)
+    {
+        if (progressPersisted)
+            return "Rerun `cdidx index` to finish refreshing the remaining files; completed update-mode file transactions remain in the index. Press Ctrl-C again during a future run to force-exit.";
+
+        if (string.Equals(mode, "update", StringComparison.Ordinal))
+            return "Rerun `cdidx index` to retry the update; no update-mode file transaction completed before the interruption. Press Ctrl-C again during a future run to force-exit.";
+
+        return "Rerun `cdidx index` to retry from the previous durable index; interrupted full-scan and rebuild writes are rolled back. Press Ctrl-C again during a future run to force-exit.";
+    }
+
+    private static int WriteInterruptedResult(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        int filesProcessed,
+        int? filesTotal,
+        string mode,
+        bool progressPersisted)
     {
         var totalSuffix = filesTotal is > 0 ? $" of {filesTotal.Value:N0}" : string.Empty;
+        var progressDescription = progressPersisted
+            ? "completed update progress was saved"
+            : string.Equals(mode, "update", StringComparison.Ordinal)
+                ? "no update progress was saved"
+                : $"{DescribeInterruptedRollbackMode(mode)} progress was rolled back";
         return WriteCommandError(
             json,
             jsonOptions,
-            $"Interrupted; partial progress saved ({filesProcessed:N0}{totalSuffix} files processed).",
+            $"Interrupted; {progressDescription} ({filesProcessed:N0}{totalSuffix} files processed).",
             CommandExitCodes.Interrupted,
-            "Rerun `cdidx index` to finish refreshing the index. Press Ctrl-C again during a future run to force-exit.",
+            BuildInterruptedRecoveryHint(mode, progressPersisted),
             CommandErrorCodes.Interrupted);
     }
+
+    private static string DescribeInterruptedRollbackMode(string mode)
+        => string.Equals(mode, "rebuild", StringComparison.Ordinal)
+            ? "rebuild"
+            : "full-scan";
 
     private static int WriteExtractionStalledResult(bool json, JsonSerializerOptions jsonOptions, IndexExtractionStalledException ex)
     {
@@ -597,6 +627,7 @@ public static partial class IndexCommandRunner
         string[] spinnerFrames,
         CancellationToken cancellationToken)
     {
+        var actualMode = options.Rebuild ? "rebuild" : "incremental";
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json && !options.Quiet)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
@@ -607,7 +638,7 @@ public static partial class IndexCommandRunner
                 return;
 
             ConsoleUi.StopSpinner(spinnerCts);
-            throw new IndexInterruptedException(0, null);
+            throw new IndexInterruptedException(0, null, actualMode);
         }
 
         string? currentHeadForCheckpoint;
@@ -619,7 +650,7 @@ public static partial class IndexCommandRunner
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ConsoleUi.StopSpinner(spinnerCts);
-            throw new IndexInterruptedException(0, null);
+            throw new IndexInterruptedException(0, null, actualMode);
         }
 
         var scanCheckpointPath = Path.Combine(projectRoot, ".cdidx", ScanCheckpointFileName);
@@ -636,7 +667,7 @@ public static partial class IndexCommandRunner
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            throw new IndexInterruptedException(0, null);
+            throw new IndexInterruptedException(0, null, actualMode);
         }
         finally
         {
@@ -735,6 +766,7 @@ public static partial class IndexCommandRunner
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
+        var actualMode = options.Rebuild ? "rebuild" : "incremental";
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions, cancellationToken);
         if (unresolvedMergeExitCode != null)
@@ -793,7 +825,7 @@ public static partial class IndexCommandRunner
             if (!cancellationToken.IsCancellationRequested)
                 return;
 
-            throw new IndexInterruptedException(filesProcessed, filesTotal);
+            throw new IndexInterruptedException(filesProcessed, filesTotal, actualMode);
         }
 
         var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
@@ -1103,7 +1135,7 @@ public static partial class IndexCommandRunner
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                throw new IndexInterruptedException(0, files.Count);
+                throw new IndexInterruptedException(0, files.Count, actualMode);
             }
             finally
             {

@@ -1525,6 +1525,8 @@ public class DbContext : IDisposable
     public const string LastFailedIndexRunFilesTotalMetaKey = "last_failed_index_run_files_total";
     public const string LastFailedIndexRunErrorCodeMetaKey = "last_failed_index_run_error_code";
     public const string LastFailedIndexRunReasonMetaKey = "last_failed_index_run_reason";
+    public const string LastFailedIndexRunProgressPersistedMetaKey = "last_failed_index_run_progress_persisted";
+    public const string LastFailedIndexRunRecoveryHintMetaKey = "last_failed_index_run_recovery_hint";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
     // whose non-empty extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass

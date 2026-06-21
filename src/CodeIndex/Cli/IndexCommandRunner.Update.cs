@@ -791,6 +791,7 @@ public static partial class IndexCommandRunner
 
                     updated++;
                     ftsMutated = true;
+                    UpdateFileCommittedForTesting?.Invoke(updated + removed, targetPaths.Count);
                     ThrowIfUpdateCancelled();
                     WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                 }

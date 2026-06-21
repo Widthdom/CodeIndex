@@ -1031,8 +1031,10 @@ public partial class DbReader
         var filesTotal = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesTotalMetaKey));
         var errorCode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunErrorCodeMetaKey);
         var reason = TryGetMetaStringInternal(DbContext.LastFailedIndexRunReasonMetaKey);
+        var progressPersisted = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastFailedIndexRunProgressPersistedMetaKey));
+        var recoveryHint = TryGetMetaStringInternal(DbContext.LastFailedIndexRunRecoveryHintMetaKey);
         if (status == null && mode == null && startedAt == null && durationMs == null && filesProcessed == null
-            && filesTotal == null && errorCode == null && reason == null)
+            && filesTotal == null && errorCode == null && reason == null && progressPersisted == null && recoveryHint == null)
         {
             return batchInProgress
                 ? new StatusFailedOrPartialIndexRun
@@ -1053,6 +1055,8 @@ public partial class DbReader
             FilesTotal = filesTotal,
             ErrorCode = errorCode,
             Reason = reason,
+            ProgressPersisted = progressPersisted,
+            RecoveryHint = recoveryHint,
         };
     }
 

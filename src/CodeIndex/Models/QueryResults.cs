@@ -1243,6 +1243,12 @@ public sealed class StatusFailedOrPartialIndexRun
     [JsonPropertyName("error_code")]
     public string? ErrorCode { get; set; }
     public string? Reason { get; set; }
+    [JsonPropertyName("progress_persisted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ProgressPersisted { get; set; }
+    [JsonPropertyName("recovery_hint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecoveryHint { get; set; }
 }
 
 public sealed class StatusRepairCommand
