@@ -89,6 +89,9 @@ internal static class DataDirectorySecurity
             return Directory.CreateDirectory(path);
 
         var fullPath = Path.GetFullPath(path);
+        if (Directory.Exists(fullPath) && IsSharedDirectoryRoot(fullPath))
+            return new DirectoryInfo(fullPath);
+
         EnsureSensitiveTempFallbackRoot(fullPath);
         RejectUnsafeDirectoryTarget(fullPath);
 
