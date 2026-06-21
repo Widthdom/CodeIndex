@@ -116,6 +116,7 @@ Use the inventory below before adding or moving a test class:
 Prefer the existing helper before writing new setup code.
 
 - `CreateTempProject(prefix)` creates a unique temp workspace.
+- Use `CreateTempProject(prefix)` instead of adding local `Path.GetTempPath()` / `Guid.NewGuid()` directory helpers; keep any local wrapper as a thin prefix-specific delegate only when it preserves existing call-site readability.
 - `InitializeGitRepo(projectRoot)` initializes git and sets repo-local `user.name` and `user.email`.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db`, initializes schema, and seeds `codeindex_meta.indexed_project_root` to match the project root.
 - `InsertIndexedFile(...)` inserts a realistic indexed file with content-derived checksum, chunks, symbols, and references, and now passes the file path into Python symbol extraction so `__init__.py`-based re-export tests can exercise qualified package names.
@@ -329,6 +330,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 新しいセットアップコードを書く前に、既存ヘルパーを優先してください。
 
 - `CreateTempProject(prefix)` は一意な一時ワークスペースを作成します。
+- 独自に `Path.GetTempPath()` / `Guid.NewGuid()` を組み合わせた directory helper を増やさず、`CreateTempProject(prefix)` を使ってください。既存呼び出し側の読みやすさを保つ場合だけ、local wrapper は prefix 固有の薄い委譲に留めます。
 - `InitializeGitRepo(projectRoot)` は git を初期化し、repo-local の `user.name` と `user.email` を設定します。
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化したうえで `codeindex_meta.indexed_project_root` に project root を書き込みます。
 - `InsertIndexedFile(...)` は内容由来の checksum、chunks、symbols、references を含む現実的なインデックス済みファイルを挿入し、Python の symbol extraction には file path も渡すため、`__init__.py` ベースの再エクスポートテストで package 修飾名を扱えます。

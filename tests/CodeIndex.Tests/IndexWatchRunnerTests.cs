@@ -778,11 +778,7 @@ public class IndexWatchRunnerTests
     }
 
     private static string CreateTempProject()
-    {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_watch_runner_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(projectRoot);
-        return projectRoot;
-    }
+        => TestProjectHelper.CreateTempProject("cdidx_watch_runner");
 
     private static void DeleteDirectory(string path)
     {

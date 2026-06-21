@@ -12406,11 +12406,7 @@ public sealed class Caller
     }
 
     private static string CreateTempProject()
-    {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(projectRoot);
-        return projectRoot;
-    }
+        => TestProjectHelper.CreateTempProject("cdidx_index_runner");
 
     private static string CreateTemporaryDotnetHostPath()
     {
