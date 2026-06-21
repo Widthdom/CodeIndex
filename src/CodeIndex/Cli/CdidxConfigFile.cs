@@ -738,11 +738,11 @@ internal static class CdidxConfigFile
             pathError = null;
             try
             {
-                var normalizedRoot = NormalizeBoundaryPath(Path.GetFullPath(root));
+                var normalizedRoot = PathCasing.NormalizeBoundaryPath(root);
                 var fullPath = Path.IsPathRooted(rawPath)
                     ? Path.GetFullPath(rawPath)
                     : Path.GetFullPath(Path.Combine(normalizedRoot, rawPath));
-                var normalizedPath = NormalizeBoundaryPath(fullPath);
+                var normalizedPath = PathCasing.NormalizeBoundaryPath(fullPath);
 
                 if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
                 {
@@ -763,15 +763,6 @@ internal static class CdidxConfigFile
                 return false;
             }
         }
-    }
-
-    private static string NormalizeBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     private static bool TryReadStringArray(JsonElement element, string key, string path, out string[]? value, out string? error)

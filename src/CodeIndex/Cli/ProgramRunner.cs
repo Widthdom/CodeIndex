@@ -3822,7 +3822,7 @@ internal static partial class ProgramRunner
                 return false;
             }
 
-            File.WriteAllText(probe, "");
+            FileWriteProbe.WriteEmptyFile(probe, Encoding.UTF8);
             createdProbe = true;
             return true;
         }

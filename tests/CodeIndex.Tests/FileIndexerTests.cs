@@ -209,6 +209,28 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void FileWriteProbe_TryWriteAndDeleteEmptyFile_DoesNotOverwriteOrDeleteExistingProbe_Issue3777()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-existing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
+            File.WriteAllText(probePath, "existing", Encoding.UTF8);
+
+            var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
+
+            Assert.False(result);
+            Assert.True(File.Exists(probePath));
+            Assert.Equal("existing", File.ReadAllText(probePath, Encoding.UTF8));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
