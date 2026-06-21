@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Models;
@@ -366,12 +367,40 @@ internal static class CSharpReferenceExtractor
 
     private static string? NormalizeCSharpAttributeQualifier(string qualifier)
     {
-        var compact = new string(qualifier.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+        var compact = RemoveWhitespace(qualifier);
         while (compact.EndsWith(".", StringComparison.Ordinal))
             compact = compact[..^1];
         while (compact.EndsWith("::", StringComparison.Ordinal))
             compact = compact[..^2];
         return compact.Length > 0 ? compact : null;
+    }
+
+    private static string RemoveWhitespace(string value)
+    {
+        var firstWhitespace = -1;
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsWhiteSpace(value[i]))
+            {
+                firstWhitespace = i;
+                break;
+            }
+        }
+
+        if (firstWhitespace < 0)
+            return value;
+
+        var builder = new StringBuilder(value.Length);
+        if (firstWhitespace > 0)
+            builder.Append(value, 0, firstWhitespace);
+        for (var i = firstWhitespace + 1; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (!char.IsWhiteSpace(ch))
+                builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static bool IsCompilerServicesQualifier(string qualifier)

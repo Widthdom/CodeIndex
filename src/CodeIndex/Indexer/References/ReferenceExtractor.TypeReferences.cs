@@ -274,7 +274,8 @@ public static partial class ReferenceExtractor
         if (nameStart > 0)
             text = text.Substring(0, nameStart).TrimEnd();
 
-        return refKind + new string(text.Where(static ch => !char.IsWhiteSpace(ch)).ToArray());
+        var compactType = RemoveWhitespace(text);
+        return refKind.Length == 0 ? compactType : refKind + compactType;
     }
 
     private static string StripLeadingCSharpParameterModifier(string text)
@@ -471,7 +472,35 @@ public static partial class ReferenceExtractor
 
     private static string NormalizeCSharpTypeArgumentShape(string argument)
     {
-        return new string(argument.Where(static ch => !char.IsWhiteSpace(ch)).ToArray());
+        return RemoveWhitespace(argument);
+    }
+
+    private static string RemoveWhitespace(string value)
+    {
+        var firstWhitespace = -1;
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsWhiteSpace(value[i]))
+            {
+                firstWhitespace = i;
+                break;
+            }
+        }
+
+        if (firstWhitespace < 0)
+            return value;
+
+        var builder = new StringBuilder(value.Length);
+        if (firstWhitespace > 0)
+            builder.Append(value, 0, firstWhitespace);
+        for (var i = firstWhitespace + 1; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (!char.IsWhiteSpace(ch))
+                builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static bool IsCSharpAsyncIteratorFunction(SymbolRecord symbol, string[] structuralLines)
