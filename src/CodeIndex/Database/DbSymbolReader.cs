@@ -114,6 +114,15 @@ public partial class DbReader
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
     private const int QueryOutputSignatureMaxChars = 512;
     private const string QueryOutputSignatureTruncationSuffix = "...";
+    private static readonly Regex CSharpConstFieldSignatureRegex = new(
+        @"^(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal|static|new|unsafe|readonly|volatile|required)\s+)*const\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpFieldLikeSignatureRegex = new(
+        @"^(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal|static|readonly|volatile|new|unsafe|required)\s+)*(?!event\b|delegate\b|const\b).+\s+@?[\p{L}_][\p{L}\p{Nd}_]*\s*(?:=(?![=>])|;)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpPropertyAccessorSignatureRegex = new(
+        @"\{\s*(?:get|set|init)\b|=>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private sealed class UnusedCandidateSymbol
     {
@@ -130,6 +139,7 @@ public partial class DbReader
         public string? ReturnType { get; init; }
         public string? ContainerKind { get; init; }
         public string? ContainerName { get; init; }
+        public string? ContainerQualifiedName { get; init; }
         public bool IsPublicOrExported { get; init; }
         public bool IsReflectionOrConfigSuspect { get; init; }
         public int ProvisionalBucketOrder { get; init; }
@@ -235,6 +245,65 @@ public partial class DbReader
                             OR same_file_chunk.start_line > {endLineSql}
                             OR csharp_identifier_occurrence_count(same_file_chunk.content, {symbolAlias}.name) > 1
                         )
+                  )
+              )";
+    }
+
+    private string BuildCSharpPartialContainingTypeUseExclusionSql(string symbolAlias, string fileAlias, string visibilitySql)
+    {
+        var containerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
+        var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
+        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_own_type");
+        var ownSignatureSql = GetSymbolColumnSql("signature", "''", "partial_own_type");
+        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_peer_type");
+        var peerSignatureSql = GetSymbolColumnSql("signature", "''", "partial_peer_type");
+        var ownQualifiedNameSql = $@"CASE
+                            WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || partial_own_type.name
+                            ELSE partial_own_type.name
+                        END";
+        var peerQualifiedNameSql = $@"CASE
+                            WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || partial_peer_type.name
+                            ELSE partial_peer_type.name
+                        END";
+
+        return $@"
+              AND NOT (
+                  {fileAlias}.lang = 'csharp'
+                  AND {visibilitySql} IN ('private', 'fileprivate')
+                  AND {symbolAlias}.name <> ''
+                  AND {containerKindSql} IN ('class', 'struct', 'interface')
+                  AND {containerNameSql} <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols partial_own_type
+                      WHERE partial_own_type.file_id = {symbolAlias}.file_id
+                        AND partial_own_type.kind = {containerKindSql}
+                        AND partial_own_type.name = {containerNameSql}
+                        AND lower({ownSignatureSql}) LIKE '%partial%'
+                        AND (
+                            {containerQualifiedNameSql} = ''
+                            OR {containerQualifiedNameSql} = partial_own_type.name
+                            OR {containerQualifiedNameSql} = {ownQualifiedNameSql}
+                        )
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols partial_peer_type
+                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
+                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
+                      WHERE partial_peer_file.lang = 'csharp'
+                        AND partial_peer_type.file_id <> {symbolAlias}.file_id
+                        AND partial_peer_type.kind = {containerKindSql}
+                        AND partial_peer_type.name = {containerNameSql}
+                        AND lower({peerSignatureSql}) LIKE '%partial%'
+                        AND (
+                            {containerQualifiedNameSql} = ''
+                            OR {containerQualifiedNameSql} = partial_peer_type.name
+                            OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
+                        )
+                        AND csharp_identifier_occurrence_count(partial_peer_chunk.content, {symbolAlias}.name) > 0
+                      LIMIT 1
                   )
               )";
     }
@@ -3286,7 +3355,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasSameFilePrivateUse(candidate, fileContentByFileId))
+                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
                         continue;
 
                     var result = CreateUnusedSymbolResult(candidate);
@@ -3321,7 +3390,7 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (HasSameFilePrivateUse(candidate, fileContentByFileId))
+                if (HasPrivateCSharpUse(candidate, fileContentByFileId))
                     continue;
 
                 results.Add(CreateUnusedSymbolResult(candidate));
@@ -3355,7 +3424,7 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (HasSameFilePrivateUse(candidate, fileContentByFileId))
+                if (HasPrivateCSharpUse(candidate, fileContentByFileId))
                     continue;
 
                 candidatesFetched++;
@@ -3380,6 +3449,10 @@ public partial class DbReader
         }
     }
 
+    private bool HasPrivateCSharpUse(UnusedCandidateSymbol candidate, Dictionary<long, string> fileContentByFileId)
+        => HasSameFilePrivateUse(candidate, fileContentByFileId)
+           || HasCSharpPartialContainingTypeUse(candidate);
+
     private bool HasSameFilePrivateUse(UnusedCandidateSymbol candidate, Dictionary<long, string> fileContentByFileId)
     {
         if (!string.Equals(candidate.Lang, "csharp", StringComparison.Ordinal)
@@ -3396,6 +3469,73 @@ public partial class DbReader
             candidate.StartLine,
             candidate.EndLine);
     }
+
+    private bool HasCSharpPartialContainingTypeUse(UnusedCandidateSymbol candidate)
+    {
+        if (!string.Equals(candidate.Lang, "csharp", StringComparison.Ordinal)
+            || !IsPrivateLikeVisibility(candidate.Visibility)
+            || candidate.Name.Length == 0
+            || !IsCSharpPartialContainerKind(candidate.ContainerKind)
+            || string.IsNullOrWhiteSpace(candidate.ContainerName)
+            || !_hasChunksTable
+            || !HasTable("chunks"))
+        {
+            return false;
+        }
+
+        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "own_type");
+        var ownSignatureSql = GetSymbolColumnSql("signature", "''", "own_type");
+        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "peer_type");
+        var peerSignatureSql = GetSymbolColumnSql("signature", "''", "peer_type");
+        var ownQualifiedNameSql = $@"CASE
+                WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || own_type.name
+                ELSE own_type.name
+            END";
+        var peerQualifiedNameSql = $@"CASE
+                WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || peer_type.name
+                ELSE peer_type.name
+            END";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT 1
+            FROM symbols own_type
+            JOIN symbols peer_type
+              ON peer_type.file_id <> own_type.file_id
+             AND peer_type.kind = own_type.kind
+             AND peer_type.name = own_type.name
+            JOIN files peer_file ON peer_file.id = peer_type.file_id
+            JOIN chunks peer_chunk ON peer_chunk.file_id = peer_type.file_id
+            WHERE own_type.file_id = @fileId
+              AND own_type.kind = @containerKind
+              AND own_type.name = @containerName
+              AND lower({ownSignatureSql}) LIKE '%partial%'
+              AND lower({peerSignatureSql}) LIKE '%partial%'
+              AND peer_file.lang = 'csharp'
+              AND (
+                  @containerQualifiedName = ''
+                  OR @containerQualifiedName = own_type.name
+                  OR @containerQualifiedName = {ownQualifiedNameSql}
+              )
+              AND (
+                  @containerQualifiedName = ''
+                  OR @containerQualifiedName = peer_type.name
+                  OR @containerQualifiedName = {peerQualifiedNameSql}
+              )
+              AND csharp_identifier_occurrence_count(peer_chunk.content, @symbolName) > 0
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@fileId", candidate.FileId);
+        cmd.Parameters.AddWithValue("@containerKind", candidate.ContainerKind);
+        cmd.Parameters.AddWithValue("@containerName", candidate.ContainerName);
+        cmd.Parameters.AddWithValue("@containerQualifiedName", candidate.ContainerQualifiedName ?? string.Empty);
+        cmd.Parameters.AddWithValue("@symbolName", candidate.Name);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        return reader.TrackedRead();
+    }
+
+    private static bool IsCSharpPartialContainerKind(string? kind)
+        => kind is "class" or "struct" or "interface";
 
     private string GetUnusedCandidateFileContent(long fileId, Dictionary<long, string> fileContentByFileId)
     {
@@ -3508,6 +3648,7 @@ public partial class DbReader
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("container_qualified_name", GetSymbolColumnSql("container_name", "''"))} AS container_qualified_name,
                    CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
                    CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
                    {provisionalBucketOrderSql} AS provisional_bucket_order
@@ -3574,25 +3715,27 @@ public partial class DbReader
                 ReturnType = GetNullableString(reader, 10),
                 ContainerKind = GetNullableString(reader, 11),
                 ContainerName = GetNullableString(reader, 12),
-                IsPublicOrExported = reader.GetInt32(13) != 0,
-                IsReflectionOrConfigSuspect = reader.GetInt32(14) != 0,
-                ProvisionalBucketOrder = reader.GetInt32(15),
+                ContainerQualifiedName = GetNullableString(reader, 13),
+                IsPublicOrExported = reader.GetInt32(14) != 0,
+                IsReflectionOrConfigSuspect = reader.GetInt32(15) != 0,
+                ProvisionalBucketOrder = reader.GetInt32(16),
             };
         }
     }
 
     private UnusedSymbolResult CreateUnusedSymbolResult(UnusedCandidateSymbol candidate)
     {
+        var kind = NormalizeUnusedSymbolKind(candidate);
         var isReflectionOrConfigSuspect = candidate.IsReflectionOrConfigSuspect;
         if (!isReflectionOrConfigSuspect && candidate.IsPublicOrExported)
-            isReflectionOrConfigSuspect = HasReflectionAttributeContext(candidate.Kind, candidate.Path, candidate.StartLine);
+            isReflectionOrConfigSuspect = HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine);
 
         var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility);
         return new UnusedSymbolResult
         {
             Path = candidate.Path,
             Lang = candidate.Lang,
-            Kind = candidate.Kind,
+            Kind = kind,
             Name = candidate.Name,
             Line = candidate.Line,
             StartLine = candidate.StartLine,
@@ -3607,6 +3750,31 @@ public partial class DbReader
             UnusedReason = classification.Reason,
             UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility),
         };
+    }
+
+    private static string NormalizeUnusedSymbolKind(UnusedCandidateSymbol candidate)
+        => NormalizeUnusedSymbolKind(candidate.Lang, candidate.Kind, candidate.Signature);
+
+    private static string NormalizeUnusedSymbolKind(string? lang, string kind, string? signature)
+    {
+        if (!string.Equals(lang, "csharp", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(signature))
+        {
+            return kind;
+        }
+
+        var trimmed = signature.TrimStart();
+        if (CSharpConstFieldSignatureRegex.IsMatch(trimmed))
+            return "constant";
+
+        if ((kind is "function" or "property")
+            && !CSharpPropertyAccessorSignatureRegex.IsMatch(trimmed)
+            && CSharpFieldLikeSignatureRegex.IsMatch(trimmed))
+        {
+            return "field";
+        }
+
+        return kind;
     }
 
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
@@ -3687,6 +3855,7 @@ public partial class DbReader
                 visibilitySql,
                 GetSymbolColumnSql("start_line", "s.line"),
                 GetSymbolColumnSql("end_line", "s.line"));
+            sql += BuildCSharpPartialContainingTypeUseExclusionSql("s", "f", visibilitySql);
         }
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
@@ -3733,7 +3902,10 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var path = reader.GetString(0);
-            var kindValue = reader.GetString(2);
+            var langValue = GetNullableString(reader, 1);
+            var rawKindValue = reader.GetString(2);
+            var signature = GetNullableString(reader, 7);
+            var kindValue = NormalizeUnusedSymbolKind(langValue, rawKindValue, signature);
             var startLine = GetInt32OrFallback(reader, 5, 4);
             var isPublicOrExported = reader.GetInt32(12) != 0;
             var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
@@ -3745,13 +3917,13 @@ public partial class DbReader
             results.Add(new UnusedSymbolResult
             {
                 Path = path,
-                Lang = GetNullableString(reader, 1),
+                Lang = langValue,
                 Kind = kindValue,
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
                 StartLine = startLine,
                 EndLine = GetInt32OrFallback(reader, 6, 4),
-                Signature = GetNullableString(reader, 7),
+                Signature = signature,
                 Visibility = visibility,
                 ReturnType = GetNullableString(reader, 9),
                 ContainerKind = GetNullableString(reader, 10),
@@ -3936,6 +4108,10 @@ public partial class DbReader
                 $"lower({GetSymbolColumnSql("visibility", "''")})",
                 GetSymbolColumnSql("start_line", "s.line"),
                 GetSymbolColumnSql("end_line", "s.line"));
+            sql += BuildCSharpPartialContainingTypeUseExclusionSql(
+                "s",
+                "f",
+                $"lower({GetSymbolColumnSql("visibility", "''")})");
         }
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
@@ -4036,7 +4212,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasSameFilePrivateUse(candidate, fileContentByFileId))
+                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
                         continue;
 
                     var result = CreateUnusedSymbolResult(candidate);
@@ -4075,7 +4251,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasSameFilePrivateUse(candidate, fileContentByFileId))
+                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
                         continue;
 
                     count++;

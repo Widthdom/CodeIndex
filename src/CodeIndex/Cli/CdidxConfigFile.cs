@@ -248,7 +248,12 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else
             {
-                var parsedMaxAgeDays = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxAgeDays))
+                {
+                    errors.Add($"[cdidx] {path}: `suggestion_max_age_days` must be a positive integer.");
+                    return;
+                }
+
                 if (parsedMaxAgeDays > SuggestionStore.MaximumMaxAgeDays)
                     errors.Add($"{FormatConfigDiagnosticPrefix(path)} `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
                 else
@@ -262,7 +267,12 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else
             {
-                var parsedMaxCount = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxCount))
+                {
+                    errors.Add($"[cdidx] {path}: `suggestion_max_count` must be a positive integer.");
+                    return;
+                }
+
                 if (parsedMaxCount > SuggestionStore.MaximumMaxCount)
                     errors.Add($"{FormatConfigDiagnosticPrefix(path)} `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
                 else
@@ -314,7 +324,12 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else
             {
-                var parsedLimit = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLimit))
+                {
+                    errors.Add($"[cdidx] {path}: `indexing.watchPendingPathLimit` must be a positive integer.");
+                    return;
+                }
+
                 if (parsedLimit > IndexWatchRunner.MaxWatchPendingPathLimit)
                     errors.Add($"{FormatConfigDiagnosticPrefix(path)} `indexing.watchPendingPathLimit` must be <= {IndexWatchRunner.MaxWatchPendingPathLimit}.");
                 else

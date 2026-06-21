@@ -343,6 +343,60 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void RunWrapped_ManyRawJsonItems_ReturnsStructuredEnvelopeError_Issue3779()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            _ =>
+            {
+                for (var i = 0; i <= JsonEnvelopeWrapper.MaxRawJsonItems; i++)
+                    Console.WriteLine("0");
+                return CommandExitCodes.Success;
+            }));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Contains("--json-envelope raw JSON item count exceeded", stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var metadata = document.RootElement.GetProperty("metadata");
+        Assert.Equal(CommandExitCodes.InvalidArgument, metadata.GetProperty("exit_code").GetInt32());
+        Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
+        var error = metadata.GetProperty("error");
+        Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal(JsonEnvelopeWrapper.MaxRawJsonItems, error.GetProperty("max_items").GetInt32());
+        Assert.Equal(0, document.RootElement.GetProperty("results").GetArrayLength());
+    }
+
+    [Fact]
+    public void RunWrapped_NestedRawJsonNodes_ReturnsStructuredEnvelopeError_Issue3779()
+    {
+        var rawLine = BuildWideRawJsonArray(JsonEnvelopeWrapper.MaxRawJsonNodes);
+        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            _ =>
+            {
+                Console.WriteLine(rawLine);
+                return CommandExitCodes.Success;
+            }));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Contains("--json-envelope raw JSON node count exceeded", stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var metadata = document.RootElement.GetProperty("metadata");
+        Assert.Equal(CommandExitCodes.InvalidArgument, metadata.GetProperty("exit_code").GetInt32());
+        Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
+        var error = metadata.GetProperty("error");
+        Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal(JsonEnvelopeWrapper.MaxRawJsonNodes, error.GetProperty("max_nodes").GetInt32());
+        Assert.Equal(0, document.RootElement.GetProperty("results").GetArrayLength());
+    }
+
+    [Fact]
     public void RunWrapped_MixedRawLines_ParsesWithoutMaterializingSplitArray_Issue3015()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
@@ -410,6 +464,20 @@ public class JsonEnvelopeWrapperTests
         for (var i = 0; i < nestedObjectCount; i++)
             builder.Append('}');
         builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static string BuildWideRawJsonArray(int itemCount)
+    {
+        var builder = new StringBuilder(itemCount * 2 + 2);
+        builder.Append('[');
+        for (var i = 0; i < itemCount; i++)
+        {
+            if (i > 0)
+                builder.Append(',');
+            builder.Append('0');
+        }
+        builder.Append(']');
         return builder.ToString();
     }
 }
