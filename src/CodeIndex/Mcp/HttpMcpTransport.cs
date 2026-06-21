@@ -29,7 +29,9 @@ namespace CodeIndex.Mcp;
 internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
+    internal const int DefaultMaxResponseBodyBytes = 1_000_000;
     internal const int MaxConfiguredRequestBodyBytes = 16 * 1024 * 1024;
+    internal const int MaxConfiguredResponseBodyBytes = 16 * 1024 * 1024;
     internal const int DefaultMaxQueuedRequests = 64;
     internal const int MaxConfiguredQueuedRequests = 1024;
     internal const int DefaultMaxConcurrentHandlers = 64;
@@ -43,6 +45,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const int MaxSseEventFrameBytes = 64 * 1024;
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
+    internal const string MaxResponseBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
@@ -56,6 +59,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private const string InvalidHealthJson = """{"status":"degraded","db_open":false,"error":"health_provider_invalid"}""";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan EventStreamWriteTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly HttpListener _listener;
@@ -70,6 +74,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly SemaphoreSlim _queueSlots;
     private readonly SemaphoreSlim _handlerSemaphore;
     private readonly int _maxRequestBodyBytes;
+    private readonly int _maxResponseBodyBytes;
     private readonly int _maxQueuedRequests;
     private readonly int _maxConcurrentHandlers;
     private readonly int _maxEventStreams;
@@ -114,6 +119,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         string? bearerToken,
         Action<HttpRequestLogRecord>? requestLogger = null,
         int? maxRequestBodyBytes = null,
+        int? maxResponseBodyBytes = null,
         int? maxQueuedRequests = null,
         int? maxConcurrentHandlers = null,
         int? maxEventStreams = null,
@@ -126,6 +132,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             DefaultMaxRequestBodyBytes,
             MaxConfiguredRequestBodyBytes,
             "HTTP MCP request body byte limit");
+        _maxResponseBodyBytes = ResolvePositiveIntOption(
+            maxResponseBodyBytes,
+            nameof(maxResponseBodyBytes),
+            MaxResponseBodyBytesEnvVar,
+            DefaultMaxResponseBodyBytes,
+            MaxConfiguredResponseBodyBytes,
+            "HTTP MCP response body byte limit");
         _maxQueuedRequests = ResolvePositiveIntOption(
             maxQueuedRequests,
             nameof(maxQueuedRequests),
@@ -213,6 +226,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal bool HasEventStreams => EventStreamCount > 0;
 
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
+
+    internal int MaxResponseBodyBytes => _maxResponseBodyBytes;
 
     internal int MaxQueuedRequests => _maxQueuedRequests;
 
@@ -573,10 +588,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var context = request.Context;
         if (context.Request.ContentLength64 > _maxRequestBodyBytes)
         {
+            request.Diagnostic = "request_body_limit_exceeded";
             await RespondAsync(context, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
             return null;
         }
+        if (context.Request.ContentLength64 < 0)
+            request.Diagnostic = "request_body_length_unknown";
 
         using var buffer = new MemoryStream();
         var scratch = new byte[Math.Min(8192, _maxRequestBodyBytes)];
@@ -588,6 +606,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
             if (buffer.Length + read > _maxRequestBodyBytes)
             {
+                request.Diagnostic = "request_body_limit_exceeded";
                 await RespondAsync(context, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
                 LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
                 return null;
@@ -596,6 +615,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             buffer.Write(scratch, 0, read);
         }
 
+        // ToArray/GetString materializes only after Content-Length and streaming reads have both
+        // enforced _maxRequestBodyBytes.
         return (context.Request.ContentEncoding ?? Encoding.UTF8).GetString(buffer.ToArray());
     }
 
@@ -631,10 +652,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             }
 
             var payload = Encoding.UTF8.GetBytes(frame);
+            if (!await TryRejectOversizedResponseAsync(request, payload.LongLength).ConfigureAwait(false))
+                return true;
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
-            await context.Response.OutputStream.WriteAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await WriteResponseBytesAsync(context.Response.OutputStream, payload, cancellationToken).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "out-of-band response body");
             LogRequest(request, (int)HttpStatusCode.OK);
             return true;
@@ -695,10 +718,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             }
 
             var payload = Encoding.UTF8.GetBytes(frame);
+            if (!await TryRejectOversizedResponseAsync(request, payload.LongLength).ConfigureAwait(false))
+                return;
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
-            await context.Response.OutputStream.WriteAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await WriteResponseBytesAsync(context.Response.OutputStream, payload, cancellationToken).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "request response body");
             LogRequest(request, (int)HttpStatusCode.OK);
         }
@@ -709,6 +734,27 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             AbortResponseBestEffort(context.Response, "request response failure");
             throw;
         }
+    }
+
+    private async Task<bool> TryRejectOversizedResponseAsync(PendingRequest request, long payloadBytes)
+    {
+        if (payloadBytes <= _maxResponseBodyBytes)
+            return true;
+
+        request.Diagnostic = "response_body_limit_exceeded";
+        await RespondAsync(
+            request.Context,
+            (int)HttpStatusCode.InternalServerError,
+            $"MCP HTTP response body exceeds the configured {_maxResponseBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
+        LogRequest(request, (int)HttpStatusCode.InternalServerError);
+        return false;
+    }
+
+    private static async Task WriteResponseBytesAsync(Stream stream, byte[] bytes, CancellationToken cancellationToken)
+    {
+        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        writeCts.CancelAfter(ResponseWriteTimeout);
+        await stream.WriteAsync(bytes.AsMemory(), writeCts.Token).ConfigureAwait(false);
     }
 
     public async Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
@@ -825,7 +871,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.ContentType = "text/plain; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
-            await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            await WriteResponseBytesAsync(context.Response.OutputStream, bytes, CancellationToken.None).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "plain-text response body");
         }
         catch
@@ -842,7 +888,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.ContentType = "application/json; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
-            await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            await WriteResponseBytesAsync(context.Response.OutputStream, bytes, CancellationToken.None).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "json response body");
         }
         catch
@@ -911,7 +957,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             _eventStreams[streamId] = stream;
 
             var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
-            await context.Response.OutputStream.WriteAsync(prelude.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await WriteResponseBytesAsync(context.Response.OutputStream, prelude, cancellationToken).ConfigureAwait(false);
             await context.Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
@@ -1008,11 +1054,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         private async Task WriteSseBytesAsync(byte[] bytes, CancellationToken cancellationToken)
         {
-            await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            writeCts.CancelAfter(EventStreamWriteTimeout);
+            await _writeGate.WaitAsync(writeCts.Token).ConfigureAwait(false);
             try
             {
-                await Response.OutputStream.WriteAsync(bytes.AsMemory(), cancellationToken).ConfigureAwait(false);
-                await Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await Response.OutputStream.WriteAsync(bytes.AsMemory(), writeCts.Token).ConfigureAwait(false);
+                await Response.OutputStream.FlushAsync(writeCts.Token).ConfigureAwait(false);
             }
             finally
             {
@@ -1188,7 +1236,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         int StatusCode,
         double DurationMs,
         string AuthOutcome,
-        string? RejectionReason);
+        string? RejectionReason,
+        string? Diagnostic);
 
     private PendingRequest BeginRequest(HttpListenerContext context)
     {
@@ -1227,7 +1276,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             statusCode,
             request.Elapsed.TotalMilliseconds,
             request.AuthOutcome,
-            request.RejectionReason);
+            request.RejectionReason,
+            request.Diagnostic);
         Interlocked.Increment(ref _pendingRequestLogCount);
         if (_requestLogQueue.Writer.TryWrite(record))
             return;
@@ -1283,6 +1333,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
+            // HandleContextAsync calls this only with a body returned by TryReadRequestBodyAsync,
+            // so the full JSON parse is bounded by the HTTP request-body byte limit.
             using var doc = JsonDocument.Parse(body, JsonFrameParser.CreateDocumentOptions(McpServer.MaxJsonDepth));
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
@@ -1331,6 +1383,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         internal string AuthOutcome { get; set; } = "none";
 
         internal string? RejectionReason { get; set; }
+
+        internal string? Diagnostic { get; set; }
 
         internal bool Logged { get; set; }
 

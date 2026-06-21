@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -220,6 +221,87 @@ public class McpServerTests : IDisposable
         Assert.True(document.RootElement.TryGetProperty("result", out _));
     }
 
+    [Fact]
+    public async Task ProcessFrameAsync_MatchesSyncCompatibilityWrapper_Issue3770()
+    {
+        const string frame = """{"jsonrpc":"2.0","id":3770,"method":"tools/list"}""";
+
+        var syncResponse = _server.ProcessFrame(frame);
+        var asyncResponse = await _server.ProcessFrameAsync(frame);
+
+        Assert.NotNull(syncResponse);
+        Assert.NotNull(asyncResponse);
+        using var syncDocument = JsonDocument.Parse(syncResponse);
+        using var asyncDocument = JsonDocument.Parse(asyncResponse);
+        Assert.Equal(
+            syncDocument.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength(),
+            asyncDocument.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_TimedOutIsolatedActionReportsAndCleansUpDrain_Issue3722()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTests = _ => blocker.Task;
+
+        var response = await server.ProcessFrameAsync("""{"jsonrpc":"2.0","id":3722,"method":"ping"}""")
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(response);
+        using (var document = JsonDocument.Parse(response))
+        {
+            var error = document.RootElement.GetProperty("error");
+            Assert.Equal("Request timed out", error.GetProperty("message").GetString());
+            Assert.True(error.GetProperty("data").GetProperty("isolated_action_draining").GetBoolean());
+        }
+        var draining = server.BuildRequestTimeoutDiagnosticsStatus();
+        Assert.Equal(1, draining["isolated_action_draining_count"]!.GetValue<long>());
+        Assert.Equal("draining", draining["last"]!["state"]!.GetValue<string>());
+
+        blocker.SetResult();
+
+        await WaitUntilAsync(
+            () => server.BuildRequestTimeoutDiagnosticsStatus()["isolated_action_draining_count"]!.GetValue<long>() == 0,
+            "timed-out isolated action to drain and unregister");
+        var drained = server.BuildRequestTimeoutDiagnosticsStatus();
+        Assert.Equal(1, drained["isolated_action_drained_count"]!.GetValue<long>());
+        Assert.Equal("completed", drained["last"]!["state"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task DrainInFlightTasksAsync_CancelsShutdownAfterBoundedDrainWindow_Issue3774()
+    {
+        var stuck = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { stuck.Task };
+
+        await _server.DrainInFlightTasksAsync(
+            tasks,
+            TimeSpan.FromMilliseconds(10),
+            TimeSpan.FromMilliseconds(10));
+
+        Assert.True(_server.ShutdownRequestedForTests);
+        stuck.SetResult();
+        await stuck.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, string description)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+                return;
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail($"Timed out waiting for {description}.");
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
     {
         var normalized = content.Replace("\r\n", "\n");
@@ -390,6 +472,57 @@ public sealed class Caller
         Assert.True(structured["count"]!.GetValue<int>() > 0);
         Assert.NotNull(structured["result_stable_at"]);
         Assert.Empty(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQueryNearResponseLimit_TruncatesDeterministically_Issue3792()
+    {
+        var queries = new JsonArray();
+        for (var i = 0; i < McpServer.MaxBatchQuerySize; i++)
+        {
+            queries.Add(new JsonObject
+            {
+                ["slotId"] = $"slot-{i.ToString(CultureInfo.InvariantCulture)}",
+                ["tool"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["limit"] = 1,
+                    ["format"] = "compact",
+                },
+            });
+        }
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 3792,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["maxResponseBytes"] = 5000,
+                    ["queries"] = queries,
+                },
+            },
+        };
+
+        var stopwatch = Stopwatch.StartNew();
+        var response = _server.HandleMessage(request)!;
+        stopwatch.Stop();
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 5000);
+        Assert.True(structured["results"]!.AsArray().Count > 0);
+        var truncatedQueries = structured["truncated_queries"]!.AsArray();
+        Assert.NotEmpty(truncatedQueries);
+        var firstTruncatedIndex = truncatedQueries[0]!["request_index"]!.GetValue<int>();
+        Assert.Equal(firstTruncatedIndex, structured["cascade_started_at_index"]!.GetValue<int>());
+        Assert.True(firstTruncatedIndex > 0);
+        Assert.Equal("slot-" + firstTruncatedIndex.ToString(CultureInfo.InvariantCulture), truncatedQueries[0]!["slot_id"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2059,13 +2192,13 @@ public sealed class Caller
         var result = response["result"]!;
         Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
         var text = result["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Project filter could not be resolved", text, StringComparison.Ordinal);
+        Assert.Contains("Project filter could not be resolved: InvalidOperationException", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Tool 'search' failed", text, StringComparison.Ordinal);
-        Assert.DoesNotContain(nameof(InvalidOperationException), text, StringComparison.Ordinal);
+        Assert.DoesNotContain("DefinitelyMissingProject3160", text, StringComparison.Ordinal);
         var structured = result["structuredContent"]!;
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
         Assert.Equal("project", structured["parameter"]!.GetValue<string>());
-        Assert.Contains("DefinitelyMissingProject3160", structured["diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("InvalidOperationException", structured["diagnostic"]!.GetValue<string>());
     }
 
     [Fact]
@@ -12862,6 +12995,52 @@ public sealed class Caller
             Assert.Equal("src/App/ServiceA.cs", result!["path"]!.GetValue<string>());
             Assert.Equal(expectedProjectRoot, structured["project_filter_root"]!.GetValue<string>());
             Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, structured["project_filter_root_fallback_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ProjectScopeErrorSanitizesCaughtExceptionMessage_Issue3660()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_sanitized_exception");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_sanitized_exception_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var secretProject = "secret-project-token-ghp_1234567890abcdef-private";
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var requestJson = """
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"ServiceA","project":"__PROJECT__","exactSubstring":true}}}
+            """.Replace("__PROJECT__", secretProject, StringComparison.Ordinal);
+            var response = server.HandleMessage(JsonNode.Parse(requestJson)!)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var contentText = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            var structured = response["result"]!["structuredContent"]!;
+            var structuredMessage = structured["message"]!.GetValue<string>();
+            var diagnostic = structured["diagnostic"]!.GetValue<string>();
+            Assert.Equal("InvalidOperationException", diagnostic);
+            Assert.Contains("Project filter could not be resolved: InvalidOperationException", contentText);
+            Assert.DoesNotContain(secretProject, contentText);
+            Assert.DoesNotContain(secretProject, structuredMessage);
+            Assert.DoesNotContain(secretProject, diagnostic);
+            Assert.DoesNotContain(projectRoot, contentText);
+            Assert.DoesNotContain(projectRoot, structuredMessage);
+            Assert.DoesNotContain(projectRoot, diagnostic);
         }
         finally
         {

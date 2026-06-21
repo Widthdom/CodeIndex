@@ -119,6 +119,68 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     }
 
     [Fact]
+    public void TryLoad_ReadFailureDiagnosticUsesSanitizedPathAndException_Issue3778()
+    {
+        var secretDirectory = Path.Combine(_tempDir, "secret-workspace-token");
+        Directory.CreateDirectory(secretDirectory);
+        var path = Path.Combine(secretDirectory, "missing-open-issues.json");
+
+        var loaded = IssueDuplicatePreflight.TryLoad(path, out var preflight, out var error);
+
+        Assert.False(loaded);
+        Assert.False(preflight.Checked);
+        Assert.Contains("missing-open-issues.json", error);
+        Assert.Contains(nameof(FileNotFoundException), error);
+        Assert.DoesNotContain(secretDirectory, error);
+        Assert.DoesNotContain(_tempDir, error);
+    }
+
+    [Fact]
+    public void TryLoad_ReadFailureDiagnosticSanitizesWindowsStylePath_Issue3778()
+    {
+        var path = @"C:\Users\secret-workspace-token\missing-open-issues.json";
+
+        var loaded = IssueDuplicatePreflight.TryLoad(path, out var preflight, out var error);
+
+        Assert.False(loaded);
+        Assert.False(preflight.Checked);
+        Assert.Contains("missing-open-issues.json", error);
+        Assert.DoesNotContain("secret-workspace-token", error);
+        Assert.DoesNotContain(@"C:\Users", error);
+    }
+
+    [Fact]
+    public void TryLoad_InvalidFileDiagnosticUsesSanitizedPathAndBoundedDetail_Issue3778()
+    {
+        var secretDirectory = Path.Combine(_tempDir, "secret-invalid-json-parent");
+        Directory.CreateDirectory(secretDirectory);
+        var path = Path.Combine(secretDirectory, "open-issues.json");
+        var issueNumber = new string('9', IssueDuplicatePreflight.MaxOpenIssueNumberLength + 1);
+        File.WriteAllText(
+            path,
+            $$"""
+            [
+              {
+                "number": "{{issueNumber}}",
+                "title": "Oversized number should fail",
+                "labels": [{"name": "bug"}],
+                "url": "https://example.com/issues/1"
+              }
+            ]
+            """);
+
+        var loaded = IssueDuplicatePreflight.TryLoad(path, out var preflight, out var error);
+
+        Assert.False(loaded);
+        Assert.False(preflight.Checked);
+        Assert.Contains("open-issues.json", error);
+        Assert.Contains("invalid-preflight-file", error);
+        Assert.Contains(IssueDuplicatePreflight.MaxOpenIssueNumberLength.ToString(System.Globalization.CultureInfo.InvariantCulture), error);
+        Assert.DoesNotContain(secretDirectory, error);
+        Assert.DoesNotContain(_tempDir, error);
+    }
+
+    [Fact]
     public void TryLoad_GitHubSourceFetchesOpenIssuesWithExplicitToken_Issue3449()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "explicit-token");

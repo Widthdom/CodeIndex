@@ -552,19 +552,63 @@ public class HttpMcpTransportTests : IDisposable
     [Fact]
     public async Task HttpTransport_RequestBodyOverLimit_Returns413AndDoesNotKillServer()
     {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, maxRequestBodyBytes: 64);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue, maxRequestBodyBytes: 64);
 
         using var oversized = await harness.PostJsonAsync(new string('x', 65));
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversized.StatusCode);
         var rejectedBody = await oversized.Content.ReadAsStringAsync();
         Assert.Contains("64 byte limit", rejectedBody, StringComparison.Ordinal);
+        var rejectedRecord = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("request_body_limit_exceeded", rejectedRecord.Diagnostic);
 
         using var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":7,"method":"ping"}""");
         Assert.Equal(HttpStatusCode.OK, follow.StatusCode);
         var body = await follow.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
         Assert.Equal(7, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_UnknownLengthRequestBody_LogsBoundedDiagnostic_Issue3755()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new UnknownLengthStringContent("""{"jsonrpc":"2.0","id":3755,"method":"ping"}"""),
+        };
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("request_body_length_unknown", record.Diagnostic);
+        Assert.Equal("3755", record.RequestId);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseBodyOverLimit_Returns500AndLogsDiagnostic_Issue3755()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue, maxResponseBodyBytes: 1024);
+
+        using var oversized = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, oversized.StatusCode);
+        var rejectedBody = await oversized.Content.ReadAsStringAsync();
+        Assert.Contains("response body exceeds", rejectedBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"tools\"", rejectedBody, StringComparison.Ordinal);
+        var rejectedRecord = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("response_body_limit_exceeded", rejectedRecord.Diagnostic);
+
+        using var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"ping"}""");
+        Assert.Equal(HttpStatusCode.OK, follow.StatusCode);
+        var body = await follow.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(2, doc.RootElement.GetProperty("id").GetInt32());
     }
 
     [Fact]
@@ -578,10 +622,12 @@ public class HttpMcpTransportTests : IDisposable
             bearerToken: null);
 
         Assert.Equal(HttpMcpTransport.DefaultMaxRequestBodyBytes, transport.MaxRequestBodyBytes);
+        Assert.Equal(HttpMcpTransport.DefaultMaxResponseBodyBytes, transport.MaxResponseBodyBytes);
         Assert.Equal(HttpMcpTransport.DefaultMaxQueuedRequests, transport.MaxQueuedRequests);
         Assert.Equal(HttpMcpTransport.DefaultMaxConcurrentHandlers, transport.MaxConcurrentHandlers);
         Assert.Equal(HttpMcpTransport.DefaultMaxEventStreams, transport.MaxEventStreams);
         Assert.InRange(transport.MaxRequestBodyBytes, 1, HttpMcpTransport.MaxConfiguredRequestBodyBytes);
+        Assert.InRange(transport.MaxResponseBodyBytes, 1, HttpMcpTransport.MaxConfiguredResponseBodyBytes);
         Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
         Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
         Assert.InRange(transport.MaxEventStreams, 1, HttpMcpTransport.MaxConfiguredEventStreams);
@@ -608,10 +654,12 @@ public class HttpMcpTransportTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture(
             HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+            HttpMcpTransport.MaxResponseBodyBytesEnvVar,
             HttpMcpTransport.MaxQueueDepthEnvVar,
             HttpMcpTransport.MaxConcurrentHandlersEnvVar,
             HttpMcpTransport.MaxEventStreamsEnvVar);
         env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, (2 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
+        env.Set(HttpMcpTransport.MaxResponseBodyBytesEnvVar, (3 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
         env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, "128");
         env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, "32");
         env.Set(HttpMcpTransport.MaxEventStreamsEnvVar, "8");
@@ -624,6 +672,7 @@ public class HttpMcpTransportTests : IDisposable
             bearerToken: null);
 
         Assert.Equal(2 * 1024 * 1024, transport.MaxRequestBodyBytes);
+        Assert.Equal(3 * 1024 * 1024, transport.MaxResponseBodyBytes);
         Assert.Equal(128, transport.MaxQueuedRequests);
         Assert.Equal(32, transport.MaxConcurrentHandlers);
         Assert.Equal(8, transport.MaxEventStreams);
@@ -1491,6 +1540,7 @@ public class HttpMcpTransportTests : IDisposable
             IMcpAuthenticator? authenticator = null,
             Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null,
             int? maxRequestBodyBytes = null,
+            int? maxResponseBodyBytes = null,
             int? maxQueuedRequests = null,
             int? requestLogQueueCapacity = null)
         {
@@ -1500,9 +1550,10 @@ public class HttpMcpTransportTests : IDisposable
                 listen.Host,
                 listen.Port,
                 bearerToken,
-                requestLogger,
-                maxRequestBodyBytes,
-                maxQueuedRequests,
+                requestLogger: requestLogger,
+                maxRequestBodyBytes: maxRequestBodyBytes,
+                maxResponseBodyBytes: maxResponseBodyBytes,
+                maxQueuedRequests: maxQueuedRequests,
                 requestLogQueueCapacity: requestLogQueueCapacity);
             var server = authenticator is null
                 ? new McpServer(dbPath, ConsoleUi.LoadVersion())
@@ -1552,6 +1603,29 @@ public class HttpMcpTransportTests : IDisposable
             catch { /* timeouts / cancellations expected when the listener stops mid-accept */ }
             _server.Dispose();
             _cts.Dispose();
+        }
+    }
+
+    private sealed class UnknownLengthStringContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+
+        public UnknownLengthStringContent(string body)
+        {
+            _bytes = Encoding.UTF8.GetBytes(body);
+            Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
+            {
+                CharSet = "utf-8",
+            };
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => stream.WriteAsync(_bytes, 0, _bytes.Length);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
         }
     }
 }

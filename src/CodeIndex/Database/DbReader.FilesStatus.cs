@@ -885,6 +885,11 @@ public partial class DbReader
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,
+            ReadOnlyImmutableFallback = _readOnlyImmutableFallback,
+            WalCheckpointSkippedReason = _walCheckpointSkippedReason,
+            WalCheckpointFailureReason = _walCheckpointFailureReason,
+            WalStaleSnapshotRisk = WalStaleSnapshotRisk,
+            WalStaleSnapshotReason = WalStaleSnapshotReason,
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。

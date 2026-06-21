@@ -41,7 +41,7 @@ internal sealed class McpIndexRunLock : IDisposable
         var infoPath = lockPath + ".info";
         try
         {
-            var stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            var stream = ExclusiveFileLock.Open(lockPath);
             var acquired = new McpIndexRunLock(stream, infoPath);
             acquired.WriteHolderInfo();
             runLock = acquired;
@@ -75,7 +75,7 @@ internal sealed class McpIndexRunLock : IDisposable
         var since = DateTimeOffset.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
         try
         {
-            DataDirectorySecurity.WritePrivateText(_infoPath, $$"""{"pid":{{Environment.ProcessId}},"since":"{{since}}"}""");
+            ExclusiveFileLock.WriteHolderInfo(_infoPath, $$"""{"pid":{{Environment.ProcessId}},"since":"{{since}}"}""");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -98,14 +98,10 @@ internal sealed class McpIndexRunLock : IDisposable
     {
         try
         {
-            if (!File.Exists(infoPath))
+            if (!ExclusiveFileLock.TryReadHolderInfoText(infoPath, MaxInfoBytes, out var text))
                 return null;
 
-            var text = DataDirectorySecurity.ReadTextWithinLimit(infoPath, MaxInfoBytes, FileShare.ReadWrite);
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
-
-            using var document = JsonDocument.Parse(text, InfoJsonDocumentOptions);
+            using var document = JsonDocument.Parse(text!, InfoJsonDocumentOptions);
             var root = document.RootElement;
             if (!root.TryGetProperty("pid", out var pidElement) || !pidElement.TryGetInt32(out var pid))
                 return null;
@@ -149,16 +145,7 @@ internal sealed class McpIndexRunLock : IDisposable
             return;
 
         _disposed = true;
-        try
-        {
-            DeleteFileForTesting(_infoPath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            var diagnostic = LockCleanupDiagnostic.Create("mcp_index_lock", "metadata", ex);
-            GlobalToolLog.Error(diagnostic.ToLogMessage());
-            CleanupDiagnosticSinkForTesting?.Invoke(diagnostic);
-        }
+        ExclusiveFileLock.TryDeleteCleanupTarget(_infoPath, "mcp_index_lock", "metadata", DeleteFileForTesting, CleanupDiagnosticSinkForTesting);
         _stream.Dispose();
     }
 
