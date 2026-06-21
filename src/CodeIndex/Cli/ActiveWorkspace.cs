@@ -9,6 +9,7 @@ internal static class ActiveWorkspace
 {
     internal const string EnvironmentVariable = "CDIDX_ACTIVE_WORKSPACE";
     internal const int MaxEnvironmentPathChars = 4096;
+    internal const int MaxWorkspaceNameChars = 128;
     private const int MaxStateBytes = 64 * 1024;
     internal const int MaxStateJsonDepth = 16;
     private static readonly JsonDocumentOptions StateJsonDocumentOptions = new()
@@ -94,8 +95,27 @@ internal static class ActiveWorkspace
 
         try
         {
+            if (!IsFullyQualifiedPath(envPath))
+            {
+                WriteLoadWarning($"environment variable {EnvironmentVariable}", "value must be an absolute database path");
+                return null;
+            }
+
             var fullPath = Path.GetFullPath(envPath);
-            return new ActiveWorkspaceState("env", Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory, fullPath);
+            var root = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                WriteLoadWarning($"environment variable {EnvironmentVariable}", "database path parent is unavailable");
+                return null;
+            }
+
+            if (!TryNormalizeState("env", root, fullPath, out var state, out var stateReason))
+            {
+                WriteLoadWarning($"environment variable {EnvironmentVariable}", stateReason);
+                return null;
+            }
+
+            return state;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -140,7 +160,7 @@ internal static class ActiveWorkspace
 
         try
         {
-            path = Path.Combine(NormalizeBoundaryPath(root), "cdidx", "active.json");
+            path = Path.Combine(PathCasing.NormalizeBoundaryPath(root), "cdidx", "active.json");
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
@@ -183,6 +203,9 @@ internal static class ActiveWorkspace
             return false;
         }
 
+        if (!TryNormalizeName(name, out var normalizedName, out reason))
+            return false;
+
         if (!IsFullyQualifiedPath(root))
         {
             reason = "`root` must be an absolute path";
@@ -197,8 +220,8 @@ internal static class ActiveWorkspace
 
         try
         {
-            var normalizedRoot = NormalizeBoundaryPath(root);
-            var normalizedDbPath = Path.GetFullPath(dbPath);
+            var normalizedRoot = PathCasing.NormalizeBoundaryPath(root);
+            var normalizedDbPath = PathCasing.NormalizeBoundaryPath(dbPath);
             if (PathCasing.PathsEqual(normalizedRoot, normalizedDbPath)
                 || !PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedDbPath))
             {
@@ -206,7 +229,7 @@ internal static class ActiveWorkspace
                 return false;
             }
 
-            state = new ActiveWorkspaceState(string.IsNullOrWhiteSpace(name) ? "default" : name, normalizedRoot, normalizedDbPath);
+            state = new ActiveWorkspaceState(normalizedName, normalizedRoot, normalizedDbPath);
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
@@ -216,13 +239,27 @@ internal static class ActiveWorkspace
         }
     }
 
-    private static string NormalizeBoundaryPath(string path)
+    private static bool TryNormalizeName(string? name, out string normalizedName, out string reason)
     {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        reason = string.Empty;
+        normalizedName = "default";
+        if (string.IsNullOrWhiteSpace(name))
+            return true;
+
+        normalizedName = name.Trim();
+        if (normalizedName.Length > MaxWorkspaceNameChars)
+        {
+            reason = $"`name` exceeds {MaxWorkspaceNameChars} characters";
+            return false;
+        }
+
+        if (normalizedName.Any(char.IsControl))
+        {
+            reason = "`name` must not contain control characters";
+            return false;
+        }
+
+        return true;
     }
 
     private static bool IsFullyQualifiedPath(string path)

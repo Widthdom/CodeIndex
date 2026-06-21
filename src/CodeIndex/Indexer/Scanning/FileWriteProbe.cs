@@ -7,10 +7,12 @@ internal static class FileWriteProbe
     internal static void WriteEmptyFile(string path, Encoding? encoding = null)
     {
         var ioPath = LongPath.EnsureWindowsPrefix(path);
+        using var stream = new FileStream(ioPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         if (encoding is null)
-            File.WriteAllText(ioPath, string.Empty);
-        else
-            File.WriteAllText(ioPath, string.Empty, encoding);
+            return;
+
+        using var writer = new StreamWriter(stream, encoding);
+        writer.Write(string.Empty);
     }
 
     internal static bool TryWriteAndDeleteEmptyFile(string path, Encoding? encoding = null)
@@ -21,7 +23,6 @@ internal static class FileWriteProbe
         }
         catch (Exception ex) when (IsWriteProbeFailure(ex))
         {
-            TryDeleteFileIfExists(path);
             return false;
         }
 

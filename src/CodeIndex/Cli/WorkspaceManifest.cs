@@ -47,14 +47,14 @@ internal static class WorkspaceManifestLoader
                                       or PathTooLongException
                                       or UnauthorizedAccessException)
         {
-            throw new InvalidDataException($"Workspace manifest discovery start directory is invalid: {startingDirectory}", ex);
+            throw new InvalidDataException($"Workspace manifest discovery start directory is invalid: {ConsoleUi.FormatBoundedValue(startingDirectory)}", ex);
         }
 
         var searchedAncestors = 0;
         while (current is not null)
         {
             if (searchedAncestors >= MaxManifestDiscoveryAncestors)
-                throw new InvalidDataException($"Workspace manifest discovery exceeded the {MaxManifestDiscoveryAncestors} ancestor limit from {startingDirectory}.");
+                throw new InvalidDataException($"Workspace manifest discovery exceeded the {MaxManifestDiscoveryAncestors} ancestor limit from {ConsoleUi.FormatBoundedValue(startingDirectory)}.");
             searchedAncestors++;
 
             foreach (var name in new[] { DotFileName, FileName })
@@ -113,7 +113,7 @@ internal static class WorkspaceManifestLoader
             return strategy;
         }
 
-        throw new InvalidDataException($"Workspace manifest index_strategy must be 'per_member' or 'single': {strategy}");
+        throw new InvalidDataException($"Workspace manifest index_strategy must be 'per_member' or 'single': {ConsoleUi.FormatBoundedValue(strategy)}");
     }
 
     private static string ValidateDefaultDbName(string dbName)
@@ -129,7 +129,7 @@ internal static class WorkspaceManifestLoader
             || dbName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || !string.Equals(Path.GetFileName(dbName), dbName, StringComparison.Ordinal))
         {
-            throw new InvalidDataException($"Workspace manifest default_db_name must be a plain file name: {dbName}");
+            throw new InvalidDataException($"Workspace manifest default_db_name must be a plain file name: {ConsoleUi.FormatBoundedValue(dbName)}");
         }
 
         return dbName;
@@ -215,22 +215,13 @@ internal static class WorkspaceManifestLoader
     private static string ResolveMemberPath(string root, string member)
     {
         if (Path.IsPathRooted(member))
-            throw new InvalidDataException($"Workspace manifest member path must be relative: {member}");
+            throw new InvalidDataException("Workspace manifest member path must be relative.");
 
-        var normalizedRoot = NormalizeBoundaryPath(Path.GetFullPath(root));
-        var fullMember = NormalizeBoundaryPath(Path.GetFullPath(Path.Combine(normalizedRoot, member)));
+        var normalizedRoot = PathCasing.NormalizeBoundaryPath(root);
+        var fullMember = PathCasing.NormalizeBoundaryPath(Path.Combine(normalizedRoot, member));
         if (!PathCasing.IsPathEqualOrParent(normalizedRoot, fullMember))
-            throw new InvalidDataException($"Workspace manifest member path escapes the manifest root: {member}");
+            throw new InvalidDataException("Workspace manifest member path escapes the manifest root.");
 
         return fullMember;
-    }
-
-    private static string NormalizeBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }
