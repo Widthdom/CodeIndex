@@ -1559,6 +1559,104 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_ExternalRecipeCountValidationReportsBoundedDiagnostic_Issue3751()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_count_3751");
+        try
+        {
+            var recipePath = Path.Combine(projectRoot, "many-recipes.json");
+            var recipes = Enumerable.Range(0, 33)
+                .Select(index => $$"""
+                    {
+                      "name": "local-audit-{{index}}",
+                      "description": "Exercise count validation.",
+                      "queries": [
+                        {
+                          "name": "marker-{{index}}",
+                          "query": "Marker{{index}}",
+                          "description": "Find the configured marker."
+                        }
+                      ]
+                    }
+                    """);
+            File.WriteAllText(recipePath, "[" + string.Join(",", recipes) + "]");
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var registry = SearchAuditRecipes.Load();
+
+            Assert.Contains(
+                "recipe source #1 has more than 32 recipes; extra entries are ignored.",
+                registry.Diagnostics);
+            Assert.DoesNotContain(registry.Recipes, recipe => recipe.Name == "local-audit-32");
+            Assert.Contains(registry.Recipes, recipe => recipe.Name == "local-audit-31");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExternalRecipeQueryAndLabelValidationReportsBoundedDiagnostics_Issue3751()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_query_label_3751");
+        try
+        {
+            var recipePath = Path.Combine(projectRoot, "invalid-recipes.json");
+            var longQuery = new string('q', QueryLimits.MaxQueryLength + 1);
+            var longLabel = new string('l', 65);
+            File.WriteAllText(
+                recipePath,
+                $$"""
+                [
+                  {
+                    "name": "local-audit",
+                    "description": "Exercise query and label validation.",
+                    "queries": [
+                      {
+                        "name": "too-long-query",
+                        "query": "{{longQuery}}",
+                        "description": "This query should be rejected."
+                      },
+                      {
+                        "name": "bounded-labels",
+                        "query": "BoundedNeedle",
+                        "description": "This query should keep only valid labels.",
+                        "recommended_labels": ["audit", "{{longLabel}}", ""]
+                      }
+                    ]
+                  }
+                ]
+                """);
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var registry = SearchAuditRecipes.Load();
+
+            Assert.Contains(
+                $"recipe source #1 item #1 field 'query' exceeds {QueryLimits.MaxQueryLength} characters.",
+                registry.Diagnostics);
+            Assert.Contains(
+                "recipe source #1 recipe 'local-audit' query 'bounded-labels' label #2 exceeds 64 characters.",
+                registry.Diagnostics);
+            Assert.Contains(
+                "recipe source #1 recipe 'local-audit' query 'bounded-labels' label #3 must be a non-empty string.",
+                registry.Diagnostics);
+            var recipe = Assert.Single(registry.Recipes.Where(recipe => recipe.Name == "local-audit"));
+            var query = Assert.Single(recipe.Queries);
+            Assert.Equal("bounded-labels", query.Name);
+            Assert.Equal(["audit"], query.RecommendedLabels);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("csv")]
