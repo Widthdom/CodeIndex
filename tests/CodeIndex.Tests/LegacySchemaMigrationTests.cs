@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -199,6 +200,35 @@ public class LegacySchemaMigrationTests : IDisposable
             """;
         cmd.ExecuteNonQuery();
         SqliteConnection.ClearAllPools();
+    }
+
+    private static long ReadForeignKeys(DbContext db)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "PRAGMA foreign_keys";
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static void SetForeignKeys(DbContext db, bool enabled)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA foreign_keys={(enabled ? 1 : 0)}";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void InvokePrivateDbContextMethod(DbContext db, string methodName)
+    {
+        var method = typeof(DbContext).GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        try
+        {
+            method!.Invoke(db, parameters: null);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException != null)
+        {
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+        }
     }
 
     [Fact]
@@ -479,6 +509,90 @@ public class LegacySchemaMigrationTests : IDisposable
         => typeof(DbContext)
             .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(db, value);
+
+    [Fact]
+    public void InitializeSchema_ForeignKeysRestoredWhenMigrationWindowFailsInsideTransaction_Issue3678()
+    {
+        using var db = new DbContext(_dbPath);
+        Assert.Equal(1, ReadForeignKeys(db));
+
+        var previousHook = DbContext.ForeignKeysDisabledForTesting;
+        DbContext.ForeignKeysDisabledForTesting = operation =>
+        {
+            if (operation == "EnsureKindCheckConstraintsCurrent")
+                throw new InvalidOperationException("injected kind-check migration failure");
+        };
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(db.InitializeSchema);
+
+            Assert.Contains("injected kind-check", ex.Message, StringComparison.Ordinal);
+            Assert.Equal(1, ReadForeignKeys(db));
+        }
+        finally
+        {
+            DbContext.ForeignKeysDisabledForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void MigrationWindow_ForeignKeysRestoredWhenFailureOccursOutsideActiveTransaction_Issue3678()
+    {
+        using var db = new DbContext(_dbPath);
+        db.InitializeSchema();
+        SetForeignKeys(db, enabled: false);
+        Assert.Equal(0, ReadForeignKeys(db));
+
+        var previousHook = DbContext.ForeignKeysDisabledForTesting;
+        DbContext.ForeignKeysDisabledForTesting = operation =>
+        {
+            if (operation == "EnsureKindCheckConstraintsCurrent")
+                throw new InvalidOperationException("injected direct migration failure");
+        };
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                InvokePrivateDbContextMethod(db, "EnsureKindCheckConstraintsCurrent"));
+
+            Assert.Contains("injected direct", ex.Message, StringComparison.Ordinal);
+            Assert.Equal(0, ReadForeignKeys(db));
+        }
+        finally
+        {
+            DbContext.ForeignKeysDisabledForTesting = previousHook;
+            SetForeignKeys(db, enabled: true);
+        }
+    }
+
+    [Fact]
+    public void InitializeSchema_ForeignKeyRestoreFailureReportsActionableDatabaseError_Issue3678()
+    {
+        using var db = new DbContext(_dbPath);
+        var previousHook = DbContext.ForeignKeysRestoringForTesting;
+        DbContext.ForeignKeysRestoringForTesting = (operation, _) =>
+        {
+            if (operation == "EnsureKindCheckConstraintsCurrent")
+                throw new InvalidOperationException("restore blocked");
+        };
+
+        try
+        {
+            var ex = Assert.Throws<CodeIndexException>(db.InitializeSchema);
+
+            Assert.Equal(CommandErrorCodes.DbError, ex.Code);
+            Assert.Equal(CodeIndexExceptionCategory.Database, ex.Category);
+            Assert.Contains("Failed to restore PRAGMA foreign_keys", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("EnsureKindCheckConstraintsCurrent", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("rerun the command", ex.Hint, StringComparison.OrdinalIgnoreCase);
+            Assert.IsType<InvalidOperationException>(ex.InnerException);
+        }
+        finally
+        {
+            DbContext.ForeignKeysRestoringForTesting = previousHook;
+        }
+    }
 
     [Fact]
     public void DbContext_ReadOnlyFilesystem_FallsBackToReadOnlyOpen()

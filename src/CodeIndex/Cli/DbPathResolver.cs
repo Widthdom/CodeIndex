@@ -173,6 +173,11 @@ public static class DbPathResolver
         if (indexedProjectRoot == null && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
             indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
 
+        var pathCaseSensitive = TryReadWorkspacePathCaseSensitive(dbPath);
+        if (!pathCaseSensitive.HasValue && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
+            pathCaseSensitive = TryReadWorkspacePathCaseSensitive(fullDbPath);
+        SeedPathCasingFromWorkspaceStamp(indexedProjectRoot, fullDbPath, pathCaseSensitive);
+
         var projectLocalRoot = TryResolveProjectLocalRoot(fullDbPath, dbPath, dbPathExplicit, indexedProjectRoot);
         if (projectLocalRoot != null)
             return projectLocalRoot;
@@ -287,6 +292,23 @@ public static class DbPathResolver
 
     private static string? TryReadIndexedProjectRoot(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
+
+    private static bool? TryReadWorkspacePathCaseSensitive(string dbPath)
+    {
+        var raw = TryReadMetaString(dbPath, CodeIndex.Database.DbContext.WorkspacePathCaseSensitiveMetaKey);
+        return bool.TryParse(raw, out var pathCaseSensitive) ? pathCaseSensitive : null;
+    }
+
+    private static void SeedPathCasingFromWorkspaceStamp(string? indexedProjectRoot, string fullDbPath, bool? pathCaseSensitive)
+    {
+        if (!pathCaseSensitive.HasValue)
+            return;
+
+        var ignoreCase = !pathCaseSensitive.Value;
+        if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
+            PathCasing.SeedFromWorkspace(indexedProjectRoot, ignoreCase);
+        PathCasing.SeedFromReferencePath(fullDbPath, ignoreCase);
+    }
 
     /// <summary>
     /// Best-effort read of the persisted git HEAD commit stamped at the end of the

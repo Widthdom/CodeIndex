@@ -141,28 +141,31 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void CaseSensitivityProbeDirectory_CleanupFailureThrows_Issue3439()
+    public void CaseSensitivityProbeDirectory_CleanupFailureDowngradesToDiagnostic_Issue3828()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-cleanup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         var previousDelete = CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting;
+        var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
+        var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
         try
         {
-            using var scope = CaseSensitivityProbeDirectory.CreateProbePathScope(tempDir, "case-probe-test-");
+            var scope = CaseSensitivityProbeDirectory.CreateProbePathScope(tempDir, "case-probe-test-");
             CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting = path => throw new IOException($"blocked: {path}");
+            CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting = diagnostics.Add;
 
-            var ex = Assert.Throws<CaseSensitivityProbeException>(() => scope.Dispose());
+            scope.Dispose();
 
-            Assert.Equal(Path.GetFullPath(tempDir), ex.ProjectRoot);
-            Assert.NotNull(ex.CleanupPath);
-            Assert.EndsWith(
-                $"{CaseSensitivityProbeDirectory.DataDirectoryName}{Path.DirectorySeparatorChar}{CaseSensitivityProbeDirectory.ProbeDirectoryName}",
-                ex.CleanupPath);
-            Assert.IsType<IOException>(ex.InnerException);
+            Assert.Contains(scope.CleanupDiagnostics, diagnostic =>
+                diagnostic.RelativePath == $"{CaseSensitivityProbeDirectory.DataDirectoryName}/{CaseSensitivityProbeDirectory.ProbeDirectoryName}");
+            Assert.Contains(diagnostics, diagnostic =>
+                diagnostic.RelativePath == $"{CaseSensitivityProbeDirectory.DataDirectoryName}/{CaseSensitivityProbeDirectory.ProbeDirectoryName}");
+            Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.RelativePath.Contains(tempDir, StringComparison.Ordinal));
         }
         finally
         {
             CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting = previousDelete;
+            CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting = previousSink;
             TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
