@@ -6734,6 +6734,7 @@ public sealed class Caller
             };
 
             int interruptedExitCode;
+            JsonElement interruptedJson;
             lock (TestConsoleLock.Gate)
             {
                 var originalOut = Console.Out;
@@ -6742,6 +6743,8 @@ public sealed class Caller
                 {
                     Console.SetOut(stdout);
                     interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions, cancellation);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    interruptedJson = document.RootElement.Clone();
                 }
                 finally
                 {
@@ -6752,6 +6755,10 @@ public sealed class Caller
 
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            Assert.Equal("error", interruptedJson.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, interruptedJson.GetProperty("error_code").GetString());
+            Assert.Contains("full-scan progress was rolled back", interruptedJson.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("rolled back", interruptedJson.GetProperty("hint").GetString(), StringComparison.Ordinal);
             var reopenWarning = ConsoleCapture.CaptureError(() =>
             {
                 using var db = new DbContext(dbPath);
@@ -6760,6 +6767,15 @@ public sealed class Caller
             Assert.DoesNotContain("Last batch did not complete", reopenWarning);
             Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
             Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var lastRun = statusJson.GetProperty("last_failed_or_partial_index_run");
+            Assert.Equal("partial", lastRun.GetProperty("status").GetString());
+            Assert.Equal("incremental", lastRun.GetProperty("mode").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, lastRun.GetProperty("error_code").GetString());
+            Assert.False(lastRun.GetProperty("progress_persisted").GetBoolean());
+            Assert.Contains("rolled back", lastRun.GetProperty("recovery_hint").GetString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -6827,6 +6843,138 @@ public sealed class Caller
         finally
         {
             IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateModeFallbackFullScan_CancelledAfterReadinessDemotion_ReportsRolledBackProgress()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "bin/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            File.AppendAllText(Path.Combine(projectRoot, ".gitignore"), "obj/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "later.cs"), "public class Later { }\n");
+            using var cancellation = new CancellationTokenSource();
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = () => cancellation.Cancel();
+
+            int interruptedExitCode;
+            JsonElement interruptedJson;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--files", ".gitignore", "--json"], _jsonOptions, cancellation);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    interruptedJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            Assert.Contains("full-scan progress was rolled back", interruptedJson.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("rolled back", interruptedJson.GetProperty("hint").GetString(), StringComparison.Ordinal);
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var lastRun = statusJson.GetProperty("last_failed_or_partial_index_run");
+            Assert.Equal("partial", lastRun.GetProperty("status").GetString());
+            Assert.Equal("incremental", lastRun.GetProperty("mode").GetString());
+            Assert.False(lastRun.GetProperty("progress_persisted").GetBoolean());
+            Assert.Contains("rolled back", lastRun.GetProperty("recovery_hint").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_CancelledAfterCommittedFile_ReportsPersistedProgress()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public int Version => 1; }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var initialChecksum = ReadIndexedChecksum(dbPath, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public int Version => 2; }\n");
+
+            var hookInvoked = false;
+            IndexCommandRunner.UpdateFileCommittedForTesting = (filesProcessed, filesTotal) =>
+            {
+                Assert.Equal(1, filesProcessed);
+                Assert.Equal(1, filesTotal);
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+
+            int interruptedExitCode;
+            JsonElement interruptedJson;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--files", "app.cs", "--json"], _jsonOptions, cancellation);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    interruptedJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    IndexCommandRunner.UpdateFileCommittedForTesting = null;
+                }
+            }
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            Assert.Equal("error", interruptedJson.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, interruptedJson.GetProperty("error_code").GetString());
+            Assert.Contains("completed update progress was saved", interruptedJson.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("completed update-mode file transactions remain", interruptedJson.GetProperty("hint").GetString(), StringComparison.Ordinal);
+            Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
+            Assert.NotEqual(initialChecksum, ReadIndexedChecksum(dbPath, "app.cs"));
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var lastRun = statusJson.GetProperty("last_failed_or_partial_index_run");
+            Assert.Equal("partial", lastRun.GetProperty("status").GetString());
+            Assert.Equal("update", lastRun.GetProperty("mode").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, lastRun.GetProperty("error_code").GetString());
+            Assert.Equal(1, lastRun.GetProperty("files_processed").GetInt64());
+            Assert.Equal(1, lastRun.GetProperty("files_total").GetInt64());
+            Assert.True(lastRun.GetProperty("progress_persisted").GetBoolean());
+            Assert.Contains("remain in the index", lastRun.GetProperty("recovery_hint").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateFileCommittedForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

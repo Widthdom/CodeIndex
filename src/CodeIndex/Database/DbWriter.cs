@@ -2424,6 +2424,8 @@ public class DbWriter
         SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, null);
         SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, null);
         SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunProgressPersistedMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunRecoveryHintMetaKey, null);
     }
 
     /// <summary>

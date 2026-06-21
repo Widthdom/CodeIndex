@@ -49,6 +49,7 @@ public static partial class IndexCommandRunner
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
+    internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Action<string>? WriteScanCheckpointForTesting { get; set; }
@@ -156,6 +157,7 @@ public static partial class IndexCommandRunner
         }
         catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
         {
+            const bool progressPersisted = false;
             TryStampLastFailedIndexRun(
                 resolvedDbPath,
                 status: "partial",
@@ -165,8 +167,10 @@ public static partial class IndexCommandRunner
                 filesProcessed: 0,
                 filesTotal: null,
                 CommandErrorCodes.Interrupted,
-                reason: "cancelled");
-            return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null);
+                reason: "cancelled",
+                progressPersisted: progressPersisted,
+                recoveryHint: BuildInterruptedRecoveryHint(mode, progressPersisted));
+            return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null, mode, progressPersisted);
         }
 
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
@@ -312,20 +316,25 @@ public static partial class IndexCommandRunner
         }
         catch (IndexInterruptedException ex)
         {
+            var failureMode = ex.ActualMode ?? mode;
+            var progressPersisted = InterruptedProgressIsPersisted(failureMode, ex.FilesProcessed);
             TryStampLastFailedIndexRun(
                 resolvedDbPath,
                 status: "partial",
-                mode,
+                failureMode,
                 runStartedAtUtc,
                 stopwatch.ElapsedMilliseconds,
                 ex.FilesProcessed,
                 ex.FilesTotal,
                 CommandErrorCodes.Interrupted,
-                reason: "interrupted");
-            return WriteInterruptedResult(options.Json, jsonOptions, ex.FilesProcessed, ex.FilesTotal);
+                reason: "interrupted",
+                progressPersisted: progressPersisted,
+                recoveryHint: BuildInterruptedRecoveryHint(failureMode, progressPersisted));
+            return WriteInterruptedResult(options.Json, jsonOptions, ex.FilesProcessed, ex.FilesTotal, failureMode, progressPersisted);
         }
         catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
         {
+            const bool progressPersisted = false;
             TryStampLastFailedIndexRun(
                 resolvedDbPath,
                 status: "partial",
@@ -335,8 +344,10 @@ public static partial class IndexCommandRunner
                 filesProcessed: 0,
                 filesTotal: null,
                 CommandErrorCodes.Interrupted,
-                reason: "cancelled");
-            return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null);
+                reason: "cancelled",
+                progressPersisted: progressPersisted,
+                recoveryHint: BuildInterruptedRecoveryHint(mode, progressPersisted));
+            return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null, mode, progressPersisted);
         }
         catch (IndexExtractionStalledException ex)
         {
@@ -602,7 +613,9 @@ public static partial class IndexCommandRunner
         long? filesProcessed,
         long? filesTotal,
         string errorCode,
-        string reason)
+        string reason,
+        bool? progressPersisted = null,
+        string? recoveryHint = null)
     {
         if (string.IsNullOrWhiteSpace(dbPath)
             || dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
@@ -624,6 +637,8 @@ public static partial class IndexCommandRunner
             writer.SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, filesTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode);
             writer.SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, reason);
+            writer.SetMeta(DbContext.LastFailedIndexRunProgressPersistedMetaKey, progressPersisted?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint);
         }
         catch (Exception ex) when (ex is CodeIndexException or IOException or UnauthorizedAccessException or NotSupportedException or SqliteException)
         {
@@ -1564,15 +1579,17 @@ public static partial class IndexCommandRunner
 
     private sealed class IndexInterruptedException : OperationCanceledException
     {
-        public IndexInterruptedException(int filesProcessed, int? filesTotal)
+        public IndexInterruptedException(int filesProcessed, int? filesTotal, string? actualMode = null)
             : base("Indexing was interrupted.")
         {
             FilesProcessed = filesProcessed;
             FilesTotal = filesTotal;
+            ActualMode = actualMode;
         }
 
         public int FilesProcessed { get; }
         public int? FilesTotal { get; }
+        public string? ActualMode { get; }
     }
 
     private sealed class IndexExtractionStalledException : Exception
