@@ -173,6 +173,85 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JsonBroadObject_EmitsStructuredDataTruncationDiagnostic_Issue3765()
+    {
+        var properties = string.Join(",\n", Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"  \"p{index}\": {index}"));
+        var content = "{\n" + properties + "\n}";
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_symbol_budget_exceeded");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+    }
+
+    [Fact]
+    public void Extract_JsonDeepObject_EmitsStructuredDataDepthDiagnostic_Issue3765()
+    {
+        var builder = new StringBuilder();
+        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxJsonDepth; index++)
+            builder.Append("{\"p").Append(index).Append("\":");
+        builder.Append('0');
+        for (var index = 0; index <= SymbolExtractor.StructuredDataMaxJsonDepth; index++)
+            builder.Append('}');
+
+        var symbols = SymbolExtractor.Extract(1, "json", builder.ToString());
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_depth_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_YamlBroadMapping_EmitsStructuredDataTruncationDiagnostic_Issue3765()
+    {
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"p{index}: {index}"));
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_symbol_budget_exceeded");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+    }
+
+    [Fact]
+    public void Extract_XmlBroadXaml_EmitsStructuredDataTruncationDiagnostic_Issue3765()
+    {
+        var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"""  <Button x:Name="Button{index}" />"""));
+        var content = $$"""
+            <Window x:Class="App.MainWindow" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+            {{elements}}
+            </Window>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "structured_data_xml_symbol_budget_exceeded");
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+    }
+
+    [Fact]
+    public void Extract_DockerfileJsonFormVolume_EmitsArrayTruncationDiagnostic_Issue3765()
+    {
+        var items = string.Join(", ", Enumerable.Range(0, SymbolExtractor.DockerfileJsonFormMaxItems + 1).Select(index => $"\"/data/{index}\""));
+        var content = $"FROM alpine\nVOLUME [{items}]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "dockerfile_json_form_array_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_DockerfileJsonFormCopy_EmitsBodyTruncationDiagnostic_Issue3765()
+    {
+        var longPath = "/" + new string('a', SymbolExtractor.DockerfileJsonFormMaxBodyLength + 1);
+        var content = $$"""
+            FROM alpine
+            COPY ["src", "{{longPath}}"]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "extraction_diagnostic" && symbol.Name == "dockerfile_json_form_body_budget_exceeded");
+    }
+
+    [Fact]
     public void Extract_Solution_IndexesProjectEntries_Issue3662()
     {
         const string content = """
@@ -16548,11 +16627,13 @@ public partial class SymbolExtractorTests
         var content = "VOLUME [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var volumeSymbols = symbols.Where(s => s.Kind == "volume").ToList();
 
-        Assert.Equal(maxItems, symbols.Count);
-        Assert.Contains(symbols, s => s.Kind == "volume" && s.Name == "/vol0");
-        Assert.Contains(symbols, s => s.Kind == "volume" && s.Name == "/vol" + (maxItems - 1));
-        Assert.DoesNotContain(symbols, s => s.Kind == "volume" && s.Name == "/too-many");
+        Assert.Equal(maxItems, volumeSymbols.Count);
+        Assert.Contains(volumeSymbols, s => s.Name == "/vol0");
+        Assert.Contains(volumeSymbols, s => s.Name == "/vol" + (maxItems - 1));
+        Assert.DoesNotContain(volumeSymbols, s => s.Name == "/too-many");
+        Assert.Contains(symbols, s => s.Kind == "extraction_diagnostic" && s.Name == "dockerfile_json_form_array_budget_exceeded");
     }
 
     [Fact]
@@ -16603,8 +16684,10 @@ public partial class SymbolExtractorTests
         var content = instruction + " [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var kind = instruction.ToLowerInvariant();
 
-        Assert.Empty(symbols);
+        Assert.DoesNotContain(symbols, s => s.Kind == kind);
+        Assert.Contains(symbols, s => s.Kind == "extraction_diagnostic" && s.Name == "dockerfile_json_form_array_budget_exceeded");
     }
 
     [Fact]
@@ -19881,6 +19964,52 @@ public partial class SymbolExtractorTests
             Assert.Contains("Skipped TypeScript path alias target substitution", stderr, StringComparison.Ordinal);
             Assert.DoesNotContain(longSubstitutingTarget, stderr, StringComparison.Ordinal);
             Assert.DoesNotContain(wildcard, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ExcessivePathAliasExpansionCandidatesTruncatesWithWarning_Issue3764()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_expansion_candidates_symbols");
+        try
+        {
+            var maxExpansionCandidates = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasExpansionCandidates");
+            var moduleBody = new string('a', 80);
+            var ruleCount = (maxExpansionCandidates / 20) + 4;
+            var paths = new StringBuilder();
+            for (var i = 0; i < ruleCount; i++)
+            {
+                if (i > 0)
+                    paths.Append(',');
+
+                var prefixLength = i % 40;
+                var suffixLength = i / 40;
+                var pattern = "@/"
+                    + moduleBody[..prefixLength]
+                    + "*"
+                    + (suffixLength == 0 ? string.Empty : moduleBody[^suffixLength..]);
+                paths.Append('"').Append(pattern).Append("\":[\"missing").Append(i).Append("/*\"]");
+            }
+
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{" + paths + "}}}");
+            var moduleName = "@/" + moduleBody;
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import value from \"" + moduleName + "\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == moduleName);
+            Assert.Contains("Truncated TypeScript path alias expansion candidates", stderr, StringComparison.Ordinal);
+            Assert.Contains("path_alias_expansion_candidate_limit", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(moduleName, stderr, StringComparison.Ordinal);
         }
         finally
         {

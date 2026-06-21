@@ -835,6 +835,34 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void LanguageMapOverrides_PatternCountCapTruncatesRemainingOverridesWithWarning_Issue3764()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_patterns_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            const int maxPatterns = 8192;
+            var configPath = Path.Combine(tempDir, "langmap.yaml");
+            var builder = new StringBuilder("entries:\n");
+            for (var i = 0; i <= maxPatterns; i++)
+                builder.Append("extension:x").Append(i).Append('\n');
+            File.WriteAllText(configPath, builder.ToString());
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { configPath },
+                warnings.Add);
+
+            Assert.Empty(map);
+            Assert.Contains(warnings, warning => warning.Contains("pattern count exceeds 8192", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_EntryCountCapIsPerFileSoWorkspaceOverridesStillLoad()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_per_file_entries_{Guid.NewGuid():N}");

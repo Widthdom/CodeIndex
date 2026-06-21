@@ -56,6 +56,26 @@ public static partial class IndexCommandRunner
             Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the --max-references-per-file limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise --max-references-per-file if this is expected.",
         };
 
+    private static IReadOnlyList<FileIssue> AppendReferenceExtractionDiagnosticIssues(
+        IReadOnlyList<FileIssue> issues,
+        string path,
+        IReadOnlyList<ReferenceExtractionDiagnostic> diagnostics)
+    {
+        foreach (var diagnostic in diagnostics)
+        {
+            issues = AppendIssue(issues, new FileIssue
+            {
+                Path = path,
+                Kind = diagnostic.Kind,
+                Line = 0,
+                Message = diagnostic.Message,
+                Severity = FileIssue.SeverityWarning,
+            });
+        }
+
+        return issues;
+    }
+
     internal static FileIssue BuildNullByteIssue(FileIndexer.BinaryFileSkippedException ex) =>
         new()
         {
@@ -911,7 +931,10 @@ public static partial class IndexCommandRunner
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(options.MaxFileSizeBytes);
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
+            options.MaxFileSizeBytes,
+            maxSymbolCount: options.MaxSymbolsPerFile + 1,
+            maxReferenceCount: options.MaxReferencesPerFile + 1);
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var existingFileCount = writer.GetCounts().files;
@@ -1172,6 +1195,7 @@ public static partial class IndexCommandRunner
                                 }
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 FileIssue? referenceRegexTimeoutIssue = null;
+                                ReferenceExtractionResult? referenceExtraction = null;
                                 if (options.SymbolsOnly)
                                 {
                                     references = [];
@@ -1180,7 +1204,7 @@ public static partial class IndexCommandRunner
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                     using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
-                                    references = ReferenceExtractor.Extract(
+                                    referenceExtraction = ReferenceExtractor.ExtractDetailed(
                                         0,
                                         record.Lang,
                                         content,
@@ -1189,6 +1213,7 @@ public static partial class IndexCommandRunner
                                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                         extractionCancellationToken,
                                         maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                    references = referenceExtraction.References;
                                     referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
@@ -1197,6 +1222,8 @@ public static partial class IndexCommandRunner
                                     issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                                 if (referenceRegexTimeoutIssue != null)
                                     issues = AppendIssue(issues, referenceRegexTimeoutIssue);
+                                if (referenceExtraction != null)
+                                    issues = AppendReferenceExtractionDiagnosticIssues(issues, record.Path, referenceExtraction.Diagnostics);
                                 if (references.Count > options.MaxReferencesPerFile)
                                 {
                                     var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
@@ -1512,10 +1539,11 @@ public static partial class IndexCommandRunner
                     else
                     {
                         FileIssue? regexTimeoutIssue = null;
+                        ReferenceExtractionResult? referenceExtraction = null;
                         if (item.References == null)
                         {
                             using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
-                            references = ReferenceExtractor.Extract(
+                            referenceExtraction = ReferenceExtractor.ExtractDetailed(
                                 fileId,
                                 record.Lang,
                                 item.Content!,
@@ -1524,6 +1552,7 @@ public static partial class IndexCommandRunner
                                 record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                 cancellationToken,
                                 maxReferenceCount: options.MaxReferencesPerFile + 1);
+                            references = referenceExtraction.References;
                             regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                         }
                         else
@@ -1535,6 +1564,14 @@ public static partial class IndexCommandRunner
                         {
                             var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
                             item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
+                        }
+                        if (referenceExtraction != null)
+                        {
+                            var baseIssues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
+                            item = item with
+                            {
+                                Issues = AppendReferenceExtractionDiagnosticIssues(baseIssues, record.Path, referenceExtraction.Diagnostics),
+                            };
                         }
                         if (references.Count > options.MaxReferencesPerFile)
                         {

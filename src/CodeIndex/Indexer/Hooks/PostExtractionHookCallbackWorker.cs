@@ -24,7 +24,9 @@ internal sealed record PostExtractionHookCallbackResult(
     string? CallbackError,
     long DurationMs,
     List<SymbolRecord>? Symbols,
-    List<ReferenceRecord>? References);
+    List<ReferenceRecord>? References,
+    bool SymbolsTruncated = false,
+    bool ReferencesTruncated = false);
 
 internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 {
@@ -48,6 +50,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         IReadOnlyList<SymbolRecord>? symbols,
         IReadOnlyList<ReferenceRecord>? references,
         TimeSpan callbackBudget,
+        int? maxSymbols = null,
+        int? maxReferences = null,
         CancellationToken cancellationToken = default)
     {
         lock (gate)
@@ -65,7 +69,9 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 callback,
                 context,
                 symbols?.ToList(),
-                references?.ToList());
+                references?.ToList(),
+                maxSymbols,
+                maxReferences);
             var requestJson = JsonSerializer.Serialize(request, PostExtractionHookCallbackWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
@@ -162,7 +168,9 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 CallbackError: response.CallbackError,
                 DurationMs: stopwatch.ElapsedMilliseconds,
                 Symbols: response.Symbols,
-                References: response.References);
+                References: response.References,
+                SymbolsTruncated: response.SymbolsTruncated,
+                ReferencesTruncated: response.ReferencesTruncated);
         }
     }
 
@@ -621,11 +629,24 @@ internal static class PostExtractionHookCallbackWorker
             Console.SetError(originalError);
         }
 
+        var symbolsTruncated = TrimToLimit(request.Symbols, request.MaxSymbols);
+        var referencesTruncated = TrimToLimit(request.References, request.MaxReferences);
         return new WorkerResponse(
             request.Symbols,
             request.References,
             callbackFailure is null ? null : SafeDiagnosticFormatter.FormatExceptionCategory("hook_callback_failed", callbackFailure),
-            null);
+            null,
+            symbolsTruncated,
+            referencesTruncated);
+    }
+
+    private static bool TrimToLimit<T>(List<T>? items, int? maxCount)
+    {
+        if (items == null || maxCount is not { } limit || limit <= 0 || items.Count <= limit)
+            return false;
+
+        items.RemoveRange(limit, items.Count - limit);
+        return true;
     }
 
     private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
@@ -666,13 +687,17 @@ internal static class PostExtractionHookCallbackWorker
         string Callback,
         FileContext Context,
         List<SymbolRecord>? Symbols,
-        List<ReferenceRecord>? References);
+        List<ReferenceRecord>? References,
+        int? MaxSymbols = null,
+        int? MaxReferences = null);
 
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,
         List<ReferenceRecord>? References,
         string? CallbackError,
-        string? WorkerError);
+        string? WorkerError,
+        bool SymbolsTruncated = false,
+        bool ReferencesTruncated = false);
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]

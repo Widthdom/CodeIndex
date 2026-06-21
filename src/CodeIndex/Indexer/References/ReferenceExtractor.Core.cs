@@ -66,8 +66,8 @@ public static partial class ReferenceExtractor
         // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
-        var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols);
-        var allDefinitionNames = BuildAllDefinitionNames(language, symbols);
+        var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
+        var allDefinitionNames = BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic);
         var fileDefinitionNames = isRazorFile
             ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
             : null;
@@ -90,12 +90,12 @@ public static partial class ReferenceExtractor
         // enclosing class (see issue #233).
         // 式本体・ブロック本体のプロパティアクセサ内の呼び出しを、外側のクラスではなく
         // プロパティ自身に帰属させる (issue #233 参照)。
-        var containerCandidates = BuildReferenceContainerCandidates(symbols);
+        var containerCandidates = BuildReferenceContainerCandidates(symbols, request.ReportDiagnostic);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
-        var csharpXmlDocAttachmentScopeCandidates = BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols);
+        var csharpXmlDocAttachmentScopeCandidates = BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic);
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -103,7 +103,7 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols);
+        var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic);
         var rustEnumCandidates = language == "rust"
             ? symbols
                 .Where(symbol => symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
@@ -113,7 +113,7 @@ public static partial class ReferenceExtractor
         var pythonDefinitionContainersByLineAndKind = language == "python"
             ? BuildPythonDefinitionContainersByLineAndKind(symbols)
             : null;
-        var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols);
+        var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic);
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.

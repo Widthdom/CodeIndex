@@ -44,12 +44,17 @@ public sealed class PostExtractionHookRunner : IDisposable
     public static readonly TimeSpan DefaultCallbackBudget = TimeSpan.FromSeconds(5);
     internal const int DefaultDiscoveryLimit = 128;
     internal const long DefaultDiscoveryMaxBytes = 64 * 1024 * 1024;
+    internal const int MaxCallbackBudgetMilliseconds = 60_000;
+    internal const int MaxDiscoveryLimit = 4096;
+    internal const long MaxDiscoveryMaxBytes = 512L * 1024 * 1024;
     internal const int DefaultTypeInspectionLimit = 4096;
 
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
     private readonly ConcurrentDictionary<string, byte> disabledHooks = new(StringComparer.Ordinal);
     private readonly TimeSpan callbackBudget;
+    private readonly int? maxSymbolCount;
+    private readonly int? maxReferenceCount;
     private bool disposed;
     internal static Func<TimeSpan>? CallbackBudgetForTesting { get; set; }
     internal static Func<int>? DiscoveryLimitForTesting { get; set; }
@@ -57,16 +62,25 @@ public sealed class PostExtractionHookRunner : IDisposable
     internal static Func<int>? TypeInspectionLimitForTesting { get; set; }
     internal static WeakReference? LastUnretainedLoadContextForTesting { get; set; }
 
-    private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks, TimeSpan callbackBudget)
+    private PostExtractionHookRunner(
+        List<LoadedPostExtractionHook> hooks,
+        TimeSpan callbackBudget,
+        int? maxSymbolCount,
+        int? maxReferenceCount)
     {
         this.hooks = hooks;
         this.callbackBudget = callbackBudget;
+        this.maxSymbolCount = maxSymbolCount;
+        this.maxReferenceCount = maxReferenceCount;
     }
 
-    public static PostExtractionHookRunner DiscoverDefault(long? maxFileSizeBytes = null)
+    public static PostExtractionHookRunner DiscoverDefault(
+        long? maxFileSizeBytes = null,
+        int? maxSymbolCount = null,
+        int? maxReferenceCount = null)
     {
         var resolution = ResolveDefaultHooksDirectory(includeAcceptedOverrideDiagnostic: false);
-        return Discover(resolution.Directory, maxFileSizeBytes, resolution.Diagnostics);
+        return Discover(resolution.Directory, maxFileSizeBytes, resolution.Diagnostics, maxSymbolCount, maxReferenceCount);
     }
 
     public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
@@ -84,12 +98,16 @@ public sealed class PostExtractionHookRunner : IDisposable
         IReadOnlyList<ExtensionTrustOverride> initialTrustOverrides)
     {
         var loaded = new List<LoadedPostExtractionHook>();
-        var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        var callbackBudget = ResolveCallbackBudget();
+        var runner = new PostExtractionHookRunner(loaded, callbackBudget.Value, null, null);
+        runner.EnqueueDiagnostic(callbackBudget.Diagnostic);
         runner.EnqueueDiagnostics(initialDiagnostics);
+        var discoveryLimit = ResolveDiscoveryLimit();
+        runner.EnqueueDiagnostic(discoveryLimit.Diagnostic);
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
-        var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit())
+        var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, discoveryLimit.Value)
             .Select(dllPath =>
             {
                 var fullPath = Path.GetFullPath(dllPath);
@@ -103,31 +121,46 @@ public sealed class PostExtractionHookRunner : IDisposable
         return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
     }
 
-    public static PostExtractionHookRunner Discover(string? hooksDirectory, long? maxFileSizeBytes = null)
-        => Discover(hooksDirectory, maxFileSizeBytes, []);
+    public static PostExtractionHookRunner Discover(
+        string? hooksDirectory,
+        long? maxFileSizeBytes = null,
+        int? maxSymbolCount = null,
+        int? maxReferenceCount = null)
+        => Discover(hooksDirectory, maxFileSizeBytes, [], maxSymbolCount, maxReferenceCount);
 
     private static PostExtractionHookRunner Discover(
         string? hooksDirectory,
         long? maxFileSizeBytes,
-        IReadOnlyList<PostExtractionHookDiagnostic> initialDiagnostics)
+        IReadOnlyList<PostExtractionHookDiagnostic> initialDiagnostics,
+        int? maxSymbolCount,
+        int? maxReferenceCount)
     {
         var loaded = new List<LoadedPostExtractionHook>();
-        var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        var callbackBudget = ResolveCallbackBudget();
+        var runner = new PostExtractionHookRunner(
+            loaded,
+            callbackBudget.Value,
+            NormalizeHookMaterializationLimit(maxSymbolCount),
+            NormalizeHookMaterializationLimit(maxReferenceCount));
+        runner.EnqueueDiagnostic(callbackBudget.Diagnostic);
         runner.EnqueueDiagnostics(initialDiagnostics);
         var maxProtocolLineBytes = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var discoveryLimit = ResolveDiscoveryLimit();
+        runner.EnqueueDiagnostic(discoveryLimit.Diagnostic);
 
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return runner;
 
         var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
-        foreach (var dllPath in EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit()))
+        runner.EnqueueDiagnostic(maxAssemblyBytes.Diagnostic);
+        foreach (var dllPath in EnumerateHookAssemblyPaths(hooksDirectory, runner, discoveryLimit.Value))
         {
             ExtensionAssemblyLoadContext? loadContext = null;
             var retainedLoadContext = false;
             Assembly assembly;
             try
             {
-                if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes))
+                if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes.Value))
                     continue;
 
                 loadContext = new ExtensionAssemblyLoadContext(
@@ -354,13 +387,24 @@ public sealed class PostExtractionHookRunner : IDisposable
         foreach (var hook in hooks)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var workingSymbols = CloneSymbols(symbols);
+            var workingSymbols = CloneSymbols(symbols, maxSymbolCount, out var inputTruncated);
+            if (inputTruncated && maxSymbolCount is { } symbolLimit)
+            {
+                EnqueueHookMaterializationDiagnostic(
+                    hook,
+                    nameof(IPostExtractionHook.OnSymbolsExtracted),
+                    "symbol",
+                    symbolLimit,
+                    "input");
+            }
             if (InvokeHookWithBudget(
                     hook,
                     PostExtractionHookCallbackKind.Symbols,
                     nameof(IPostExtractionHook.OnSymbolsExtracted),
                     context,
                     workingSymbols,
+                    null,
+                    maxSymbolCount,
                     null,
                     cancellationToken))
             {
@@ -377,7 +421,16 @@ public sealed class PostExtractionHookRunner : IDisposable
         foreach (var hook in hooks)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var workingReferences = CloneReferences(references);
+            var workingReferences = CloneReferences(references, maxReferenceCount, out var inputTruncated);
+            if (inputTruncated && maxReferenceCount is { } referenceLimit)
+            {
+                EnqueueHookMaterializationDiagnostic(
+                    hook,
+                    nameof(IPostExtractionHook.OnReferencesExtracted),
+                    "reference",
+                    referenceLimit,
+                    "input");
+            }
             if (InvokeHookWithBudget(
                     hook,
                     PostExtractionHookCallbackKind.References,
@@ -385,6 +438,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                     context,
                     null,
                     workingReferences,
+                    null,
+                    maxReferenceCount,
                     cancellationToken))
             {
                 ReplaceList(references, workingReferences);
@@ -399,6 +454,8 @@ public sealed class PostExtractionHookRunner : IDisposable
         FileContext context,
         List<SymbolRecord>? symbols,
         List<ReferenceRecord>? references,
+        int? maxSymbols,
+        int? maxReferences,
         CancellationToken cancellationToken)
     {
         if (disabledHooks.ContainsKey(hook.Info.TypeName))
@@ -412,6 +469,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             symbols,
             references,
             callbackBudget,
+            maxSymbols,
+            maxReferences,
             cancellationToken);
         if (result.TimedOut)
         {
@@ -444,9 +503,31 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
 
         if (result.Symbols != null && symbols != null)
+        {
+            if (result.SymbolsTruncated && maxSymbols is { } symbolLimit)
+            {
+                EnqueueHookMaterializationDiagnostic(
+                    hook,
+                    callback,
+                    "symbol",
+                    symbolLimit,
+                    "output");
+            }
             ReplaceList(symbols, result.Symbols);
+        }
         if (result.References != null && references != null)
+        {
+            if (result.ReferencesTruncated && maxReferences is { } referenceLimit)
+            {
+                EnqueueHookMaterializationDiagnostic(
+                    hook,
+                    callback,
+                    "reference",
+                    referenceLimit,
+                    "output");
+            }
             ReplaceList(references, result.References);
+        }
 
         if (result.CallbackError != null)
         {
@@ -499,13 +580,37 @@ public sealed class PostExtractionHookRunner : IDisposable
         diagnostics.Enqueue(CreateDiagnostic(assemblyPath, typeName, message, callback, durationMs, category));
     }
 
+    private void EnqueueDiagnostic(PostExtractionHookDiagnostic? diagnostic)
+    {
+        if (diagnostic != null)
+            diagnostics.Enqueue(diagnostic);
+    }
+
     private void EnqueueDiagnostics(IEnumerable<PostExtractionHookDiagnostic> items)
     {
         foreach (var item in items)
             diagnostics.Enqueue(item);
     }
 
-    private static TimeSpan ResolveCallbackBudget()
+    private void EnqueueHookMaterializationDiagnostic(
+        LoadedPostExtractionHook hook,
+        string callback,
+        string recordKind,
+        int maxCount,
+        string direction)
+    {
+        EnqueueDiagnostic(
+            hook.Info.AssemblyPath,
+            hook.Info.TypeName,
+            $"Post-extraction hook {callback} {direction} exceeded the {maxCount:N0} {recordKind} materialization budget; extra {recordKind} records were discarded.",
+            callback,
+            category: recordKind == "symbol" ? "hook_symbol_count_truncated" : "hook_reference_count_truncated");
+    }
+
+    private static int? NormalizeHookMaterializationLimit(int? value)
+        => value is > 0 ? value : null;
+
+    private static HookBudgetResolution<TimeSpan> ResolveCallbackBudget()
     {
         if (CallbackBudgetForTesting != null)
             return NormalizeCallbackBudget(CallbackBudgetForTesting());
@@ -513,10 +618,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         var raw = Environment.GetEnvironmentVariable(CallbackBudgetEnvironmentVariable);
         return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
             ? NormalizeCallbackBudgetMilliseconds(milliseconds)
-            : DefaultCallbackBudget;
+            : new HookBudgetResolution<TimeSpan>(DefaultCallbackBudget, null);
     }
 
-    private static int ResolveDiscoveryLimit()
+    private static HookBudgetResolution<int> ResolveDiscoveryLimit()
     {
         if (DiscoveryLimitForTesting != null)
             return NormalizeDiscoveryLimit(DiscoveryLimitForTesting());
@@ -524,13 +629,29 @@ public sealed class PostExtractionHookRunner : IDisposable
         var raw = Environment.GetEnvironmentVariable(DiscoveryLimitEnvironmentVariable);
         return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
             ? NormalizeDiscoveryLimit(value)
-            : DefaultDiscoveryLimit;
+            : new HookBudgetResolution<int>(DefaultDiscoveryLimit, null);
     }
 
-    private static int NormalizeDiscoveryLimit(int value)
-        => value <= 0 ? DefaultDiscoveryLimit : value;
+    private static HookBudgetResolution<int> NormalizeDiscoveryLimit(int value)
+    {
+        if (value <= 0)
+            return new HookBudgetResolution<int>(DefaultDiscoveryLimit, null);
 
-    private static long ResolveDiscoveryMaxBytes()
+        if (value > MaxDiscoveryLimit)
+        {
+            return new HookBudgetResolution<int>(
+                MaxDiscoveryLimit,
+                CreateDiagnostic(
+                    "<configuration>",
+                    null,
+                    $"{DiscoveryLimitEnvironmentVariable} value {value} exceeded the maximum {MaxDiscoveryLimit}; clamped to {MaxDiscoveryLimit}.",
+                    category: "hook_discovery_limit_clamped"));
+        }
+
+        return new HookBudgetResolution<int>(value, null);
+    }
+
+    private static HookBudgetResolution<long> ResolveDiscoveryMaxBytes()
     {
         if (DiscoveryMaxBytesForTesting != null)
             return NormalizeDiscoveryMaxBytes(DiscoveryMaxBytesForTesting());
@@ -538,11 +659,27 @@ public sealed class PostExtractionHookRunner : IDisposable
         var raw = Environment.GetEnvironmentVariable(DiscoveryMaxBytesEnvironmentVariable);
         return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
             ? NormalizeDiscoveryMaxBytes(value)
-            : DefaultDiscoveryMaxBytes;
+            : new HookBudgetResolution<long>(DefaultDiscoveryMaxBytes, null);
     }
 
-    private static long NormalizeDiscoveryMaxBytes(long value)
-        => value <= 0 ? DefaultDiscoveryMaxBytes : value;
+    private static HookBudgetResolution<long> NormalizeDiscoveryMaxBytes(long value)
+    {
+        if (value <= 0)
+            return new HookBudgetResolution<long>(DefaultDiscoveryMaxBytes, null);
+
+        if (value > MaxDiscoveryMaxBytes)
+        {
+            return new HookBudgetResolution<long>(
+                MaxDiscoveryMaxBytes,
+                CreateDiagnostic(
+                    "<configuration>",
+                    null,
+                    $"{DiscoveryMaxBytesEnvironmentVariable} value {value} exceeded the maximum {MaxDiscoveryMaxBytes}; clamped to {MaxDiscoveryMaxBytes}.",
+                    category: "hook_discovery_bytes_clamped"));
+        }
+
+        return new HookBudgetResolution<long>(value, null);
+    }
 
     private static int ResolveTypeInspectionLimit()
     {
@@ -572,18 +709,64 @@ public sealed class PostExtractionHookRunner : IDisposable
         return false;
     }
 
-    private static TimeSpan NormalizeCallbackBudgetMilliseconds(long milliseconds)
-        => milliseconds <= 0
-            ? DefaultCallbackBudget
-            : TimeSpan.FromMilliseconds(Math.Min(milliseconds, int.MaxValue));
+    private static HookBudgetResolution<TimeSpan> NormalizeCallbackBudgetMilliseconds(long milliseconds)
+    {
+        if (milliseconds <= 0)
+            return new HookBudgetResolution<TimeSpan>(DefaultCallbackBudget, null);
 
-    private static TimeSpan NormalizeCallbackBudget(TimeSpan value)
-        => value <= TimeSpan.Zero
-            ? DefaultCallbackBudget
-            : TimeSpan.FromMilliseconds(Math.Min(value.TotalMilliseconds, int.MaxValue));
+        if (milliseconds > MaxCallbackBudgetMilliseconds)
+        {
+            return new HookBudgetResolution<TimeSpan>(
+                TimeSpan.FromMilliseconds(MaxCallbackBudgetMilliseconds),
+                CreateDiagnostic(
+                    "<configuration>",
+                    null,
+                    $"{CallbackBudgetEnvironmentVariable} value {milliseconds} exceeded the maximum {MaxCallbackBudgetMilliseconds}; clamped to {MaxCallbackBudgetMilliseconds}.",
+                    category: "hook_callback_budget_clamped"));
+        }
 
-    private static List<SymbolRecord> CloneSymbols(IEnumerable<SymbolRecord> symbols)
-        => symbols.Select(symbol => new SymbolRecord
+        return new HookBudgetResolution<TimeSpan>(TimeSpan.FromMilliseconds(milliseconds), null);
+    }
+
+    private static HookBudgetResolution<TimeSpan> NormalizeCallbackBudget(TimeSpan value)
+    {
+        if (value <= TimeSpan.Zero)
+            return new HookBudgetResolution<TimeSpan>(DefaultCallbackBudget, null);
+
+        if (value.TotalMilliseconds > MaxCallbackBudgetMilliseconds)
+        {
+            return new HookBudgetResolution<TimeSpan>(
+                TimeSpan.FromMilliseconds(MaxCallbackBudgetMilliseconds),
+                CreateDiagnostic(
+                    "<configuration>",
+                    null,
+                    $"{CallbackBudgetEnvironmentVariable} value {value.TotalMilliseconds:0} exceeded the maximum {MaxCallbackBudgetMilliseconds}; clamped to {MaxCallbackBudgetMilliseconds}.",
+                    category: "hook_callback_budget_clamped"));
+        }
+
+        return new HookBudgetResolution<TimeSpan>(value, null);
+    }
+
+    private static List<SymbolRecord> CloneSymbols(IEnumerable<SymbolRecord> symbols, int? maxCount, out bool truncated)
+    {
+        var result = new List<SymbolRecord>();
+        truncated = false;
+        foreach (var symbol in symbols)
+        {
+            if (maxCount is { } limit && result.Count >= limit)
+            {
+                truncated = true;
+                break;
+            }
+
+            result.Add(CloneSymbol(symbol));
+        }
+
+        return result;
+    }
+
+    private static SymbolRecord CloneSymbol(SymbolRecord symbol)
+        => new()
         {
             Id = symbol.Id,
             FileId = symbol.FileId,
@@ -606,10 +789,28 @@ public sealed class PostExtractionHookRunner : IDisposable
             IsMetadataTarget = symbol.IsMetadataTarget,
             MetadataTargetSource = symbol.MetadataTargetSource,
             SameLineSignatureOccurrenceIndex = symbol.SameLineSignatureOccurrenceIndex,
-        }).ToList();
+        };
 
-    private static List<ReferenceRecord> CloneReferences(IEnumerable<ReferenceRecord> references)
-        => references.Select(reference => new ReferenceRecord
+    private static List<ReferenceRecord> CloneReferences(IEnumerable<ReferenceRecord> references, int? maxCount, out bool truncated)
+    {
+        var result = new List<ReferenceRecord>();
+        truncated = false;
+        foreach (var reference in references)
+        {
+            if (maxCount is { } limit && result.Count >= limit)
+            {
+                truncated = true;
+                break;
+            }
+
+            result.Add(CloneReference(reference));
+        }
+
+        return result;
+    }
+
+    private static ReferenceRecord CloneReference(ReferenceRecord reference)
+        => new()
         {
             Id = reference.Id,
             FileId = reference.FileId,
@@ -622,7 +823,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             ContainerName = reference.ContainerName,
             IsSelfReference = reference.IsSelfReference,
             IsMutualRecursion = reference.IsMutualRecursion,
-        }).ToList();
+        };
 
     private static void ReplaceList<T>(IList<T> target, IReadOnlyList<T> replacement)
     {
@@ -795,4 +996,6 @@ public sealed class PostExtractionHookRunner : IDisposable
         string? Directory,
         IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics,
         IReadOnlyList<ExtensionTrustOverride> TrustOverrides);
+
+    private sealed record HookBudgetResolution<T>(T Value, PostExtractionHookDiagnostic? Diagnostic);
 }
