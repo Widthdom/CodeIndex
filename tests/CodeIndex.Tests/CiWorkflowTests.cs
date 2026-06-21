@@ -16,8 +16,9 @@ public class CiWorkflowTests
             "- name: Audit NuGet package vulnerabilities\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'",
             normalizedWorkflow);
         Assert.Contains(
-            "- name: Verify formatting\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'",
+            "- name: Verify developer task wrapper\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'\n        run: make lint",
             normalizedWorkflow);
+        Assert.DoesNotContain("- name: Verify formatting", normalizedWorkflow);
         Assert.Contains("\"${{ matrix.os }}\" -eq \"ubuntu-latest\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"", workflow);
         Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-latest/net8.0", workflow);
         Assert.Contains("--blame-crash", workflow);
