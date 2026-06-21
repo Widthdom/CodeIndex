@@ -96,7 +96,9 @@ internal static class LanguageMapOverrides
             {
                 if (patternCount >= MaxOverridePatterns)
                 {
-                    reportWarning?.Invoke($"Ignored remaining language-map override patterns in {path} because the pattern count exceeds {MaxOverridePatterns}.");
+                    reportWarning?.Invoke(
+                        $"Ignored remaining language-map override patterns in {DiagnosticSanitizer.ForPath(path)} because the pattern count exceeds {MaxOverridePatterns}.",
+                        $"{path}\npattern-count");
                     return;
                 }
 
