@@ -337,6 +337,63 @@ public class DatabaseTests : IDisposable
         Assert.Contains("Unknown symbol kind", ex.Message);
     }
 
+    [Fact]
+    public void InsertChunks_CancelledBeforeBatch_ThrowsOperationCanceled_Issue3738()
+    {
+        var fileId = UpsertTestFile("src/cancel-chunk.cs", checksum: "cancel-chunk");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "class CancelChunk { }",
+            },
+        ], cts.Token));
+    }
+
+    [Fact]
+    public void InsertReferences_ReportsProgressCheckpoints_Issue3738()
+    {
+        var fileId = UpsertTestFile("src/progress-reference.cs", checksum: "progress-reference");
+        var checkpoints = new List<DbWriter.DbWriterBatchProgress>();
+        DbWriter.BatchProgressCheckpointForTesting = checkpoints.Add;
+        try
+        {
+            _writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "Target",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = "Target();",
+                },
+            ], CancellationToken.None);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = null;
+        }
+
+        Assert.Contains(checkpoints, checkpoint =>
+            checkpoint.Operation == "insert_references"
+            && checkpoint.RowsProcessed == 0
+            && checkpoint.RowsTotal == 1);
+        Assert.Contains(checkpoints, checkpoint =>
+            checkpoint.Operation == "insert_references"
+            && checkpoint.RowsProcessed == 1
+            && checkpoint.RowsTotal == 1);
+        Assert.Contains(checkpoints, checkpoint => checkpoint.Operation == "upsert_reference_lines");
+    }
+
     [Theory]
     [InlineData("annotation")]
     [InlineData("bcl_regex_without_timeout")]
@@ -710,6 +767,46 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public async Task BeginTransaction_CancelledWhileGateHeld_ThrowsOperationCanceled_Issue3772()
+    {
+        using var held = _writer.BeginTransaction(CancellationToken.None, "owner operation");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Task.Run(() =>
+        {
+            using var waiting = _writer.BeginTransaction(cts.Token, "cancelled operation");
+        }));
+    }
+
+    [Fact]
+    public async Task BeginTransaction_GateTimeoutReportsOwnerAndWaiterDiagnostics_Issue3772()
+    {
+        var originalTimeout = DbWriter.TransactionStateContentionTimeoutForTesting;
+        DbWriter.TransactionStateContentionTimeoutForTesting = TimeSpan.FromMilliseconds(25);
+        try
+        {
+            using var held = _writer.BeginTransaction(CancellationToken.None, "owner operation");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Task.Run(() =>
+            {
+                using var waiting = _writer.BeginTransaction(CancellationToken.None, "waiting operation");
+            }));
+
+            Assert.Contains("Timed out waiting for DbWriter transaction gate", ex.Message);
+            Assert.Contains("owner_operation=owner operation", ex.Message);
+            Assert.Contains("waiter_operation=waiting operation", ex.Message);
+            Assert.Contains("owner_thread_id=", ex.Message);
+            Assert.Contains("waiter_thread_id=", ex.Message);
+            Assert.Contains("transaction_depth=1", ex.Message);
+        }
+        finally
+        {
+            DbWriter.TransactionStateContentionTimeoutForTesting = originalTimeout;
+        }
+    }
+
+    [Fact]
     public void TransactionScope_SavepointWithoutConnection_ThrowsExplicitInvalidOperation()
     {
         var scopeType = typeof(DbWriter).GetNestedType("TransactionScope")
@@ -786,6 +883,49 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunIncrementalVacuum_CancellationBeforeMetrics_ThrowsOperationCanceled_Issue3811()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_cancel_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => db.RunIncrementalVacuum(false, cts.Token));
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunIncrementalVacuum_ReportsProgressBoundaries_Issue3811()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_progress_test_{Guid.NewGuid():N}.db");
+        var progress = new List<string>();
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            DbContext.MaintenanceProgressForTesting = (operation, phase) => progress.Add($"{operation}:{phase}");
+
+            var result = db.RunIncrementalVacuum(dryRun: true);
+
+            Assert.Equal("dry_run", result.Status);
+            Assert.Contains("vacuum:metrics_before", progress);
+            Assert.Contains("vacuum:metrics_after", progress);
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
             DeleteDbFiles(dbPath);
         }
     }

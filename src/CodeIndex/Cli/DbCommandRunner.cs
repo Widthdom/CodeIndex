@@ -27,13 +27,22 @@ public static class DbCommandRunner
     internal const int SchemaEntryLimit = 200;
     internal const int SchemaSqlTextLimit = 8192;
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
+    private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
     internal static Action<string>? DeleteTemporaryDirectoryForTesting { get; set; }
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFilesForTesting { get; set; }
     internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFileNamesForTesting { get; set; }
+    internal static Action<string, string>? MaintenanceProgressForTesting
+    {
+        get => ScopedMaintenanceProgressForTesting.Value;
+        set => ScopedMaintenanceProgressForTesting.Value = value;
+    }
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+        => Run(cmdArgs, jsonOptions, CancellationToken.None);
+
+    public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var options = ParseArgs(cmdArgs);
         if (options.ShowHelp)
@@ -95,25 +104,34 @@ public static class DbCommandRunner
                 "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
                 CommandErrorCodes.DbNotFound);
 
-        if (options.Schema)
-            return RunSchema(options, jsonOptions, dbPath, isUri);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
 
-        if (options.Prune)
-            return RunPrune(options, jsonOptions, dbPath, isUri);
+            if (options.Schema)
+                return RunSchema(options, jsonOptions, dbPath, isUri, cancellationToken);
 
-        if (options.Checkpoint)
-            return RunCheckpoint(options, jsonOptions);
+            if (options.Prune)
+                return RunPrune(options, jsonOptions, dbPath, isUri, cancellationToken);
 
-        if (options.ListCheckpoints)
-            return RunListCheckpoints(options, jsonOptions);
+            if (options.Checkpoint)
+                return RunCheckpoint(options, jsonOptions);
 
-        if (options.Restore)
-            return RunRestore(options, jsonOptions);
+            if (options.ListCheckpoints)
+                return RunListCheckpoints(options, jsonOptions);
 
-        if (options.RestoreBackups)
-            return RunRestoreBackups(options, jsonOptions);
+            if (options.Restore)
+                return RunRestore(options, jsonOptions);
 
-        return RunIntegrityCheck(options, jsonOptions, dbPath, isUri);
+            if (options.RestoreBackups)
+                return RunRestoreBackups(options, jsonOptions);
+
+            return RunIntegrityCheck(options, jsonOptions, dbPath, isUri, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return WriteMaintenanceCancelled(options.Json, jsonOptions, "db maintenance command");
+        }
     }
 
     public static int RunIntegrityCheck(string[] cmdArgs, JsonSerializerOptions jsonOptions) => Run(cmdArgs, jsonOptions);
@@ -125,11 +143,13 @@ public static class DbCommandRunner
         return CreateCheckpoint(fullDbPath, name).CheckpointPath;
     }
 
-    private static int RunIntegrityCheck(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
+    private static int RunIntegrityCheck(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri, CancellationToken cancellationToken)
     {
         try
         {
-            var result = RunIntegrityCheckPragma(dbPath);
+            ReportMaintenanceProgress("integrity_check", "start", dbPath);
+            var result = RunIntegrityCheckPragma(dbPath, cancellationToken);
+            ReportMaintenanceProgress("integrity_check", "complete", dbPath);
             var issues = result.Rows;
             var ok = issues.Count == 1 && string.Equals(issues[0], "ok", StringComparison.Ordinal);
             var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
@@ -172,6 +192,10 @@ public static class DbCommandRunner
 
             return ok ? CommandExitCodes.Success : CommandExitCodes.DatabaseError;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
@@ -187,11 +211,13 @@ public static class DbCommandRunner
         }
     }
 
-    private static int RunSchema(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
+    private static int RunSchema(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri, CancellationToken cancellationToken)
     {
         try
         {
-            var schema = ReadSchema(dbPath);
+            ReportMaintenanceProgress("schema", "start", dbPath);
+            var schema = ReadSchema(dbPath, cancellationToken);
+            ReportMaintenanceProgress("schema", "complete", dbPath);
             var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
             {
@@ -231,6 +257,10 @@ public static class DbCommandRunner
 
             return CommandExitCodes.Success;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
@@ -246,7 +276,7 @@ public static class DbCommandRunner
         }
     }
 
-    private static int RunPrune(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
+    private static int RunPrune(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri, CancellationToken cancellationToken)
     {
         if (!options.PruneApply && !options.PruneDryRun)
             return WriteCommandError(
@@ -277,7 +307,9 @@ public static class DbCommandRunner
 
         try
         {
-            var result = PruneOrphans(dbPath, apply: options.PruneApply);
+            ReportMaintenanceProgress("prune", "start", dbPath);
+            var result = PruneOrphans(dbPath, apply: options.PruneApply, cancellationToken);
+            ReportMaintenanceProgress("prune", "complete", dbPath);
             var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
             {
@@ -307,6 +339,10 @@ public static class DbCommandRunner
             }
 
             return CommandExitCodes.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -601,23 +637,29 @@ public static class DbCommandRunner
     // pragma side effects of the normal DbContext open path.
     // PRAGMA integrity_check は問題が無ければ 1 行の `"ok"` を、破損があれば最大 N 行の検出結果を返す。
     // 読み取りのみのため read-only 接続で十分で、DbContext の WAL モード設定副作用を避けられる。
-    private static DbIntegrityCheckReadResult RunIntegrityCheckPragma(string dbPath)
+    private static DbIntegrityCheckReadResult RunIntegrityCheckPragma(string dbPath, CancellationToken cancellationToken)
     {
         if (IntegrityCheckRowsForTesting != null)
-            return BoundIntegrityRows(IntegrityCheckRowsForTesting());
+            return BoundIntegrityRows(IntegrityCheckRowsForTesting(), cancellationToken);
 
+        cancellationToken.ThrowIfCancellationRequested();
         var connectionString = DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly);
 
         using var connection = new SqliteConnection(connectionString);
+        ReportMaintenanceProgress("integrity_check", "open_connection", dbPath);
         connection.Open();
+        ApplyBusyTimeout(connection, cancellationToken);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})";
+        ReportMaintenanceProgress("integrity_check", "read_rows", dbPath);
+        cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
         var rows = new List<string>();
         var rowsTruncated = false;
         var textTruncated = false;
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (rows.Count >= IntegrityCheckRowLimit)
             {
                 rowsTruncated = true;
@@ -632,13 +674,17 @@ public static class DbCommandRunner
         return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
     }
 
-    private static DbSchemaReadResult ReadSchema(string dbPath)
+    private static DbSchemaReadResult ReadSchema(string dbPath, CancellationToken cancellationToken)
     {
-        using var connection = OpenConnection(dbPath, writable: false);
+        using var connection = OpenConnection(dbPath, writable: false, cancellationToken);
+        ReportMaintenanceProgress("schema", "read_version", dbPath);
+        cancellationToken.ThrowIfCancellationRequested();
         using var versionCmd = connection.CreateCommand();
         versionCmd.CommandText = "PRAGMA user_version";
         var rawVersion = versionCmd.ExecuteScalar();
         var userVersion = rawVersion is long l ? (int)l : (rawVersion is int i ? i : 0);
+        cancellationToken.ThrowIfCancellationRequested();
+        ReportMaintenanceProgress("schema", "count_objects", dbPath);
         var objectTypeCounts = ReadSchemaObjectTypeCounts(connection);
 
         using var cmd = connection.CreateCommand();
@@ -650,12 +696,15 @@ public static class DbCommandRunner
             LIMIT @entry_limit";
         cmd.Parameters.AddWithValue("@sql_limit", SchemaSqlTextLimit + 1);
         cmd.Parameters.AddWithValue("@entry_limit", SchemaEntryLimit + 1);
+        ReportMaintenanceProgress("schema", "read_entries", dbPath);
+        cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
         var entries = new List<DbSchemaEntryJsonResult>();
         var entriesTruncated = false;
         var sqlTruncated = false;
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (entries.Count >= SchemaEntryLimit)
             {
                 entriesTruncated = true;
@@ -710,13 +759,14 @@ public static class DbCommandRunner
         return counts;
     }
 
-    private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows)
+    private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows, CancellationToken cancellationToken)
     {
         var rows = new List<string>();
         var rowsTruncated = false;
         var textTruncated = false;
         foreach (var raw in rawRows)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (rows.Count >= IntegrityCheckRowLimit)
             {
                 rowsTruncated = true;
@@ -738,12 +788,14 @@ public static class DbCommandRunner
         return (text[..limit] + " [truncated]", true);
     }
 
-    private static (int OrphanSymbolReferences, int OrphanReferenceLines, int OrphanSymbols, int Total, List<DbDiagnosticJsonResult> Warnings) PruneOrphans(string dbPath, bool apply)
+    private static (int OrphanSymbolReferences, int OrphanReferenceLines, int OrphanSymbols, int Total, List<DbDiagnosticJsonResult> Warnings) PruneOrphans(string dbPath, bool apply, CancellationToken cancellationToken)
     {
-        using var connection = OpenConnection(dbPath, writable: apply);
+        using var connection = OpenConnection(dbPath, writable: apply, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         using var transaction = apply ? connection.BeginTransaction() : null;
         var warnings = new List<DbDiagnosticJsonResult>();
 
+        ReportMaintenanceProgress("prune", "count_symbol_references", dbPath);
         var orphanSymbolReferences = Count(connection, transaction, @"
             SELECT COUNT(*)
             FROM symbol_references sr
@@ -751,20 +803,23 @@ public static class DbCommandRunner
             LEFT JOIN reference_lines rl ON rl.id = sr.reference_line_id
             LEFT JOIN files rlf ON rlf.id = rl.file_id
             WHERE f.id IS NULL
-               OR (sr.reference_line_id IS NOT NULL AND (rl.id IS NULL OR rlf.id IS NULL))");
+               OR (sr.reference_line_id IS NOT NULL AND (rl.id IS NULL OR rlf.id IS NULL))", cancellationToken);
+        ReportMaintenanceProgress("prune", "count_reference_lines", dbPath);
         var orphanReferenceLines = Count(connection, transaction, @"
             SELECT COUNT(*)
             FROM reference_lines rl
             LEFT JOIN files f ON f.id = rl.file_id
-            WHERE f.id IS NULL");
+            WHERE f.id IS NULL", cancellationToken);
+        ReportMaintenanceProgress("prune", "count_symbols", dbPath);
         var orphanSymbols = Count(connection, transaction, @"
             SELECT COUNT(*)
             FROM symbols s
             LEFT JOIN files f ON f.id = s.file_id
-            WHERE f.id IS NULL");
+            WHERE f.id IS NULL", cancellationToken);
 
         if (apply)
         {
+            ReportMaintenanceProgress("prune", "delete_symbol_references", dbPath);
             Execute(connection, transaction, @"
                 DELETE FROM symbol_references
                 WHERE file_id NOT IN (SELECT id FROM files)
@@ -772,12 +827,17 @@ public static class DbCommandRunner
                        SELECT rl.id
                        FROM reference_lines rl
                        INNER JOIN files f ON f.id = rl.file_id
-                   ))");
-            Execute(connection, transaction, "DELETE FROM reference_lines WHERE file_id NOT IN (SELECT id FROM files)");
-            Execute(connection, transaction, "DELETE FROM symbols WHERE file_id NOT IN (SELECT id FROM files)");
+                   ))", cancellationToken);
+            ReportMaintenanceProgress("prune", "delete_reference_lines", dbPath);
+            Execute(connection, transaction, "DELETE FROM reference_lines WHERE file_id NOT IN (SELECT id FROM files)", cancellationToken);
+            ReportMaintenanceProgress("prune", "delete_symbols", dbPath);
+            Execute(connection, transaction, "DELETE FROM symbols WHERE file_id NOT IN (SELECT id FROM files)", cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("prune", "commit", dbPath);
             transaction!.Commit();
-            Execute(connection, null, "PRAGMA optimize");
-            var walWarning = RunWalCheckpointTruncate(connection);
+            ReportMaintenanceProgress("prune", "optimize", dbPath);
+            Execute(connection, null, "PRAGMA optimize", cancellationToken);
+            var walWarning = RunWalCheckpointTruncate(connection, cancellationToken);
             if (walWarning is not null)
                 warnings.Add(walWarning);
         }
@@ -786,41 +846,71 @@ public static class DbCommandRunner
         return (orphanSymbolReferences, orphanReferenceLines, orphanSymbols, total, warnings);
     }
 
-    private static SqliteConnection OpenConnection(string dbPath, bool writable)
+    private static SqliteConnection OpenConnection(string dbPath, bool writable, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var connectionString = DbPathResolver.BuildSqliteConnectionString(
             dbPath,
             writable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly);
         var connection = new SqliteConnection(connectionString);
-        connection.Open();
-        return connection;
+        try
+        {
+            connection.Open();
+            ApplyBusyTimeout(connection, cancellationToken);
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
 
-    private static int Count(SqliteConnection connection, SqliteTransaction? transaction, string sql)
+    private static void ApplyBusyTimeout(SqliteConnection connection, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA busy_timeout={DbPragmaPolicy.ReadBusyTimeoutMs(DbContext.BusyTimeoutEnvironmentVariable)}";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static int Count(SqliteConnection connection, SqliteTransaction? transaction, string sql, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = sql;
-        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        var result = Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
     }
 
-    private static void Execute(SqliteConnection connection, SqliteTransaction? transaction, string sql)
+    private static void Execute(SqliteConnection connection, SqliteTransaction? transaction, string sql, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private static DbDiagnosticJsonResult? RunWalCheckpointTruncate(SqliteConnection connection)
+    private static DbDiagnosticJsonResult? RunWalCheckpointTruncate(SqliteConnection connection, CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("prune", "wal_checkpoint_truncate", connection.DataSource);
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
             DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
             cmd.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
             return null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception)
         {
@@ -835,7 +925,11 @@ public static class DbCommandRunner
         => new(code, message, ConsoleUi.FormatBoundedValue(path));
 
     private static bool IsRecoverableFilesystemException(Exception ex)
-        => FileSystemTraversalFailure.IsExpected(ex);
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     private static bool IsRecoverableRestoreException(Exception ex)
         => IsRecoverableFilesystemException(ex) || ex is InvalidOperationException;
@@ -1637,6 +1731,21 @@ public static class DbCommandRunner
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null, string? category = null)
     {
         return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode, category: category);
+    }
+
+    private static int WriteMaintenanceCancelled(bool json, JsonSerializerOptions jsonOptions, string operation)
+        => WriteCommandError(
+            json,
+            jsonOptions,
+            $"{operation} cancelled before it could complete",
+            CommandExitCodes.CancelledBySignal,
+            "Retry the command after the cancelling operation completes.",
+            CommandErrorCodes.Interrupted);
+
+    private static void ReportMaintenanceProgress(string operation, string phase, string dbPath)
+    {
+        GlobalToolLog.Info($"db_maintenance_progress operation={operation} phase={phase} db_path={ConsoleUi.FormatBoundedValue(dbPath)}");
+        MaintenanceProgressForTesting?.Invoke(operation, phase);
     }
 }
 

@@ -30,6 +30,7 @@ public class DbWriter
     private readonly Action? _markWriteWork;
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
+    private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     internal static Action? FoldBackfillRowUpdatedForTesting
     {
         get => ScopedFoldBackfillRowUpdatedForTesting.Value;
@@ -40,6 +41,12 @@ public class DbWriter
     {
         get => ScopedBatchRowSkipWarningForTesting.Value;
         set => ScopedBatchRowSkipWarningForTesting.Value = value;
+    }
+
+    internal static Action<DbWriterBatchProgress>? BatchProgressCheckpointForTesting
+    {
+        get => ScopedBatchProgressCheckpointForTesting.Value;
+        set => ScopedBatchProgressCheckpointForTesting.Value = value;
     }
 
     private readonly object _transactionStateLock = new();
@@ -69,6 +76,8 @@ public class DbWriter
     private int _transactionDepth;
     private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;
+    private string? _transactionOwnerOperation;
+    private DateTimeOffset _transactionOwnerAcquiredAtUtc;
     private bool? _hasIssueMetadataColumns;
     internal static TimeSpan? TransactionStateContentionTimeoutForTesting { get; set; }
     // Outermost SqliteTransaction currently held open by this writer (null when no
@@ -87,6 +96,8 @@ public class DbWriter
     private SqliteTransaction? _activeTransaction;
     internal SqliteConnection Connection => _conn;
     public long BatchRowsSkipped => Volatile.Read(ref _batchRowsSkipped);
+
+    internal sealed record DbWriterBatchProgress(string Operation, int RowsProcessed, int RowsTotal);
 
     public DbWriter(SqliteConnection connection)
         : this(connection, commandCache: null, markWriteWork: null)
@@ -163,8 +174,14 @@ public class DbWriter
     /// SQLiteはネストされたBEGIN TRANSACTIONをサポートしないため、ネスト時はSAVEPOINTを使用する。
     /// </summary>
     public TransactionScope BeginTransaction()
+        => BeginTransaction(CancellationToken.None, operation: null);
+
+    public TransactionScope BeginTransaction(CancellationToken cancellationToken)
+        => BeginTransaction(cancellationToken, operation: null);
+
+    internal TransactionScope BeginTransaction(CancellationToken cancellationToken, string? operation)
     {
-        var gateLease = EnterTransactionGate();
+        var gateLease = EnterTransactionGate(cancellationToken, operation);
         try
         {
             if (_transactionDepth == 0)
@@ -191,10 +208,14 @@ public class DbWriter
         }
     }
 
-    private TransactionGateLease EnterTransactionGate()
+    private TransactionGateLease EnterTransactionGate(CancellationToken cancellationToken = default, string? operation = null)
     {
+        var timeout = GetTransactionStateContentionTimeout();
+        var stopwatch = Stopwatch.StartNew();
+        var operationLabel = string.IsNullOrWhiteSpace(operation) ? "transaction" : operation.Trim();
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             lock (_transactionStateLock)
             {
                 if (_transactionDepth > 0 &&
@@ -204,7 +225,14 @@ public class DbWriter
                     return TransactionGateLease.None;
             }
 
-            _transactionGate.Wait();
+            var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
+            if (waitMilliseconds <= 0)
+                throw new InvalidOperationException(BuildTransactionGateTimeoutMessage(operationLabel, stopwatch));
+
+            if (!_transactionGate.Wait(waitMilliseconds, cancellationToken))
+                continue;
+
+            var ownsSemaphore = true;
             lock (_transactionStateLock)
             {
                 if (_transactionDepth == 0)
@@ -213,13 +241,17 @@ public class DbWriter
                     var token = Guid.NewGuid();
                     _transactionOwnerThreadId = Environment.CurrentManagedThreadId;
                     _transactionOwnerToken = token;
+                    _transactionOwnerOperation = operationLabel;
+                    _transactionOwnerAcquiredAtUtc = DateTimeOffset.UtcNow;
                     _currentTransactionGateToken.Value = token;
+                    ownsSemaphore = false;
                     return new TransactionGateLease(this, token, previousToken);
                 }
             }
 
-            _transactionGate.Release();
-            WaitForTransactionDepthToClear();
+            if (ownsSemaphore)
+                _transactionGate.Release();
+            WaitForTransactionDepthToClear(cancellationToken, operationLabel);
         }
     }
 
@@ -252,7 +284,7 @@ public class DbWriter
         }
     }
 
-    private void WaitForTransactionDepthToClear()
+    private void WaitForTransactionDepthToClear(CancellationToken cancellationToken, string operation)
     {
         var timeout = GetTransactionStateContentionTimeout();
         var stopwatch = Stopwatch.StartNew();
@@ -260,11 +292,11 @@ public class DbWriter
         {
             while (_transactionDepth > 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
                 if (waitMilliseconds <= 0)
                 {
-                    throw new InvalidOperationException(
-                        $"Timed out waiting for DbWriter transaction gate state to clear; transaction_depth={_transactionDepth}.");
+                    throw new InvalidOperationException(BuildTransactionGateTimeoutMessage(operation, stopwatch));
                 }
 
                 Monitor.Wait(_transactionStateLock, waitMilliseconds);
@@ -287,6 +319,30 @@ public class DbWriter
         return Math.Max(1, (int)Math.Ceiling(wait.TotalMilliseconds));
     }
 
+    private string BuildTransactionGateTimeoutMessage(string operation, Stopwatch stopwatch)
+    {
+        lock (_transactionStateLock)
+        {
+            var heldMs = _transactionOwnerAcquiredAtUtc == default
+                ? 0
+                : Math.Max(0, (long)(DateTimeOffset.UtcNow - _transactionOwnerAcquiredAtUtc).TotalMilliseconds);
+            return "Timed out waiting for DbWriter transaction gate"
+                + $"; waiter_operation={FormatTransactionGateDiagnosticValue(operation)}"
+                + $"; waiter_thread_id={Environment.CurrentManagedThreadId}"
+                + $"; owner_thread_id={_transactionOwnerThreadId}"
+                + $"; owner_operation={FormatTransactionGateDiagnosticValue(_transactionOwnerOperation)}"
+                + $"; transaction_depth={_transactionDepth}"
+                + $"; held_ms={heldMs.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                + $"; waited_ms={((long)stopwatch.Elapsed.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture)}.";
+        }
+    }
+
+    private static string FormatTransactionGateDiagnosticValue(string? value)
+        => ConsoleUi.FormatBoundedValue(string.IsNullOrWhiteSpace(value) ? "unknown" : value)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal);
+
     private void ExitTransactionGate(Guid token, Guid? previousToken)
     {
         lock (_transactionStateLock)
@@ -295,6 +351,8 @@ public class DbWriter
             {
                 _transactionOwnerThreadId = 0;
                 _transactionOwnerToken = Guid.Empty;
+                _transactionOwnerOperation = null;
+                _transactionOwnerAcquiredAtUtc = default;
             }
         }
         if (_currentTransactionGateToken.Value == token)
@@ -1055,26 +1113,31 @@ public class DbWriter
     /// バッチごとにプリペアドステートメントを再利用し、行ごとのコマンド生成コストを回避する。
     /// </summary>
     public void InsertChunks(IReadOnlyList<ChunkRecord> chunks)
+        => InsertChunks(chunks, CancellationToken.None);
+
+    public void InsertChunks(IReadOnlyList<ChunkRecord> chunks, CancellationToken cancellationToken)
     {
         if (chunks.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 5);
         for (int i = 0; i < chunks.Count; i += rowsPerStatement)
         {
+            CheckBatchCancellationAndReportProgress("insert_chunks", i, chunks.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, chunks.Count);
             try
             {
                 // Only create a batch transaction when not already inside an outer transaction
                 // 外部トランザクション内でない場合のみバッチトランザクションを作成
-                using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+                using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert chunks") : null;
                 InsertChunkBatch(chunks, i, end);
                 transaction?.Commit();
             }
             catch (SqliteException batchException) when (IsRowSkippableSqliteException(batchException))
             {
-                InsertChunksWithRowSkip(chunks, i, end, batchException);
+                InsertChunksWithRowSkip(chunks, i, end, batchException, cancellationToken);
             }
         }
+        CheckBatchCancellationAndReportProgress("insert_chunks", chunks.Count, chunks.Count, cancellationToken);
     }
 
     /// <summary>
@@ -1084,34 +1147,40 @@ public class DbWriter
     /// バッチごとにプリペアドステートメントを再利用し、行ごとのコマンド生成コストを回避する。
     /// </summary>
     public void InsertSymbols(IReadOnlyList<SymbolRecord> symbols)
+        => InsertSymbols(symbols, CancellationToken.None);
+
+    public void InsertSymbols(IReadOnlyList<SymbolRecord> symbols, CancellationToken cancellationToken)
     {
         if (symbols.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 19);
         for (int i = 0; i < symbols.Count; i += rowsPerStatement)
         {
+            CheckBatchCancellationAndReportProgress("insert_symbols", i, symbols.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, symbols.Count);
             var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             try
             {
                 // Only create a batch transaction when not already inside an outer transaction
                 // 外部トランザクション内でない場合のみバッチトランザクションを作成
-                using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+                using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert symbols") : null;
                 InsertSymbolBatch(symbols, i, end, foldedNameCache);
                 transaction?.Commit();
             }
             catch (SqliteException batchException) when (IsRowSkippableSqliteException(batchException))
             {
-                InsertSymbolsWithRowSkip(symbols, i, end, batchException);
+                InsertSymbolsWithRowSkip(symbols, i, end, batchException, cancellationToken);
             }
         }
+        CheckBatchCancellationAndReportProgress("insert_symbols", symbols.Count, symbols.Count, cancellationToken);
     }
 
-    private void InsertChunksWithRowSkip(IReadOnlyList<ChunkRecord> chunks, int start, int end, SqliteException batchException)
+    private void InsertChunksWithRowSkip(IReadOnlyList<ChunkRecord> chunks, int start, int end, SqliteException batchException, CancellationToken cancellationToken)
     {
-        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert chunks row skip") : null;
         for (int i = start; i < end; i++)
         {
+            CheckBatchCancellationAndReportProgress("insert_chunks_row_skip", i, end, cancellationToken);
             var chunk = chunks[i];
             ExecuteWithRowSavepoint(
                 () => InsertChunkBatch(chunks, i, i + 1),
@@ -1121,12 +1190,13 @@ public class DbWriter
         transaction?.Commit();
     }
 
-    private void InsertSymbolsWithRowSkip(IReadOnlyList<SymbolRecord> symbols, int start, int end, SqliteException batchException)
+    private void InsertSymbolsWithRowSkip(IReadOnlyList<SymbolRecord> symbols, int start, int end, SqliteException batchException, CancellationToken cancellationToken)
     {
-        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert symbols row skip") : null;
         var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
         for (int i = start; i < end; i++)
         {
+            CheckBatchCancellationAndReportProgress("insert_symbols_row_skip", i, end, cancellationToken);
             var symbol = symbols[i];
             ExecuteWithRowSavepoint(
                 () => InsertSymbolBatch(symbols, i, i + 1, foldedNameCache),
@@ -1134,6 +1204,25 @@ public class DbWriter
         }
 
         transaction?.Commit();
+    }
+
+    private void CheckBatchCancellationAndReportProgress(
+        string operation,
+        int rowsProcessed,
+        int rowsTotal,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (rowsTotal <= BatchSize && BatchProgressCheckpointForTesting == null)
+            return;
+
+        var progress = new DbWriterBatchProgress(operation, rowsProcessed, rowsTotal);
+        BatchProgressCheckpointForTesting?.Invoke(progress);
+        GlobalToolLog.Info(
+            "db_writer_batch_checkpoint"
+            + $" operation={operation}"
+            + $" rows_processed={rowsProcessed.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+            + $" rows_total={rowsTotal.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
     }
 
     private void ExecuteWithRowSavepoint(Action insertRow, Action<Exception> onSkip)
@@ -1359,19 +1448,26 @@ public class DbWriter
     /// インデックス済み参照をバッチ挿入する。
     /// </summary>
     public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags = true)
+        => InsertReferences(references, refreshMutualRecursionFlags, CancellationToken.None);
+
+    public void InsertReferences(IReadOnlyList<ReferenceRecord> references, CancellationToken cancellationToken)
+        => InsertReferences(references, refreshMutualRecursionFlags: true, cancellationToken);
+
+    public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
     {
         if (references.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
         for (int i = 0; i < references.Count; i += rowsPerStatement)
         {
+            CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, references.Count);
             var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
-            using var transaction = BeginTransaction();
-            var referenceLineIds = UpsertReferenceLines(references, i, end);
+            using var transaction = BeginTransaction(cancellationToken, "insert references");
+            var referenceLineIds = UpsertReferenceLines(references, i, end, cancellationToken);
 
             using var cmd = _conn.CreateCommand();
             var sql = new StringBuilder();
@@ -1419,8 +1515,12 @@ public class DbWriter
             transaction.Commit();
         }
 
+        CheckBatchCancellationAndReportProgress("insert_references", references.Count, references.Count, cancellationToken);
         if (refreshMutualRecursionFlags)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             RefreshMutualRecursionFlags();
+        }
     }
 
     private static void ValidateSymbolKinds(SymbolRecord symbol)
@@ -1441,11 +1541,12 @@ public class DbWriter
             throw new ArgumentException($"Unknown reference container kind '{reference.ContainerKind}'. Register the kind in {nameof(SymbolKindCatalog)} before writing it.", nameof(reference));
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end)
+    private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)
     {
         var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>();
         for (int i = start; i < end; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var reference = references[i];
             contextsByLine[(reference.FileId, reference.Line, reference.Context)] = reference.Context;
         }
@@ -1454,6 +1555,7 @@ public class DbWriter
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += rowsPerStatement)
         {
+            CheckBatchCancellationAndReportProgress("upsert_reference_lines", i, rows.Length, cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
             var sql = new StringBuilder();
@@ -1479,6 +1581,7 @@ public class DbWriter
         int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
+            CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
             var predicates = new List<string>(keyEnd - i);

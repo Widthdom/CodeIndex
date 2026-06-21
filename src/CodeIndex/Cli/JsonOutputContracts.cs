@@ -199,7 +199,13 @@ internal sealed record DiffJsonResult(
     [property: JsonPropertyName("symbols_only_in_left")] List<string>? SymbolsOnlyInLeft,
     [property: JsonPropertyName("symbols_only_in_right")] List<string>? SymbolsOnlyInRight,
     [property: JsonPropertyName("limit")] int Limit,
-    [property: JsonPropertyName("detailed")] bool Detailed);
+    [property: JsonPropertyName("detailed")] bool Detailed,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("diagnostics")] List<DiffDiagnosticJsonResult>? Diagnostics = null);
+
+internal sealed record DiffDiagnosticJsonResult(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("message")] string Message);
 
 internal sealed record DiffSummaryOnlyJsonResult(
     [property: JsonPropertyName("status")] string Status,

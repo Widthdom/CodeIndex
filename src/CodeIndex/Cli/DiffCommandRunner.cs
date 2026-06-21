@@ -21,6 +21,9 @@ public static class DiffCommandRunner
     private const int UnreadableExitCode = 3;
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
+        => Run(args, jsonOptions, CancellationToken.None);
+
+    public static int Run(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var options = ParseArgs(args);
         if (options.ShowHelp)
@@ -49,7 +52,9 @@ public static class DiffCommandRunner
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var leftHeader = ReadHeader(options.LeftDb!);
+            cancellationToken.ThrowIfCancellationRequested();
             var rightHeader = ReadHeader(options.RightDb!);
             if (leftHeader.SchemaVersion != rightHeader.SchemaVersion)
             {
@@ -58,11 +63,21 @@ public static class DiffCommandRunner
                 return SchemaMismatchExitCode;
             }
 
-            var result = BuildDiff(leftHeader, rightHeader, options);
+            var result = BuildDiff(leftHeader, rightHeader, options, cancellationToken);
 
             WriteResult(result, options, jsonOptions);
 
             return result.Identical ? CommandExitCodes.Success : DriftExitCode;
+        }
+        catch (OperationCanceledException)
+        {
+            return WriteCommandError(
+                options.Json || options.SummaryOnly,
+                jsonOptions,
+                "diff comparison cancelled before it could complete",
+                CommandExitCodes.CancelledBySignal,
+                "Retry the diff with a smaller database pair or after the cancelling operation completes.",
+                CommandErrorCodes.Interrupted);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
@@ -276,7 +291,7 @@ public static class DiffCommandRunner
             symbol_references.container_name_folded
         """;
 
-    private static DiffJsonResult BuildDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options)
+    private static DiffJsonResult BuildDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options, CancellationToken cancellationToken)
     {
         var summary = new DiffSummaryJsonResult(
             left.FileCount,
@@ -296,6 +311,7 @@ public static class DiffCommandRunner
         var filesOnlyInRight = new List<string>();
         var symbolsOnlyInLeft = new List<string>();
         var symbolsOnlyInRight = new List<string>();
+        var diagnostics = new List<DiffDiagnosticJsonResult>();
         var identical =
             summary.SchemaVersionsEqual &&
             summary.FileCountDelta == 0 &&
@@ -309,32 +325,38 @@ public static class DiffCommandRunner
 
         if (!options.SummaryOnly)
         {
-            var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit);
+            cancellationToken.ThrowIfCancellationRequested();
+            var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit, cancellationToken);
             filesOnlyInLeft = fileDiff.OnlyInLeft;
             filesOnlyInRight = fileDiff.OnlyInRight;
             identical = identical && fileDiff.Equal;
+            AddTruncationDiagnostic(diagnostics, fileDiff.Truncated, "file differences");
         }
 
         if (options.Detailed)
         {
-            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, options.Limit);
+            cancellationToken.ThrowIfCancellationRequested();
+            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, options.Limit, cancellationToken);
             symbolsOnlyInLeft = symbolDiff.OnlyInLeft;
             symbolsOnlyInRight = symbolDiff.OnlyInRight;
             identical = identical && symbolDiff.Equal;
+            AddTruncationDiagnostic(diagnostics, symbolDiff.Truncated, "symbol differences");
         }
 
         if (identical)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             identical =
-                RowsEqual(leftConnection, rightConnection, FileRowsSql) &&
-                RowsEqual(leftConnection, rightConnection, ChunkRowsSql) &&
-                RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql) &&
-                RowsEqual(leftConnection, rightConnection, FileIssueRowsSql) &&
-                RowsEqual(leftConnection, rightConnection, MetaRowsSql) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql)) &&
-                RowsEqual(leftConnection, rightConnection, ReferenceRowsSql);
+                RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken) &&
+                RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken) &&
+                RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql, cancellationToken) &&
+                RowsEqual(leftConnection, rightConnection, FileIssueRowsSql, cancellationToken) &&
+                RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken) &&
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken)) &&
+                RowsEqual(leftConnection, rightConnection, ReferenceRowsSql, cancellationToken);
         }
 
+        var truncated = diagnostics.Count > 0;
         return new DiffJsonResult(
             identical ? "identical" : "different",
             identical,
@@ -346,7 +368,18 @@ public static class DiffCommandRunner
             options.Detailed ? symbolsOnlyInLeft : null,
             options.Detailed ? symbolsOnlyInRight : null,
             options.Limit,
-            options.Detailed);
+            options.Detailed,
+            truncated,
+            truncated ? diagnostics : null);
+    }
+
+    private static void AddTruncationDiagnostic(List<DiffDiagnosticJsonResult> diagnostics, bool truncated, string area)
+    {
+        if (!truncated)
+            return;
+        diagnostics.Add(new DiffDiagnosticJsonResult(
+            "diff_samples_truncated",
+            $"{area} exceeded the requested diff sample limit; rerun with a higher --limit for more rows."));
     }
 
     private static DiffJsonResult BuildSchemaMismatchDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options)
@@ -380,17 +413,21 @@ public static class DiffCommandRunner
     }
 
     private static OrderedRowsDiff DiffOrderedRows(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit)
-        => DiffOrderedRows(leftConnection, rightConnection, sql, sql, limit);
+        => DiffOrderedRows(leftConnection, rightConnection, sql, sql, limit, CancellationToken.None);
 
     private static OrderedRowsDiff DiffOrderedRows(
         SqliteConnection leftConnection,
         SqliteConnection rightConnection,
         string leftSql,
         string rightSql,
-        int limit)
+        int limit,
+        CancellationToken cancellationToken)
     {
         if (limit == 0)
-            return new OrderedRowsDiff(RowsEqual(leftConnection, rightConnection, leftSql, rightSql), [], []);
+        {
+            var rowsEqual = RowsEqual(leftConnection, rightConnection, leftSql, rightSql, cancellationToken);
+            return new OrderedRowsDiff(rowsEqual, [], [], !rowsEqual);
+        }
 
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = leftSql;
@@ -403,20 +440,22 @@ public static class DiffCommandRunner
         var onlyInRight = new List<string>(limit);
         var leftRowsRead = 0;
         var rightRowsRead = 0;
-        var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left");
-        var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right");
+        var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
+        var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
+        var truncated = false;
 
         while (leftHasValue || rightHasValue)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var comparison = leftHasValue && rightHasValue
                 ? CompareRows(leftValue, rightValue)
                 : leftHasValue ? -1 : 1;
 
             if (comparison == 0)
             {
-                leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left");
-                rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right");
+                leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
+                rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
                 continue;
             }
 
@@ -425,26 +464,36 @@ public static class DiffCommandRunner
             {
                 if (onlyInLeft.Count < limit)
                     onlyInLeft.Add(EncodeRow(leftValue.SortValues));
-                leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left");
+                else
+                    truncated = true;
+                leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
                 if (onlyInRight.Count < limit)
                     onlyInRight.Add(EncodeRow(rightValue.SortValues));
-                rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right");
+                else
+                    truncated = true;
+                rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
             }
 
             if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
+            {
+                truncated = truncated || leftHasValue || rightHasValue;
                 break;
+            }
         }
 
-        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight);
+        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, truncated);
     }
 
-    private static OrderedRowsDiff DiffOrderedStrings(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit)
+    private static OrderedRowsDiff DiffOrderedStrings(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit, CancellationToken cancellationToken)
     {
         if (limit == 0)
-            return new OrderedRowsDiff(StringRowsEqual(leftConnection, rightConnection, sql), [], []);
+        {
+            var rowsEqual = StringRowsEqual(leftConnection, rightConnection, sql, cancellationToken);
+            return new OrderedRowsDiff(rowsEqual, [], [], !rowsEqual);
+        }
 
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = sql;
@@ -457,20 +506,22 @@ public static class DiffCommandRunner
         var onlyInRight = new List<string>(limit);
         var leftRowsRead = 0;
         var rightRowsRead = 0;
-        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left");
-        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right");
+        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
+        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
+        var truncated = false;
 
         while (leftHasValue || rightHasValue)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var comparison = leftHasValue && rightHasValue
                 ? string.CompareOrdinal(leftValue, rightValue)
                 : leftHasValue ? -1 : 1;
 
             if (comparison == 0)
             {
-                leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left");
-                rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right");
+                leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
+                rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
                 continue;
             }
 
@@ -479,26 +530,36 @@ public static class DiffCommandRunner
             {
                 if (onlyInLeft.Count < limit)
                     onlyInLeft.Add(leftValue);
-                leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left");
+                else
+                    truncated = true;
+                leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
                 if (onlyInRight.Count < limit)
                     onlyInRight.Add(rightValue);
-                rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right");
+                else
+                    truncated = true;
+                rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
             }
 
             if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
+            {
+                truncated = truncated || leftHasValue || rightHasValue;
                 break;
+            }
         }
 
-        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight);
+        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, truncated);
     }
 
     private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql)
-        => RowsEqual(leftConnection, rightConnection, sql, sql);
+        => RowsEqual(leftConnection, rightConnection, sql, sql, CancellationToken.None);
 
-    private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string leftSql, string rightSql)
+    private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, CancellationToken cancellationToken)
+        => RowsEqual(leftConnection, rightConnection, sql, sql, cancellationToken);
+
+    private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string leftSql, string rightSql, CancellationToken cancellationToken)
     {
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = leftSql;
@@ -509,20 +570,21 @@ public static class DiffCommandRunner
 
         var leftRowsRead = 0;
         var rightRowsRead = 0;
-        var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left");
-        var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right");
+        var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
+        var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         while (leftHasValue && rightHasValue)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (CompareRows(leftValue, rightValue) != 0)
                 return false;
-            leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left");
-            rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right");
+            leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
+            rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
         }
 
         return leftHasValue == rightHasValue;
     }
 
-    private static bool StringRowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql)
+    private static bool StringRowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, CancellationToken cancellationToken)
     {
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = sql;
@@ -533,21 +595,23 @@ public static class DiffCommandRunner
 
         var leftRowsRead = 0;
         var rightRowsRead = 0;
-        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left");
-        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right");
+        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
+        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         while (leftHasValue && rightHasValue)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!string.Equals(leftValue, rightValue, StringComparison.Ordinal))
                 return false;
-            leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left");
-            rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right");
+            leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
+            rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
         }
 
         return leftHasValue == rightHasValue;
     }
 
-    private static bool TryReadRow(SqliteDataReader reader, out DiffRow value, ref int rowsRead, string side)
+    private static bool TryReadRow(SqliteDataReader reader, out DiffRow value, ref int rowsRead, string side, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!reader.Read())
         {
             value = DiffRow.Empty;
@@ -631,8 +695,9 @@ public static class DiffCommandRunner
         return left.Length.CompareTo(right.Length);
     }
 
-    private static bool TryReadString(SqliteDataReader reader, out string value, ref int rowsRead, string side)
+    private static bool TryReadString(SqliteDataReader reader, out string value, ref int rowsRead, string side, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!reader.Read())
         {
             value = string.Empty;
@@ -895,7 +960,8 @@ public static class DiffCommandRunner
     private sealed record OrderedRowsDiff(
         bool Equal,
         List<string> OnlyInLeft,
-        List<string> OnlyInRight);
+        List<string> OnlyInRight,
+        bool Truncated);
 
     private sealed record DiffRow(
         object?[] SortValues)

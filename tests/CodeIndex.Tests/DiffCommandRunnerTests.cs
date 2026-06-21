@@ -183,6 +183,64 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_JsonReportsTruncatedDiagnosticWhenSamplesHitLimit_Issue3736()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_truncated_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_truncated_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/ExtraA.cs", "csharp", "public class ExtraA { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/ExtraB.cs", "csharp", "public class ExtraB { }");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--limit", "1"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.Equal("different", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("truncated").GetBoolean());
+            Assert.Single(root.GetProperty("files_only_in_right").EnumerateArray());
+            Assert.Contains(
+                root.GetProperty("diagnostics").EnumerateArray(),
+                item => item.GetProperty("code").GetString() == "diff_samples_truncated");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonCancellationReturnsInterruptedError_Issue3736()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_diff_cancelled");
+        try
+        {
+            var db = TestProjectHelper.CreateProjectDb(root);
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var (exitCode, stdout, stderr) = RunWithCapturedStreams([db, db, "--json"], cts.Token);
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var rootElement = document.RootElement;
+            Assert.Equal("error", rootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, rootElement.GetProperty("error_code").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_StopsWhenDiffRowBudgetIsExceeded_Issue3834()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_row_budget_left");
@@ -850,7 +908,7 @@ public class DiffCommandRunnerTests
         command.ExecuteNonQuery();
     }
 
-    private (int ExitCode, string Output) RunWithCapturedOut(string[] args)
+    private (int ExitCode, string Output) RunWithCapturedOut(string[] args, CancellationToken cancellationToken = default)
     {
         var originalOut = Console.Out;
         using var writer = new StringWriter();
@@ -859,7 +917,7 @@ public class DiffCommandRunnerTests
             try
             {
                 Console.SetOut(writer);
-                var exitCode = DiffCommandRunner.Run(args, _jsonOptions);
+                var exitCode = DiffCommandRunner.Run(args, _jsonOptions, cancellationToken);
                 return (exitCode, writer.ToString());
             }
             finally
@@ -869,7 +927,7 @@ public class DiffCommandRunnerTests
         }
     }
 
-    private (int ExitCode, string StdOut, string StdErr) RunWithCapturedStreams(string[] args)
+    private (int ExitCode, string StdOut, string StdErr) RunWithCapturedStreams(string[] args, CancellationToken cancellationToken = default)
     {
         var originalOut = Console.Out;
         var originalErr = Console.Error;
@@ -881,7 +939,7 @@ public class DiffCommandRunnerTests
             {
                 Console.SetOut(stdout);
                 Console.SetError(stderr);
-                var exitCode = DiffCommandRunner.Run(args, _jsonOptions);
+                var exitCode = DiffCommandRunner.Run(args, _jsonOptions, cancellationToken);
                 return (exitCode, stdout.ToString(), stderr.ToString());
             }
             finally
