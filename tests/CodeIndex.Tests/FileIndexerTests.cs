@@ -4985,6 +4985,19 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ComputeChecksumFromNormalizedContent_MatchesUtf8ByteChecksumAcrossChunks()
+    {
+        var content = new string('a', 1023)
+            + char.ConvertFromUtf32(0x1F680)
+            + new string('b', 4097)
+            + "\uD800";
+
+        var expected = FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(content));
+
+        Assert.Equal(expected, FileContentLoader.ComputeChecksumFromNormalizedContent(content));
+    }
+
+    [Fact]
     public void ComputeChecksum_LongInputWithoutCr_MatchesRawByteSha256()
     {
         // For CR-free payloads (the common case), the checksum must still equal raw-byte

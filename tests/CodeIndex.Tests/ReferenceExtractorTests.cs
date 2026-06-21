@@ -16,6 +16,26 @@ namespace CodeIndex.Tests;
 public partial class ReferenceExtractorTests
 {
     [Fact]
+    public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForUnmaskedLanguage()
+    {
+        var lines = new[] { "package main", "func main() {}" };
+
+        var masked = StructuralLineMasker.MaskLines("go", lines);
+
+        Assert.Same(lines, masked);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_ClonesForMaskedLanguage()
+    {
+        var lines = new[] { "var value = \"literal\";" };
+
+        var masked = StructuralLineMasker.MaskLines("csharp", lines);
+
+        Assert.NotSame(lines, masked);
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();

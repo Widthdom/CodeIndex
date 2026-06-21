@@ -6,6 +6,7 @@ namespace CodeIndex.Indexer;
 internal sealed class FileContentLoader(long maxFileSizeBytes)
 {
     private const int GitLfsPointerMaxBytes = 1024;
+    private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
 
     internal LoadedFileContent Load(
         string absolutePath,
@@ -23,7 +24,9 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         var isGitLfsPointer = IsGitLfsPointer(bytes);
         if (isGitLfsPointer)
             content = string.Empty;
-        var checksumBytes = isGitLfsPointer ? bytes : Encoding.UTF8.GetBytes(content);
+        var checksum = isGitLfsPointer
+            ? ComputeChecksum(bytes)
+            : ComputeChecksumFromNormalizedContent(content);
 
         return new LoadedFileContent(
             content,
@@ -31,7 +34,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             sizeBytes,
             modifiedUtc,
             FileIndexer.CountPhysicalLines(content),
-            ComputeChecksum(checksumBytes),
+            checksum,
             warning);
     }
 
@@ -64,8 +67,8 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: 4096,
-                useAsync: false))
+                bufferSize: 81920,
+                options: FileOptions.SequentialScan))
             {
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
@@ -107,7 +110,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     {
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
-        if (!isUtf16Encoded && TryFindIndexBlockingNullByte(bytes, out var nullByteOffset))
+        if (!isUtf16Encoded && TryFindNullByte(bytes, out var nullByteOffset))
             throw new FileIndexer.BinaryFileSkippedException(
                 relativePath,
                 nullByteOffset,
@@ -221,6 +224,8 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     {
         if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
             return false;
+        if (!rawBytes.AsSpan().StartsWith(GitLfsPointerPrefix))
+            return false;
 
         var pointerText = Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         var lines = pointerText.Split('\n');
@@ -291,6 +296,11 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         if (TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _))
             return false;
 
+        return TryFindNullByte(rawBytes, out offset);
+    }
+
+    private static bool TryFindNullByte(byte[] rawBytes, out int offset)
+    {
         offset = Array.IndexOf(rawBytes, (byte)0);
         return offset >= 0;
     }
@@ -379,6 +389,34 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         var pendingCarriageReturn = false;
         AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
         FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
+        return FinishChecksum(hasher);
+    }
+
+    internal static string ComputeChecksumFromNormalizedContent(string content)
+    {
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> buffer = stackalloc byte[4096];
+        const int MaxCharsPerChunk = 1024;
+        for (var offset = 0; offset < content.Length;)
+        {
+            var charCount = Math.Min(MaxCharsPerChunk, content.Length - offset);
+            if (offset + charCount < content.Length
+                && charCount > 0
+                && char.IsHighSurrogate(content[offset + charCount - 1])
+                && char.IsLowSurrogate(content[offset + charCount]))
+            {
+                charCount--;
+            }
+
+            if (charCount == 0)
+                charCount = 1;
+
+            var written = Encoding.UTF8.GetBytes(content.AsSpan(offset, charCount), buffer);
+            if (written > 0)
+                hasher.AppendData(buffer[..written]);
+            offset += charCount;
+        }
+
         return FinishChecksum(hasher);
     }
 
