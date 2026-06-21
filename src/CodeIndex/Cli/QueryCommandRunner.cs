@@ -2399,16 +2399,22 @@ public static partial class QueryCommandRunner
     private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
     {
         cursor = default;
-        var parts = value.Split(':');
-        if (parts.Length != 3)
+        var lastSeparator = value.LastIndexOf(':');
+        if (lastSeparator <= 0 || lastSeparator == value.Length - 1)
             return false;
-        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var score) ||
-            !long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var chunkId) ||
-            !int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var offset) ||
-            offset < 0)
-        {
+
+        var firstSeparator = value.LastIndexOf(':', lastSeparator - 1);
+        if (firstSeparator <= 0 || firstSeparator == lastSeparator - 1)
             return false;
-        }
+
+        if (!double.TryParse(value.AsSpan(0, firstSeparator), NumberStyles.Float, CultureInfo.InvariantCulture, out var score)
+            || !double.IsFinite(score))
+            return false;
+        if (!long.TryParse(value.AsSpan(firstSeparator + 1, lastSeparator - firstSeparator - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var chunkId)
+            || chunkId < 0)
+            return false;
+        if (!int.TryParse(value.AsSpan(lastSeparator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var offset) || offset < 0)
+            return false;
 
         cursor = new SearchCursor(score, chunkId, offset);
         return true;

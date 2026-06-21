@@ -2218,9 +2218,7 @@ public class DbContext : IDisposable
         const string oldSymbolReferences = "_symbol_references_file_line_key";
         var quotedOldReferenceLines = SqliteIdentifier.Quote(oldReferenceLines);
         var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
-        var foreignKeys = ReadPragmaLong("foreign_keys");
-        Execute("PRAGMA foreign_keys=OFF");
-        try
+        RunWithForeignKeysDisabledForMigration("EnsureReferenceLinesContextKey", () =>
         {
             Execute($"DROP TABLE IF EXISTS {quotedOldSymbolReferences}");
             Execute($"DROP TABLE IF EXISTS {quotedOldReferenceLines}");
@@ -2233,11 +2231,7 @@ public class DbContext : IDisposable
             Execute($"DROP TABLE {quotedOldSymbolReferences}");
             Execute($"DROP TABLE {quotedOldReferenceLines}");
             InvokeForeignKeyValidationBeforeCheckForTesting("reference_lines_context_key");
-        }
-        finally
-        {
-            Execute($"PRAGMA foreign_keys={foreignKeys}");
-        }
+        });
 
         ValidateForeignKeysAfterMigration("reference_lines_context_key");
         _schemaCache?.Refresh();
@@ -2324,10 +2318,8 @@ public class DbContext : IDisposable
             """;
         const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
 
-        var foreignKeys = ReadPragmaLong("foreign_keys");
         var rebuilt = false;
-        Execute("PRAGMA foreign_keys=OFF");
-        try
+        RunWithForeignKeysDisabledForMigration("EnsureKindCheckConstraintsCurrent", () =>
         {
             if (!TableCheckContainsAll("symbols", SymbolKindCatalog.SymbolKinds))
             {
@@ -2343,14 +2335,44 @@ public class DbContext : IDisposable
 
             if (rebuilt)
                 InvokeForeignKeyValidationBeforeCheckForTesting("kind_check_constraints");
-        }
-        finally
-        {
-            Execute($"PRAGMA foreign_keys={foreignKeys}");
-        }
+        });
 
         if (rebuilt)
             ValidateForeignKeysAfterMigration("kind_check_constraints");
+    }
+
+    private void RunWithForeignKeysDisabledForMigration(string operation, Action action)
+    {
+        var foreignKeys = ReadPragmaLong("foreign_keys");
+        Execute("PRAGMA foreign_keys=OFF");
+        ExceptionDispatchInfo? operationFailure = null;
+        try
+        {
+            ForeignKeysDisabledForTesting?.Invoke(operation);
+            action();
+        }
+        catch (Exception ex)
+        {
+            operationFailure = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        try
+        {
+            ForeignKeysRestoringForTesting?.Invoke(operation, foreignKeys);
+            Execute($"PRAGMA foreign_keys={foreignKeys}");
+        }
+        catch (Exception ex)
+        {
+            throw new CodeIndexException(
+                code: CommandErrorCodes.DbError,
+                category: CodeIndexExceptionCategory.Database,
+                message: $"Failed to restore PRAGMA foreign_keys after {operation}.",
+                path: _connection.DataSource,
+                hint: "Close other database connections, restore write access if needed, and rerun the command before trusting further migration work.",
+                innerException: ex);
+        }
+
+        operationFailure?.Throw();
     }
 
     private void InvokeForeignKeyValidationBeforeCheckForTesting(string phase)
