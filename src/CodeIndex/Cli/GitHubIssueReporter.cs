@@ -123,8 +123,8 @@ internal static class GitHubIssueReporter
         if (token == null)
             return SuggestionStore.SubmitAttemptResult.Skipped();
 
-        using var timeoutCts = CreateTimeoutCancellationSource();
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        var timeout = ResolveSubmitTimeout();
+        using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
 
         try
         {
@@ -141,7 +141,7 @@ internal static class GitHubIssueReporter
                 record.Hash,
                 token,
                 BuildExistingSuggestionLookupLabels(record),
-                linkedCts.Token);
+                requestCancellation.Token);
             if (existingLookup.Error != null)
             {
                 CommandErrorWriter.WriteStderr(BuildSubmissionFailureMessage(existingLookup.Error));
@@ -151,11 +151,11 @@ internal static class GitHubIssueReporter
             if (existingLookup.IssueUrl != null)
                 return SuggestionStore.SubmitAttemptResult.Success(existingLookup.IssueUrl);
 
-            return await CreateIssueAsync(record, version, token, linkedCts.Token);
+            return await CreateIssueAsync(record, version, token, requestCancellation.Token);
         }
-        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (requestCancellation.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            var detail = $"{ex.GetType().Name}: GitHub submission timed out after {ResolveSubmitTimeout().TotalSeconds:0} seconds";
+            var detail = $"{ex.GetType().Name}: GitHub submission timed out after {timeout.TotalSeconds:0} seconds";
             CommandErrorWriter.WriteStderr(BuildSubmissionFailureMessage(detail));
             return SuggestionStore.SubmitAttemptResult.Failure(detail);
         }
@@ -178,14 +178,6 @@ internal static class GitHubIssueReporter
             return !taskCanceled.CancellationToken.IsCancellationRequested || IsTimeoutCancellation(taskCanceled);
 
         return ex is not OperationCanceledException;
-    }
-
-    private static CancellationTokenSource CreateTimeoutCancellationSource()
-    {
-        var timeout = ResolveSubmitTimeout();
-        return timeout <= TimeSpan.Zero
-            ? new CancellationTokenSource()
-            : new CancellationTokenSource(timeout);
     }
 
     internal static TimeSpan ResolveSubmitTimeout()

@@ -43,6 +43,36 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_OpenAppend_OnUnixRejectsSymlinkTargets_Issue3824()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_symlink_{Guid.NewGuid():N}");
+        var target = Path.Combine(directory, "target.log");
+        var link = Path.Combine(directory, "link.log");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(target, "target");
+            File.CreateSymbolicLink(link, target);
+
+            var ex = Assert.Throws<IOException>(() =>
+            {
+                using var _ = PrivateLogFile.OpenAppend(link);
+            });
+
+            Assert.Contains("symbolic link or reparse point", ex.Message, StringComparison.Ordinal);
+            Assert.Equal("target", File.ReadAllText(target));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void PrivateLogFile_HardenExisting_CapsBestEffortWork_Issue3027()
     {
         if (OperatingSystem.IsWindows())
@@ -51,6 +81,7 @@ public class GlobalToolLogTests
         var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_harden_{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         var fileCount = PrivateLogFile.MaxExistingFilesToHarden + 2;
+        var diagnostics = new List<PrivateLogFileDiagnostic>();
         try
         {
             for (var i = 0; i < fileCount; i++)
@@ -60,7 +91,7 @@ public class GlobalToolLogTests
                 File.SetUnixFileMode(path, PermissionBits);
             }
 
-            PrivateLogFile.HardenExisting(directory, "stderr-*.log");
+            PrivateLogFile.HardenExisting(directory, "stderr-*.log", diagnostics.Add);
 
             var privateCount = 0;
             for (var i = 0; i < fileCount; i++)
@@ -71,6 +102,11 @@ public class GlobalToolLogTests
             }
 
             Assert.Equal(PrivateLogFile.MaxExistingFilesToHarden, privateCount);
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(Path.Combine(directory, "stderr-0000.log")) & PermissionBits);
+            Assert.NotEqual(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(Path.Combine(directory, $"stderr-{fileCount - 1:D4}.log")) & PermissionBits);
+            var diagnostic = Assert.Single(diagnostics, item => item.Operation == "harden_existing_cap");
+            Assert.Equal("cap_exceeded", diagnostic.Reason);
+            Assert.DoesNotContain(directory, diagnostic.Target, StringComparison.Ordinal);
         }
         finally
         {
@@ -154,6 +190,39 @@ public class GlobalToolLogTests
         }
         finally
         {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PrivateLogFile_TryRotateSlots_ReportsPostReplaceFlushFailure_Issue3776()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_rotate_flush_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "metrics.jsonl");
+        var failures = new List<Exception>();
+        try
+        {
+            File.WriteAllText(path, "current");
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ => throw new IOException("flush denied");
+
+            var rotated = PrivateLogFile.TryRotateSlots(
+                path,
+                retainedFileCount: 3,
+                onFailure: failures.Add);
+
+            Assert.False(rotated);
+            var failure = Assert.Single(failures);
+            Assert.Contains("Atomic replace completed", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("target file was already replaced", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("parent directory could not be flushed", failure.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(path));
+            Assert.Equal("current", File.ReadAllText(path + ".1"));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
@@ -444,6 +513,17 @@ public class GlobalToolLogTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ResolveTempFallbackLogDirectory_UsesPrivateTempFallback_Issue3675()
+    {
+        var directory = GlobalToolLog.ResolveTempFallbackLogDirectoryForTesting();
+
+        Assert.Equal(DataDirectorySecurity.ResolveSensitiveTempFallbackDirectory("logs"), directory);
+        Assert.NotEqual(
+            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "cdidx", "logs")),
+            directory);
     }
 
     [Fact]

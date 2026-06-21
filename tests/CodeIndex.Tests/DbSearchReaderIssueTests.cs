@@ -218,6 +218,62 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Contains(DbReader.MaxLiteralSearchTokenCount.ToString(), ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SplitLiteralSearchTokens_RejectsOverlongQuotedPhrase_Issue3794()
+    {
+        var query = "\"" + new string('a', DbReader.MaxLiteralSearchTokenLength + 1) + "\"";
+
+        var ex = Assert.Throws<SearchQueryLimitException>(() => DbReader.SplitLiteralSearchTokens(query));
+
+        Assert.Contains("literal search phrase is too long", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxLiteralSearchTokenLength.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateRawFtsQuery_RejectsHighColumnListFanout_Issue3794()
+    {
+        var columns = string.Join(' ', Enumerable.Repeat("content", DbReader.MaxRawFtsColumnListCount + 1));
+        var query = $"{{{columns}}}: needle";
+
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => DbReader.ValidateRawFtsQuery(query));
+
+        Assert.Contains("raw FTS5 column list has too many columns", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxRawFtsColumnListCount.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateRawFtsQuery_RejectsOverlongColumnToken_Issue3794()
+    {
+        var column = new string('c', DbReader.MaxRawFtsColumnTokenLength + 1);
+
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => DbReader.ValidateRawFtsQuery($"{column}: needle"));
+
+        Assert.Contains("raw FTS5 column qualifier is too long", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxRawFtsColumnTokenLength.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildPathLikePattern_RejectsOverlongPathPattern_Issue3794()
+    {
+        var pattern = new string('a', DbReader.MaxPathLikePatternLength + 1);
+
+        var ex = Assert.Throws<SearchQueryLimitException>(() => DbReader.BuildPathLikePattern(pattern));
+
+        Assert.Contains("path pattern is too long", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxPathLikePatternLength.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildPathLikePattern_RejectsWildcardHeavyPathPattern_Issue3794()
+    {
+        var pattern = string.Concat(Enumerable.Repeat("*", DbReader.MaxPathLikePatternWildcards + 1));
+
+        var ex = Assert.Throws<SearchQueryLimitException>(() => DbReader.BuildPathLikePattern(pattern));
+
+        Assert.Contains("path pattern has too many wildcards", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxPathLikePatternWildcards.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");

@@ -24,6 +24,8 @@ internal static class MetricsSink
     internal const int RotationKeep = 3;
     internal const int MaxStringFieldChars = 1024;
     internal const int MaxSerializedEventBytes = 8 * 1024;
+    internal const int MaxConsecutiveFailures = 3;
+    private const int MaxFailureDiagnosticChars = 192;
 
     internal static IDisposable? TryStart(string? explicitPath) =>
         TryStart(explicitPath, DefaultMaxBytes, CommandErrorWriter.WriteWarning);
@@ -40,9 +42,7 @@ internal static class MetricsSink
         try
         {
             var fullPath = Path.GetFullPath(path);
-            var directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
+            DataDirectorySecurity.CreateSensitiveParentDirectoryForFile(fullPath);
 
             long bytesWritten;
             using (var probe = PrivateLogFile.OpenAppend(fullPath, FileShare.ReadWrite))
@@ -69,6 +69,9 @@ internal static class MetricsSink
 
     internal static bool IsActive => CurrentSession.Value is not null;
 
+    internal static MetricsDiagnostics? SnapshotDiagnosticsForTesting()
+        => CurrentSession.Value?.SnapshotDiagnostics();
+
     internal static void Record(MetricsEvent evt)
     {
         var session = CurrentSession.Value;
@@ -84,12 +87,26 @@ internal static class MetricsSink
         return string.IsNullOrWhiteSpace(envValue) ? null : envValue;
     }
 
+    private static string FormatFailure(string reason, Exception exception)
+    {
+        var formatted = $"{reason}:{exception.GetType().Name}:{CommandErrorWriter.FormatSanitizedException(exception)}";
+        return formatted.Length <= MaxFailureDiagnosticChars
+            ? formatted
+            : formatted[..MaxFailureDiagnosticChars];
+    }
+
     internal sealed class Session : IDisposable
     {
         private readonly object _gate = new();
         private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
         private readonly long _maxBytes;
         private long _bytesWritten;
+        private long _droppedEventCount;
+        private long _writeFailureCount;
+        private long _rotationFailureCount;
+        private int _consecutiveFailureCount;
+        private bool _disabledForFailures;
+        private string? _lastFailure;
         private bool _disposed;
 
         public Session(string path, long maxBytes, long bytesWritten)
@@ -101,28 +118,51 @@ internal static class MetricsSink
 
         public string Path { get; }
 
+        internal MetricsDiagnostics SnapshotDiagnostics()
+        {
+            lock (_gate)
+            {
+                return new MetricsDiagnostics(
+                    Path,
+                    _bytesWritten,
+                    _disposed,
+                    _disabledForFailures,
+                    _consecutiveFailureCount,
+                    _droppedEventCount,
+                    _writeFailureCount,
+                    _rotationFailureCount,
+                    _lastFailure);
+            }
+        }
+
         public void Write(MetricsEvent evt)
         {
             lock (_gate)
             {
-                if (_disposed)
+                if (_disposed || _disabledForFailures)
                     return;
 
                 try
                 {
-                    RotateIfNeededLocked();
                     var encoded = _utf8NoBom.GetBytes(SerializeEvent(evt) + Environment.NewLine);
+                    if (_bytesWritten > 0 && _bytesWritten + encoded.Length > _maxBytes && !RotateLocked("rotation_failure"))
+                        return;
+
                     using (var stream = PrivateLogFile.OpenAppend(Path, FileShare.ReadWrite))
                     {
                         stream.Write(encoded, 0, encoded.Length);
                         stream.Flush();
                     }
                     _bytesWritten += encoded.Length;
-                    RotateIfNeededLocked();
+                    _consecutiveFailureCount = 0;
+
+                    if (_bytesWritten >= _maxBytes)
+                        RotateLocked("rotation_failure");
                 }
-                catch
+                catch (Exception ex)
                 {
                     // Best-effort only / ベストエフォートのみ
+                    RecordFailureLocked("write_failure", ex);
                 }
             }
         }
@@ -139,13 +179,40 @@ internal static class MetricsSink
             }
         }
 
-        private void RotateIfNeededLocked()
+        private bool RotateLocked(string reason)
         {
-            if (_bytesWritten < _maxBytes)
-                return;
-
-            if (PrivateLogFile.TryRotateSlots(Path, RotationKeep))
+            var capturedFailure = default(Exception);
+            if (PrivateLogFile.TryRotateSlots(
+                Path,
+                RotationKeep,
+                onFailure: ex => capturedFailure = ex))
+            {
                 _bytesWritten = 0;
+                _consecutiveFailureCount = 0;
+                return true;
+            }
+
+            RecordFailureLocked(reason, capturedFailure ?? new IOException("metrics rotation failed"));
+            return false;
+        }
+
+        private void RecordFailureLocked(string reason, Exception exception)
+        {
+            _droppedEventCount++;
+            _consecutiveFailureCount++;
+            switch (reason)
+            {
+                case "write_failure":
+                    _writeFailureCount++;
+                    break;
+                case "rotation_failure":
+                    _rotationFailureCount++;
+                    break;
+            }
+
+            _lastFailure = FormatFailure(reason, exception);
+            if (_consecutiveFailureCount >= MaxConsecutiveFailures)
+                _disabledForFailures = true;
         }
     }
 
@@ -243,6 +310,17 @@ internal static class MetricsSink
 }
 
 internal readonly record struct BoundedMetricsString(string Text, int OriginalLength, bool Truncated);
+
+internal sealed record MetricsDiagnostics(
+    string Path,
+    long BytesWritten,
+    bool Disposed,
+    bool DisabledForFailures,
+    int ConsecutiveFailureCount,
+    long DroppedEventCount,
+    long WriteFailureCount,
+    long RotationFailureCount,
+    string? LastFailure);
 
 /// <summary>
 /// Structured metrics record emitted to the JSONL sink. Optional fields are omitted from

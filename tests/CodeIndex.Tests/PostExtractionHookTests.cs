@@ -11,6 +11,8 @@ public class PostExtractionHookTests
 {
     internal const string SlowHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_POST_EXTRACTION_HOOK_MS";
     internal const string SlowHookCompletionPathEnvironmentVariable = "CDIDX_TEST_SLOW_POST_EXTRACTION_HOOK_DONE_PATH";
+    internal const string CancellableHookDelayEnvironmentVariable = "CDIDX_TEST_CANCELLABLE_POST_EXTRACTION_HOOK_MS";
+    internal const string CancellableHookCompletionPathEnvironmentVariable = "CDIDX_TEST_CANCELLABLE_POST_EXTRACTION_HOOK_DONE_PATH";
     internal const string SlowConstructorHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_CTOR_POST_EXTRACTION_HOOK_MS";
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
@@ -316,6 +318,47 @@ public class PostExtractionHookTests
     }
 
     [Fact]
+    public void OnSymbolsExtracted_CancellationWhileWaitingForCallback_KillsWorker_Issue3773()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-cancel");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                CancellableHookDelayEnvironmentVariable,
+                CancellableHookCompletionPathEnvironmentVariable);
+            var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
+            try
+            {
+                env.Set(CancellableHookDelayEnvironmentVariable, "500");
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromSeconds(5);
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                var completionPath = Path.Combine(projectRoot, "cancellable-hook.done");
+                env.Set(CancellableHookCompletionPathEnvironmentVariable, completionPath);
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+
+                using (var runner = PostExtractionHookRunner.Discover(hooksDir))
+                using (var cancellation = new CancellationTokenSource())
+                {
+                    var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                    var symbols = new List<SymbolRecord>();
+                    cancellation.CancelAfter(50);
+
+                    Assert.ThrowsAny<OperationCanceledException>(() =>
+                        runner.OnSymbolsExtracted(context, symbols, cancellation.Token));
+                    AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
+                }
+                CollectUnloadedHookAssemblies();
+            }
+            finally
+            {
+                PostExtractionHookRunner.CallbackBudgetForTesting = originalBudget;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void CallbackBudget_NormalizesInvalidAndTooLargeValues()
     {
         lock (TestConsoleLock.Gate)
@@ -577,6 +620,31 @@ public class PostExtractionHookTests
 
             Thread.Sleep(25);
         }
+    }
+}
+
+public sealed class AWaitingPostExtractionHook : IPostExtractionHook
+{
+    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
+    {
+        DelayAndSignalWhenRequested();
+    }
+
+    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
+    {
+        DelayAndSignalWhenRequested();
+    }
+
+    private static void DelayAndSignalWhenRequested()
+    {
+        var raw = Environment.GetEnvironmentVariable(PostExtractionHookTests.CancellableHookDelayEnvironmentVariable);
+        if (!int.TryParse(raw, out var milliseconds) || milliseconds <= 0)
+            return;
+
+        Thread.Sleep(milliseconds);
+        var completionPath = Environment.GetEnvironmentVariable(PostExtractionHookTests.CancellableHookCompletionPathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(completionPath))
+            File.WriteAllText(completionPath, "done");
     }
 }
 

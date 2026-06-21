@@ -56,6 +56,8 @@ public readonly record struct SearchCursor(double Score, long ChunkId, int Offse
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public readonly record struct SearchFileCountResult(string Path, int Count);
+
 public readonly record struct FindScanSummary(
     int CandidateFiles,
     int FilesScanned,
@@ -734,6 +736,12 @@ public static class ImpactTruncatedReasons
 
     /// <summary>Internal safety cap fired on a pathological graph.</summary>
     public const string SafetyCap = "safety_cap";
+
+    /// <summary>Path/cycle parent state exceeded the traversal memory budget.</summary>
+    public const string GraphStateBudget = "graph_state_budget";
+
+    /// <summary>Boundary caller probing exceeded its max-depth scan budget.</summary>
+    public const string BoundaryProbeBudget = "boundary_probe_budget";
 }
 
 public static class ImpactTerminationReasons
@@ -743,6 +751,8 @@ public static class ImpactTerminationReasons
     public const string CycleDetected = "cycle_detected";
     public const string RowLimitTruncated = "row_limit_truncated";
     public const string SafetyCap = "safety_cap";
+    public const string GraphStateBudget = "graph_state_budget";
+    public const string BoundaryProbeBudget = "boundary_probe_budget";
     public const string Cancelled = "cancelled";
 }
 

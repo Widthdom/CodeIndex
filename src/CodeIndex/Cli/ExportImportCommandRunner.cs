@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -714,16 +713,11 @@ internal static class ExportImportCommandRunner
             });
     }
 
-    private static string ComputeSha256(string path)
-        => ComputeSha256(path, CancellationToken.None);
-
-    private static string ComputeSha256(string path, CancellationToken cancellationToken)
+    private static string ComputeSha256(string path, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var stream = File.OpenRead(path);
-        var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        cancellationToken.ThrowIfCancellationRequested();
-        return hash;
+        return Sha256StreamHasher.ComputeHex(stream, cancellationToken);
     }
 
     private static bool TryValidateImportArchiveEntries(
@@ -964,7 +958,12 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message, out string phase, CancellationToken cancellationToken)
+    private static bool TryValidateImportedManifest(
+        ExportManifest manifest,
+        string dbPath,
+        out string message,
+        out string phase,
+        CancellationToken cancellationToken = default)
     {
         phase = PhaseSha256;
         var actualSha256 = ComputeSha256(dbPath, cancellationToken);
@@ -1198,8 +1197,12 @@ internal static class ExportImportCommandRunner
         CopyToWithLimit(source, target, MaxImportDatabaseBytes, cancellationToken);
     }
 
-    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
-        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName);
+    internal static long CopyToWithLimit(
+        Stream source,
+        Stream target,
+        long maxBytes,
+        CancellationToken cancellationToken = default)
+        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
 
     internal static long CopyToWithLimit(
         Stream source,

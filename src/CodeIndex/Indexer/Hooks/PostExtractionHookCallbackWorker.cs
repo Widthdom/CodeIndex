@@ -53,6 +53,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
             var stopwatch = Stopwatch.StartNew();
             if (!EnsureStarted(out var startError))
             {
@@ -305,14 +306,14 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
     {
         try
         {
-            if (!task.Wait(milliseconds, cancellationToken))
-            {
-                exception = null;
-                return false;
-            }
-
+            task.WaitAsync(TimeSpan.FromMilliseconds(milliseconds), cancellationToken).GetAwaiter().GetResult();
             exception = null;
             return true;
+        }
+        catch (TimeoutException)
+        {
+            exception = null;
+            return false;
         }
         catch (AggregateException ex)
         {
