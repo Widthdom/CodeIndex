@@ -297,14 +297,20 @@ public class ReportCommandRunnerTests
             var entries = ReadTarGzEntries(output);
             var schemaText = Encoding.UTF8.GetString(entries["schema.txt"]);
             Assert.Contains("tables", schemaText);
-            Assert.Contains("files", schemaText);
-            Assert.Contains("symbols", schemaText);
+            Assert.Contains("label | row_count", schemaText);
+            Assert.Contains("table_000", schemaText);
             Assert.Contains("row_count", schemaText);
+            Assert.Contains("raw table names redacted", schemaText);
             Assert.Contains($"database: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
+            Assert.DoesNotContain("files |", schemaText);
+            Assert.DoesNotContain("symbols |", schemaText);
             Assert.DoesNotContain(dbPath, schemaText);
             Assert.DoesNotContain("no SQLite index found", schemaText);
 
             using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            Assert.True(JsonArrayContains(
+                manifest.RootElement.GetProperty("omissions").GetProperty("schema"),
+                "raw_schema_table_names"));
             var readiness = manifest.RootElement.GetProperty("readiness");
             Assert.Equal("database", readiness.GetProperty("source").GetString());
             Assert.True(readiness.GetProperty("graph_table_available").GetBoolean());
@@ -338,8 +344,9 @@ public class ReportCommandRunnerTests
             Assert.True(dbIncluded);
             Assert.False(tablesTruncated);
             Assert.Equal(Path.GetFullPath(dbPath), reportedDbPath);
-            Assert.Contains(tables, table => table.Name == "files");
-            Assert.Contains("files", schemaText);
+            Assert.Contains(tables, table => table.Name == "table_000");
+            Assert.Contains("table_000", schemaText);
+            Assert.DoesNotContain("files |", schemaText);
             Assert.DoesNotContain("no SQLite index found", schemaText);
         }
         finally
@@ -385,11 +392,11 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
-    public void BuildSchemaSummary_CapsDisplayedTableNamesAndRowCountScans_Issue3146()
+    public void BuildSchemaSummary_RedactsDisplayedTableNamesAndCapsRowCountScans_Issue3146_Issue3806()
     {
         var workDir = CreateWorkDir();
         var dbPath = Path.Combine(workDir, "large-table.db");
-        var longName = "table_" + new string('a', ReportCommandRunner.MaxSchemaTableNameDisplayChars + 20);
+        var longName = "customer_secret_table_" + new string('a', ReportCommandRunner.MaxSchemaTableNameDisplayChars + 20);
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -425,10 +432,12 @@ public class ReportCommandRunnerTests
             Assert.False(tablesTruncated);
             Assert.Equal(ReportCommandRunner.MaxSchemaRowCountScanRows, table.RowCount);
             Assert.True(table.RowCountTruncated);
+            Assert.Equal("table_000", table.Name);
             Assert.True(table.Name.Length <= ReportCommandRunner.MaxSchemaTableNameDisplayChars);
-            Assert.Contains("[truncated]", table.Name);
             Assert.Contains($">={ReportCommandRunner.MaxSchemaRowCountScanRows}", schemaText);
+            Assert.Contains("raw table names redacted", schemaText);
             Assert.DoesNotContain(longName, schemaText);
+            Assert.DoesNotContain("customer_secret_table", schemaText);
             Assert.DoesNotContain((ReportCommandRunner.MaxSchemaRowCountScanRows + 5).ToString(), schemaText);
         }
         finally
@@ -607,6 +616,70 @@ public class ReportCommandRunnerTests
             Assert.Contains("oldest-tail", logText);
             Assert.Contains("newest-tail", logText);
             Assert.DoesNotContain(new string('x', 128), logText);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void ReadLogFileTailLines_HugeSingleLineIsBounded_Issue3806()
+    {
+        var workDir = CreateWorkDir();
+        var path = Path.Combine(workDir, "stderr-20260621.log");
+        try
+        {
+            File.WriteAllText(path, "prefix " + new string('x', ReportCommandRunner.MaxLogTailLineChars * 2));
+
+            var line = Assert.Single(ReportCommandRunner.ReadLogFileTailLines(path, 1));
+
+            Assert.True(line.Length <= ReportCommandRunner.MaxLogTailLineChars);
+            Assert.Contains("[line truncated]", line);
+            Assert.DoesNotContain(new string('x', ReportCommandRunner.MaxLogTailLineChars + 1), line);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_WithHugeLogLine_ReportsLineTruncation_Issue3806()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        File.WriteAllText(
+            Path.Combine(logDir, "stderr-20260621.log"),
+            "2026-06-21T00:00:00Z [INFO] huge="
+            + new string('x', ReportCommandRunner.MaxLogTailLineChars * 2)
+            + "\n2026-06-21T00:00:01Z [INFO] tail\n");
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--log-lines", "2",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            var logText = Encoding.UTF8.GetString(entries["log/stderr-recent.log"]);
+            Assert.Contains("[line truncated]", logText);
+            Assert.Contains("tail", logText);
+
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var logOmissions = manifest.RootElement.GetProperty("omissions").GetProperty("log");
+            Assert.True(JsonArrayContains(logOmissions, "log_line_chars_after_limit"));
+            Assert.Equal(
+                ReportCommandRunner.MaxLogTailLineChars,
+                manifest.RootElement.GetProperty("limits").GetProperty("max_log_tail_line_chars").GetInt32());
         }
         finally
         {

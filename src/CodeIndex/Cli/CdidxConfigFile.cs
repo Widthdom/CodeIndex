@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 
@@ -36,6 +37,10 @@ internal static class CdidxConfigFile
     internal const int MaxConfigScalarStringChars = 1024;
     internal const int MaxConfigPathStringChars = 4096;
     internal const int MaxConfigDurationStringChars = 256;
+    internal const int MaxConfigDiagnosticChars = 256;
+    internal const int MaxConfigSourceDetailChars = 160;
+    internal const int MaxUnknownKeyDiagnostics = 8;
+    internal const int MaxUnknownConfigKeyChars = 128;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -81,6 +86,15 @@ internal static class CdidxConfigFile
         internal bool Failed => Error is not null;
     }
 
+    internal readonly record struct ConfigDiagnosticText(string Text, int OriginalLength, bool Truncated);
+
+    private sealed class UnknownKeyDiagnosticState
+    {
+        internal int Count { get; set; }
+        internal int Reported { get; set; }
+        internal bool Truncated => Count > Reported;
+    }
+
     /// <summary>
     /// Walk upward from <paramref name="startingDirectory"/> looking for `.cdidxrc.json`.
     /// When found, parse it and return recognized settings (only when the matching env var is
@@ -109,7 +123,7 @@ internal static class CdidxConfigFile
         }
         catch (Exception ex)
         {
-            return new LoadResult(Path: path, Error: $"[cdidx] Failed to read {FileName} at {path}: {ex.Message}");
+            return new LoadResult(Path: path, Error: $"[cdidx] Failed to read {FileName} at {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }
 
         JsonDocument document;
@@ -124,27 +138,29 @@ internal static class CdidxConfigFile
         }
         catch (JsonException ex)
         {
-            return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {path}: {ex.Message}");
+            return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }
 
         using (document)
         {
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return new LoadResult(Path: path, Error: $"[cdidx] {path}: top-level value must be a JSON object.");
+                return new LoadResult(Path: path, Error: $"{FormatConfigDiagnosticPrefix(path)} top-level value must be a JSON object.");
 
             var pending = new List<(string EnvName, string Value)>();
             var errors = new List<string>();
+            var unknownKeys = new UnknownKeyDiagnosticState();
 
-            AddUnknownKeyDiagnostics(root, KnownTopLevelKeys, null, path, string.Join(", ", KnownTopLevelKeys.Where(k => k != "$schema")), errors);
+            AddUnknownKeyDiagnostics(root, KnownTopLevelKeys, null, path, string.Join(", ", KnownTopLevelKeys.Where(k => k != "$schema")), unknownKeys, errors);
             AddTopLevelEnvironmentSettings(root, path, pending, errors);
             AddSuggestionEnvironmentSettings(root, path, pending, errors);
-            AddIndexingEnvironmentSettings(root, path, pending, errors);
-            AddSearchEnvironmentSettings(root, path, pending, errors);
-            ValidateOptionalObject(root, "output", KnownOutputKeys, path, errors);
-            ValidateOptionalObject(root, "graph", KnownGraphKeys, path, errors);
-            ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, errors);
-            AddMcpEnvironmentSettings(root, path, pending, errors);
+            AddIndexingEnvironmentSettings(root, path, pending, unknownKeys, errors);
+            AddSearchEnvironmentSettings(root, path, pending, unknownKeys, errors);
+            ValidateOptionalObject(root, "output", KnownOutputKeys, path, unknownKeys, errors);
+            ValidateOptionalObject(root, "graph", KnownGraphKeys, path, unknownKeys, errors);
+            ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, unknownKeys, errors);
+            AddMcpEnvironmentSettings(root, path, pending, unknownKeys, errors);
+            AddUnknownKeyTruncationDiagnostic(path, unknownKeys, errors);
 
             if (errors.Count > 0)
                 return new LoadResult(Path: path, Error: string.Join(Environment.NewLine, errors));
@@ -185,7 +201,7 @@ internal static class CdidxConfigFile
         if (root.TryGetProperty("disable_persistent_log", out var disableLog))
         {
             if (disableLog.ValueKind != JsonValueKind.True && disableLog.ValueKind != JsonValueKind.False)
-                errors.Add($"[cdidx] {path}: `disable_persistent_log` must be a boolean.");
+                errors.Add($"{FormatConfigDiagnosticPrefix(path)} `disable_persistent_log` must be a boolean.");
             else if (disableLog.GetBoolean())
                 pending.Add(("CDIDX_DISABLE_PERSISTENT_LOG", "1"));
         }
@@ -232,9 +248,14 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else
             {
-                var parsedMaxAgeDays = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxAgeDays))
+                {
+                    errors.Add($"[cdidx] {path}: `suggestion_max_age_days` must be a positive integer.");
+                    return;
+                }
+
                 if (parsedMaxAgeDays > SuggestionStore.MaximumMaxAgeDays)
-                    errors.Add($"[cdidx] {path}: `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
+                    errors.Add($"{FormatConfigDiagnosticPrefix(path)} `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
                 else
                     pending.Add((SuggestionStore.MaxAgeDaysEnvironmentVariable, value!));
             }
@@ -246,27 +267,32 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else
             {
-                var parsedMaxCount = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxCount))
+                {
+                    errors.Add($"[cdidx] {path}: `suggestion_max_count` must be a positive integer.");
+                    return;
+                }
+
                 if (parsedMaxCount > SuggestionStore.MaximumMaxCount)
-                    errors.Add($"[cdidx] {path}: `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
+                    errors.Add($"{FormatConfigDiagnosticPrefix(path)} `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
                 else
                     pending.Add((SuggestionStore.MaxCountEnvironmentVariable, value!));
             }
         }
     }
 
-    private static void AddIndexingEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddIndexingEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty("indexing", out var indexing))
             return;
 
         if (indexing.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `indexing` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `indexing` must be a JSON object.");
             return;
         }
 
-        AddUnknownKeyDiagnostics(indexing, KnownIndexingKeys, "indexing", path, string.Join(", ", KnownIndexingKeys), errors);
+        AddUnknownKeyDiagnostics(indexing, KnownIndexingKeys, "indexing", path, string.Join(", ", KnownIndexingKeys), unknownKeys, errors);
 
         if (indexing.TryGetProperty("includeKinds", out var includeKinds))
         {
@@ -298,27 +324,32 @@ internal static class CdidxConfigFile
                 errors.Add(err!);
             else
             {
-                var parsedLimit = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLimit))
+                {
+                    errors.Add($"[cdidx] {path}: `indexing.watchPendingPathLimit` must be a positive integer.");
+                    return;
+                }
+
                 if (parsedLimit > IndexWatchRunner.MaxWatchPendingPathLimit)
-                    errors.Add($"[cdidx] {path}: `indexing.watchPendingPathLimit` must be <= {IndexWatchRunner.MaxWatchPendingPathLimit}.");
+                    errors.Add($"{FormatConfigDiagnosticPrefix(path)} `indexing.watchPendingPathLimit` must be <= {IndexWatchRunner.MaxWatchPendingPathLimit}.");
                 else
                     pending.Add((IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, value!));
             }
         }
     }
 
-    private static void AddSearchEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddSearchEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty("search", out var search))
             return;
 
         if (search.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `search` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `search` must be a JSON object.");
             return;
         }
 
-        AddUnknownKeyDiagnostics(search, KnownSearchKeys, "search", path, string.Join(", ", KnownSearchKeys), errors);
+        AddUnknownKeyDiagnostics(search, KnownSearchKeys, "search", path, string.Join(", ", KnownSearchKeys), unknownKeys, errors);
 
         if (search.TryGetProperty("limit", out var limit))
         {
@@ -345,35 +376,35 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void AddMcpEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddMcpEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty("mcp", out var mcp))
             return;
 
         if (mcp.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `mcp` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `mcp` must be a JSON object.");
             return;
         }
 
-        AddUnknownKeyDiagnostics(mcp, KnownMcpKeys, "mcp", path, string.Join(", ", KnownMcpKeys), errors);
+        AddUnknownKeyDiagnostics(mcp, KnownMcpKeys, "mcp", path, string.Join(", ", KnownMcpKeys), unknownKeys, errors);
 
-        AddMcpToolEnvironmentSettings(mcp, path, pending, errors);
-        AddMcpRateLimitEnvironmentSettings(mcp, path, pending, errors);
+        AddMcpToolEnvironmentSettings(mcp, path, pending, unknownKeys, errors);
+        AddMcpRateLimitEnvironmentSettings(mcp, path, pending, unknownKeys, errors);
     }
 
-    private static void AddMcpToolEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddMcpToolEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!mcp.TryGetProperty("tools", out var tools))
             return;
 
         if (tools.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `mcp.tools` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `mcp.tools` must be a JSON object.");
             return;
         }
 
-        AddUnknownKeyDiagnostics(tools, KnownMcpToolsKeys, "mcp.tools", path, string.Join(", ", KnownMcpToolsKeys), errors);
+        AddUnknownKeyDiagnostics(tools, KnownMcpToolsKeys, "mcp.tools", path, string.Join(", ", KnownMcpToolsKeys), unknownKeys, errors);
 
         if (tools.TryGetProperty("allow", out var allow))
         {
@@ -392,18 +423,18 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static void AddMcpRateLimitEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, List<string> errors)
+    private static void AddMcpRateLimitEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!mcp.TryGetProperty("rate_limit", out var rateLimit))
             return;
 
         if (rateLimit.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `mcp.rate_limit` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `mcp.rate_limit` must be a JSON object.");
             return;
         }
 
-        AddUnknownKeyDiagnostics(rateLimit, KnownMcpRateLimitKeys, "mcp.rate_limit", path, string.Join(", ", KnownMcpRateLimitKeys), errors);
+        AddUnknownKeyDiagnostics(rateLimit, KnownMcpRateLimitKeys, "mcp.rate_limit", path, string.Join(", ", KnownMcpRateLimitKeys), unknownKeys, errors);
 
         if (rateLimit.TryGetProperty("rps", out var rps))
         {
@@ -582,17 +613,17 @@ internal static class CdidxConfigFile
         return CommandExitCodes.Success;
     }
 
-    private static void ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, List<string> errors)
+    private static void ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
     {
         if (!root.TryGetProperty(key, out var value))
             return;
         if (value.ValueKind != JsonValueKind.Object)
         {
-            errors.Add($"[cdidx] {path}: `{key}` must be a JSON object.");
+            errors.Add($"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a JSON object.");
             return;
         }
 
-        AddUnknownKeyDiagnostics(value, knownKeys, key, path, string.Join(", ", knownKeys), errors);
+        AddUnknownKeyDiagnostics(value, knownKeys, key, path, string.Join(", ", knownKeys), unknownKeys, errors);
     }
 
     private static void AddUnknownKeyDiagnostics(
@@ -601,6 +632,7 @@ internal static class CdidxConfigFile
         string? prefix,
         string path,
         string supportedKeys,
+        UnknownKeyDiagnosticState state,
         List<string> errors)
     {
         foreach (var property in obj.EnumerateObject())
@@ -617,10 +649,46 @@ internal static class CdidxConfigFile
 
             if (!matched)
             {
+                state.Count++;
+                if (state.Reported >= MaxUnknownKeyDiagnostics)
+                    continue;
+
+                state.Reported++;
                 var qualifiedName = prefix is null ? property.Name : $"{prefix}.{property.Name}";
-                errors.Add($"[cdidx] {path}: unknown key `{qualifiedName}`. Supported keys: {supportedKeys}.");
+                errors.Add($"[cdidx] {FormatConfigDiagnosticPath(path)}: unknown key `{FormatConfigKeyForDiagnostic(qualifiedName)}`. Supported keys: {supportedKeys}.");
             }
         }
+    }
+
+    private static void AddUnknownKeyTruncationDiagnostic(string path, UnknownKeyDiagnosticState state, List<string> errors)
+    {
+        if (!state.Truncated)
+            return;
+
+        errors.Add($"[cdidx] {FormatConfigDiagnosticPath(path)}: unknown key diagnostics truncated. unknown_key_count={state.Count}; unknown_key_reported={state.Reported}; unknown_key_limit={MaxUnknownKeyDiagnostics}.");
+    }
+
+    internal static ConfigDiagnosticText FormatConfigSourceDetail(string sourceDetail)
+        => FormatConfigDiagnosticText(sourceDetail, MaxConfigSourceDetailChars, redactPaths: true);
+
+    internal static string FormatConfigDiagnosticPath(string path)
+        => FormatConfigDiagnosticText(path, MaxConfigDiagnosticChars, redactPaths: true).Text;
+
+    private static string FormatConfigDiagnosticPrefix(string path)
+        => $"[cdidx] {FormatConfigDiagnosticPath(path)}:";
+
+    internal static string FormatConfigExceptionMessage(Exception ex)
+        => FormatConfigDiagnosticText(ex.Message, MaxConfigDiagnosticChars, redactPaths: true).Text;
+
+    private static string FormatConfigKeyForDiagnostic(string key)
+        => FormatConfigDiagnosticText(key, MaxUnknownConfigKeyChars, redactPaths: false).Text;
+
+    private static ConfigDiagnosticText FormatConfigDiagnosticText(string? value, int maxChars, bool redactPaths)
+    {
+        var raw = value ?? "<null>";
+        var redacted = DiagnosticRedactor.RedactSensitiveText(raw, "[redacted]", redactPaths);
+        var text = DiagnosticRedactor.BoundDiagnosticText(redacted, maxChars);
+        return new ConfigDiagnosticText(text, redacted.Length, redacted.Length > maxChars);
     }
 
     private static bool TryReadString(JsonElement element, string key, string path, int maxChars, out string? value, out string? error)
@@ -629,18 +697,18 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.String)
         {
-            error = $"[cdidx] {path}: `{key}` must be a string.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a string.";
             return false;
         }
         var raw = element.GetString();
         if (string.IsNullOrWhiteSpace(raw))
         {
-            error = $"[cdidx] {path}: `{key}` must be a non-empty string.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a non-empty string.";
             return false;
         }
         if (raw.Length > maxChars)
         {
-            error = $"[cdidx] {path}: `{key}` must be <= {maxChars} characters.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be <= {maxChars} characters.";
             return false;
         }
 
@@ -678,7 +746,7 @@ internal static class CdidxConfigFile
 
                 if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
                 {
-                    pathError = $"[cdidx] {path}: `{key}` must resolve inside the config workspace root `{normalizedRoot}`.";
+                    pathError = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must resolve inside the config workspace root `{FormatConfigDiagnosticPath(normalizedRoot)}`.";
                     return false;
                 }
 
@@ -691,7 +759,7 @@ internal static class CdidxConfigFile
                                            or PathTooLongException
                                            or UnauthorizedAccessException)
             {
-                pathError = $"[cdidx] {path}: `{key}` path is invalid (invalid_path).";
+                pathError = $"{FormatConfigDiagnosticPrefix(path)} `{key}` path is invalid (invalid_path).";
                 return false;
             }
         }
@@ -712,13 +780,13 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Array)
         {
-            error = $"[cdidx] {path}: `{key}` must be an array of strings.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be an array of strings.";
             return false;
         }
         var arrayLength = element.GetArrayLength();
         if (arrayLength > MaxConfigStringArrayItems)
         {
-            error = $"[cdidx] {path}: `{key}` must contain <= {MaxConfigStringArrayItems} items.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must contain <= {MaxConfigStringArrayItems} items.";
             return false;
         }
 
@@ -727,13 +795,13 @@ internal static class CdidxConfigFile
         {
             if (item.ValueKind != JsonValueKind.String)
             {
-                error = $"[cdidx] {path}: `{key}` must contain only strings.";
+                error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must contain only strings.";
                 return false;
             }
             var raw = item.GetString() ?? string.Empty;
             if (raw.Length > MaxConfigStringArrayItemChars)
             {
-                error = $"[cdidx] {path}: `{key}` items must be <= {MaxConfigStringArrayItemChars} characters.";
+                error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` items must be <= {MaxConfigStringArrayItemChars} characters.";
                 return false;
             }
             if (string.IsNullOrWhiteSpace(raw))
@@ -757,7 +825,7 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Number)
         {
-            error = $"[cdidx] {path}: `{key}` must be a number.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a number.";
             return false;
         }
 
@@ -767,7 +835,7 @@ internal static class CdidxConfigFile
             || parsed > maxInclusive)
         {
             var minimum = allowZero ? "non-negative" : "positive";
-            error = $"[cdidx] {path}: `{key}` must be a finite {minimum} number <= {maxInclusive.ToString(CultureInfo.InvariantCulture)}.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a finite {minimum} number <= {maxInclusive.ToString(CultureInfo.InvariantCulture)}.";
             return false;
         }
 
@@ -781,13 +849,13 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Number)
         {
-            error = $"[cdidx] {path}: `{key}` must be a number.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a number.";
             return false;
         }
 
         if (!element.TryGetInt32(out var parsed) || parsed <= 0)
         {
-            error = $"[cdidx] {path}: `{key}` must be a positive integer.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a positive integer.";
             return false;
         }
 
@@ -801,21 +869,21 @@ internal static class CdidxConfigFile
         error = null;
         if (element.ValueKind != JsonValueKind.Number)
         {
-            error = $"[cdidx] {path}: `{key}` must be a number.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a number.";
             return false;
         }
 
         if (!element.TryGetInt32(out var parsed) || parsed < 0 || (!allowZero && parsed == 0))
         {
             error = allowZero
-                ? $"[cdidx] {path}: `{key}` must be a non-negative integer."
-                : $"[cdidx] {path}: `{key}` must be a positive integer.";
+                ? $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a non-negative integer."
+                : $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be a positive integer.";
             return false;
         }
 
         if (QueryCommandRunner.NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && parsed > maxAllowed)
         {
-            error = $"[cdidx] {path}: `{key}` must be <= {maxAllowed}.";
+            error = $"{FormatConfigDiagnosticPrefix(path)} `{key}` must be <= {maxAllowed}.";
             return false;
         }
 

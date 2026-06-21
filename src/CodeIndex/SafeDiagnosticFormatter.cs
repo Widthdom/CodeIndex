@@ -1,4 +1,5 @@
 using System.Text;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex;
 
@@ -6,6 +7,7 @@ internal static class SafeDiagnosticFormatter
 {
     private const int MaxCategoryCharacters = 64;
     private const int MaxExceptionTypeCharacters = 128;
+    private const int MaxWorkerStderrTailCharacters = 512;
     private const string TruncationMarker = "...";
 
     internal static string FormatExceptionCategory(string category, Exception ex)
@@ -14,13 +16,28 @@ internal static class SafeDiagnosticFormatter
     internal static string FormatCategoryType(string category, string typeName)
         => $"{BoundToken(category, MaxCategoryCharacters)}: {BoundToken(typeName, MaxExceptionTypeCharacters)}";
 
-    internal static string FormatWorkerExit(string category, int? exitCode, string fallback)
+    internal static string FormatWorkerExit(string category, int? exitCode, string fallback, string? stderrTail = null)
     {
         var safeCategory = BoundToken(category, MaxCategoryCharacters);
         var safeFallback = BoundToken(fallback, MaxExceptionTypeCharacters);
-        return exitCode.HasValue
+        var message = exitCode.HasValue
             ? $"{safeCategory}: worker exited with code {exitCode.Value}. {safeFallback}."
             : $"{safeCategory}: worker exited before the exit code was available. {safeFallback}.";
+        var safeStderrTail = FormatWorkerStderrTail(stderrTail);
+        return safeStderrTail.Length == 0
+            ? message
+            : $"{message} stderr_tail=\"{safeStderrTail}\".";
+    }
+
+    private static string FormatWorkerStderrTail(string? stderrTail)
+    {
+        if (string.IsNullOrWhiteSpace(stderrTail))
+            return string.Empty;
+
+        var tail = stderrTail.Length <= MaxWorkerStderrTailCharacters
+            ? stderrTail
+            : stderrTail[^MaxWorkerStderrTailCharacters..];
+        return DiagnosticSanitizer.ForMessage(tail);
     }
 
     private static string BoundToken(string? value, int maxCharacters)

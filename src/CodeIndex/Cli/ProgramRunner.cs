@@ -45,6 +45,7 @@ internal static partial class ProgramRunner
     };
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
+    private const string UpgradeInstallerDirectoryPrefix = "cdidx-install-";
     private static readonly HashSet<string> NonLogGlobalOptionNames =
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
     private static readonly HashSet<string> TopLevelValueOptionNames =
@@ -54,6 +55,7 @@ internal static partial class ProgramRunner
     private static readonly AsyncLocal<Action<string>?> ScopedTestExtractorFileLengthCheckedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedDeleteInstallDirectoryWriteProbeForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedDeleteUpgradeInstallerScriptForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedDeleteUpgradeInstallerDirectoryForTesting = new();
 
     internal static TimeProvider TimeProvider
     {
@@ -83,6 +85,12 @@ internal static partial class ProgramRunner
     {
         get => ScopedDeleteUpgradeInstallerScriptForTesting.Value;
         set => ScopedDeleteUpgradeInstallerScriptForTesting.Value = value;
+    }
+
+    internal static Action<string>? DeleteUpgradeInstallerDirectoryForTesting
+    {
+        get => ScopedDeleteUpgradeInstallerDirectoryForTesting.Value;
+        set => ScopedDeleteUpgradeInstallerDirectoryForTesting.Value = value;
     }
 
     private sealed record CommandRunContext(
@@ -355,6 +363,7 @@ internal static partial class ProgramRunner
 
         buffer.Position = 0;
         using var reader = new StreamReader(buffer, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        // The loop above rejects streams beyond TestExtractorMaxInputBytes before this materializes text.
         content = reader.ReadToEnd();
         return true;
     }
@@ -2434,7 +2443,12 @@ internal static partial class ProgramRunner
         HttpMcpTransport transport;
         try
         {
-            transport = new HttpMcpTransport(resolved.Prefix, resolved.Host, resolved.Port, bearerToken, LogHttpMcpRequest);
+            transport = new HttpMcpTransport(
+                resolved.Prefix,
+                resolved.Host,
+                resolved.Port,
+                bearerToken,
+                requestLogger: LogHttpMcpRequest);
         }
         catch (FormatException ex)
         {
@@ -2515,7 +2529,8 @@ internal static partial class ProgramRunner
             + $" status={record.StatusCode.ToString(CultureInfo.InvariantCulture)}"
             + $" duration_ms={record.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)}"
             + $" auth={FormatLogValue(record.AuthOutcome)}"
-            + $" rejection={FormatLogValue(record.RejectionReason)}");
+            + $" rejection={FormatLogValue(record.RejectionReason)}"
+            + $" diagnostic={FormatLogValue(record.Diagnostic)}");
     }
 
     private static string FormatLogValue(string? value)
@@ -2536,7 +2551,7 @@ internal static partial class ProgramRunner
     {
         CommandErrorWriter.WriteStderr("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
         CommandErrorWriter.WriteStderr("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
-        CommandErrorWriter.WriteStderr($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
+        CommandErrorWriter.WriteStderr($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxResponseBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredResponseBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxResponseBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
     internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string? thresholdValue, out string error)
@@ -3061,7 +3076,7 @@ internal static partial class ProgramRunner
         string? scriptPath = null;
         try
         {
-            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("cdidx-install-").FullName;
+            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory(UpgradeInstallerDirectoryPrefix).FullName;
             scriptPath = Path.Combine(scriptDirectory, "install.sh");
             using (var client = UpgradeHttpClientFactory())
             {
@@ -3142,7 +3157,7 @@ internal static partial class ProgramRunner
             if (scriptPath != null)
                 TryDeleteUpgradeInstallerScript(scriptPath);
             if (scriptDirectory != null)
-                try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
+                TryDeleteUpgradeInstallerDirectory(scriptDirectory);
         }
     }
 
@@ -3508,6 +3523,94 @@ internal static partial class ProgramRunner
         {
             CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
+    }
+
+    private static void TryDeleteUpgradeInstallerDirectory(string scriptDirectory)
+    {
+        try
+        {
+            if (!TryValidateUpgradeInstallerDirectoryCleanupTarget(scriptDirectory, out var fullPath, out var validationFailure))
+            {
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({validationFailure}).");
+                return;
+            }
+
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
+                return;
+
+            if (!TryValidateUpgradeInstallerDirectoryCleanupTarget(fullPath, out fullPath, out validationFailure))
+            {
+                CommandErrorWriter.WriteStderr($"Warning: skipped deleting upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({validationFailure}).");
+                return;
+            }
+
+            if (DeleteUpgradeInstallerDirectoryForTesting != null)
+                DeleteUpgradeInstallerDirectoryForTesting(fullPath);
+            else
+                Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+        }
+    }
+
+    private static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
+        string path,
+        out string fullPath,
+        out string failureReason)
+    {
+        fullPath = string.Empty;
+        failureReason = string.Empty;
+        try
+        {
+            fullPath = NormalizeCleanupBoundaryPath(Path.GetFullPath(path));
+            var tempRoot = NormalizeCleanupBoundaryPath(Path.GetTempPath());
+            if (string.Equals(fullPath, tempRoot, PathCasing.ComparisonFor(tempRoot))
+                || !PathCasing.IsPathEqualOrParent(tempRoot, fullPath))
+            {
+                failureReason = "target is outside the expected cleanup root";
+                return false;
+            }
+
+            if (!Path.GetFileName(fullPath).StartsWith(UpgradeInstallerDirectoryPrefix, StringComparison.Ordinal))
+            {
+                failureReason = "target name does not match the expected upgrade temporary-directory prefix";
+                return false;
+            }
+
+            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
+            if (Directory.Exists(longPath))
+            {
+                var attributes = File.GetAttributes(longPath);
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+                {
+                    failureReason = "target is not a regular temporary directory";
+                    return false;
+                }
+            }
+            else if (File.Exists(longPath))
+            {
+                failureReason = "target is not a directory";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
+        {
+            failureReason = "target path is invalid";
+            return false;
+        }
+    }
+
+    private static string NormalizeCleanupBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(

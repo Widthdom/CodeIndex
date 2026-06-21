@@ -781,8 +781,10 @@ public static partial class QueryCommandRunner
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         var jsonDoneInterrupted = false;
+        DbReader? jsonDoneReader = null;
         return WithDb(options, jsonOptions, reader =>
         {
+            jsonDoneReader = reader;
             if (options.GroupBy != null)
             {
                 return RunGroupedSearchCount(reader, options, jsonOptions, exact, exactSubstringHint);
@@ -969,7 +971,7 @@ public static partial class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneReader);
         });
     }
 
@@ -2933,10 +2935,24 @@ public static partial class QueryCommandRunner
             result.ExactSubstringHint = hint;
     }
 
-    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false)
-        => Console.WriteLine(JsonSerializer.Serialize(
-            new JsonStreamDoneResult(Done: true, Count: count, Interrupted: interrupted),
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, DbReader? reader = null)
+    {
+        var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
+        Console.WriteLine(JsonSerializer.Serialize(
+            new JsonStreamDoneResult(
+                Done: true,
+                Count: count,
+                Interrupted: interrupted,
+                ReadOnlyFallback: includeDiagnostics ? reader!.ReadOnlyFallback : null,
+                WalCheckpointAttempted: includeDiagnostics ? reader!.WalCheckpointAttempted : null,
+                WalCheckpointSucceeded: includeDiagnostics ? reader!.WalCheckpointSucceeded : null,
+                ReadOnlyImmutableFallback: includeDiagnostics ? reader!.ReadOnlyImmutableFallback : null,
+                WalCheckpointSkippedReason: includeDiagnostics ? reader!.WalCheckpointSkippedReason : null,
+                WalCheckpointFailureReason: includeDiagnostics ? reader!.WalCheckpointFailureReason : null,
+                WalStaleSnapshotRisk: includeDiagnostics ? reader!.WalStaleSnapshotRisk : null,
+                WalStaleSnapshotReason: includeDiagnostics ? reader!.WalStaleSnapshotReason : null),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
+    }
 
     private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
         => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
@@ -6328,11 +6344,17 @@ public static partial class QueryCommandRunner
 
     private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)
     {
-        JsonObject Entry<T>(T? value, string source) => new()
+        JsonObject Entry<T>(T? value, string source)
         {
-            ["value"] = JsonSerializer.SerializeToNode(value),
-            ["source"] = source,
-        };
+            var entry = new JsonObject
+            {
+                ["value"] = JsonSerializer.SerializeToNode(value),
+                ["source"] = source,
+            };
+            AddEffectiveConfigSourceSummary(entry, source);
+            return entry;
+        }
+
         var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
         var payload = new JsonObject
@@ -6352,6 +6374,40 @@ public static partial class QueryCommandRunner
             },
         };
         return payload;
+    }
+
+    private static void AddEffectiveConfigSourceSummary(JsonObject entry, string source)
+    {
+        var sourceKind = source;
+        string? sourceDetail = null;
+        if (source.StartsWith("config:", StringComparison.Ordinal))
+        {
+            sourceKind = "config_file";
+            sourceDetail = Path.GetFileName(source["config:".Length..]);
+        }
+        else if (source.StartsWith("env:", StringComparison.Ordinal))
+        {
+            sourceKind = "environment";
+            sourceDetail = source["env:".Length..];
+        }
+
+        entry["source_kind"] = sourceKind;
+        if (string.IsNullOrWhiteSpace(sourceDetail))
+        {
+            if (sourceKind == "config_file")
+                entry["source"] = sourceKind;
+            return;
+        }
+
+        var bounded = CdidxConfigFile.FormatConfigSourceDetail(sourceDetail);
+        if (sourceKind == "config_file")
+            entry["source"] = $"config:{bounded.Text}";
+        entry["source_detail"] = bounded.Text;
+        if (bounded.Truncated)
+        {
+            entry["source_detail_length"] = bounded.OriginalLength;
+            entry["source_detail_truncated"] = true;
+        }
     }
 
     private static string ResolveDbPathConfigSource(QueryCommandOptions options)
@@ -6849,6 +6905,9 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
+                return workspaceDbExitCode;
+
             var reverse = cmdArgs.Any(a => a == "--reverse");
             var results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
             var cycleCandidates = options.DependencyCycles
@@ -7268,6 +7327,41 @@ public static partial class QueryCommandRunner
         CommandErrorWriter.WriteStderr($"Error: deps --workspace-db accepts at most {maxAdditional} distinct additional databases ({MaxWorkspaceDependencyDatabaseCount} total including --db), which is {MaxWorkspaceDependencyDatabasePairCount} ordered cross-database pairs; got {additionalCount} additional ({memberDbs.Count} total, {pairCount} pairs).");
         CommandErrorWriter.WriteStderr("Hint: pass fewer --workspace-db values or run deps separately for smaller workspace member groups.");
         return true;
+    }
+
+    private static bool TryWriteInvalidWorkspaceDependencyDatabaseError(QueryCommandOptions options, out int exitCode)
+    {
+        exitCode = CommandExitCodes.Success;
+        if (options.WorkspaceDbPaths.Count == 0)
+            return false;
+
+        foreach (var dbPath in BuildWorkspaceDependencyDatabaseList(options).Skip(1))
+        {
+            if (DbContext.TryValidateExistingCodeIndexDb(
+                    dbPath,
+                    requireWritable: false,
+                    requireSupportedUserVersion: true,
+                    out var validationMessage,
+                    out var isNotFound,
+                    out var isSchemaTooNew))
+                continue;
+
+            var errorCode = isNotFound
+                ? CommandErrorCodes.DbNotFound
+                : isSchemaTooNew
+                    ? CommandErrorCodes.SchemaTooNew
+                    : CommandErrorCodes.DbError;
+            CommandErrorWriter.WriteStderr($"Error [{errorCode}]: attached workspace database cannot be used for cross-database dependency query: {validationMessage}");
+            CommandErrorWriter.WriteStderr(isNotFound
+                ? "Hint: pass an existing CodeIndex database to `--workspace-db`, or run `cdidx index <workspacePath>` for that workspace member first."
+                : isSchemaTooNew
+                    ? "Hint: run the query with a current cdidx binary, or rebuild that workspace member database with this cdidx version before using `--workspace-db`."
+                    : "Hint: pass only CodeIndex databases created by `cdidx index` to `--workspace-db`; remove stale, empty, or unrelated SQLite files from the workspace database list.");
+            exitCode = CommandExitCodes.DatabaseError;
+            return true;
+        }
+
+        return false;
     }
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
@@ -12013,7 +12107,37 @@ public static partial class QueryCommandRunner
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+        AddReadOnlyFallbackDiagnostics(payload, reader);
     }
+
+    internal static void AddReadOnlyFallbackDiagnostics(JsonObject payload, DbReader reader)
+    {
+        if (!HasReadOnlyFallbackDiagnostics(reader))
+        {
+            return;
+        }
+
+        payload["read_only_fallback"] = reader.ReadOnlyFallback;
+        payload["wal_checkpoint_attempted"] = reader.WalCheckpointAttempted;
+        payload["wal_checkpoint_succeeded"] = reader.WalCheckpointSucceeded;
+        payload["read_only_immutable_fallback"] = reader.ReadOnlyImmutableFallback;
+        if (reader.WalCheckpointSkippedReason != null)
+            payload["wal_checkpoint_skipped_reason"] = reader.WalCheckpointSkippedReason;
+        if (reader.WalCheckpointFailureReason != null)
+            payload["wal_checkpoint_failure_reason"] = reader.WalCheckpointFailureReason;
+        payload["wal_stale_snapshot_risk"] = reader.WalStaleSnapshotRisk;
+        if (reader.WalStaleSnapshotReason != null)
+            payload["wal_stale_snapshot_reason"] = reader.WalStaleSnapshotReason;
+    }
+
+    private static bool HasReadOnlyFallbackDiagnostics(DbReader? reader)
+        => reader != null
+           && (reader.ReadOnlyFallback
+               || reader.WalCheckpointAttempted
+               || reader.ReadOnlyImmutableFallback
+               || reader.WalCheckpointSkippedReason != null
+               || reader.WalCheckpointFailureReason != null
+               || reader.WalStaleSnapshotRisk);
 
     private static JsonObject BuildCountJsonPayload(
         DbReader reader,
@@ -12082,7 +12206,8 @@ public static partial class QueryCommandRunner
             || JsonBool(payload, "scan_truncated") == true
             || JsonBool(payload, "scan_cap_reached") == true
             || JsonBool(payload, "scan_timed_out") == true
-            || JsonBool(payload, "truncated") == true;
+            || JsonBool(payload, "truncated") == true
+            || JsonBool(payload, "wal_stale_snapshot_risk") == true;
         payload["degraded"] = degraded;
         payload["authoritative_count"] = !degraded;
     }
