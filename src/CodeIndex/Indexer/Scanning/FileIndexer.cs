@@ -3091,6 +3091,15 @@ public class FileIndexer
                 if (readFailure.ExceptionType is nameof(FileNotFoundException) or nameof(DirectoryNotFoundException))
                     return true;
 
+                if (readFailure.ExceptionType == nameof(UnauthorizedAccessException))
+                {
+                    if (!File.Exists(prefixedIgnorePath))
+                        throw new UnauthorizedAccessException(readFailure.Reason);
+
+                    errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
+                    return true;
+                }
+
                 errors.Add(new ScanError(
                     ToRelativePath(ignorePath),
                     $"Could not safely read {ignoreFileName} because {skippedReason}."));
