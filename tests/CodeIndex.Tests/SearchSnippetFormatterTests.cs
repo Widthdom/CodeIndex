@@ -274,6 +274,34 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void BuildExcerpt_PreferredMatchLineScanIsBounded_Issue3742()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, SearchSnippetFormatter.MaxPreferredMatchScanLines + 100)
+            .Select(_ => "Target"));
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(
+            content,
+            "Target",
+            absoluteStartLine: 1,
+            maxLines: 3,
+            preferredMatchLine: SearchSnippetFormatter.MaxPreferredMatchScanLines + 50);
+
+        Assert.Equal(1, excerpt.FocusLine);
+        Assert.Equal(SearchSnippetFormatter.MaxPreferredMatchScanLines - 3, excerpt.DroppedMatchLineCount);
+
+        var scan = InvokeFindMatchingLineIndexes(
+            content,
+            "Target",
+            [],
+            caseSensitive: false,
+            normalizeCSharpVerbatimNames: false,
+            maxTrackedWindowLines: SearchSnippetFormatter.MaxPreferredMatchScanLines,
+            maxScannedLines: SearchSnippetFormatter.MaxPreferredMatchScanLines,
+            maxScannedChars: int.MaxValue);
+        Assert.Equal(SearchSnippetFormatter.MaxPreferredMatchScanLines, scan.TotalMatchCount);
+    }
+
+    [Fact]
     public void ToCompactResults_PreparedQueryContextRemainsLanguageAwareAcrossResults()
     {
         var context = SearchSnippetFormatter.PrepareQueryContext("Foo.Bar");
@@ -539,12 +567,14 @@ public class SearchSnippetFormatterTests
         string[] tokens,
         bool caseSensitive,
         bool normalizeCSharpVerbatimNames,
-        int maxTrackedWindowLines)
+        int maxTrackedWindowLines,
+        int maxScannedLines = int.MaxValue,
+        int maxScannedChars = int.MaxValue)
     {
         var method = typeof(SearchSnippetFormatter).GetMethod("FindMatchingLineIndexes", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(method);
 
-        var scan = method.Invoke(null, [content, query, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines]);
+        var scan = method.Invoke(null, [content, query, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines, maxScannedLines, maxScannedChars]);
         Assert.NotNull(scan);
 
         var type = scan!.GetType();
