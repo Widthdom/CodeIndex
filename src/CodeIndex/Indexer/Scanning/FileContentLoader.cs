@@ -8,7 +8,10 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     private const int GitLfsPointerMaxBytes = 1024;
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
 
-    internal readonly record struct NormalizedIndexableContent(string Content, int LineCount);
+    internal readonly record struct NormalizedIndexableContent(
+        string Content,
+        int LineCount,
+        bool HasOversizeLine);
 
     internal LoadedFileContent Load(
         string absolutePath,
@@ -29,6 +32,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
                 sizeBytes,
                 modifiedUtc,
                 0,
+                false,
                 ComputeChecksum(bytes),
                 null,
                 lfsInspection);
@@ -44,6 +48,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             sizeBytes,
             modifiedUtc,
             normalized.LineCount,
+            normalized.HasOversizeLine,
             checksum,
             warning,
             inspection);
@@ -346,11 +351,13 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     internal static NormalizedIndexableContent NormalizeForIndexing(string content)
     {
         if (content.Length == 0)
-            return new NormalizedIndexableContent(content, 0);
+            return new NormalizedIndexableContent(content, 0, false);
 
         StringBuilder? builder = null;
         var outputLength = 0;
         var lineCount = 0;
+        var currentLineLength = 0;
+        var hasOversizeLine = false;
         var previousOutputWasLineBreak = false;
         var atLineStart = true;
 
@@ -368,6 +375,15 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
                 lineCount++;
 
             outputLength++;
+            if (c == '\n')
+            {
+                currentLineLength = 0;
+            }
+            else if (!hasOversizeLine)
+            {
+                currentLineLength++;
+                hasOversizeLine = currentLineLength > ChunkSplitter.MaxLineLength;
+            }
             previousOutputWasLineBreak = c == '\n';
             atLineStart = c == '\n';
         }
@@ -394,7 +410,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             CountOutputChar(c);
         }
 
-        return new NormalizedIndexableContent(builder?.ToString() ?? content, lineCount);
+        return new NormalizedIndexableContent(builder?.ToString() ?? content, lineCount, hasOversizeLine);
     }
 
     internal static string NormalizeContentForPrepass(string content)
@@ -764,6 +780,7 @@ internal readonly record struct LoadedFileContent(
     long SizeBytes,
     DateTime ModifiedUtc,
     int LineCount,
+    bool HasOversizeLine,
     string Checksum,
     string? Warning,
     FileContentInspection Inspection);

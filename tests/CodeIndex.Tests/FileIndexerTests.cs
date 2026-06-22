@@ -4890,8 +4890,21 @@ public class FileIndexerTests
 
         Assert.Equal(expectedContent, loaded.Content);
         Assert.Equal(expectedLineCount, loaded.LineCount);
+        Assert.False(loaded.HasOversizeLine);
         Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(expectedContent)), loaded.Checksum);
         Assert.Null(loaded.Warning);
+    }
+
+    [Fact]
+    public void FileContentLoader_Load_DetectsOversizeLineDuringCanonicalization()
+    {
+        var longLine = new string('a', ChunkSplitter.MaxLineLength + 1);
+        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes($"\uFEFF{longLine}\r\nb"));
+
+        Assert.Equal($"{longLine}\nb", loaded.Content);
+        Assert.Equal(2, loaded.LineCount);
+        Assert.True(loaded.HasOversizeLine);
+        Assert.Empty(ChunkSplitter.SplitNormalized(1, loaded.Content, loaded.HasOversizeLine));
     }
 
     [Fact]

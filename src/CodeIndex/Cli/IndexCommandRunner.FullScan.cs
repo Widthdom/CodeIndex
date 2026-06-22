@@ -1186,6 +1186,7 @@ public static partial class IndexCommandRunner
                             var content = loaded.Content;
                             var rawBytes = loaded.RawBytes;
                             var warning = loaded.Warning;
+                            var hasOversizeLine = loaded.HasOversizeLine;
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
@@ -1194,7 +1195,7 @@ public static partial class IndexCommandRunner
                             if (parallelizeExtraction)
                             {
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
-                                chunks = ChunkSplitter.Split(0, content);
+                                chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine);
                                 if (generatedSuppressionIssue != null)
                                 {
                                     symbols = [];
@@ -1273,7 +1274,7 @@ public static partial class IndexCommandRunner
                             extractionResults.Add(
                                 parallelizeExtraction
                                     ? FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks!, symbols!, references!, issues!)
-                                    : FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
+                                    : FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, hasOversizeLine, warning, chunks, symbols, references, issues),
                                 extractionCancellationToken);
                         }
                         catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
@@ -1465,7 +1466,10 @@ public static partial class IndexCommandRunner
                     var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                     var chunks = item.Chunks == null
-                        ? ChunkSplitter.Split(fileId, item.Content!)
+                        ? ChunkSplitter.SplitNormalized(
+                            fileId,
+                            item.Content!,
+                            item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!))
                         : ReassignChunkFileIds(item.Chunks, fileId);
                     var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)

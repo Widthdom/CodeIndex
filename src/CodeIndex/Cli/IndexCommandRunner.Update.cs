@@ -675,7 +675,7 @@ public static partial class IndexCommandRunner
                     WriteProjectRootOnce();
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
-                    var chunks = ChunkSplitter.Split(fileId, content);
+                    var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
                     var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {

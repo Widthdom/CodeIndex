@@ -3510,7 +3510,13 @@ public class FileIndexer
             Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
-        return new LoadedFileRecord(record, loaded.Content, loaded.RawBytes, loaded.Warning, loaded.Inspection);
+        return new LoadedFileRecord(
+            record,
+            loaded.Content,
+            loaded.RawBytes,
+            loaded.HasOversizeLine,
+            loaded.Warning,
+            loaded.Inspection);
     }
 
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)

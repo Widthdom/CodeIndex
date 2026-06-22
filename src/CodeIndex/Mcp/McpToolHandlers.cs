@@ -5995,7 +5995,7 @@ public partial class McpServer
                 MarkSymbolKindFilterMetaIncompleteOnce();
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
-                var chunks = ChunkSplitter.Split(fileId, content);
+                var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
                 var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                 if (generatedSuppressionIssue != null)
                 {

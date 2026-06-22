@@ -1658,6 +1658,7 @@ public static partial class IndexCommandRunner
         string? Content,
         byte[]? RawBytes,
         FileContentInspection? Inspection,
+        bool? HasOversizeLine,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
         IReadOnlyList<SymbolRecord>? Symbols,
@@ -1672,13 +1673,14 @@ public static partial class IndexCommandRunner
             string? content,
             byte[]? rawBytes,
             FileContentInspection? inspection,
+            bool hasOversizeLine,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
             IReadOnlyList<SymbolRecord>? symbols,
             IReadOnlyList<ReferenceRecord>? references,
             IReadOnlyList<FileIssue>? issues)
         {
-            return new FullScanFileWorkItem(filePath, relativePath, record, content, rawBytes, inspection, warning, chunks, symbols, references, issues, null);
+            return new FullScanFileWorkItem(filePath, relativePath, record, content, rawBytes, inspection, hasOversizeLine, warning, chunks, symbols, references, issues, null);
         }
 
         public static FullScanFileWorkItem Precomputed(
@@ -1691,14 +1693,14 @@ public static partial class IndexCommandRunner
             IReadOnlyList<ReferenceRecord> references,
             IReadOnlyList<FileIssue> issues)
         {
-            return new FullScanFileWorkItem(filePath, relativePath, record, null, null, null, warning, chunks, symbols, references, issues, null);
+            return new FullScanFileWorkItem(filePath, relativePath, record, null, null, null, null, warning, chunks, symbols, references, issues, null);
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, exception);
+            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, null, warning, null, null, null, null, null);
+            => new(filePath, relativePath, null, null, null, null, null, warning, null, null, null, null, null);
     }
 
     private sealed record FoldOnlyRemediation(
