@@ -1,7 +1,14 @@
 ---
 category: changed
 affected:
+  - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentInspection.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
+  - src/CodeIndex/Indexer/Scanning/LoadedFileRecord.cs
+  - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
 ---
 
