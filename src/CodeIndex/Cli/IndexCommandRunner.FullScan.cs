@@ -1259,10 +1259,11 @@ public static partial class IndexCommandRunner
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                     using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
-                                    referenceExtraction = ReferenceExtractor.ExtractDetailed(
+                                    referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                                         0,
                                         record.Lang,
                                         content,
+                                        hasOversizeLine,
                                         symbols,
                                         record.Path,
                                         record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
@@ -1604,10 +1605,11 @@ public static partial class IndexCommandRunner
                         if (item.References == null)
                         {
                             using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
-                            referenceExtraction = ReferenceExtractor.ExtractDetailed(
+                            referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                                 fileId,
                                 record.Lang,
                                 item.Content!,
+                                item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
                                 symbols,
                                 record.Path,
                                 record.Lang == "csharp" ? csharpWorkspace.Symbols : null,

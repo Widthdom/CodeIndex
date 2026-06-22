@@ -25,6 +25,8 @@ public static partial class ReferenceExtractor
         string language,
         string content,
         bool isRazorFile,
+        bool contentIsNormalized,
+        bool? hasOversizeLine,
         out ReferenceLinePreparation preparedInput)
     {
         preparedInput = null!;
@@ -48,7 +50,7 @@ public static partial class ReferenceExtractor
         // ValidateContent の同等ガードと合わせて、正規表現のバックトラックで
         // インデクサが止まることを防ぎ、スキップは `line_too_long` FileIssue
         // として表面化させる。Closes #1542.
-        if (ChunkSplitter.HasOversizeLine(content))
+        if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
             return false;
 
         if (FileIndexer.HasConflictMarkers(content))
@@ -67,9 +69,12 @@ public static partial class ReferenceExtractor
         // 損なう。続いて行頭 U+FEFF/U+200B のみ剥がし、1 行目と mid-file の行頭
         // marker 両方で `^\s*` 固定パターンを成立させる。行頭以外の marker は
         // そのまま保持する。Closes #183/#2117.
-        if (content.Contains('\r'))
-            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        content = FileIndexer.StripLineLeadingInvisibles(content);
+        if (!contentIsNormalized)
+        {
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingInvisibles(content);
+        }
 
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)

@@ -916,6 +916,27 @@ public static partial class ReferenceExtractor
             cancellationToken,
             maxReferenceCount).References;
 
+    internal static List<ReferenceRecord> ExtractNormalized(
+        long fileId,
+        string? lang,
+        string content,
+        bool hasOversizeLine,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path = null,
+        IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
+        CancellationToken cancellationToken = default,
+        int? maxReferenceCount = null)
+        => ExtractDetailedNormalized(
+            fileId,
+            lang,
+            content,
+            hasOversizeLine,
+            symbols,
+            path,
+            workspaceSymbols,
+            cancellationToken,
+            maxReferenceCount).References;
+
     public static ReferenceExtractionResult ExtractDetailed(
         long fileId,
         string? lang,
@@ -925,6 +946,51 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null)
+        => ExtractDetailedCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            symbols,
+            path,
+            workspaceSymbols,
+            cancellationToken,
+            maxReferenceCount);
+
+    internal static ReferenceExtractionResult ExtractDetailedNormalized(
+        long fileId,
+        string? lang,
+        string content,
+        bool hasOversizeLine,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path = null,
+        IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
+        CancellationToken cancellationToken = default,
+        int? maxReferenceCount = null)
+        => ExtractDetailedCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: true,
+            hasOversizeLine,
+            symbols,
+            path,
+            workspaceSymbols,
+            cancellationToken,
+            maxReferenceCount);
+
+    private static ReferenceExtractionResult ExtractDetailedCore(
+        long fileId,
+        string? lang,
+        string content,
+        bool contentIsNormalized,
+        bool? hasOversizeLine,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path,
+        IReadOnlyList<SymbolRecord>? workspaceSymbols,
+        CancellationToken cancellationToken,
+        int? maxReferenceCount)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
@@ -936,11 +1002,14 @@ public static partial class ReferenceExtractor
 
             if (string.IsNullOrEmpty(content))
                 return new ReferenceExtractionResult([], []);
-            if (ChunkSplitter.HasOversizeLine(content))
+            if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
                 return new ReferenceExtractionResult([], []);
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingInvisibles(content);
+            if (!contentIsNormalized)
+            {
+                if (content.Contains('\r'))
+                    content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+                content = FileIndexer.StripLineLeadingInvisibles(content);
+            }
             cancellationToken.ThrowIfCancellationRequested();
 
             var pluginReferences = pluginExtractor.Extract(
@@ -972,7 +1041,9 @@ public static partial class ReferenceExtractor
             requestedLanguage,
             cancellationToken,
             maxReferenceCount,
-            builtInDiagnostics.Add)),
+            builtInDiagnostics.Add,
+            contentIsNormalized,
+            hasOversizeLine)),
             builtInDiagnostics);
     }
 

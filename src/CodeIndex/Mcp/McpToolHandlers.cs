@@ -6050,10 +6050,11 @@ public partial class McpServer
                     FileIssue? regexTimeoutIssue;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
                     {
-                        references = ReferenceExtractor.Extract(
+                        references = ReferenceExtractor.ExtractNormalized(
                             fileId,
                             record.Lang,
                             content,
+                            loaded.HasOversizeLine,
                             symbols,
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,

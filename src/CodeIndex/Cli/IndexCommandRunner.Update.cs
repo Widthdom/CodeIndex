@@ -758,10 +758,11 @@ public static partial class IndexCommandRunner
                     ReferenceExtractionResult referenceExtraction;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
                     {
-                        referenceExtraction = ReferenceExtractor.ExtractDetailed(
+                        referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                             fileId,
                             record.Lang,
                             content,
+                            loaded.HasOversizeLine,
                             symbols,
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,

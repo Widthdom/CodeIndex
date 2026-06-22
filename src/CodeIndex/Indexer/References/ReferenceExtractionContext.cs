@@ -16,4 +16,6 @@ public sealed record ReferenceExtractionContext(
     string? RequestedLanguage = null,
     CancellationToken CancellationToken = default,
     int? MaxReferenceCount = null,
-    Action<ReferenceExtractionDiagnostic>? ReportDiagnostic = null);
+    Action<ReferenceExtractionDiagnostic>? ReportDiagnostic = null,
+    bool ContentIsNormalized = false,
+    bool? HasOversizeLine = null);
