@@ -1,20 +1,20 @@
 using CodeIndex.Database;
-using CodeIndex.Indexer;
 using CodeIndex.Models;
 
-namespace CodeIndex.Cli;
+namespace CodeIndex.Indexer;
 
-public static partial class IndexCommandRunner
+internal static class CSharpStaticInterfacePrepass
 {
     private static readonly byte[] CSharpInterfaceKeywordBytes = "interface"u8.ToArray();
     private static readonly byte[] CSharpStaticKeywordBytes = "static"u8.ToArray();
     private static readonly byte[] CSharpAbstractKeywordBytes = "abstract"u8.ToArray();
     private static readonly byte[] CSharpVirtualKeywordBytes = "virtual"u8.ToArray();
 
-    private static CSharpStaticInterfaceWorkspaceSymbols BuildCSharpStaticInterfaceWorkspaceSymbols(
+    internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
         DbWriter writer,
         FileIndexer indexer,
-        IEnumerable<FullScanFileTarget> fileTargets,
+        IEnumerable<FileTarget> fileTargets,
+        bool includeExistingSymbols = true,
         Action<string?>? reportCurrentFile = null,
         CancellationToken cancellationToken = default)
     {
@@ -25,7 +25,7 @@ public static partial class IndexCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = target.FilePath;
             var relativePath = target.DisplayRelativePath;
-            if (!IsOutsideProjectRoot(relativePath))
+            if (includeExistingSymbols && !IsOutsideProjectRoot(relativePath))
                 pendingPaths.Add(target.IndexPath);
 
             var language = target.Language;
@@ -70,27 +70,32 @@ public static partial class IndexCommandRunner
             }
         }
 
-        var symbols = writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths);
+        var symbols = includeExistingSymbols
+            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths)
+            : [];
         symbols.AddRange(pendingSymbols);
-        var hadPendingContracts = writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths);
+        var hadPendingContracts = includeExistingSymbols
+            && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths);
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
             symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
     }
 
-    private static CSharpStaticInterfaceWorkspaceSymbols BuildCSharpStaticInterfaceWorkspaceSymbols(
+    internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
         IEnumerable<string> filePaths,
+        bool includeExistingSymbols = true,
         Action<string?>? reportCurrentFile = null,
         CancellationToken cancellationToken = default)
     {
-        var fileTargets = filePaths.Select(path => FullScanFileTarget.CreateFromPath(projectRoot, path));
-        return BuildCSharpStaticInterfaceWorkspaceSymbols(
+        var fileTargets = filePaths.Select(path => FileTarget.CreateFromPath(projectRoot, path));
+        return BuildWorkspaceSymbols(
             writer,
             indexer,
             fileTargets,
+            includeExistingSymbols,
             reportCurrentFile,
             cancellationToken);
     }
@@ -472,7 +477,45 @@ public static partial class IndexCommandRunner
     private static bool IsCSharpIdentifierPart(char ch)
         => char.IsLetterOrDigit(ch) || ch == '_';
 
-    private sealed record CSharpStaticInterfaceWorkspaceSymbols(
+    internal readonly record struct FileTarget(
+        string FilePath,
+        string RelativePath,
+        string DisplayRelativePath,
+        string IndexPath,
+        string? Language)
+    {
+        public static FileTarget CreateFromPath(string projectRoot, string path)
+        {
+            var filePath = Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            return Create(projectRoot, filePath);
+        }
+
+        public static FileTarget Create(string projectRoot, string filePath, string? language = null)
+        {
+            var relativePath = Path.GetRelativePath(projectRoot, filePath);
+            return new FileTarget(
+                filePath,
+                relativePath,
+                FileIndexer.NormalizePathSeparators(relativePath),
+                FileIndexer.NormalizeIndexPath(relativePath),
+                language);
+        }
+    }
+
+    private static bool IsOutsideProjectRoot(string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath))
+            return true;
+
+        var normalized = OperatingSystem.IsWindows()
+            ? relativePath.Replace('\\', '/')
+            : relativePath;
+        return normalized == ".." || normalized.StartsWith("../", StringComparison.Ordinal);
+    }
+}
+
+internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
         bool HasStaticInterfaceContracts);
-}

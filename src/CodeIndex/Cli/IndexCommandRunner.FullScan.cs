@@ -1140,10 +1140,17 @@ public static partial class IndexCommandRunner
                 () => currentCSharpWorkspaceFile);
             try
             {
-                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                var csharpPrepassTargets = fileTargets.Select(static target => new CSharpStaticInterfacePrepass.FileTarget(
+                    target.FilePath,
+                    target.RelativePath,
+                    target.DisplayRelativePath,
+                    target.IndexPath,
+                    target.Language));
+                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
-                    fileTargets,
+                    csharpPrepassTargets,
+                    includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                     path => currentCSharpWorkspaceFile = path,
                     cancellationToken);
             }

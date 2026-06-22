@@ -3059,7 +3059,7 @@ public sealed class Caller
         }
         """;
 
-        Assert.True(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
     }
 
     [Fact]
@@ -3077,7 +3077,7 @@ public sealed class Caller
             "Database",
             "DbWriter.cs"));
 
-        Assert.False(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+        Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
     }
 
     [Theory]
@@ -3096,7 +3096,7 @@ public sealed class Caller
 
         var bytes = EncodeCSharpPrepassContent(content, encodingName);
 
-        Assert.True(IndexCommandRunner.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+        Assert.True(CSharpStaticInterfacePrepass.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
     }
 
     [Fact]
@@ -3113,7 +3113,7 @@ public sealed class Caller
         bytes[0] = 0x20;
         Buffer.BlockCopy(encoded, 0, bytes, 1, encoded.Length);
 
-        Assert.True(IndexCommandRunner.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+        Assert.True(CSharpStaticInterfacePrepass.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
     }
 
     [Theory]
@@ -3125,7 +3125,7 @@ public sealed class Caller
     {
         var bytes = Encoding.UTF8.GetBytes(content);
 
-        Assert.False(IndexCommandRunner.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+        Assert.False(CSharpStaticInterfacePrepass.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
     }
 
     private static byte[] EncodeCSharpPrepassContent(string content, string encodingName)

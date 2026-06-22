@@ -5929,7 +5929,12 @@ public partial class McpServer
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
-        var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
+        var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+            writer,
+            indexer,
+            projectPath,
+            files,
+            cancellationToken: requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         var fatalScanErrors = scanResult.Errors
@@ -7452,93 +7457,6 @@ public partial class McpServer
     }
 
     internal static Action<string>? DeleteCdidxDirectoryWritableProbeForTesting { get; set; }
-
-    private static CSharpStaticInterfaceWorkspaceSymbols BuildMcpCSharpStaticInterfaceWorkspaceSymbols(
-        DbWriter writer,
-        FileIndexer indexer,
-        string projectRoot,
-        IEnumerable<string> filePaths,
-        CancellationToken cancellationToken = default)
-    {
-        var pendingSymbols = new List<SymbolRecord>();
-        var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var filePath in filePaths)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var absolutePath = Path.IsPathRooted(filePath)
-                ? filePath
-                : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
-            pendingPaths.Add(relativePath);
-
-            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-            if (detection.Status != FileIndexer.FileProbeStatus.Supported
-                || detection.Language != "csharp")
-            {
-                continue;
-            }
-
-            try
-            {
-                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
-                if (record.Lang != "csharp")
-                    continue;
-                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path) != null)
-                    continue;
-
-                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-            }
-        }
-
-        var symbols = writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths);
-        symbols.AddRange(pendingSymbols);
-        var hasContracts = symbols.Any(IsMcpCSharpStaticInterfaceContractSymbol)
-            || writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths);
-        return new CSharpStaticInterfaceWorkspaceSymbols(symbols, hasContracts);
-    }
-
-    private static bool IsMcpCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
-        => symbol.Kind is "function" or "operator" or "property"
-           && symbol.ContainerKind == "interface"
-           && !string.IsNullOrWhiteSpace(symbol.Signature)
-           && ContainsMcpCSharpWord(symbol.Signature!, "static")
-           && (ContainsMcpCSharpWord(symbol.Signature!, "abstract")
-               || ContainsMcpCSharpWord(symbol.Signature!, "virtual"));
-
-    private static bool ContainsMcpCSharpWord(string text, string word)
-    {
-        var index = 0;
-        while (index < text.Length)
-        {
-            index = text.IndexOf(word, index, StringComparison.Ordinal);
-            if (index < 0)
-                return false;
-
-            var before = index == 0 ? '\0' : text[index - 1];
-            var afterIndex = index + word.Length;
-            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
-            if (!IsMcpCSharpIdentifierPart(before) && !IsMcpCSharpIdentifierPart(after))
-                return true;
-
-            index += word.Length;
-        }
-
-        return false;
-    }
-
-    private static bool IsMcpCSharpIdentifierPart(char ch)
-        => char.IsLetterOrDigit(ch) || ch == '_';
-
-    private sealed record CSharpStaticInterfaceWorkspaceSymbols(
-        IReadOnlyList<SymbolRecord> Symbols,
-        bool HasStaticInterfaceContracts);
 
     private string ResolveSuggestionAgent()
     {

@@ -259,7 +259,7 @@ public static partial class IndexCommandRunner
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
-            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+            csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                 writer,
                 indexer,
                 projectRoot,
@@ -288,7 +288,7 @@ public static partial class IndexCommandRunner
                         targetPaths.Add(filePath);
                 }
 
-                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
                     projectRoot,
