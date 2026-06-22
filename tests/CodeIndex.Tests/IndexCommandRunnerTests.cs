@@ -3099,6 +3099,23 @@ public sealed class Caller
         Assert.True(IndexCommandRunner.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
     }
 
+    [Fact]
+    public void RawBytesMayContainCSharpStaticInterfaceContract_UnalignedUtf16Payload_ReturnsTrue()
+    {
+        const string content = """
+        public interface IFixture<T>
+        {
+            static abstract T Create();
+        }
+        """;
+        var encoded = EncodeCSharpPrepassContent(content, "utf16-le");
+        var bytes = new byte[encoded.Length + 1];
+        bytes[0] = 0x20;
+        Buffer.BlockCopy(encoded, 0, bytes, 1, encoded.Length);
+
+        Assert.True(IndexCommandRunner.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+    }
+
     [Theory]
     [InlineData("public class C { public static void Run() { } }")]
     [InlineData("public interface IFixture { void Run(); }")]
