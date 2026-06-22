@@ -74,12 +74,19 @@ internal static class IndexFreshnessChecker
         var skipWorktreePathsLoaded = false;
         HashSet<string>? skipWorktreePaths = null;
 
-        foreach (var absolutePath in scan.Files.OrderBy(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, path)), StringComparer.Ordinal))
+        var workspaceFileTargets = scan.Files
+            .Select(path => WorkspaceFileTarget.Create(projectRoot, path))
+            .OrderBy(target => target.IndexPath, StringComparer.Ordinal);
+        foreach (var target in workspaceFileTargets)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
+                var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                    target.AbsolutePath,
+                    target.RelativePath,
+                    cancellationToken);
+                var record = loaded.Record;
                 result.WorkspaceFileCount++;
                 while (hasIndexed && string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) < 0)
                 {
@@ -117,9 +124,8 @@ internal static class IndexFreshnessChecker
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
                 result.ScanErrorCount++;
-                AddSample(result.ScanErrors, FormatScanFailureSample(relativePath, ex));
+                AddSample(result.ScanErrors, FormatScanFailureSample(target.DisplayRelativePath, ex));
             }
         }
 
@@ -171,6 +177,23 @@ internal static class IndexFreshnessChecker
                 result.MissingFileCount++;
                 AddSample(result.MissingFiles, path);
             }
+        }
+    }
+
+    private readonly record struct WorkspaceFileTarget(
+        string AbsolutePath,
+        string RelativePath,
+        string DisplayRelativePath,
+        string IndexPath)
+    {
+        public static WorkspaceFileTarget Create(string projectRoot, string absolutePath)
+        {
+            var relativePath = Path.GetRelativePath(projectRoot, absolutePath);
+            return new WorkspaceFileTarget(
+                absolutePath,
+                relativePath,
+                FileIndexer.NormalizePathSeparators(relativePath),
+                FileIndexer.NormalizeIndexPath(relativePath));
         }
     }
 
