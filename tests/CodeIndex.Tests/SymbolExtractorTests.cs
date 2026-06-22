@@ -28,6 +28,21 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void ExtractNormalized_KnownOversizeLine_SkipsSymbols()
+    {
+        var content = new string('a', ChunkSplitter.MaxLineLength + 1) + "\npublic class App { }\n";
+
+        var symbols = SymbolExtractor.ExtractNormalized(
+            1,
+            "csharp",
+            content,
+            hasOversizeLine: true,
+            filePath: "App.cs");
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void BuiltInSymbolRegexes_HaveBoundedMatchTimeouts()
     {
         var regexes = EnumerateStaticRegexValues(

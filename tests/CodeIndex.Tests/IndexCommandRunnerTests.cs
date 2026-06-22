@@ -3059,7 +3059,7 @@ public sealed class Caller
         }
         """;
 
-        Assert.True(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
     }
 
     [Fact]
@@ -3077,7 +3077,68 @@ public sealed class Caller
             "Database",
             "DbWriter.cs"));
 
-        Assert.False(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+        Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Theory]
+    [InlineData("utf8")]
+    [InlineData("utf8-bom")]
+    [InlineData("utf16-le")]
+    [InlineData("utf16-be")]
+    public void RawBytesMayContainCSharpStaticInterfaceContract_ContractEncodings_ReturnsTrue(string encodingName)
+    {
+        const string content = """
+        public interface IFixture<T>
+        {
+            static abstract T Create();
+        }
+        """;
+
+        var bytes = EncodeCSharpPrepassContent(content, encodingName);
+
+        Assert.True(CSharpStaticInterfacePrepass.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+    }
+
+    [Fact]
+    public void RawBytesMayContainCSharpStaticInterfaceContract_UnalignedUtf16Payload_ReturnsTrue()
+    {
+        const string content = """
+        public interface IFixture<T>
+        {
+            static abstract T Create();
+        }
+        """;
+        var encoded = EncodeCSharpPrepassContent(content, "utf16-le");
+        var bytes = new byte[encoded.Length + 1];
+        bytes[0] = 0x20;
+        Buffer.BlockCopy(encoded, 0, bytes, 1, encoded.Length);
+
+        Assert.True(CSharpStaticInterfacePrepass.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+    }
+
+    [Theory]
+    [InlineData("public class C { public static void Run() { } }")]
+    [InlineData("public interface IFixture { void Run(); }")]
+    [InlineData("public interface IFixture { static int Count => 0; }")]
+    [InlineData("public abstract class C { public static void Run() { } }")]
+    public void RawBytesMayContainCSharpStaticInterfaceContract_MissingContractTokens_ReturnsFalse(string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+
+        Assert.False(CSharpStaticInterfacePrepass.RawBytesMayContainCSharpStaticInterfaceContract(bytes));
+    }
+
+    private static byte[] EncodeCSharpPrepassContent(string content, string encodingName)
+    {
+        Encoding encoding = encodingName switch
+        {
+            "utf8" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            "utf8-bom" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+            "utf16-le" => new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+            "utf16-be" => new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+            _ => throw new ArgumentOutOfRangeException(nameof(encodingName), encodingName, null),
+        };
+        return encoding.GetPreamble().Concat(encoding.GetBytes(content)).ToArray();
     }
 
     [Fact]

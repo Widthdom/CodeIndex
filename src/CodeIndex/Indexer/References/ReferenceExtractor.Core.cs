@@ -20,7 +20,13 @@ public static partial class ReferenceExtractor
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
-        if (!TryPrepareReferenceLines(language, content, isRazorFile, out var preparedInput))
+        if (!TryPrepareReferenceLines(
+            language,
+            content,
+            isRazorFile,
+            request.ContentIsNormalized,
+            request.HasOversizeLine,
+            out var preparedInput))
             return [];
         request.CancellationToken.ThrowIfCancellationRequested();
 

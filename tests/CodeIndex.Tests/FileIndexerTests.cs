@@ -3508,16 +3508,27 @@ public class FileIndexerTests
         try
         {
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.mystery\n");
-            File.WriteAllText(Path.Combine(tempDir, "app.cs"), "class App { }\n");
+            var appPath = Path.Combine(tempDir, "app.cs");
+            var scriptPath = Path.Combine(tempDir, "script");
+            var toolPath = Path.Combine(tempDir, "tool");
+            var dataPath = Path.Combine(tempDir, "data.mystery");
+            var ignoredPath = Path.Combine(tempDir, "ignored.mystery");
+            File.WriteAllText(appPath, "class App { }\n");
             File.WriteAllText(Path.Combine(tempDir, "Dockerfile.dev"), "FROM scratch\n");
-            File.WriteAllText(Path.Combine(tempDir, "tool"), "plain text without a shebang\n");
-            File.WriteAllText(Path.Combine(tempDir, "data.mystery"), "unknown extension\n");
-            File.WriteAllText(Path.Combine(tempDir, "ignored.mystery"), "ignored unknown extension\n");
+            File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('hello')\n");
+            File.WriteAllText(toolPath, "plain text without a shebang\n");
+            File.WriteAllText(dataPath, "unknown extension\n");
+            File.WriteAllText(ignoredPath, "ignored unknown extension\n");
 
             var indexer = new FileIndexer(tempDir);
             var scanResult = indexer.ScanFilesDetailed();
 
             Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+            Assert.Equal("csharp", scanResult.FileLanguages[appPath]);
+            Assert.Equal("python", scanResult.FileLanguages[scriptPath]);
+            Assert.DoesNotContain(toolPath, scanResult.FileLanguages.Keys);
+            Assert.DoesNotContain(dataPath, scanResult.FileLanguages.Keys);
+            Assert.DoesNotContain(ignoredPath, scanResult.FileLanguages.Keys);
             Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
             Assert.Contains("tool", scanResult.NonIndexablePaths);
             Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
@@ -4863,27 +4874,45 @@ public class FileIndexerTests
         }
     }
 
-    [Fact]
-    public void FileContentLoader_Load_CanonicalizesContentBeforeChecksum()
+    [Theory]
+    [InlineData("", "", 0)]
+    [InlineData("a\nb\n", "a\nb\n", 2)]
+    [InlineData("\n\n", "\n\n", 2)]
+    [InlineData("a\r\n\uFEFFb\rc", "a\nb\nc", 3)]
+    [InlineData("\uFEFF\u200B", "", 0)]
+    [InlineData("a\n\uFEFF\u200Bb", "a\nb", 2)]
+    public void FileContentLoader_Load_CanonicalizesContentAndLineCountBeforeChecksum(
+        string rawContent,
+        string expectedContent,
+        int expectedLineCount)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "sample.cs");
-            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("a\r\n\uFEFFb\r"));
+        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes(rawContent));
 
-            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
-            var loaded = loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
+        Assert.Equal(expectedContent, loaded.Content);
+        Assert.Equal(expectedLineCount, loaded.LineCount);
+        Assert.False(loaded.HasOversizeLine);
+        Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(expectedContent)), loaded.Checksum);
+        Assert.Null(loaded.Warning);
+    }
 
-            Assert.Equal("a\nb\n", loaded.Content);
-            Assert.Equal(FileIndexer.CountPhysicalLines(loaded.Content), loaded.LineCount);
-            Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(loaded.Content)), loaded.Checksum);
-            Assert.Null(loaded.Warning);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+    [Fact]
+    public void FileContentLoader_Load_DetectsOversizeLineDuringCanonicalization()
+    {
+        var longLine = new string('a', ChunkSplitter.MaxLineLength + 1);
+        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes($"\uFEFF{longLine}\r\nb"));
+
+        Assert.Equal($"{longLine}\nb", loaded.Content);
+        Assert.Equal(2, loaded.LineCount);
+        Assert.True(loaded.HasOversizeLine);
+        Assert.Empty(ChunkSplitter.SplitNormalized(1, loaded.Content, loaded.HasOversizeLine));
+        var issues = FileIndexer.ValidateContent(
+            "sample.cs",
+            loaded.RawBytes,
+            loaded.Content,
+            "csharp",
+            loaded.Inspection,
+            loaded.HasOversizeLine);
+        Assert.Contains(issues, issue => issue.Kind == "line_too_long");
     }
 
     [Fact]
@@ -6155,6 +6184,23 @@ public class FileIndexerTests
 
         Assert.Throws<OperationCanceledException>(() =>
             FileContentLoader.TryComputeChecksum(stream, long.MaxValue, out _, cancellation.Token));
+    }
+
+    private static LoadedFileContent LoadFileContentForTest(byte[] bytes)
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "sample.cs");
+            File.WriteAllBytes(path, bytes);
+
+            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
+            return loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
     }
 
     private static void WriteFileIndexerPatternConfig(string projectRoot, string fileName, string content)

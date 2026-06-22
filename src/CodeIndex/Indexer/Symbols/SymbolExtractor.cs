@@ -2347,6 +2347,8 @@ public static partial class SymbolExtractor
         long fileId,
         string? originalLang,
         string content,
+        bool contentIsNormalized,
+        bool? hasOversizeLine,
         string? filePath,
         string? projectRoot,
         CancellationToken cancellationToken,
@@ -2382,15 +2384,19 @@ public static partial class SymbolExtractor
         // ValidateContent の同等ガードと合わせて、正規表現のバックトラックで
         // インデクサが止まることを防ぎ、スキップは `line_too_long` FileIssue
         // として表面化させる。Closes #1542.
-        if (ChunkSplitter.HasOversizeLine(content))
+        if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
             return true;
 
         if (FileIndexer.HasConflictMarkers(content))
             return true;
 
-        if (content.Contains('\r'))
-            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        preparedContent = FileIndexer.StripLineLeadingInvisibles(content);
+        if (!contentIsNormalized)
+        {
+            if (content.Contains('\r'))
+                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+            content = FileIndexer.StripLineLeadingInvisibles(content);
+        }
+        preparedContent = content;
         cancellationToken.ThrowIfCancellationRequested();
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
 
@@ -2419,12 +2425,44 @@ public static partial class SymbolExtractor
     /// <param name="filePath">Relative file path when available / 利用可能なら相対ファイルパス</param>
     /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
     public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
+        => ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            filePath,
+            projectRoot,
+            cancellationToken);
+
+    internal static List<SymbolRecord> ExtractNormalized(long fileId, string? lang, string content, bool hasOversizeLine, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
+        => ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: true,
+            hasOversizeLine,
+            filePath,
+            projectRoot,
+            cancellationToken);
+
+    private static List<SymbolRecord> ExtractCore(
+        long fileId,
+        string? lang,
+        string content,
+        bool contentIsNormalized,
+        bool? hasOversizeLine,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default)
     {
         var originalLang = lang;
         if (TryPrepareSymbolExtraction(
             fileId,
             originalLang,
             content,
+            contentIsNormalized,
+            hasOversizeLine,
             filePath,
             projectRoot,
             cancellationToken,

@@ -38,6 +38,27 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         string projectRoot,
         TimeSpan callbackBudget,
         CancellationToken cancellationToken = default)
+        => Invoke(
+            fileId,
+            lang,
+            content,
+            filePath,
+            projectRoot,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            callbackBudget,
+            cancellationToken);
+
+    internal SymbolExtractionWorkerResult Invoke(
+        long fileId,
+        string? lang,
+        string content,
+        string filePath,
+        string projectRoot,
+        bool contentIsNormalized,
+        bool? hasOversizeLine,
+        TimeSpan callbackBudget,
+        CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
@@ -49,7 +70,14 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 return Failure(startError, stopwatch.ElapsedMilliseconds);
             }
 
-            var request = new SymbolExtractionWorker.WorkerRequest(fileId, lang, content, filePath, projectRoot);
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                fileId,
+                lang,
+                content,
+                filePath,
+                projectRoot,
+                contentIsNormalized,
+                hasOversizeLine);
             var requestJson = JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
@@ -566,13 +594,22 @@ internal static class SymbolExtractionWorker
             WriteConsoleOutputForTestingIfRequested(options);
             DelayForTestingIfRequested(options, cancellationToken);
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(request.Lang, "symbol_extraction");
-            var symbols = SymbolExtractor.Extract(
-                request.FileId,
-                request.Lang,
-                request.Content,
-                request.FilePath,
-                request.ProjectRoot,
-                cancellationToken);
+            var symbols = request.ContentIsNormalized && request.HasOversizeLine is { } hasOversizeLine
+                ? SymbolExtractor.ExtractNormalized(
+                    request.FileId,
+                    request.Lang,
+                    request.Content,
+                    hasOversizeLine,
+                    request.FilePath,
+                    request.ProjectRoot,
+                    cancellationToken)
+                : SymbolExtractor.Extract(
+                    request.FileId,
+                    request.Lang,
+                    request.Content,
+                    request.FilePath,
+                    request.ProjectRoot,
+                    cancellationToken);
             return new WorkerResponse(
                 symbols,
                 null,
@@ -707,7 +744,9 @@ internal static class SymbolExtractionWorker
         string? Lang,
         string Content,
         string FilePath,
-        string ProjectRoot);
+        string ProjectRoot,
+        bool ContentIsNormalized = false,
+        bool? HasOversizeLine = null);
 
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,

@@ -26,7 +26,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
 - `FsCheck.Xunit` is reserved for property-based tests that assert universal invariants (never-throws contracts, idempotence, "output is parseable by downstream consumer") across randomly generated inputs. Use it to complement, not replace, the example-based `[Fact]` / `[Theory]` tests — pick FsCheck when the property is a universally quantified claim, and an example test when a specific concrete case is the contract.
 - Test parallelism: enabled by default across independent test classes. Tests that touch process-global state such as SQLite pool resets, environment variables, or current-directory overrides must use an explicit non-parallel collection, and tests that swap `Console.Out` / `Console.Error` must lock on `TestConsoleLock.Gate`.
-- CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. XPlat Code Coverage collection is limited to the `ubuntu-latest` / `net8.0` lane so every OS/framework lane still exercises the full suite without paying collector overhead. Test execution runs with `--no-restore --no-build` after the locked restore and Release build steps. The `ubuntu-latest` / `net8.0` lane also reuses the earlier Release solution build instead of running the per-framework test-project build again, and uses `make lint` as the single formatting verifier.
+- CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. TRX telemetry summaries and test-result artifact uploads run only for failed or pass-on-retry lanes, not for clean first-pass success lanes. XPlat Code Coverage collection is limited to the `ubuntu-latest` / `net8.0` lane so every OS/framework lane still exercises the full suite without paying collector overhead. Test execution runs with `--no-restore --no-build` after the locked restore and Release build steps. The `ubuntu-latest` / `net8.0` lane also reuses the earlier Release solution build instead of running the per-framework test-project build again, and uses `make lint` as the single formatting verifier.
 
 ## Test Layout
 
@@ -37,7 +37,7 @@ The test project mirrors the production areas closely.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
 - `FileIndexerTests.cs`
-  File scanning, language detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage.
+  File scanning, language detection, content loading/canonicalization, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
 - `LegacySchemaMigrationTests.cs`
@@ -240,7 +240,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
 - `FsCheck.Xunit` はランダム生成入力に対する普遍的不変条件（never-throws、idempotence、"出力が downstream consumer で parse 可能" 等）を表明する property-based テスト専用です。例ベースの `[Fact]` / `[Theory]` を置き換えるのではなく補完するもので、普遍量化された主張なら FsCheck、特定の具体ケースが契約なら例ベースという形で使い分けてください。
 - テスト並列実行: 独立したテストクラス間ではデフォルトで有効です。SQLite pool の解放、環境変数の変更、カレントディレクトリの上書きのような process-global 状態を触るテストは、明示的な non-parallel collection に入れてください。`Console.Out` / `Console.Error` を差し替えるテストは `TestConsoleLock.Gate` で lock してください。
-- CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。XPlat Code Coverage の収集は `ubuntu-latest` / `net8.0` lane に限定し、すべての OS/framework lane で full suite を実行しつつ collector overhead を避けます。テスト実行は locked restore と Release build の後に `--no-restore --no-build` で走らせます。`ubuntu-latest` / `net8.0` lane では、直前の Release solution build を再利用し、per-framework の test-project build は再実行しません。また、formatting verifier は `make lint` だけを使います。
+- CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。TRX telemetry summary と test-result artifact upload は失敗または retry 成功 lane だけで実行し、初回で clean に成功した lane では実行しません。XPlat Code Coverage の収集は `ubuntu-latest` / `net8.0` lane に限定し、すべての OS/framework lane で full suite を実行しつつ collector overhead を避けます。テスト実行は locked restore と Release build の後に `--no-restore --no-build` で走らせます。`ubuntu-latest` / `net8.0` lane では、直前の Release solution build を再利用し、per-framework の test-project build は再実行しません。また、formatting verifier は `make lint` だけを使います。
 
 ## テスト構成
 
@@ -251,7 +251,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
 - `FileIndexerTests.cs`
-  ファイル走査、言語判定、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。
+  ファイル走査、言語判定、content loading / canonicalization、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。
 - `DatabaseTests.cs`、`DbReaderTests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
 - `LegacySchemaMigrationTests.cs`

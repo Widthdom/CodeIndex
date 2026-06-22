@@ -53,6 +53,7 @@ public class FileIndexer
 
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
+        IReadOnlyDictionary<string, string> FileLanguages,
         IReadOnlyList<ScanError> Errors,
         IReadOnlyList<string> NonIndexablePaths,
         IReadOnlyList<string> UnknownExtensionFiles,
@@ -532,6 +533,7 @@ public class FileIndexer
 
     private sealed record DirectoryScanState(
         List<string> Results,
+        Dictionary<string, string> FileLanguages,
         List<ScanError> Errors,
         HashSet<string> NonIndexablePaths,
         HashSet<string> UnknownExtensionFiles,
@@ -2304,6 +2306,7 @@ public class FileIndexer
     {
         cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
+        var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
@@ -2320,6 +2323,7 @@ public class FileIndexer
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
         var scanState = new DirectoryScanState(
             files,
+            fileLanguages,
             errors,
             nonIndexablePaths,
             unknownExtensionFiles,
@@ -2341,6 +2345,7 @@ public class FileIndexer
         }
         return new ScanFilesResult(
             scanState.Results,
+            scanState.FileLanguages,
             scanState.Errors,
             scanState.NonIndexablePaths.ToList(),
             scanState.UnknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
@@ -2386,7 +2391,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
+        return EnumerateDirectory(dir, relativeDir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -2400,6 +2405,7 @@ public class FileIndexer
 
     private bool EnumerateDirectory(
         string dir,
+        string relativeDir,
         DirectoryScanState scanState,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
@@ -2426,7 +2432,7 @@ public class FileIndexer
             if (directoryIgnoreCase != _ignoreCase)
             {
                 scanState.Errors.Add(new ScanError(
-                    ToRelativePath(dir),
+                    relativeDir,
                     "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
                     ScanIssueSeverity.Warning));
             }
@@ -2438,20 +2444,20 @@ public class FileIndexer
             // Child subtree failures must not revoke that authority for sibling-file purge.
             // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
             // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
-            scanState.ListedDirectories.Add(ToRelativePath(dir));
+            scanState.ListedDirectories.Add(relativeDir);
             RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
             fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
             scanState.Errors.Add(new ScanError(
-                ToRelativePath(dir),
+                relativeDir,
                 $"Could not scan directory due to {FileSystemTraversalFailure.DescribeReason(ex)}."));
             fullyScanned = false;
         }
 
         if (fullyScanned)
-            scanState.FullyScannedDirectories.Add(ToRelativePath(dir));
+            scanState.FullyScannedDirectories.Add(relativeDir);
 
         return fullyScanned;
     }
@@ -2592,6 +2598,8 @@ public class FileIndexer
             return false;
         }
 
+        if (language.Language is { Length: > 0 } acceptedLanguage)
+            scanState.FileLanguages[file] = acceptedLanguage;
         return true;
     }
 
@@ -3449,8 +3457,8 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath, CancellationToken cancellationToken = default)
     {
-        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath, cancellationToken);
-        return (record, content, warning);
+        var loaded = BuildLoadedRecordWithRawBytes(absolutePath, cancellationToken);
+        return (loaded.Record, loaded.Content, loaded.Warning);
     }
 
     /// <summary>
@@ -3461,6 +3469,21 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
     {
+        var loaded = BuildLoadedRecordWithRawBytes(absolutePath, cancellationToken);
+        return (loaded.Record, loaded.Content, loaded.RawBytes, loaded.Warning);
+    }
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
+    {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        return BuildLoadedRecordWithRawBytes(absolutePath, relativePath, cancellationToken);
+    }
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
@@ -3469,7 +3492,6 @@ public class FileIndexer
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
         var loaded = _contentLoader.Load(
@@ -3488,7 +3510,43 @@ public class FileIndexer
             Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
-        return (record, loaded.Content, loaded.RawBytes, loaded.Warning);
+        return new LoadedFileRecord(
+            record,
+            loaded.Content,
+            loaded.RawBytes,
+            loaded.HasOversizeLine,
+            loaded.Warning,
+            loaded.Inspection);
+    }
+
+    internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+        => LoadNormalizedContentForPrepass(
+            absolutePath,
+            relativePath,
+            rawByteFilter: null,
+            cancellationToken)!;
+
+    internal string? LoadNormalizedContentForPrepass(
+        string absolutePath,
+        string relativePath,
+        Func<byte[], bool>? rawByteFilter,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
+            throw new InvalidOperationException("Only regular files can be indexed");
+
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
+        return _contentLoader.LoadNormalizedContentForPrepass(
+            absolutePath,
+            normalizedRelativePath,
+            relativePath,
+            rawByteFilter,
+            cancellationToken);
     }
 
     public FileRecord BuildSkippedFileRecord(string absolutePath)
@@ -3497,6 +3555,14 @@ public class FileIndexer
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        return BuildSkippedFileRecord(absolutePath, relativePath);
+    }
+
+    internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath)
+    {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
         var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         var info = new FileInfo(ioPath);
@@ -3698,10 +3764,19 @@ public class FileIndexer
     /// ファイル内容のエンコーディング問題を検証する。
     /// </summary>
     public static List<FileIssue> ValidateContent(string relativePath, byte[] rawBytes, string content, string? language = null)
+        => ValidateContent(relativePath, rawBytes, content, language, FileContentInspection.Inspect(rawBytes));
+
+    internal static List<FileIssue> ValidateContent(
+        string relativePath,
+        byte[] rawBytes,
+        string content,
+        string? language,
+        FileContentInspection inspection,
+        bool? hasOversizeLine = null)
     {
         var issues = new List<FileIssue>();
 
-        if (IsGitLfsPointer(rawBytes))
+        if (inspection.IsGitLfsPointer)
         {
             issues.Add(new FileIssue
             {
@@ -3723,7 +3798,9 @@ public class FileIndexer
         // (UTF-16 LE では ASCII 部の片バイトが NUL、CRLF は 0D 00 0A 00)。代わりに
         // `utf16_bom` 1 件を出して `validate` が「UTF-16 として解釈した」ことを示し、
         // 不正サロゲートペアに備え content 側 U+FFFD 走査は継続する。Closes #1540.
-        var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+        var isUtf16 = inspection.IsUtf16;
+        var utf16BigEndian = inspection.Utf16BigEndian;
+        var hasUtf16Bom = inspection.HasUtf16Bom;
 
         if (isUtf16)
         {
@@ -3755,7 +3832,7 @@ public class FileIndexer
         if (!isUtf16)
             AddRawByteContentIssues(issues, relativePath, rawBytes);
 
-        AddOversizeContentIssues(issues, relativePath, content);
+        AddOversizeContentIssues(issues, relativePath, content, hasOversizeLine);
         var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
         if (effectiveLanguage is "xml" or "msbuild")
             AddXmlStructureIssues(issues, relativePath, content);
@@ -4208,7 +4285,7 @@ public class FileIndexer
         }
     }
 
-    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content)
+    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content, bool? hasOversizeLine)
     {
         // line_too_long — surface the chunk/symbol/reference skip path that
         // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
@@ -4222,16 +4299,19 @@ public class FileIndexer
         // SymbolExtractor / ReferenceExtractor 側の同等ガードはすでに空を返す
         // ため、本 FileIssue は issue 起票時の「無音停止」を切り分けやすくする
         // 観測点を提供する。Closes #1542.
-        var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
-        if (longLine > 0)
+        if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
         {
-            issues.Add(new FileIssue
+            var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
+            if (longLine > 0)
             {
-                Path = relativePath,
-                Kind = "line_too_long",
-                Line = longLine,
-                Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
-            });
+                issues.Add(new FileIssue
+                {
+                    Path = relativePath,
+                    Kind = "line_too_long",
+                    Line = longLine,
+                    Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
+                });
+            }
         }
 
         var longFtsTokenLine = FindOversizeFtsTokenLine(content, CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength);

@@ -259,7 +259,7 @@ public static partial class IndexCommandRunner
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
-            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+            csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                 writer,
                 indexer,
                 projectRoot,
@@ -280,17 +280,15 @@ public static partial class IndexCommandRunner
             var expandHeartbeat = StartIndexJsonPhaseHeartbeat(options, "expanding C# update set for static interface contracts");
             try
             {
-                foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
+                var scanResult = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                foreach (var filePath in scanResult.Files)
                 {
-                    var detection = indexer.TryDetectLanguageForIndexing(filePath);
-                    if (detection.Status == FileIndexer.FileProbeStatus.Supported
-                        && detection.Language == "csharp")
-                    {
+                    if (scanResult.FileLanguages.TryGetValue(filePath, out var language)
+                        && language == "csharp")
                         targetPaths.Add(filePath);
-                    }
                 }
 
-                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
                     projectRoot,
@@ -604,7 +602,11 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath, cancellationToken);
+                    var loaded = indexer.BuildLoadedRecordWithRawBytes(absPath, cancellationToken);
+                    var record = loaded.Record;
+                    var content = loaded.Content;
+                    var rawBytes = loaded.RawBytes;
+                    var warning = loaded.Warning;
 
                     if (warning != null && !options.Json && !options.Quiet)
                     {
@@ -673,7 +675,7 @@ public static partial class IndexCommandRunner
                     WriteProjectRootOnce();
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
-                    var chunks = ChunkSplitter.Split(fileId, content);
+                    var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
                     var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
@@ -682,7 +684,7 @@ public static partial class IndexCommandRunner
                         writer.InsertReferences([]);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         var generatedIssues = AppendIssueIfMissing(
-                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang),
+                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
                             generatedSuppressionIssue);
                         writer.InsertIssues(fileId, generatedIssues);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
@@ -703,6 +705,8 @@ public static partial class IndexCommandRunner
                         Path.GetFullPath(options.ProjectPath!),
                         record.Path,
                         currentUpdatePath,
+                        true,
+                        loaded.HasOversizeLine,
                         symbolExtractionWorker,
                         cancellationToken);
                     var symbols = symbolExtraction.Symbols;
@@ -754,10 +758,11 @@ public static partial class IndexCommandRunner
                     ReferenceExtractionResult referenceExtraction;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
                     {
-                        referenceExtraction = ReferenceExtractor.ExtractDetailed(
+                        referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                             fileId,
                             record.Lang,
                             content,
+                            loaded.HasOversizeLine,
                             symbols,
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
@@ -776,7 +781,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (referenceRegexTimeoutIssue != null)

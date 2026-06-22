@@ -82,6 +82,14 @@ public static class ChunkSplitter
         // 不可視文字/CRLF剥離後に再度空判定し、markerのみの入力が空ファイルと同じく0チャンクになるようにする。
         if (content.Length == 0)
             return [];
+
+        return SplitNormalized(fileId, content, HasOversizeLine(content));
+    }
+
+    internal static List<ChunkRecord> SplitNormalized(long fileId, string content, bool hasOversizeLine)
+    {
+        if (string.IsNullOrEmpty(content))
+            return [];
         // Skip oversize-line files (e.g. 1 MB minified `.min.js`, base64 blobs):
         // returning no chunks prevents a single multi-MB Content column from
         // being persisted, and parallel guards in SymbolExtractor / ReferenceExtractor
@@ -94,8 +102,14 @@ public static class ChunkSplitter
         // ガードと合わせて、正規表現抽出が同じ入力で停止しないようにする。
         // スキップは ValidateContent からの `line_too_long` FileIssue として
         // 既存の issues 経路で観測できる。Closes #1542.
-        if (HasOversizeLine(content))
+        if (hasOversizeLine)
             return [];
+
+        return SplitNormalizedCore(fileId, content);
+    }
+
+    private static List<ChunkRecord> SplitNormalizedCore(long fileId, string content)
+    {
         // Track line start offsets instead of materializing every line string. Large
         // source files can still be valid and under the file-size cap, and chunking
         // should only allocate the persisted chunk bodies rather than a duplicate

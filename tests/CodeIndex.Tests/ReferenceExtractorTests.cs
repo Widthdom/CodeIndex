@@ -46,6 +46,23 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void ExtractDetailedNormalized_KnownOversizeLine_SkipsReferences()
+    {
+        var content = new string('a', ChunkSplitter.MaxLineLength + 1) + "\nclass App { void Run() => Work(); }\n";
+
+        var result = ReferenceExtractor.ExtractDetailedNormalized(
+            1,
+            "csharp",
+            content,
+            hasOversizeLine: true,
+            symbols: [],
+            path: "App.cs");
+
+        Assert.Empty(result.References);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void BuiltInReferenceRegexes_HaveBoundedMatchTimeouts()
     {
         var regexes = EnumerateStaticRegexValues(
