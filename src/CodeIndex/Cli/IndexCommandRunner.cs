@@ -35,6 +35,10 @@ public static partial class IndexCommandRunner
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
     private static readonly System.Threading.AsyncLocal<Action<DbWriter, IReadOnlyList<string>>?> ScopedPlannerStatisticsMaintenanceDiagnosticStampingForTesting = new();
     private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);
+    private static readonly byte[] CSharpInterfaceKeywordBytes = "interface"u8.ToArray();
+    private static readonly byte[] CSharpStaticKeywordBytes = "static"u8.ToArray();
+    private static readonly byte[] CSharpAbstractKeywordBytes = "abstract"u8.ToArray();
+    private static readonly byte[] CSharpVirtualKeywordBytes = "virtual"u8.ToArray();
 
     internal readonly record struct FileByteReadSummary(long BytesRead, long SkippedFileCount);
 
@@ -1149,7 +1153,13 @@ public static partial class IndexCommandRunner
                 if (indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null)
                     continue;
 
-                var content = indexer.LoadNormalizedContentForPrepass(absolutePath, target.RelativePath, cancellationToken);
+                var content = indexer.LoadNormalizedContentForPrepass(
+                    absolutePath,
+                    target.RelativePath,
+                    RawBytesMayContainCSharpStaticInterfaceContract,
+                    cancellationToken);
+                if (content == null)
+                    continue;
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
 
@@ -1205,6 +1215,61 @@ public static partial class IndexCommandRunner
                 return true;
 
             index = bodyStart + 1;
+        }
+
+        return false;
+    }
+
+    internal static bool RawBytesMayContainCSharpStaticInterfaceContract(byte[] bytes)
+    {
+        var span = bytes.AsSpan();
+        return ContainsAsciiTokenInCommonEncodings(span, CSharpInterfaceKeywordBytes)
+               && ContainsAsciiTokenInCommonEncodings(span, CSharpStaticKeywordBytes)
+               && (ContainsAsciiTokenInCommonEncodings(span, CSharpAbstractKeywordBytes)
+                   || ContainsAsciiTokenInCommonEncodings(span, CSharpVirtualKeywordBytes));
+    }
+
+    private static bool ContainsAsciiTokenInCommonEncodings(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> token)
+    {
+        if (bytes.IndexOf(token) >= 0)
+            return true;
+        if (bytes.IndexOf((byte)0) < 0)
+            return false;
+
+        return ContainsUtf16AsciiToken(bytes, token, littleEndian: true)
+               || ContainsUtf16AsciiToken(bytes, token, littleEndian: false);
+    }
+
+    private static bool ContainsUtf16AsciiToken(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> asciiToken, bool littleEndian)
+    {
+        var byteLength = asciiToken.Length * 2;
+        if (bytes.Length < byteLength)
+            return false;
+
+        for (var start = 0; start <= bytes.Length - byteLength; start++)
+        {
+            var matched = true;
+            for (var tokenIndex = 0; tokenIndex < asciiToken.Length; tokenIndex++)
+            {
+                var byteIndex = start + tokenIndex * 2;
+                var first = bytes[byteIndex];
+                var second = bytes[byteIndex + 1];
+                if (littleEndian)
+                {
+                    if (first == asciiToken[tokenIndex] && second == 0)
+                        continue;
+                }
+                else if (first == 0 && second == asciiToken[tokenIndex])
+                {
+                    continue;
+                }
+
+                matched = false;
+                break;
+            }
+
+            if (matched)
+                return true;
         }
 
         return false;

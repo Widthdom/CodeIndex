@@ -3507,6 +3507,17 @@ public class FileIndexer
     }
 
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+        => LoadNormalizedContentForPrepass(
+            absolutePath,
+            relativePath,
+            rawByteFilter: null,
+            cancellationToken)!;
+
+    internal string? LoadNormalizedContentForPrepass(
+        string absolutePath,
+        string relativePath,
+        Func<byte[], bool>? rawByteFilter,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
@@ -3521,6 +3532,7 @@ public class FileIndexer
             absolutePath,
             normalizedRelativePath,
             relativePath,
+            rawByteFilter,
             cancellationToken);
     }
 
