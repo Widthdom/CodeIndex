@@ -3468,6 +3468,15 @@ public class FileIndexer
 
     internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
     {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        return BuildLoadedRecordWithRawBytes(absolutePath, relativePath, cancellationToken);
+    }
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
@@ -3476,7 +3485,6 @@ public class FileIndexer
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
         var loaded = _contentLoader.Load(
@@ -3504,6 +3512,14 @@ public class FileIndexer
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        return BuildSkippedFileRecord(absolutePath, relativePath);
+    }
+
+    internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath)
+    {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
         var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         var info = new FileInfo(ioPath);

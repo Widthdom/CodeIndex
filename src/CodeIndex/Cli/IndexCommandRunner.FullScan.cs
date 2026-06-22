@@ -1174,11 +1174,14 @@ public static partial class IndexCommandRunner
                             break;
 
                         var filePath = files[fileIndex];
+                        var relativeFilePath = filePath;
+                        var displayRelativePath = filePath;
                         try
                         {
-                            var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
-                            activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
-                            var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, extractionCancellationToken);
+                            relativeFilePath = Path.GetRelativePath(projectRoot, filePath);
+                            displayRelativePath = FileIndexer.NormalizePathSeparators(relativeFilePath);
+                            activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
+                            var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, relativeFilePath, extractionCancellationToken);
                             var record = loaded.Record;
                             var content = loaded.Content;
                             var rawBytes = loaded.RawBytes;
@@ -1201,7 +1204,7 @@ public static partial class IndexCommandRunner
                                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
                                         generatedSuppressionIssue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
+                                        FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1225,7 +1228,7 @@ public static partial class IndexCommandRunner
                                         ? [issue]
                                         : AppendIssue([symbolRegexTimeoutIssue], issue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, loaded.Inspection, issue.Message, [], [], [], capIssues),
+                                        FullScanFileWorkItem.Success(filePath, displayRelativePath, record, string.Empty, rawBytes, loaded.Inspection, issue.Message, [], [], [], capIssues),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1268,7 +1271,7 @@ public static partial class IndexCommandRunner
                                 }
                             }
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
+                                FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
                                 extractionCancellationToken);
                         }
                         catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
@@ -1277,15 +1280,15 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            var record = indexer.BuildSkippedFileRecord(filePath);
+                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
                             var issue = BuildNullByteIssue(ex);
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
+                                FullScanFileWorkItem.Success(filePath, displayRelativePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
                                 extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {
-                            var record = indexer.BuildSkippedFileRecord(filePath);
+                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
                             var issue = new FileIssue
                             {
                                 Path = ex.RelativePath,
@@ -1294,19 +1297,18 @@ public static partial class IndexCommandRunner
                                 Message = ex.Message,
                             };
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
+                                FullScanFileWorkItem.Success(filePath, displayRelativePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
                                 extractionCancellationToken);
                         }
                         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                         {
-                            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             extractionResults.Add(
-                                FullScanFileWorkItem.Skipped(filePath, $"{relativePath}: skipped because it was deleted during indexing."),
+                                FullScanFileWorkItem.Skipped(filePath, displayRelativePath, $"{displayRelativePath}: skipped because it was deleted during indexing."),
                                 extractionCancellationToken);
                         }
                         catch (Exception ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), extractionCancellationToken);
+                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, displayRelativePath, ex), extractionCancellationToken);
                         }
                         finally
                         {
@@ -1344,7 +1346,7 @@ public static partial class IndexCommandRunner
                 }
 
                 lastExtractionProgressAt = Stopwatch.GetTimestamp();
-                currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, item.FilePath));
+                currentJsonIndexFile = item.RelativePath;
                 EnsureIndexingActivityVisible();
                 if (item.Exception is IndexExtractionStalledException stalledException)
                     throw stalledException;
