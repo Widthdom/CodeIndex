@@ -280,14 +280,12 @@ public static partial class IndexCommandRunner
             var expandHeartbeat = StartIndexJsonPhaseHeartbeat(options, "expanding C# update set for static interface contracts");
             try
             {
-                foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
+                var scanResult = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                foreach (var filePath in scanResult.Files)
                 {
-                    var detection = indexer.TryDetectLanguageForIndexing(filePath);
-                    if (detection.Status == FileIndexer.FileProbeStatus.Supported
-                        && detection.Language == "csharp")
-                    {
+                    if (scanResult.FileLanguages.TryGetValue(filePath, out var language)
+                        && language == "csharp")
                         targetPaths.Add(filePath);
-                    }
                 }
 
                 csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
