@@ -3508,16 +3508,27 @@ public class FileIndexerTests
         try
         {
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.mystery\n");
-            File.WriteAllText(Path.Combine(tempDir, "app.cs"), "class App { }\n");
+            var appPath = Path.Combine(tempDir, "app.cs");
+            var scriptPath = Path.Combine(tempDir, "script");
+            var toolPath = Path.Combine(tempDir, "tool");
+            var dataPath = Path.Combine(tempDir, "data.mystery");
+            var ignoredPath = Path.Combine(tempDir, "ignored.mystery");
+            File.WriteAllText(appPath, "class App { }\n");
             File.WriteAllText(Path.Combine(tempDir, "Dockerfile.dev"), "FROM scratch\n");
-            File.WriteAllText(Path.Combine(tempDir, "tool"), "plain text without a shebang\n");
-            File.WriteAllText(Path.Combine(tempDir, "data.mystery"), "unknown extension\n");
-            File.WriteAllText(Path.Combine(tempDir, "ignored.mystery"), "ignored unknown extension\n");
+            File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('hello')\n");
+            File.WriteAllText(toolPath, "plain text without a shebang\n");
+            File.WriteAllText(dataPath, "unknown extension\n");
+            File.WriteAllText(ignoredPath, "ignored unknown extension\n");
 
             var indexer = new FileIndexer(tempDir);
             var scanResult = indexer.ScanFilesDetailed();
 
             Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+            Assert.Equal("csharp", scanResult.FileLanguages[appPath]);
+            Assert.Equal("python", scanResult.FileLanguages[scriptPath]);
+            Assert.DoesNotContain(toolPath, scanResult.FileLanguages.Keys);
+            Assert.DoesNotContain(dataPath, scanResult.FileLanguages.Keys);
+            Assert.DoesNotContain(ignoredPath, scanResult.FileLanguages.Keys);
             Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
             Assert.Contains("tool", scanResult.NonIndexablePaths);
             Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);

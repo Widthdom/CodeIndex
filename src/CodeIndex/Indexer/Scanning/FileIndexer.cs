@@ -53,6 +53,7 @@ public class FileIndexer
 
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
+        IReadOnlyDictionary<string, string> FileLanguages,
         IReadOnlyList<ScanError> Errors,
         IReadOnlyList<string> NonIndexablePaths,
         IReadOnlyList<string> UnknownExtensionFiles,
@@ -532,6 +533,7 @@ public class FileIndexer
 
     private sealed record DirectoryScanState(
         List<string> Results,
+        Dictionary<string, string> FileLanguages,
         List<ScanError> Errors,
         HashSet<string> NonIndexablePaths,
         HashSet<string> UnknownExtensionFiles,
@@ -2304,6 +2306,7 @@ public class FileIndexer
     {
         cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
+        var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
@@ -2320,6 +2323,7 @@ public class FileIndexer
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
         var scanState = new DirectoryScanState(
             files,
+            fileLanguages,
             errors,
             nonIndexablePaths,
             unknownExtensionFiles,
@@ -2341,6 +2345,7 @@ public class FileIndexer
         }
         return new ScanFilesResult(
             scanState.Results,
+            scanState.FileLanguages,
             scanState.Errors,
             scanState.NonIndexablePaths.ToList(),
             scanState.UnknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
@@ -2593,6 +2598,8 @@ public class FileIndexer
             return false;
         }
 
+        if (language.Language is { Length: > 0 } acceptedLanguage)
+            scanState.FileLanguages[file] = acceptedLanguage;
         return true;
     }
 

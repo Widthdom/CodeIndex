@@ -834,7 +834,7 @@ public static partial class IndexCommandRunner
         var fileTargets = files.Select(filePath => FullScanFileTarget.Create(
             projectRoot,
             filePath,
-            TryDetectFullScanTargetLanguage(indexer, filePath))).ToArray();
+            scanResult.FileLanguages.TryGetValue(filePath, out var language) ? language : null)).ToArray();
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);

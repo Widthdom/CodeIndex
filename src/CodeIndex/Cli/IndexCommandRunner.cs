@@ -1586,14 +1586,6 @@ public static partial class IndexCommandRunner
             : null;
     }
 
-    private static string? TryDetectFullScanTargetLanguage(FileIndexer indexer, string absolutePath)
-    {
-        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-        return detection.Status == FileIndexer.FileProbeStatus.Supported
-            ? detection.Language
-            : null;
-    }
-
     private static long? TryGetUnchangedFileIdFromStat(
         DbWriter writer,
         string projectRoot,
