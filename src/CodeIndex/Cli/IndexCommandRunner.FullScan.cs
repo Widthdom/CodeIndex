@@ -831,6 +831,7 @@ public static partial class IndexCommandRunner
         var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
         var scanResult = discovery.ScanResult;
         var files = discovery.Files;
+        var fileTargets = files.Select(filePath => FullScanFileTarget.Create(projectRoot, filePath)).ToArray();
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
@@ -861,9 +862,7 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
-        var retainedPaths = files
-            .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, path)))
-            .ToHashSet(StringComparer.Ordinal);
+        var retainedPaths = fileTargets.Select(target => target.IndexPath).ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {
             SaveScanCheckpoint(
@@ -1128,8 +1127,7 @@ public static partial class IndexCommandRunner
                 csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
                     writer,
                     indexer,
-                    projectRoot,
-                    files,
+                    fileTargets,
                     path => currentCSharpWorkspaceFile = path,
                     cancellationToken);
             }
@@ -1173,13 +1171,12 @@ public static partial class IndexCommandRunner
                         if (fileIndex >= files.Count)
                             break;
 
-                        var filePath = files[fileIndex];
-                        var relativeFilePath = filePath;
-                        var displayRelativePath = filePath;
+                        var target = fileTargets[fileIndex];
+                        var filePath = target.FilePath;
+                        var relativeFilePath = target.RelativePath;
+                        var displayRelativePath = target.DisplayRelativePath;
                         try
                         {
-                            relativeFilePath = Path.GetRelativePath(projectRoot, filePath);
-                            displayRelativePath = FileIndexer.NormalizePathSeparators(relativeFilePath);
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
                             var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, relativeFilePath, extractionCancellationToken);
                             var record = loaded.Record;

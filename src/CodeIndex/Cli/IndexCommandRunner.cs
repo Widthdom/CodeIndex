@@ -1122,22 +1122,19 @@ public static partial class IndexCommandRunner
     private static CSharpStaticInterfaceWorkspaceSymbols BuildCSharpStaticInterfaceWorkspaceSymbols(
         DbWriter writer,
         FileIndexer indexer,
-        string projectRoot,
-        IEnumerable<string> filePaths,
+        IEnumerable<FullScanFileTarget> fileTargets,
         Action<string?>? reportCurrentFile = null,
         CancellationToken cancellationToken = default)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var filePath in filePaths)
+        foreach (var target in fileTargets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var absolutePath = Path.IsPathRooted(filePath)
-                ? filePath
-                : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            var absolutePath = target.FilePath;
+            var relativePath = target.DisplayRelativePath;
             if (!IsOutsideProjectRoot(relativePath))
-                pendingPaths.Add(relativePath);
+                pendingPaths.Add(target.IndexPath);
 
             var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
             if (detection.Status != FileIndexer.FileProbeStatus.Supported
@@ -1149,7 +1146,9 @@ public static partial class IndexCommandRunner
             try
             {
                 reportCurrentFile?.Invoke(relativePath);
-                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
+                var loaded = indexer.BuildLoadedRecordWithRawBytes(absolutePath, target.RelativePath, cancellationToken);
+                var record = loaded.Record;
+                var content = loaded.Content;
                 if (record.Lang != "csharp")
                     continue;
                 if (indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path) != null)
@@ -1177,6 +1176,23 @@ public static partial class IndexCommandRunner
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
             symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
+    }
+
+    private static CSharpStaticInterfaceWorkspaceSymbols BuildCSharpStaticInterfaceWorkspaceSymbols(
+        DbWriter writer,
+        FileIndexer indexer,
+        string projectRoot,
+        IEnumerable<string> filePaths,
+        Action<string?>? reportCurrentFile = null,
+        CancellationToken cancellationToken = default)
+    {
+        var fileTargets = filePaths.Select(path => FullScanFileTarget.CreateFromPath(projectRoot, path));
+        return BuildCSharpStaticInterfaceWorkspaceSymbols(
+            writer,
+            indexer,
+            fileTargets,
+            reportCurrentFile,
+            cancellationToken);
     }
 
     internal static bool MayContainCSharpStaticInterfaceContract(string content)
@@ -1538,6 +1554,31 @@ public static partial class IndexCommandRunner
     private sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
         bool HasStaticInterfaceContracts);
+
+    private readonly record struct FullScanFileTarget(
+        string FilePath,
+        string RelativePath,
+        string DisplayRelativePath,
+        string IndexPath)
+    {
+        public static FullScanFileTarget CreateFromPath(string projectRoot, string path)
+        {
+            var filePath = Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            return Create(projectRoot, filePath);
+        }
+
+        public static FullScanFileTarget Create(string projectRoot, string filePath)
+        {
+            var relativePath = Path.GetRelativePath(projectRoot, filePath);
+            return new FullScanFileTarget(
+                filePath,
+                relativePath,
+                FileIndexer.NormalizePathSeparators(relativePath),
+                FileIndexer.NormalizeIndexPath(relativePath));
+        }
+    }
 
     private sealed record FullScanFileWorkItem(
         string FilePath,
