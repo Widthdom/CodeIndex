@@ -1474,7 +1474,7 @@ public static partial class IndexCommandRunner
                         writer.InsertSymbols([]);
                         writer.InsertReferences([]);
                         var generatedIssues = AppendIssueIfMissing(
-                            item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang),
+                            item.Issues ?? ValidateWorkItemContent(item, record),
                             generatedSuppressionIssue);
                         writer.InsertIssues(fileId, generatedIssues);
                         if (options.Verbose)
