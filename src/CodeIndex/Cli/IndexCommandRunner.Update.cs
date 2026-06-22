@@ -684,7 +684,7 @@ public static partial class IndexCommandRunner
                         writer.InsertReferences([]);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         var generatedIssues = AppendIssueIfMissing(
-                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
+                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
                             generatedSuppressionIssue);
                         writer.InsertIssues(fileId, generatedIssues);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
@@ -705,6 +705,8 @@ public static partial class IndexCommandRunner
                         Path.GetFullPath(options.ProjectPath!),
                         record.Path,
                         currentUpdatePath,
+                        true,
+                        loaded.HasOversizeLine,
                         symbolExtractionWorker,
                         cancellationToken);
                     var symbols = symbolExtraction.Symbols;
@@ -778,7 +780,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (referenceRegexTimeoutIssue != null)

@@ -212,6 +212,8 @@ public static partial class IndexCommandRunner
         string projectRoot,
         string issuePath,
         string phasePath,
+        bool contentIsNormalized,
+        bool? hasOversizeLine,
         SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
@@ -219,12 +221,23 @@ public static partial class IndexCommandRunner
         if (timeout <= TimeSpan.Zero)
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
-            var symbols = SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+            var symbols = contentIsNormalized && hasOversizeLine is { } knownHasOversizeLine
+                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken)
+                : SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
             return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var result = worker.Invoke(fileId, lang, content, filePath, projectRoot, timeout, cancellationToken);
+        var result = worker.Invoke(
+            fileId,
+            lang,
+            content,
+            filePath,
+            projectRoot,
+            contentIsNormalized,
+            hasOversizeLine,
+            timeout,
+            cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (result.TimedOut)
             throw new IndexExtractionStalledException(0, null, timeout, phasePath, result.WorkerError);
@@ -1202,7 +1215,7 @@ public static partial class IndexCommandRunner
                                     references = [];
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                     issues = AppendIssueIfMissing(
-                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
+                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
                                         generatedSuppressionIssue);
                                     extractionResults.Add(
                                         FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks, symbols, references, issues),
@@ -1218,6 +1231,8 @@ public static partial class IndexCommandRunner
                                     Path.GetFullPath(options.ProjectPath!),
                                     record.Path,
                                     activeJsonExtractionPhases[workerIndex],
+                                    true,
+                                    hasOversizeLine,
                                     workerSymbolExtractionWorker,
                                     extractionCancellationToken);
                                 symbols = symbolExtraction.Symbols;
@@ -1257,7 +1272,7 @@ public static partial class IndexCommandRunner
                                     referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                 }
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection);
+                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
                                 if (symbolRegexTimeoutIssue != null)
                                     issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                                 if (referenceRegexTimeoutIssue != null)
@@ -1509,6 +1524,8 @@ public static partial class IndexCommandRunner
                             Path.GetFullPath(options.ProjectPath!),
                             record.Path,
                             currentJsonIndexFile,
+                            true,
+                            item.HasOversizeLine,
                             mainSymbolExtractionWorker,
                             cancellationToken)).Symbols
                         : ReassignSymbolFileIds(item.Symbols, fileId);
@@ -2071,7 +2088,7 @@ public static partial class IndexCommandRunner
             throw new InvalidOperationException("Full-scan work item does not carry deferred content for validation.");
 
         return item.Inspection is { } inspection
-            ? FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, inspection)
+            ? FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, inspection, item.HasOversizeLine)
             : FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
     }
 

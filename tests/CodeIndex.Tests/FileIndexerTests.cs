@@ -4905,6 +4905,14 @@ public class FileIndexerTests
         Assert.Equal(2, loaded.LineCount);
         Assert.True(loaded.HasOversizeLine);
         Assert.Empty(ChunkSplitter.SplitNormalized(1, loaded.Content, loaded.HasOversizeLine));
+        var issues = FileIndexer.ValidateContent(
+            "sample.cs",
+            loaded.RawBytes,
+            loaded.Content,
+            "csharp",
+            loaded.Inspection,
+            loaded.HasOversizeLine);
+        Assert.Contains(issues, issue => issue.Kind == "line_too_long");
     }
 
     [Fact]

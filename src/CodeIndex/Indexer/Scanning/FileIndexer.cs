@@ -3771,7 +3771,8 @@ public class FileIndexer
         byte[] rawBytes,
         string content,
         string? language,
-        FileContentInspection inspection)
+        FileContentInspection inspection,
+        bool? hasOversizeLine = null)
     {
         var issues = new List<FileIssue>();
 
@@ -3831,7 +3832,7 @@ public class FileIndexer
         if (!isUtf16)
             AddRawByteContentIssues(issues, relativePath, rawBytes);
 
-        AddOversizeContentIssues(issues, relativePath, content);
+        AddOversizeContentIssues(issues, relativePath, content, hasOversizeLine);
         var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
         if (effectiveLanguage is "xml" or "msbuild")
             AddXmlStructureIssues(issues, relativePath, content);
@@ -4284,7 +4285,7 @@ public class FileIndexer
         }
     }
 
-    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content)
+    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content, bool? hasOversizeLine)
     {
         // line_too_long — surface the chunk/symbol/reference skip path that
         // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
@@ -4298,16 +4299,19 @@ public class FileIndexer
         // SymbolExtractor / ReferenceExtractor 側の同等ガードはすでに空を返す
         // ため、本 FileIssue は issue 起票時の「無音停止」を切り分けやすくする
         // 観測点を提供する。Closes #1542.
-        var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
-        if (longLine > 0)
+        if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
         {
-            issues.Add(new FileIssue
+            var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
+            if (longLine > 0)
             {
-                Path = relativePath,
-                Kind = "line_too_long",
-                Line = longLine,
-                Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
-            });
+                issues.Add(new FileIssue
+                {
+                    Path = relativePath,
+                    Kind = "line_too_long",
+                    Line = longLine,
+                    Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
+                });
+            }
         }
 
         var longFtsTokenLine = FindOversizeFtsTokenLine(content, CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength);

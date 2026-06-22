@@ -6003,7 +6003,7 @@ public partial class McpServer
                     writer.InsertSymbols([]);
                     writer.InsertReferences([]);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
-                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
                         generatedSuppressionIssue);
                     writer.InsertIssues(fileId, issues);
                     WriteProjectRootOnce();
@@ -6018,7 +6018,14 @@ public partial class McpServer
                 FileIssue? symbolRegexTimeoutIssue;
                 using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "symbol_extraction"))
                 {
-                    symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
+                    symbols = SymbolExtractor.ExtractNormalized(
+                        fileId,
+                        record.Lang,
+                        content,
+                        loaded.HasOversizeLine,
+                        filePath,
+                        projectPath,
+                        requestToken);
                     symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                 }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
@@ -6064,7 +6071,7 @@ public partial class McpServer
                     writer.InsertReferences(references);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)
