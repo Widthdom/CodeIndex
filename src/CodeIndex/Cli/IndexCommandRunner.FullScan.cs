@@ -831,7 +831,10 @@ public static partial class IndexCommandRunner
         var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
         var scanResult = discovery.ScanResult;
         var files = discovery.Files;
-        var fileTargets = files.Select(filePath => FullScanFileTarget.Create(projectRoot, filePath)).ToArray();
+        var fileTargets = files.Select(filePath => FullScanFileTarget.Create(
+            projectRoot,
+            filePath,
+            TryDetectFullScanTargetLanguage(indexer, filePath))).ToArray();
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
@@ -1869,10 +1872,10 @@ public static partial class IndexCommandRunner
         }
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-        var languageCounts = files
-            .Select(file => indexer.TryDetectLanguageForIndexing(file))
-            .Where(static detection => detection.Status == FileIndexer.FileProbeStatus.Supported && detection.Language != null)
-            .GroupBy(static detection => detection.Language!, StringComparer.Ordinal)
+        var languageCounts = fileTargets
+            .Select(static target => target.Language)
+            .Where(static language => language != null)
+            .GroupBy(static language => language!, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.Ordinal);
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);

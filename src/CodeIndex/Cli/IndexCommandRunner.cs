@@ -1140,9 +1140,17 @@ public static partial class IndexCommandRunner
             if (!IsOutsideProjectRoot(relativePath))
                 pendingPaths.Add(target.IndexPath);
 
-            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-            if (detection.Status != FileIndexer.FileProbeStatus.Supported
-                || detection.Language != "csharp")
+            var language = target.Language;
+            if (language == null)
+            {
+                var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
+                if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                    continue;
+
+                language = detection.Language;
+            }
+
+            if (language != "csharp")
             {
                 continue;
             }
@@ -1578,6 +1586,14 @@ public static partial class IndexCommandRunner
             : null;
     }
 
+    private static string? TryDetectFullScanTargetLanguage(FileIndexer indexer, string absolutePath)
+    {
+        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
+        return detection.Status == FileIndexer.FileProbeStatus.Supported
+            ? detection.Language
+            : null;
+    }
+
     private static long? TryGetUnchangedFileIdFromStat(
         DbWriter writer,
         string projectRoot,
@@ -1620,7 +1636,8 @@ public static partial class IndexCommandRunner
         string FilePath,
         string RelativePath,
         string DisplayRelativePath,
-        string IndexPath)
+        string IndexPath,
+        string? Language)
     {
         public static FullScanFileTarget CreateFromPath(string projectRoot, string path)
         {
@@ -1630,14 +1647,15 @@ public static partial class IndexCommandRunner
             return Create(projectRoot, filePath);
         }
 
-        public static FullScanFileTarget Create(string projectRoot, string filePath)
+        public static FullScanFileTarget Create(string projectRoot, string filePath, string? language = null)
         {
             var relativePath = Path.GetRelativePath(projectRoot, filePath);
             return new FullScanFileTarget(
                 filePath,
                 relativePath,
                 FileIndexer.NormalizePathSeparators(relativePath),
-                FileIndexer.NormalizeIndexPath(relativePath));
+                FileIndexer.NormalizeIndexPath(relativePath),
+                language);
         }
     }
 
