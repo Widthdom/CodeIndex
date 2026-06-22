@@ -1146,18 +1146,14 @@ public static partial class IndexCommandRunner
             try
             {
                 reportCurrentFile?.Invoke(relativePath);
-                var loaded = indexer.BuildLoadedRecordWithRawBytes(absolutePath, target.RelativePath, cancellationToken);
-                var record = loaded.Record;
-                var content = loaded.Content;
-                if (record.Lang != "csharp")
-                    continue;
-                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path) != null)
+                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null)
                     continue;
 
+                var content = indexer.LoadNormalizedContentForPrepass(absolutePath, target.RelativePath, cancellationToken);
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
 
-                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));
+                pendingSymbols.AddRange(SymbolExtractor.Extract(0, "csharp", content, target.IndexPath, cancellationToken: cancellationToken));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {

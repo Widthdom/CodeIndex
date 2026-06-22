@@ -49,6 +49,23 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             inspection);
     }
 
+    internal string LoadNormalizedContentForPrepass(
+        string absolutePath,
+        string normalizedRelativePath,
+        string relativePath,
+        CancellationToken cancellationToken)
+    {
+        var (bytes, _, _) = ReadRawBytesWithSizeLimit(
+            absolutePath,
+            normalizedRelativePath,
+            cancellationToken);
+        if (IsGitLfsPointer(bytes))
+            return string.Empty;
+
+        var (content, _, _) = DecodeIndexableContent(bytes, relativePath);
+        return NormalizeContentForPrepass(content);
+    }
+
     private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
         string absolutePath,
         string normalizedRelativePath,
@@ -361,6 +378,47 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         }
 
         return new NormalizedIndexableContent(builder?.ToString() ?? content, lineCount);
+    }
+
+    internal static string NormalizeContentForPrepass(string content)
+    {
+        if (content.Length == 0)
+            return content;
+        if (!content.Contains('\r') && !content.Contains('\uFEFF') && !content.Contains('\u200B'))
+            return content;
+
+        StringBuilder? builder = null;
+        var atLineStart = true;
+
+        StringBuilder EnsureBuilder(int sourceIndex)
+        {
+            builder ??= new StringBuilder(content.Length).Append(content, 0, sourceIndex);
+            return builder;
+        }
+
+        for (var i = 0; i < content.Length; i++)
+        {
+            var c = content[i];
+            if (IsLineLeadingInvisible(c) && atLineStart)
+            {
+                EnsureBuilder(i);
+                continue;
+            }
+
+            if (c == '\r')
+            {
+                EnsureBuilder(i).Append('\n');
+                if (i + 1 < content.Length && content[i + 1] == '\n')
+                    i++;
+                atLineStart = true;
+                continue;
+            }
+
+            builder?.Append(c);
+            atLineStart = c == '\n';
+        }
+
+        return builder?.ToString() ?? content;
     }
 
     internal static bool IsGitLfsPointer(byte[] rawBytes)

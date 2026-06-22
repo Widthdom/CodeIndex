@@ -3506,6 +3506,24 @@ public class FileIndexer
         return new LoadedFileRecord(record, loaded.Content, loaded.RawBytes, loaded.Warning, loaded.Inspection);
     }
 
+    internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
+            throw new InvalidOperationException("Only regular files can be indexed");
+
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
+        return _contentLoader.LoadNormalizedContentForPrepass(
+            absolutePath,
+            normalizedRelativePath,
+            relativePath,
+            cancellationToken);
+    }
+
     public FileRecord BuildSkippedFileRecord(string absolutePath)
     {
         if (!IsFilePathSyntaxIndexable(absolutePath))
