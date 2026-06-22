@@ -1594,8 +1594,8 @@ public static partial class IndexCommandRunner
             string filePath,
             string relativePath,
             FileRecord record,
-            string content,
-            byte[] rawBytes,
+            string? content,
+            byte[]? rawBytes,
             FileContentInspection? inspection,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
@@ -1604,6 +1604,19 @@ public static partial class IndexCommandRunner
             IReadOnlyList<FileIssue>? issues)
         {
             return new FullScanFileWorkItem(filePath, relativePath, record, content, rawBytes, inspection, warning, chunks, symbols, references, issues, null);
+        }
+
+        public static FullScanFileWorkItem Precomputed(
+            string filePath,
+            string relativePath,
+            FileRecord record,
+            string? warning,
+            IReadOnlyList<ChunkRecord> chunks,
+            IReadOnlyList<SymbolRecord> symbols,
+            IReadOnlyList<ReferenceRecord> references,
+            IReadOnlyList<FileIssue> issues)
+        {
+            return new FullScanFileWorkItem(filePath, relativePath, record, null, null, null, warning, chunks, symbols, references, issues, null);
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)

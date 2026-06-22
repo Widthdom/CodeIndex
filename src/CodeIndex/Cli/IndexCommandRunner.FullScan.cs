@@ -1201,7 +1201,7 @@ public static partial class IndexCommandRunner
                                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection),
                                         generatedSuppressionIssue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
+                                        FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks, symbols, references, issues),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1225,7 +1225,7 @@ public static partial class IndexCommandRunner
                                         ? [issue]
                                         : AppendIssue([symbolRegexTimeoutIssue], issue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Success(filePath, displayRelativePath, record, string.Empty, rawBytes, loaded.Inspection, issue.Message, [], [], [], capIssues),
+                                        FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, issue.Message, [], [], [], capIssues),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1268,7 +1268,9 @@ public static partial class IndexCommandRunner
                                 }
                             }
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
+                                parallelizeExtraction
+                                    ? FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks!, symbols!, references!, issues!)
+                                    : FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, warning, chunks, symbols, references, issues),
                                 extractionCancellationToken);
                         }
                         catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
@@ -1280,7 +1282,7 @@ public static partial class IndexCommandRunner
                             var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
                             var issue = BuildNullByteIssue(ex);
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, displayRelativePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
+                                FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
                                 extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
@@ -1294,7 +1296,7 @@ public static partial class IndexCommandRunner
                                 Message = ex.Message,
                             };
                             extractionResults.Add(
-                                FullScanFileWorkItem.Success(filePath, displayRelativePath, record, string.Empty, [], null, ex.Message, [], [], [], [issue]),
+                                FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
                                 extractionCancellationToken);
                         }
                         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -2058,8 +2060,9 @@ public static partial class IndexCommandRunner
 
     private static List<FileIssue> ValidateWorkItemContent(FullScanFileWorkItem item, FileRecord record)
     {
-        var rawBytes = item.RawBytes!;
-        var content = item.Content!;
+        if (item.RawBytes is not { } rawBytes || item.Content is not { } content)
+            throw new InvalidOperationException("Full-scan work item does not carry deferred content for validation.");
+
         return item.Inspection is { } inspection
             ? FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, inspection)
             : FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);

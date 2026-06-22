@@ -15,8 +15,8 @@ affected:
 
 ## English
 
-- **Indexing now performs less duplicate work while loading file content** — content loading now combines line-ending cleanup, line-leading invisible stripping, and line counting, stable files are read directly into their final byte array, validation reuses loader-detected LFS/UTF-16 metadata, C# static-interface preflight scans avoid checksum/line-count/record construction, and full/directory/freshness scans reuse computed relative paths so large indexes spend less time in repeated scans, path normalization, and buffer copies.
+- **Indexing now performs less duplicate work while loading file content** — content loading now combines line-ending cleanup, line-leading invisible stripping, and line counting, stable files are read directly into their final byte array, validation reuses loader-detected LFS/UTF-16 metadata, C# static-interface preflight scans avoid checksum/line-count/record construction, parallel full-scan work items stop queuing decoded content/raw bytes after extraction is complete, and full/directory/freshness scans reuse computed relative paths so large indexes spend less time in repeated scans, path normalization, buffer copies, and GC work.
 
 ## 日本語
 
-- **インデックス作成時のファイル内容読み込みで重複作業が減りました** — content loading は改行正規化、行頭不可視文字の除去、行数計測をまとめて行い、安定したファイルは最終的な byte 配列へ直接読み込み、validation は loader が検出した LFS / UTF-16 metadata を再利用し、C# static interface の事前 scan は checksum / line count / record 構築を避け、full scan / directory scan / freshness scan は算出済みの相対パスを再利用するため、大きなインデックスで繰り返し走査、path normalization、buffer copy にかかる時間を減らします。
+- **インデックス作成時のファイル内容読み込みで重複作業が減りました** — content loading は改行正規化、行頭不可視文字の除去、行数計測をまとめて行い、安定したファイルは最終的な byte 配列へ直接読み込み、validation は loader が検出した LFS / UTF-16 metadata を再利用し、C# static interface の事前 scan は checksum / line count / record 構築を避け、parallel full scan の work item は抽出完了後の decoded content / raw bytes を queue しなくなり、full scan / directory scan / freshness scan は算出済みの相対パスを再利用するため、大きなインデックスで繰り返し走査、path normalization、buffer copy、GC work にかかる時間を減らします。
