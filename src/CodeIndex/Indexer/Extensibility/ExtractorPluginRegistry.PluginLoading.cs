@@ -203,19 +203,19 @@ public static partial class ExtractorPluginRegistry
 
     private static void TryRegisterPluginType(Type type, string pluginPath)
     {
+        var supportsSymbolExtraction = typeof(ISymbolExtractor).IsAssignableFrom(type);
+        var supportsReferenceExtraction = typeof(IReferenceExtractor).IsAssignableFrom(type);
+        if (!supportsSymbolExtraction && !supportsReferenceExtraction)
+            return;
+
         try
         {
-            if (typeof(ISymbolExtractor).IsAssignableFrom(type)
-                && Activator.CreateInstance(type) is ISymbolExtractor symbolExtractor)
-            {
+            var instance = Activator.CreateInstance(type);
+            if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
                 Register(symbolExtractor);
-            }
 
-            if (typeof(IReferenceExtractor).IsAssignableFrom(type)
-                && Activator.CreateInstance(type) is IReferenceExtractor referenceExtractor)
-            {
+            if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
                 Register(referenceExtractor);
-            }
         }
         catch (Exception ex)
         {
