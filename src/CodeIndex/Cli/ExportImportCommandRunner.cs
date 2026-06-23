@@ -607,13 +607,13 @@ internal static class ExportImportCommandRunner
     private static void AddCtagsFilterParameters(SqliteCommand cmd, CtagsExportOptions filters)
     {
         if (!string.IsNullOrWhiteSpace(filters.Lang))
-            cmd.Parameters.AddWithValue("@lang", filters.Lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", filters.Lang);
 
         for (var i = 0; i < filters.PathPatterns.Count; i++)
-            cmd.Parameters.AddWithValue($"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
+            SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
 
         for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
-            cmd.Parameters.AddWithValue($"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
+            SqliteCommandPolicy.Add(cmd, $"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
     }
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal)
@@ -1083,7 +1083,7 @@ internal static class ExportImportCommandRunner
     {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
-        cmd.Parameters.AddWithValue("@key", key);
+        SqliteCommandPolicy.Add(cmd, "@key", key);
         return cmd.ExecuteScalar() as string;
     }
 
@@ -1332,7 +1332,7 @@ internal static class ExportImportCommandRunner
             INSERT INTO codeindex_meta(key, value)
             VALUES ('indexed_project_root', @projectRoot)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        cmd.Parameters.AddWithValue("@projectRoot", Path.GetFullPath(projectRoot));
+        SqliteCommandPolicy.Add(cmd, "@projectRoot", Path.GetFullPath(projectRoot));
         cmd.ExecuteNonQuery();
     }
 
@@ -1614,7 +1614,7 @@ internal static class ExportImportCommandRunner
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
-            cmd.Parameters.AddWithValue("@key", DbContext.WorkspacePathCaseSensitiveMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@key", DbContext.WorkspacePathCaseSensitiveMetaKey);
             var raw = cmd.ExecuteScalar();
             return raw is string value && bool.TryParse(value, out pathCaseSensitive);
         }

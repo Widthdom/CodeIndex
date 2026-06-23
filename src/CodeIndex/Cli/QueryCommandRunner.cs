@@ -7838,7 +7838,7 @@ public static partial class QueryCommandRunner
         if (options.Lang != null)
         {
             cmd.CommandText += " AND src.lang = @lang AND dst.lang = @lang";
-            cmd.Parameters.AddWithValue("@lang", options.Lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", options.Lang);
         }
         AddCrossDatabasePathFilters(cmd, "src", options.PathPatterns, include: !reverse);
         AddCrossDatabasePathFilters(cmd, "dst", options.PathPatterns, include: reverse);
@@ -7879,8 +7879,8 @@ public static partial class QueryCommandRunner
             GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
             ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
             LIMIT @limit";
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
         using var reader = cmd.ExecuteReader();

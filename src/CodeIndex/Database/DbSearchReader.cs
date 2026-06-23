@@ -167,7 +167,7 @@ public partial class DbReader
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
             sql += " WHERE fts_chunks MATCH @query";
-            cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+            SqliteCommandPolicy.Add(cmd, "@query", sanitizedQuery);
         }
         if (lang != null)
             sql += " AND f.lang = @lang";
@@ -185,22 +185,22 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (exact)
-            cmd.Parameters.AddWithValue("@exactQuery", query);
-        cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
-        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
-        cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
+            SqliteCommandPolicy.Add(cmd, "@exactQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@rankingQuery", normalizedQuery.Trim());
+        SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
+        SqliteCommandPolicy.Add(cmd, "@visibilityRank", visibilityRank ? 1 : 0);
         AddSearchCoverageParameters(cmd, coverageTokens);
         if (!hasGuardFilters)
-            cmd.Parameters.AddWithValue("@limit", limit);
+            SqliteCommandPolicy.Add(cmd, "@limit", limit);
         else
-            cmd.Parameters.AddWithValue("@candidateFetchLimit", guardedCandidateLimit + 1);
+            SqliteCommandPolicy.Add(cmd, "@candidateFetchLimit", guardedCandidateLimit + 1);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         if (cursor is { } searchCursorParameter && !hasGuardFilters)
         {
-            cmd.Parameters.AddWithValue("@cursorOffset", searchCursorParameter.Offset);
+            SqliteCommandPolicy.Add(cmd, "@cursorOffset", searchCursorParameter.Offset);
         }
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
@@ -420,8 +420,8 @@ public partial class DbReader
                      s.line DESC,
                      s.id ASC
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@path", path);
-        cmd.Parameters.AddWithValue("@matchLine", matchLine);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
+        SqliteCommandPolicy.Add(cmd, "@matchLine", matchLine);
 
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
@@ -481,7 +481,7 @@ public partial class DbReader
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
             sql += " WHERE fts_chunks MATCH @query";
-            cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+            SqliteCommandPolicy.Add(cmd, "@query", sanitizedQuery);
         }
         if (lang != null)
             sql += " AND f.lang = @lang";
@@ -493,15 +493,15 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (exact)
-            cmd.Parameters.AddWithValue("@exactQuery", query);
-        cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
-        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
-        cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
+            SqliteCommandPolicy.Add(cmd, "@exactQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@rankingQuery", normalizedQuery.Trim());
+        SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
+        SqliteCommandPolicy.Add(cmd, "@visibilityRank", visibilityRank ? 1 : 0);
         AddSearchCoverageParameters(cmd, coverageTokens);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
@@ -594,7 +594,7 @@ public partial class DbReader
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
             sql += " WHERE fts_chunks MATCH @query";
-            cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+            SqliteCommandPolicy.Add(cmd, "@query", sanitizedQuery);
         }
         if (lang != null)
             sql += " AND f.lang = @lang";
@@ -606,15 +606,15 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (exact)
-            cmd.Parameters.AddWithValue("@exactQuery", query);
-        cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
-        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
-        cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
+            SqliteCommandPolicy.Add(cmd, "@exactQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@rankingQuery", normalizedQuery.Trim());
+        SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
+        SqliteCommandPolicy.Add(cmd, "@visibilityRank", visibilityRank ? 1 : 0);
         AddSearchCoverageParameters(cmd, coverageTokens);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
@@ -1030,9 +1030,9 @@ public partial class DbReader
               AND c.end_line >= @startLine
               AND c.start_line <= @endLine
             ORDER BY c.start_line ASC, c.id ASC";
-        cmd.Parameters.AddWithValue("@path", path);
-        cmd.Parameters.AddWithValue("@startLine", startLine);
-        cmd.Parameters.AddWithValue("@endLine", endLine);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
+        SqliteCommandPolicy.Add(cmd, "@startLine", startLine);
+        SqliteCommandPolicy.Add(cmd, "@endLine", endLine);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -1947,7 +1947,7 @@ public partial class DbReader
     private static void AddSearchCoverageParameters(SqliteCommand cmd, IReadOnlyList<string> coverageTokens)
     {
         for (var i = 0; i < coverageTokens.Count; i++)
-            cmd.Parameters.AddWithValue($"@coverageToken{i}", coverageTokens[i]);
+            SqliteCommandPolicy.Add(cmd, $"@coverageToken{i}", coverageTokens[i]);
     }
 
     private static string SearchVisibilityOrder => @"
