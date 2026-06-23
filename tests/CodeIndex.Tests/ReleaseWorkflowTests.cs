@@ -421,6 +421,46 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "locked-legacy.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "active legacy temp");
+
+            using var lockedLegacyTemp = new FileStream(
+                legacyTempPath,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.ReadWrite,
+                    Share = FileShare.None,
+                });
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+
+            Assert.Contains("could not be locked and removed", exception.Message);
+            Assert.Contains("locked-legacy.nupkg.normalize-tmp", exception.Message);
+            Assert.DoesNotContain(projectRoot, exception.Message);
+            Assert.True(File.Exists(legacyTempPath));
+            Assert.Empty(Directory
+                .EnumerateFiles(projectRoot)
+                .Where(path => Path.GetFileName(path).Contains(".normalize-tmp.", StringComparison.Ordinal)));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == "package/services/metadata/core-properties/random.psmdcp");
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace));

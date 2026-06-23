@@ -347,7 +347,7 @@ public static class PackageCorePropertiesNormalizer
 
         try
         {
-            TryDeleteStaleLegacyTempFile(legacyTempPath, warnings);
+            DeleteStaleLegacyTempFile(legacyTempPath);
 
             using (var sourceStream = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false))
@@ -627,7 +627,7 @@ public static class PackageCorePropertiesNormalizer
         }
     }
 
-    private static void TryDeleteStaleLegacyTempFile(string path, IList<string>? warnings)
+    private static void DeleteStaleLegacyTempFile(string path)
     {
         try
         {
@@ -652,8 +652,15 @@ public static class PackageCorePropertiesNormalizer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            warnings?.Add(PackageNormalizeDiagnostics.FormatCleanupWarning(path, ex));
+            throw BuildLegacyTempCleanupException(path, ex);
         }
+    }
+
+    private static InvalidOperationException BuildLegacyTempCleanupException(string path, Exception inner)
+    {
+        return new InvalidOperationException(
+            $"Temporary normalized package {PackageNormalizeDiagnostics.FormatPath(path)} already exists but could not be locked and removed; aborting normalization to avoid racing another package normalizer.",
+            inner);
     }
 
     private static void MoveReplacingPackage(string tempPath, string fullPath)
