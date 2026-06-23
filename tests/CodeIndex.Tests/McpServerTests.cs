@@ -103,6 +103,31 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void PingHealth_UsesInjectedTimeProvider_Issue3963()
+    {
+        var clock = new ManualTimeProvider(ManualTimeProvider.FixtureUtcNow);
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            auditLog: null,
+            maxConcurrency: 1,
+            timeProvider: clock);
+        var requestAt = ManualTimeProvider.FixtureUtcNow.AddSeconds(7);
+        clock.SetUtcNow(requestAt);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"ping"}""")!;
+
+        var response = server.HandleMessage(request);
+
+        var result = response!["result"]!.AsObject();
+        Assert.Equal(7, result["uptime_s"]!.GetValue<long>());
+        Assert.Equal(requestAt.ToString("O", CultureInfo.InvariantCulture), result["last_request_at"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void RunConcurrentFrameLoop_DoesNotUseSpinWaitPolling_Issue3509()
     {
         var method = typeof(McpServer).GetMethod("RunConcurrentFrameLoopAsync", BindingFlags.NonPublic | BindingFlags.Instance);
