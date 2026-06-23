@@ -41,12 +41,42 @@ public class SourceCodeDetectorTests
         Assert.False(SourceCodeDetector.ContainsSourceCode(text));
     }
 
+    [Theory]
+    [InlineData("The base64 payload `cHVibGljIHZvaWQgRm9vKCkgeyByZXR1cm47IH0=` should be discussed without decoding it.")]
+    [InlineData("The obfuscated sample p u b l i c v o i d Foo ( ) { r e t u r n ; } should be treated as prose here.")]
+    public void AllowsEncodedOrObfuscatedTextBecauseGuardIsNotSecurityBoundary_Issue3974(string text)
+    {
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.False(result.ContainsSourceCode);
+        Assert.Null(result.ReasonCode);
+        Assert.Empty(result.ReasonCounts);
+    }
+
     [Fact]
     public void AllowsSingleLineCodeMention()
     {
         // Mentioning a single line of code in a sentence is fine.
         // 文中で1行のコードに言及するのは問題ない。
         var text = "When I write `public class MyRecord : IDisposable`, the symbol extractor misses it.";
+        Assert.False(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Theory]
+    [InlineData("Rust macro call `println!(\"hi\")` is not indexed as a symbol.")]
+    [InlineData("SQL mention `SELECT * FROM files WHERE path = ?` should stay inline.")]
+    [InlineData("Python example `def foo():` is a heading mention, not a pasted function body.")]
+    public void AllowsShortInlineExamples_Issue3974(string text)
+    {
+        Assert.False(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void AllowsMultilingualProseWithCodeTerms_Issue3974()
+    {
+        var text = "日本語の説明: Python の `def foo():` が見出しとして扱われる。"
+                 + " English note: this is prose about function extraction, not a pasted function body.";
+
         Assert.False(SourceCodeDetector.ContainsSourceCode(text));
     }
 
@@ -90,6 +120,7 @@ public class SourceCodeDetectorTests
         Assert.False(SourceCodeDetector.ContainsSourceCode("   "));
         Assert.False(SourceCodeDetector.ContainsSourceCode(null!));
         Assert.Null(SourceCodeDetector.Detect(null).ReasonCode);
+        Assert.Empty(SourceCodeDetector.Detect(null).ReasonCounts);
     }
 
     [Fact]
@@ -331,6 +362,40 @@ public class SourceCodeDetectorTests
                  + "    puts 'done'\n"
                  + "end";
         Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Theory]
+    [InlineData("The failure uses this function:\nfunction load() {\n    const token = readToken();\n    return token;\n}")]
+    [InlineData("Here are the imports:\nimport alpha\nimport beta\nimport gamma")]
+    [InlineData("Indented snippet:\n    var current = 1\n    return current\n    Console.WriteLine(current)")]
+    public void RejectsAdversarialMultiLineSnippets_Issue3974(string text)
+    {
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void Detect_ReportsMatchedReasonCounts_Issue3974()
+    {
+        var text = "using System;\n"
+                 + "using System.IO;\n"
+                 + "using System.Linq;\n"
+                 + "public void Run()\n"
+                 + "{\n"
+                 + "    var value = 1;\n"
+                 + "    return;\n"
+                 + "    Console.WriteLine(value);\n"
+                 + "}";
+
+        var result = SourceCodeDetector.Detect(text);
+
+        Assert.True(result.ContainsSourceCode);
+        Assert.Equal(SourceCodeDetector.ReasonStatementEnding, result.ReasonCode);
+        Assert.Equal(1, result.ReasonCounts[SourceCodeDetector.ReasonStatementEnding]);
+        Assert.Equal(1, result.ReasonCounts[SourceCodeDetector.ReasonIndentedCodeLines]);
+        Assert.Equal(1, result.ReasonCounts[SourceCodeDetector.ReasonBlockStructure]);
+        Assert.Equal(1, result.ReasonCounts[SourceCodeDetector.ReasonRepeatedImports]);
+        Assert.Equal(1, result.ReasonCounts[SourceCodeDetector.ReasonFunctionDefinition]);
+        Assert.False(result.ReasonCounts.ContainsKey(SourceCodeDetector.ReasonFencedCodeBlock));
     }
 
     // ================================================================

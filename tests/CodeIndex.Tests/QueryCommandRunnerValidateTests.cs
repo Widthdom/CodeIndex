@@ -104,6 +104,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(JsonValueKind.Array, root.ValueKind);
             Assert.Equal(1, root.GetArrayLength());
             Assert.Equal("bom", root[0].GetProperty("kind").GetString());
+            Assert.Equal(FileIssue.OriginByteOrderMark, root[0].GetProperty("origin").GetString());
+            Assert.Equal(FileIssue.SeverityWarning, root[0].GetProperty("severity").GetString());
         }
         finally
         {
@@ -148,6 +150,56 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunValidate_FormatCountThenJsonKeepsCountShape_Issue3896()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_count_json_3896");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllBytes(
+                Path.Combine(projectRoot, "src", "bom.cs"),
+                [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes("class Bom {}\n")]);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(1, root.GetProperty("total_estimated").GetInt32());
+            Assert.False(root.TryGetProperty("issues", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunValidate_InvalidSeverityJsonReturnsStructuredError_Issue3896()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--severity", "invalid", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unsupported validate severity 'invalid'.", document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void RunValidate_KindFilterNarrowsIssues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_kind_filter");
@@ -179,6 +231,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("bom", json.GetProperty("issues")[0].GetProperty("kind").GetString());
+            Assert.Equal(FileIssue.OriginByteOrderMark, json.GetProperty("issues")[0].GetProperty("origin").GetString());
+            Assert.Equal(FileIssue.SeverityWarning, json.GetProperty("issues")[0].GetProperty("severity").GetString());
         }
         finally
         {

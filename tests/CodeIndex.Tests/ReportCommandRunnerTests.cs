@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using CodeIndex;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -738,6 +739,31 @@ public class ReportCommandRunnerTests
             var lines = ReportCommandRunner.ReadLogFileTailLines(path, 2);
 
             Assert.Equal(new[] { "line-2", "line-3" }, lines);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void OpenReadForTailWindow_IgnoresGrowthAfterCapturedLength_Issue3994()
+    {
+        var workDir = CreateWorkDir();
+        var path = Path.Combine(workDir, "stderr-20260623.log");
+        try
+        {
+            File.WriteAllText(path, "line-1\nline-2\n");
+
+            using var stream = BoundedFile.OpenReadForTailWindow(path, ReportCommandRunner.MaxLogFileTailBytes, out var bytesTruncated);
+            File.AppendAllText(path, "line-3-should-not-appear\n");
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+
+            var text = reader.ReadToEnd();
+
+            Assert.False(bytesTruncated);
+            Assert.Contains("line-2", text);
+            Assert.DoesNotContain("line-3-should-not-appear", text);
         }
         finally
         {

@@ -83,6 +83,20 @@ internal static class DataDirectorySecurity
         File.SetUnixFileMode(path, PrivateFileMode);
     }
 
+    internal static FileStream OpenPrivateFileStream(string path, FileMode mode, FileAccess access, FileShare share)
+    {
+        var options = new FileStreamOptions
+        {
+            Mode = mode,
+            Access = access,
+            Share = share,
+        };
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            options.UnixCreateMode = PrivateFileMode;
+
+        return new FileStream(LongPath.EnsureWindowsPrefix(path), options);
+    }
+
     private static DirectoryInfo CreateDirectoryWithPrivateMode(string path)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -107,7 +121,7 @@ internal static class DataDirectorySecurity
             return;
 
         var root = ResolveSensitiveTempFallbackRootDirectory();
-        if (!IsSameDirectory(path, root) && !IsDirectoryDescendant(path, root))
+        if (!IsSameOrDescendantDirectory(root, path))
             return;
 
         RejectUnsafeDirectoryTarget(root);
@@ -121,7 +135,7 @@ internal static class DataDirectorySecurity
         try
         {
             var attributes = File.GetAttributes(path);
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
             {
                 throw new IOException(
                     $"Refusing to use symbolic link or reparse point directory {ConsoleUi.FormatBoundedValue(path)} for sensitive cdidx state.");
@@ -129,6 +143,18 @@ internal static class DataDirectorySecurity
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
+        }
+    }
+
+    private static bool IsSameOrDescendantDirectory(string parent, string child)
+    {
+        try
+        {
+            return FileSystemBoundary.IsSameOrDescendant(parent, child);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException or CodeIndexException)
+        {
+            return false;
         }
     }
 
@@ -153,42 +179,15 @@ internal static class DataDirectorySecurity
     {
         try
         {
-            var comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            return string.Equals(NormalizeDirectory(left), NormalizeDirectory(right), comparison);
+            var normalizedLeft = FileSystemBoundary.NormalizeDirectoryPath(left);
+            var normalizedRight = FileSystemBoundary.NormalizeDirectoryPath(right);
+            return string.Equals(normalizedLeft, normalizedRight, PathCasing.ComparisonFor(normalizedLeft));
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException or CodeIndexException)
         {
             return false;
         }
     }
-
-    private static bool IsDirectoryDescendant(string path, string ancestor)
-    {
-        try
-        {
-            var normalizedPath = NormalizeDirectory(path);
-            var normalizedAncestor = NormalizeDirectory(ancestor);
-            var comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-
-            return normalizedPath.Length > normalizedAncestor.Length
-                && normalizedPath.StartsWith(normalizedAncestor, comparison)
-                && IsDirectorySeparator(normalizedPath[normalizedAncestor.Length]);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-    }
-
-    private static bool IsDirectorySeparator(char value)
-        => value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
-
-    private static string NormalizeDirectory(string path)
-        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static string GetTempPath() => Path.GetTempPath();
 

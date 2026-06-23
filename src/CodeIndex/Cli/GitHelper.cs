@@ -110,12 +110,14 @@ public static class GitHelper
         if (gitExecutablePath == null)
             return null;
 
-        return CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
+        var startInfo = CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
             fileName: gitExecutablePath,
             workingDirectory: projectRoot,
             redirectStandardOutput: true,
             redirectStandardError: true,
             createNoWindow: true);
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
+        return startInfo;
     }
 
     private static ProcessStartInfo CreateGitStartInfoOrThrow(string projectRoot)
@@ -1153,16 +1155,24 @@ public static class GitHelper
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var exitTask = process.WaitForExitAsync(CancellationToken.None);
-        var delayTask = Task.Delay(NormalizePositiveTimeout(timeout), cancellationToken);
-        var completed = await Task.WhenAny(exitTask, delayTask).ConfigureAwait(false);
+        var exitTask = process.WaitForExitAsync(cancellationToken);
+        var timeoutTask = Task.Delay(NormalizePositiveTimeout(timeout), CancellationToken.None);
+        var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        var completed = await Task.WhenAny(exitTask, timeoutTask, cancellationTask).ConfigureAwait(false);
         if (completed == exitTask)
         {
-            await exitTask.ConfigureAwait(false);
-            return new GitExitWaitResult(true, false);
+            try
+            {
+                await exitTask.ConfigureAwait(false);
+                return new GitExitWaitResult(true, false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return new GitExitWaitResult(false, true);
+            }
         }
 
-        return new GitExitWaitResult(false, cancellationToken.IsCancellationRequested);
+        return new GitExitWaitResult(false, completed == cancellationTask || cancellationToken.IsCancellationRequested);
     }
 
     private static string ReadCaptured(StringBuilder builder)

@@ -98,6 +98,7 @@ public static partial class ExtractorPluginRegistry
                 PatternConfigCount = patternConfigCount,
                 SymbolExtractorCount = SymbolExtractors.Count,
                 ReferenceExtractorCount = ReferenceExtractors.Count,
+                RetainedLoadContextCount = LoadedPluginAssemblyContexts.Count,
                 SkippedFileCount = skippedFileCount,
                 DiagnosticCount = diagnosticTotalCount,
                 DiagnosticLimit = DiagnosticLimit,

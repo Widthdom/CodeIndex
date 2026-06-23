@@ -203,14 +203,24 @@ internal static class DbConnectionFactory
             return;
         }
 
-        if (!cancellationToken.CanBeCanceled)
+        WaitForRetryDelay(milliseconds, cancellationToken);
+    }
+
+    private static void WaitForRetryDelay(int milliseconds, CancellationToken cancellationToken)
+    {
+        if (milliseconds <= 0)
         {
-            System.Threading.Thread.Sleep(milliseconds);
+            cancellationToken.ThrowIfCancellationRequested();
             return;
         }
 
-        if (cancellationToken.WaitHandle.WaitOne(milliseconds))
-            cancellationToken.ThrowIfCancellationRequested();
-    }
+        using var delay = new ManualResetEventSlim(initialState: false);
+        if (cancellationToken.CanBeCanceled)
+        {
+            delay.Wait(milliseconds, cancellationToken);
+            return;
+        }
 
+        delay.Wait(milliseconds);
+    }
 }

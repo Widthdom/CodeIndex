@@ -732,21 +732,27 @@ public class SuggestionStore
         return true;
     }
 
-    private static async Task<List<SuggestionRecord>> ReadFilteredSnapshotAsync(
+    internal static async Task<List<SuggestionRecord>> ReadFilteredSnapshotAsync(
         byte[] snapshot,
         Func<SuggestionRecord, bool> predicate,
         int skip,
         int? take,
-        bool normalizeDefaults)
+        bool normalizeDefaults,
+        CancellationToken cancellationToken = default)
     {
         var results = new List<SuggestionRecord>();
         var recordsRead = 0;
         var skipped = 0;
 
+        cancellationToken.ThrowIfCancellationRequested();
         await using var stream = new MemoryStream(snapshot, writable: false);
 
-        await foreach (var record in JsonSerializer.DeserializeAsyncEnumerable<SuggestionRecord>(stream, s_readOptions))
+        await foreach (var record in JsonSerializer
+            .DeserializeAsyncEnumerable<SuggestionRecord>(stream, s_readOptions, cancellationToken)
+            .WithCancellation(cancellationToken)
+            .ConfigureAwait(false))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             recordsRead++;
             if (recordsRead > MaxSuggestionStoreRecords)
                 throw new JsonException($"Suggestion store contains more than {MaxSuggestionStoreRecords} records.");
@@ -764,6 +770,7 @@ public class SuggestionStore
             }
 
             results.Add(record);
+            cancellationToken.ThrowIfCancellationRequested();
             if (take.HasValue && results.Count >= take.Value)
                 break;
         }

@@ -42,6 +42,51 @@ internal static class SearchAuditRecipes
         ".codex/**",
         ".github/**"
     ];
+    private static readonly SearchRecipeBroadCatchTaxonomyJsonResult BroadExceptionCatchTaxonomy = new(
+        [
+            new(
+                "top_level_normalization",
+                "CLI, MCP, LSP, or command-entry catch blocks that intentionally convert unexpected failures into stable user-facing errors.",
+                "Normalize to a bounded, sanitized command error, JSON error, or protocol error without echoing raw paths or secrets."),
+            new(
+                "cleanup_best_effort",
+                "Best-effort cleanup, deletion, rotation, or rollback paths where failure must not hide the original operation result.",
+                "Emit a bounded warning only when users can act on it; otherwise keep the failure private and preserve the primary result."),
+            new(
+                "probe_fallback",
+                "Capability probes for filesystem, platform, SDK, or environment behavior where failure selects a conservative fallback.",
+                "Return a documented fallback value and, when surfaced, use a stable category rather than raw exception text."),
+            new(
+                "diagnostic_sanitization",
+                "Diagnostic formatting or redaction paths whose job is to prevent sensitive exception data from escaping.",
+                "Prefer stable categories and scrubbed messages; never let sanitizer failures re-expose the original raw diagnostic."),
+            new(
+                "worker_process_boundary",
+                "Worker-process startup, command, and IPC boundaries where broad catches isolate a subprocess or protocol request.",
+                "Translate failures into worker/protocol diagnostics with bounded payloads and clear recovery hints."),
+            new(
+                "unexpected_bug",
+                "Non-boundary broad catches where recovery is not intentional or where the catch swallows actionable defects.",
+                "Narrow to expected exception types, rethrow, or add an explicit stable diagnostic before suppressing the failure.")
+        ],
+        [
+            new(
+                "stable_sanitized_diagnostic",
+                "The catch reports a stable category or known error code with redacted human text."),
+            new(
+                "bounded_best_effort_warning",
+                "The catch preserves best-effort behavior while bounding any warning path and avoiding raw exception echo."),
+            new(
+                "documented_fallback",
+                "The catch selects a documented conservative fallback without implying the operation succeeded."),
+            new(
+                "private_suppression",
+                "The catch intentionally suppresses a secondary failure that would be noisier than useful to users."),
+            new(
+                "narrow_or_rethrow_required",
+                "The catch is not a real boundary and should be narrowed, rethrown, or converted to stable diagnostics.")
+        ],
+        "Classify each broad catch by boundary first. Treat top-level and worker boundaries as intentional only when they normalize to stable sanitized diagnostics; cleanup and probe catches are acceptable only when best-effort behavior is documented and bounded; otherwise narrow the catch or surface a stable diagnostic.");
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
     [
@@ -144,9 +189,10 @@ internal static class SearchAuditRecipes
                     "catch (Exception",
                     "Find broad C# exception catches that may need narrower exception types or explicit recovery boundaries.",
                     ["audit", "bug"],
-                    "False positives include top-level command boundaries that intentionally normalize all recoverable failures.")
+                    "False positives include top-level command, worker/process, cleanup best-effort, probe fallback, and diagnostic-sanitization boundaries when they emit bounded stable diagnostics or intentionally private suppression.")
                 {
                     MatchOrigins = ["code"],
+                    BroadCatchTaxonomy = BroadExceptionCatchTaxonomy,
                 },
                 new(
                     "process-start-info",
@@ -802,6 +848,51 @@ internal static class SearchAuditRecipes
                     ["audit", "performance", "security"],
                     "Review option combinations against cancellation, budget, long-path, and permission behavior.")
             ]),
+        SourceScopedRecipe(
+            "bounded-read-evidence",
+            "Positive audit searches for max-byte file-read helpers, explicit file-open policy, and bounded downstream accumulators.",
+            [
+                new(
+                    "bounded-file-open-helper",
+                    "BoundedFile.OpenRead",
+                    "Find reads routed through the shared file-open helper so audits can see the explicit share mode, long-path normalization, and bounded read category.",
+                    ["audit", "performance"],
+                    "Expected positive evidence includes length-checked text reads, fixed-prefix probes, log tails, hash streams, and trusted archive sources that enforce their byte limits at the caller.",
+                    ExactSubstring: false)
+                {
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "bounded-memory-accumulator",
+                    "MemoryStream",
+                    "Find MemoryStream accumulators that are downstream of a max-byte helper and should be treated as positive evidence instead of an unbounded materialization by default.",
+                    ["audit", "performance"],
+                    "Expected positive evidence is limited to BoundedHttpContentReader, BoundedJsonUtf8Stream, BoundedLineReader.TryReadUtf8File, FileContentLoader.ReadStreamBytesAfterGrowth, DataDirectorySecurity, and SuggestionStore.ReadFilteredSnapshotAsync.",
+                    ExactSubstring: false)
+                {
+                    PathPatterns =
+                    [
+                        "src/CodeIndex/BoundedLineReader.cs",
+                        "src/CodeIndex/Cli/BoundedHttpContentReader.cs",
+                        "src/CodeIndex/Mcp/BoundedJsonUtf8Stream.cs",
+                        "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs",
+                        "src/CodeIndex/Cli/DataDirectorySecurity.cs",
+                        "src/CodeIndex/Cli/SuggestionStore.cs",
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "bounded-full-byte-read-helper",
+                    "ReadRawBytesWithSizeLimit",
+                    "Find whole-file byte reads that are intentionally routed through the indexer's max-file-size helper.",
+                    ["audit", "performance"],
+                    "Expected positive evidence is FileContentLoader.ReadRawBytesWithSizeLimit and direct callers that preserve the helper's max-byte and grow-after-length-check contract.",
+                    ExactSubstring: false)
+                {
+                    PathPatterns = ["src/CodeIndex/Indexer/Scanning/FileContentLoader.cs"],
+                    MatchOrigins = ["code"],
+                }
+            ]),
         AllScopedRecipe(
             "broad-token-audit",
             "Opt-in broad token search for audits that intentionally need lexical, parser, LSP, cancellation, and auth-token coverage.",
@@ -1353,6 +1444,7 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> MatchOrigins { get; init; } = [];
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
+    public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
 }
 
 internal sealed record SearchRecipeListJsonResult(
@@ -1403,6 +1495,9 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("broad_catch_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
 
 internal sealed record SearchRecipeGuardFilterJsonResult(
@@ -1410,6 +1505,20 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("direction")] string Direction,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("option")] string Option);
+
+internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
+    [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,
+    [property: JsonPropertyName("diagnostic_behaviors")] List<SearchRecipeBroadCatchDiagnosticBehaviorJsonResult> DiagnosticBehaviors,
+    [property: JsonPropertyName("triage_guidance")] string TriageGuidance);
+
+internal sealed record SearchRecipeBroadCatchBoundaryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("expected_diagnostic_behavior")] string ExpectedDiagnosticBehavior);
+
+internal sealed record SearchRecipeBroadCatchDiagnosticBehaviorJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description);
 
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1459,6 +1568,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("broad_catch_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
@@ -1488,6 +1600,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("broad_catch_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,

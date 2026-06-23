@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
@@ -10,9 +11,16 @@ public static partial class QueryCommandRunner
     {
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         var dbPathExplicit = false;
+        var jsonSummary = false;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
+            if (arg == "--json-summary")
+            {
+                jsonSummary = true;
+                continue;
+            }
+
             if (arg == "--db")
             {
                 if (i + 1 >= cmdArgs.Length || string.IsNullOrWhiteSpace(cmdArgs[i + 1]))
@@ -62,12 +70,16 @@ public static partial class QueryCommandRunner
             s_batchDbPathExplicit = dbPathExplicit;
             var firstFailure = CommandExitCodes.Success;
             var lineNumber = 0;
+            var commandsProcessed = 0;
+            var lineErrors = 0;
+            var commandFailures = 0;
             while (TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
             {
                 lineNumber++;
                 if (lineExceededLimit)
                 {
                     CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.");
+                    lineErrors++;
                     if (firstFailure == CommandExitCodes.Success)
                         firstFailure = CommandExitCodes.UsageError;
                     continue;
@@ -76,17 +88,26 @@ public static partial class QueryCommandRunner
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
-                if (!TryParseBatchLine(line, lineNumber, out var commandName, out var subArgs, out var parseExitCode))
+                if (!TryParseBatchLine(line, lineNumber, jsonOptions, out var commandName, out var subArgs, out var parseExitCode))
                 {
+                    lineErrors++;
                     if (firstFailure == CommandExitCodes.Success)
                         firstFailure = parseExitCode;
                     continue;
                 }
 
+                commandsProcessed++;
                 var exitCode = RunBatchQueryCommand(commandName, subArgs, jsonOptions);
-                if (exitCode != CommandExitCodes.Success && firstFailure == CommandExitCodes.Success)
-                    firstFailure = exitCode;
+                if (exitCode != CommandExitCodes.Success)
+                {
+                    commandFailures++;
+                    if (firstFailure == CommandExitCodes.Success)
+                        firstFailure = exitCode;
+                }
             }
+
+            if (jsonSummary)
+                WriteBatchSummaryJson(lineNumber, commandsProcessed, lineErrors, commandFailures, firstFailure, jsonOptions);
 
             return firstFailure;
         }
@@ -96,6 +117,22 @@ public static partial class QueryCommandRunner
             s_batchDbPath = null;
             s_batchDbPathExplicit = false;
         }
+    }
+
+    private static void WriteBatchSummaryJson(int inputLinesRead, int commandsProcessed, int lineErrors, int commandFailures, int exitCode, JsonSerializerOptions jsonOptions)
+    {
+        var payload = new JsonObject
+        {
+            ["api_version"] = "1",
+            ["command"] = "batch",
+            ["input_lines_read"] = inputLinesRead,
+            ["commands_processed"] = commandsProcessed,
+            ["line_errors"] = lineErrors,
+            ["command_failures"] = commandFailures,
+            ["exit_code"] = exitCode,
+        };
+
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
     private static bool TryReadBatchLine(TextReader reader, out string? line, out bool exceededLimit)
@@ -133,7 +170,7 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static bool TryParseBatchLine(string line, int lineNumber, out string commandName, out string[] subArgs, out int exitCode)
+    private static bool TryParseBatchLine(string line, int lineNumber, JsonSerializerOptions jsonOptions, out string commandName, out string[] subArgs, out int exitCode)
     {
         commandName = string.Empty;
         subArgs = [];
@@ -176,7 +213,14 @@ public static partial class QueryCommandRunner
         }
         catch (JsonException)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.");
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                $"batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.",
+                CommandExitCodes.UsageError,
+                "ensure each batch input line is a JSON string array.",
+                errorCode: CommandErrorCodes.UsageError,
+                category: "invalid_batch_json");
             return false;
         }
     }

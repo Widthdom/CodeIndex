@@ -538,14 +538,10 @@ internal static class GlobalToolLog
             truncated = true;
         }
 
-        try
-        {
-            value = DiagnosticRedactor.RedactSensitiveText(value, RedactedValue);
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            return RedactedValue;
-        }
+        value = RegexTimeoutPolicy.RedactOrFallback(
+            RegexRedactionSurface.GlobalToolLogArgument,
+            () => DiagnosticRedactor.RedactSensitiveText(value, RedactedValue),
+            RedactedValue);
 
         if (truncated && LooksLikeTruncatedUriUserInfo(value))
             return RedactedValue;

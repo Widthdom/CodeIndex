@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 using Microsoft.Win32.SafeHandles;
 using Regex = CodeIndex.Indexer.BoundedRegex;
@@ -169,7 +170,7 @@ public static partial class ExtractorPluginRegistry
             return null;
         }
 
-        if ((attributes & FileAttributes.ReparsePoint) != 0 || !string.IsNullOrEmpty(fileInfo.LinkTarget))
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
         {
             ReportPatternConfigRejected(path, "symbolic links and reparse points are not supported");
             return null;

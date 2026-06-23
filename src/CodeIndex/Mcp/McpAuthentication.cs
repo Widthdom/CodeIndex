@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using CodeIndex.Security;
 
 namespace CodeIndex.Mcp;
 
@@ -99,9 +100,12 @@ internal static class McpAuthenticationLimits
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            SensitiveBufferPolicy.ReturnSensitiveTokenBuffer(rented);
         }
     }
+
+    internal static void HashTokenUtf8ForTests(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination) =>
+        HashTokenUtf8(token, utf8Buffer, destination);
 
     private static void HashTokenUtf8(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination)
     {
@@ -112,7 +116,7 @@ internal static class McpAuthenticationLimits
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(utf8Buffer[..bytesWritten]);
+            SensitiveBufferPolicy.ClearSensitiveBytes(utf8Buffer[..bytesWritten]);
         }
     }
 }
