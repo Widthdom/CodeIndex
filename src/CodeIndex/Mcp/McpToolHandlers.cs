@@ -6992,6 +6992,9 @@ public partial class McpServer
     private static JsonObject CreateSourceCodeReasonCounts(SourceCodeDetectionResult detection)
     {
         var counts = new JsonObject();
+        if (detection.ReasonCounts is null)
+            return counts;
+
         foreach (var reason in detection.ReasonCounts)
         {
             if (reason.Value > 0)
