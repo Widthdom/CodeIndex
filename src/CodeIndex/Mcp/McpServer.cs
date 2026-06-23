@@ -898,7 +898,7 @@ public partial class McpServer : IDisposable
         {
             WriteMcpLogLine(BuildResponseWriteErrorLog("write operation was canceled"));
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
         {
             WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
         }

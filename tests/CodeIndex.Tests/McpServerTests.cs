@@ -4362,10 +4362,17 @@ public sealed class Caller
     private sealed class ThrowingWriteTransport : IMcpTransport
     {
         private readonly Queue<string?> _frames;
+        private readonly Exception _exception;
 
         public ThrowingWriteTransport(string name, params string?[] frames)
+            : this(name, new IOException("pipe closed"), frames)
+        {
+        }
+
+        public ThrowingWriteTransport(string name, Exception exception, params string?[] frames)
         {
             Name = name;
+            _exception = exception;
             _frames = new Queue<string?>(frames);
             _frames.Enqueue(null);
         }
@@ -4383,7 +4390,7 @@ public sealed class Caller
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
             WriteCount++;
-            throw new IOException("pipe closed");
+            throw _exception;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -4395,6 +4402,20 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         var transport = new ThrowingWriteTransport(
             "throwing-sequential",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_TransportTimeoutWriteFailure_DoesNotThrow_Issue3990()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "throwing-timeout",
+            new TimeoutException("HTTP MCP operation timed out; category=http_response_write; timeout_ms=15000."),
             """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
 
         await server.RunAsync(transport, CancellationToken.None);
