@@ -518,6 +518,10 @@ internal static partial class ProgramRunner
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
         Console.WriteLine();
+        Console.WriteLine("github:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("proxy_default_credentials", GitHubHttpClientFactory.FormatProxyDefaultCredentialsStatus(), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_request_timeout_s", GitHubHttpClientFactory.MaxRequestTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture), indent: "  "));
+        Console.WriteLine();
         Console.WriteLine("cdidx_env:");
         foreach (var (key, value) in EnumerateCdidxEnvironment())
             Console.WriteLine(ConsoleUi.FormatSummaryLine(key, value, indent: "  "));
@@ -4016,18 +4020,20 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(timeout);
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
             response.Content,
             MaxReleaseChecksumBytes,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         return Encoding.UTF8.GetString(bytes);
     }
 
@@ -4090,19 +4096,21 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(timeout);
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await BoundedHttpContentReader.WriteToPrivateFileAsync(
             response.Content,
             scriptPath,
             MaxInstallerScriptBytes,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
     }
 
     internal static bool CanWriteDirectory(string directory)

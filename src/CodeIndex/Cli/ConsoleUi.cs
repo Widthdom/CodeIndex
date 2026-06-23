@@ -347,9 +347,9 @@ public static class ConsoleUi
             return null;
         }
 
-        var cts = new CancellationTokenSource();
+        var cts = new SpinnerCancellationTokenSource();
         var ct = cts.Token;
-        _ = BackgroundTaskObserver.Run(async token =>
+        var spinnerTask = BackgroundTaskObserver.Run(async token =>
         {
             int i = 0;
             while (!token.IsCancellationRequested)
@@ -365,6 +365,7 @@ public static class ConsoleUi
                 try { await Task.Delay(SpinnerFrameDelayMs, token).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
             }
         }, "cdidx", "console spinner", ct);
+        cts.SetSpinnerTask(spinnerTask);
         return cts;
     }
 
@@ -376,8 +377,18 @@ public static class ConsoleUi
     {
         if (cts == null) return;
         cts.Cancel();
-        // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
-        Thread.Sleep(SpinnerStopDelayMs);
+        if (cts is SpinnerCancellationTokenSource spinnerCts)
+        {
+            try
+            {
+                spinnerCts.SpinnerTask.GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // Spinner shutdown is best-effort; BackgroundTaskObserver reports faults.
+                // spinner shutdown は best-effort。fault は BackgroundTaskObserver が報告する。
+            }
+        }
         if (ShouldUseInteractiveConsole())
         {
             lock (TerminalLock)
@@ -387,6 +398,16 @@ public static class ConsoleUi
             }
         }
         cts.Dispose();
+    }
+
+    private sealed class SpinnerCancellationTokenSource : CancellationTokenSource
+    {
+        private Task _spinnerTask = Task.CompletedTask;
+
+        public Task SpinnerTask => _spinnerTask;
+
+        public void SetSpinnerTask(Task spinnerTask)
+            => _spinnerTask = spinnerTask;
     }
 
     internal static void SetProgressAnimationEnabled(bool? enabled)
