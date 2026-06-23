@@ -458,7 +458,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/Target.cs:5", root.GetProperty("query").GetString());
-            Assert.Empty(root.GetProperty("definitions").EnumerateArray());
+            var definition = Assert.Single(root.GetProperty("definitions").EnumerateArray());
+            Assert.Equal("Compute", definition.GetProperty("name").GetString());
+            Assert.Equal("function", definition.GetProperty("kind").GetString());
+            Assert.Equal(3, definition.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, definition.GetProperty("end_line").GetInt32());
             Assert.Equal("src/Target.cs", sourceExcerpt.GetProperty("path").GetString());
             Assert.Equal(5, sourceExcerpt.GetProperty("start_line").GetInt32());
             Assert.Equal(5, sourceExcerpt.GetProperty("end_line").GetInt32());
