@@ -1668,9 +1668,8 @@ public partial class DbReader : IDisposable
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
-            SELECT COUNT(*), COUNT(DISTINCT path)
-            FROM (
-                SELECT f.path AS path
+            WITH filtered_files AS (
+                SELECT f.path AS path, COALESCE(f.size, 0) AS size
                 FROM files f
                 WHERE 1=1";
 
@@ -1681,7 +1680,15 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += ")";
+        sql += @"
+            )
+            SELECT COUNT(*),
+                   COUNT(DISTINCT path),
+                   COALESCE(SUM(size), 0),
+                   COALESCE(AVG(size), 0),
+                   COALESCE(MAX(size), 0),
+                   (SELECT path FROM filtered_files ORDER BY size DESC, path LIMIT 1)
+            FROM filtered_files";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -1692,7 +1699,29 @@ public partial class DbReader : IDisposable
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        return ExecuteCountSummary(cmd);
+        return ExecuteFileCountSummary(cmd);
+    }
+
+    private static QueryCountResult ExecuteFileCountSummary(SqliteCommand cmd)
+    {
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return new QueryCountResult(0, 0, BytesAuthoritative: true);
+
+        var count = reader.GetInt32(0);
+        var fileCount = reader.GetInt32(1);
+        var totalBytes = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+        var averageBytes = reader.IsDBNull(3) ? 0 : reader.GetDouble(3);
+        var maxBytes = reader.IsDBNull(4) ? 0 : reader.GetInt64(4);
+        var maxBytesPath = reader.IsDBNull(5) ? null : reader.GetString(5);
+        return new QueryCountResult(
+            count,
+            fileCount,
+            TotalBytes: totalBytes,
+            AverageBytes: averageBytes,
+            MaxBytes: maxBytes,
+            MaxBytesPath: maxBytesPath,
+            BytesAuthoritative: true);
     }
 
 

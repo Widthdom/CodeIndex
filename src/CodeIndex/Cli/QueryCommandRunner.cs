@@ -4511,17 +4511,21 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountListFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
-                if (counts.Count == 0)
+                if (options.Json)
                 {
-                    Console.WriteLine(options.Json
-                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
-                        : "0");
-                    return CommandExitCodes.Success;
+                    var payload = BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options);
+                    if (options.RawBytes)
+                        AddFileCountBytesJsonFields(payload, counts);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
-
-                Console.WriteLine(options.Json
-                    ? BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.Count, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
-                    : $"{counts.Count}");
+                else
+                    Console.WriteLine(options.RawBytes ? FormatFileCountBytesSummary(counts) : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
 
@@ -4567,6 +4571,29 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static void AddFileCountBytesJsonFields(JsonObject payload, QueryCountResult counts)
+    {
+        payload["total_bytes"] = counts.TotalBytes ?? 0;
+        payload["average_bytes"] = counts.AverageBytes ?? 0;
+        payload["max_bytes"] = counts.MaxBytes ?? 0;
+        payload["max_bytes_path"] = counts.MaxBytesPath;
+        payload["bytes_authoritative"] = counts.BytesAuthoritative ?? true;
+    }
+
+    private static string FormatFileCountBytesSummary(QueryCountResult counts)
+    {
+        var totalBytes = counts.TotalBytes ?? 0;
+        var averageBytes = counts.AverageBytes ?? 0;
+        var maxBytes = counts.MaxBytes ?? 0;
+        var maxPath = string.IsNullOrEmpty(counts.MaxBytesPath)
+            ? "none"
+            : counts.MaxBytesPath;
+        var authority = (counts.BytesAuthoritative ?? true) ? "true" : "false";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{counts.Count} files, {totalBytes} bytes total, average {averageBytes:0.##} bytes, max {maxBytes} bytes ({maxPath}), bytes_authoritative: {authority}");
     }
 
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)

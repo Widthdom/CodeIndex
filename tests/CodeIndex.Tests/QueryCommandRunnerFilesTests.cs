@@ -2437,6 +2437,50 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_CountBytesIncludesSizeAggregates_Issue3948()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_count_bytes");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a-small.cs", "csharp", "class Small {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/z-large.cs", "csharp", "class Large {}\n");
+            SetIndexedFileSize(dbPath, "src/a-small.cs", 10);
+            SetIndexedFileSize(dbPath, "src/z-large.cs", 1_000);
+
+            var (jsonExit, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json", "--count", "--bytes"],
+                _jsonOptions));
+            var (humanExit, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--count", "--bytes"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(jsonStdout);
+            var root = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, jsonExit);
+            Assert.Equal(CommandExitCodes.Success, humanExit);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal(string.Empty, humanStderr);
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            Assert.Equal(2, root.GetProperty("files").GetInt32());
+            Assert.Equal(2, root.GetProperty("file_count").GetInt32());
+            Assert.Equal(1_010, root.GetProperty("total_bytes").GetInt64());
+            Assert.Equal(505, root.GetProperty("average_bytes").GetDouble());
+            Assert.Equal(1_000, root.GetProperty("max_bytes").GetInt64());
+            Assert.Equal("src/z-large.cs", root.GetProperty("max_bytes_path").GetString());
+            Assert.True(root.GetProperty("bytes_authoritative").GetBoolean());
+            Assert.Contains("2 files, 1010 bytes total", humanStdout);
+            Assert.Contains("average 505 bytes", humanStdout);
+            Assert.Contains("max 1000 bytes (src/z-large.cs)", humanStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_BytesOrdersBySizeBeforeLimit_Issue2994()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_size_order");
