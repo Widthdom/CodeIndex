@@ -8330,7 +8330,7 @@ public static partial class QueryCommandRunner
         "likely_unused_private" => "Private symbols with no indexed references; usually the highest-signal unused candidates.",
         "maybe_unused_nonpublic" => "Internal, protected, or otherwise non-public symbols with no indexed references; review call paths and framework entry points before removal.",
         "public_or_exported_no_refs" => "Public or exported symbols with no indexed references; may still be external API surface.",
-        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, attributes, config, or binding conventions.",
+        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, serialization, contracts, config, metadata, generated code, documentation headings, test hooks, or binding conventions.",
         _ => "Unknown unused-symbol bucket.",
     };
 
@@ -8413,7 +8413,7 @@ public static partial class QueryCommandRunner
         "likely_unused_private" => "Likely unused private",
         "maybe_unused_nonpublic" => "Maybe unused non-public",
         "public_or_exported_no_refs" => "Public/exported with no refs",
-        "reflection_or_config_suspect" => "Reflection/config suspects",
+        "reflection_or_config_suspect" => "Intentional-surface suspects",
         _ => bucket,
     };
 

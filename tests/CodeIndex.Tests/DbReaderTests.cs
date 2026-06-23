@@ -14505,24 +14505,139 @@ public class DbReaderTests : IDisposable
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
             pathPatterns: ["unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
-        Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString", "AdoptionService", "TokenService", "AppSettings", "ApplyConfiguration", "UseIOptions"], unused.Select(symbol => symbol.Name).ToArray());
+        Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString", "AdoptionService", "AppSettings", "TokenService", "ApplyConfiguration", "UseIOptions"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
         Assert.Equal("medium", unused[0].UnusedConfidence);
         Assert.Equal("maybe_unused_nonpublic", unused[1].UnusedBucket);
         Assert.Equal("low", unused[1].UnusedConfidence);
         Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
-        Assert.Contains("config or attribute-driven reflection", unused[3].UnusedReason);
+        Assert.Contains("serialization, config", unused[3].UnusedReason);
         Assert.Equal("public_or_exported_no_refs", unused[4].UnusedBucket);
-        Assert.Equal("public_or_exported_no_refs", unused[5].UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", unused[5].UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", unused[6].UnusedBucket);
-        Assert.Equal("public_or_exported_no_refs", unused[7].UnusedBucket);
-        Assert.Equal("public_or_exported_no_refs", unused[8].UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", unused[7].UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", unused[8].UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "PathResolver").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "AdoptionService").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "TokenService").UnusedBucket);
-        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ApplyConfiguration").UnusedBucket);
-        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "UseIOptions").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "AppSettings").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ApplyConfiguration").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "UseIOptions").UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_ClassifiesContractSurfacesAsLowConfidence_Issue3902()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/contracts/output_models.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 40,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "SearchResponseDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public sealed record SearchResponseDto(string Path)",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "SearchJsonContext",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "internal partial class SearchJsonContext : JsonSerializerContext",
+                Visibility = "internal",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(
+            limit: 10,
+            kind: null,
+            lang: "csharp",
+            pathPatterns: ["output_models.cs"],
+            excludePathPatterns: null,
+            excludeTests: false,
+            bucketFilter: "reflection_or_config_suspect");
+
+        var dto = Assert.Single(unused, symbol => symbol.Name == "SearchResponseDto");
+        Assert.Equal("reflection_or_config_suspect", dto.UnusedBucket);
+        Assert.Contains("serialization_contract", dto.UnusedReasonTags);
+
+        var jsonContext = Assert.Single(unused, symbol => symbol.Name == "SearchJsonContext");
+        Assert.Equal("reflection_or_config_suspect", jsonContext.UnusedBucket);
+        Assert.Contains("source_generated_json_context", jsonContext.UnusedReasonTags);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_ClassifiesTestHooksAndMetadataAsLowConfidence_Issue3953()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/metadata_hooks.cs",
+            Lang = "csharp",
+            Size = 160,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "ResetForTests",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 9,
+                Signature = "internal void ResetForTests()",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "SearchResponseDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "CharactersRead",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public int CharactersRead { get; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ParseException",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(
+            limit: 10,
+            kind: null,
+            lang: "csharp",
+            pathPatterns: ["metadata_hooks.cs"],
+            excludePathPatterns: null,
+            excludeTests: false,
+            bucketFilter: "reflection_or_config_suspect");
+
+        var testHook = Assert.Single(unused, symbol => symbol.Name == "ResetForTests");
+        Assert.Equal("reflection_or_config_suspect", testHook.UnusedBucket);
+        Assert.Contains("test_hook", testHook.UnusedReasonTags);
+
+        var exceptionMetadata = Assert.Single(unused, symbol => symbol.Name == "CharactersRead");
+        Assert.Equal("reflection_or_config_suspect", exceptionMetadata.UnusedBucket);
+        Assert.Contains("exception_metadata", exceptionMetadata.UnusedReasonTags);
     }
 
     [Fact]

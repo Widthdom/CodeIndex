@@ -105,6 +105,71 @@ public partial class DbReader
         "return",
         "type",
     };
+    private static readonly string[] UnusedContractPathSegments =
+    [
+        "/contracts/",
+        "/contract/",
+        "/dtos/",
+        "/dto/",
+        "/models/",
+        "/model/",
+        "/schemas/",
+        "/schema/",
+    ];
+    private static readonly string[] UnusedGeneratedPathMarkers =
+    [
+        ".g.cs",
+        ".generated.",
+        "/generated/",
+        "/obj/",
+        "/bin/",
+    ];
+    private static readonly HashSet<string> UnusedExceptionMetadataNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CharactersRead",
+        "Utf8BytesRead",
+        "SizeLimit",
+        "Limit",
+        "ByteCount",
+        "BytesRead",
+        "Offset",
+        "Position",
+        "Path",
+        "FileName",
+        "LineNumber",
+        "ColumnNumber",
+        "ActualSize",
+        "MaxSize",
+        "Length",
+    };
+    private static readonly string[] UnusedConfigMemberTerms =
+    [
+        "Configuration",
+        "Config",
+        "Options",
+        "Settings",
+        "Manifest",
+        "Schema",
+        "Metadata",
+        "Limit",
+        "Max",
+        "Min",
+        "Size",
+        "Bytes",
+        "Count",
+        "Capacity",
+        "Timeout",
+        "Version",
+        "Kind",
+        "Category",
+        "Severity",
+        "Source",
+        "Target",
+        "Path",
+        "Name",
+        "Id",
+        "Key",
+    ];
     private const int UnusedAttributeContextWindow = 16;
     private const int UnusedPublicOverfetchMultiplier = 16;
     private const int UnusedPublicOverfetchMinimum = 64;
@@ -3726,11 +3791,16 @@ public partial class DbReader
     private UnusedSymbolResult CreateUnusedSymbolResult(UnusedCandidateSymbol candidate)
     {
         var kind = NormalizeUnusedSymbolKind(candidate);
-        var isReflectionOrConfigSuspect = candidate.IsReflectionOrConfigSuspect;
-        if (!isReflectionOrConfigSuspect && candidate.IsPublicOrExported)
-            isReflectionOrConfigSuspect = HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine);
+        var surfaceTags = BuildUnusedIntentionalSurfaceTags(candidate, kind);
+        if (!surfaceTags.Contains("reflection_or_config_suspect", StringComparer.Ordinal)
+            && candidate.IsPublicOrExported
+            && HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine))
+        {
+            AddUnusedSurfaceTag(surfaceTags, "reflection_or_config_suspect");
+        }
 
-        var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility);
+        var isIntentionalSurfaceSuspect = surfaceTags.Count > 0;
+        var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility);
         return new UnusedSymbolResult
         {
             Path = candidate.Path,
@@ -3748,7 +3818,7 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
-            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility),
+            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags),
         };
     }
 
@@ -3812,7 +3882,7 @@ public partial class DbReader
 
         var sql = $@"
             WITH unused_candidates AS (
-                SELECT f.path, f.lang, s.kind, s.name, s.line,
+                SELECT s.file_id, f.path, f.lang, s.kind, s.name, s.line,
                        {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                        {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
                        {GetSymbolColumnSql("signature")} AS signature,
@@ -3820,6 +3890,7 @@ public partial class DbReader
                        {GetSymbolColumnSql("return_type")} AS return_type,
                        {GetSymbolColumnSql("container_kind")} AS container_kind,
                        {GetSymbolColumnSql("container_name")} AS container_name,
+                       {GetSymbolColumnSql("container_qualified_name", GetSymbolColumnSql("container_name", "''"))} AS container_qualified_name,
                        CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
                        CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
                        {provisionalBucketOrderSql} AS provisional_bucket_order
@@ -3871,9 +3942,9 @@ public partial class DbReader
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += @"
             )
-            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                   return_type, container_kind, container_name, is_public_or_exported,
-                   is_reflection_or_config_suspect
+            SELECT file_id, path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                   return_type, container_kind, container_name, container_qualified_name,
+                   is_public_or_exported, is_reflection_or_config_suspect, provisional_bucket_order
             FROM unused_candidates
             WHERE provisional_bucket_order = @bucketOrder
             ORDER BY path, line, name
@@ -3901,38 +3972,27 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var path = reader.GetString(0);
-            var langValue = GetNullableString(reader, 1);
-            var rawKindValue = reader.GetString(2);
-            var signature = GetNullableString(reader, 7);
-            var kindValue = NormalizeUnusedSymbolKind(langValue, rawKindValue, signature);
-            var startLine = GetInt32OrFallback(reader, 5, 4);
-            var isPublicOrExported = reader.GetInt32(12) != 0;
-            var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
-            if (!isReflectionOrConfigSuspect && isPublicOrExported)
-                isReflectionOrConfigSuspect = HasReflectionAttributeContext(kindValue, path, startLine);
-
-            var visibility = GetNullableString(reader, 8);
-            var classification = ClassifyUnusedSymbol(isPublicOrExported, isReflectionOrConfigSuspect, visibility);
-            results.Add(new UnusedSymbolResult
+            var candidate = new UnusedCandidateSymbol
             {
-                Path = path,
-                Lang = langValue,
-                Kind = kindValue,
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = startLine,
-                EndLine = GetInt32OrFallback(reader, 6, 4),
-                Signature = signature,
-                Visibility = visibility,
-                ReturnType = GetNullableString(reader, 9),
-                ContainerKind = GetNullableString(reader, 10),
-                ContainerName = GetNullableString(reader, 11),
-                UnusedBucket = classification.Bucket,
-                UnusedConfidence = classification.Confidence,
-                UnusedReason = classification.Reason,
-                UnusedReasonTags = BuildUnusedReasonTags(isPublicOrExported, isReflectionOrConfigSuspect, visibility),
-            });
+                FileId = reader.GetInt64(0),
+                Path = reader.GetString(1),
+                Lang = GetNullableString(reader, 2),
+                Kind = reader.GetString(3),
+                Name = reader.GetString(4),
+                Line = reader.GetInt32(5),
+                StartLine = GetInt32OrFallback(reader, 6, 5),
+                EndLine = GetInt32OrFallback(reader, 7, 5),
+                Signature = GetNullableString(reader, 8),
+                Visibility = GetNullableString(reader, 9),
+                ReturnType = GetNullableString(reader, 10),
+                ContainerKind = GetNullableString(reader, 11),
+                ContainerName = GetNullableString(reader, 12),
+                ContainerQualifiedName = GetNullableString(reader, 13),
+                IsPublicOrExported = reader.GetInt32(14) != 0,
+                IsReflectionOrConfigSuspect = reader.GetInt32(15) != 0,
+                ProvisionalBucketOrder = reader.GetInt32(16),
+            };
+            results.Add(CreateUnusedSymbolResult(candidate));
         }
 
         return results;
@@ -3996,13 +4056,14 @@ public partial class DbReader
 
     private static IEnumerable<int> GetRelevantUnusedProvisionalBuckets(IReadOnlySet<string> targetBuckets)
     {
-        if (targetBuckets.Contains(UnusedBucketLikelyPrivate))
+        var wantsIntentionalSurface = targetBuckets.Contains(UnusedBucketReflectionOrConfig);
+        if (targetBuckets.Contains(UnusedBucketLikelyPrivate) || wantsIntentionalSurface)
             yield return 0;
-        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic))
+        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic) || wantsIntentionalSurface)
             yield return 1;
-        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || wantsIntentionalSurface)
             yield return 2;
-        if (targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+        if (wantsIntentionalSurface)
             yield return 3;
     }
 
@@ -5139,14 +5200,171 @@ public partial class DbReader
         return count;
     }
 
-    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    private static List<string> BuildUnusedIntentionalSurfaceTags(UnusedCandidateSymbol candidate, string kind)
     {
-        if (isReflectionOrConfigSuspect)
+        var tags = new List<string>();
+        if (candidate.IsReflectionOrConfigSuspect)
+            AddUnusedSurfaceTag(tags, "reflection_or_config_suspect");
+        if (IsMarkdownHeadingSymbol(candidate, kind))
+            AddUnusedSurfaceTag(tags, "documentation_heading");
+        if (IsGeneratedSurface(candidate))
+            AddUnusedSurfaceTag(tags, "generated_surface");
+        if (IsSourceGeneratedJsonContext(candidate))
+        {
+            AddUnusedSurfaceTag(tags, "serialization_contract");
+            AddUnusedSurfaceTag(tags, "source_generated_json_context");
+        }
+        if (IsUnusedContractType(candidate, kind))
+            AddUnusedSurfaceTag(tags, "serialization_contract");
+        if (IsUnusedContractMember(candidate, kind))
+            AddUnusedSurfaceTag(tags, "contract_member");
+        if (IsConfigOrManifestSurface(candidate, kind))
+            AddUnusedSurfaceTag(tags, "config_or_metadata_surface");
+        if (IsTestHookName(candidate.Name))
+            AddUnusedSurfaceTag(tags, "test_hook");
+        if (IsExceptionMetadataProperty(candidate, kind))
+            AddUnusedSurfaceTag(tags, "exception_metadata");
+        if (IsConfigOrMetadataMember(candidate, kind))
+            AddUnusedSurfaceTag(tags, "config_or_metadata_member");
+        return tags;
+    }
+
+    private static void AddUnusedSurfaceTag(List<string> tags, string tag)
+    {
+        if (!tags.Contains(tag, StringComparer.Ordinal))
+            tags.Add(tag);
+    }
+
+    private static bool IsMarkdownHeadingSymbol(UnusedCandidateSymbol candidate, string kind)
+    {
+        return (string.Equals(candidate.Lang, "markdown", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate.Lang, "md", StringComparison.OrdinalIgnoreCase))
+            && (kind.Contains("heading", StringComparison.OrdinalIgnoreCase)
+                || kind.Contains("header", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsGeneratedSurface(UnusedCandidateSymbol candidate)
+        => ContainsAny(candidate.Path, UnusedGeneratedPathMarkers);
+
+    private static bool IsSourceGeneratedJsonContext(UnusedCandidateSymbol candidate)
+    {
+        return EndsWithAny(candidate.Name, ["JsonContext"])
+            || ContainsAny(candidate.Signature, ["JsonSerializerContext", "JsonSerializable", "JsonSourceGenerationOptions"]);
+    }
+
+    private static bool IsUnusedContractType(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsTypeLikeUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Signature, ["DataContract", "Serializable", "MessagePackObject", "ProtoContract"]);
+    }
+
+    private static bool IsUnusedContractMember(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsDataMemberUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "DataMember", "XmlElement", "XmlAttribute"]);
+    }
+
+    private static bool IsConfigOrManifestSurface(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        if (!IsTypeLikeUnusedKind(kind) && !IsDataMemberUnusedKind(kind) && !IsFunctionLikeUnusedKind(kind))
+            return false;
+        if (EndsWithAny(candidate.Name, ["Options", "Settings", "Configuration", "Config", "Manifest", "Schema"])
+            || ContainsAny(candidate.Name, ["Configuration", "IOptions"])
+            || ContainsAny(candidate.Signature, ["IConfiguration", "ConfigurationSection", "IOptions", "Options<"]))
+        {
+            return true;
+        }
+
+        return IsDataMemberUnusedKind(kind)
+            && (ContainsAny(candidate.Path, ["/config/", "/configuration/", "/options/", "/settings/", "/manifest/", "/manifests/"])
+                || ContainsAny(candidate.Signature, ["IConfiguration", "ConfigurationSection", "IOptions", "Options<"]));
+    }
+
+    private static bool IsTestHookName(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name)
+            && (name.EndsWith("ForTests", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("ForTest", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("TestOnly", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsExceptionMetadataProperty(UnusedCandidateSymbol candidate, string kind)
+    {
+        return string.Equals(kind, "property", StringComparison.OrdinalIgnoreCase)
+            && UnusedExceptionMetadataNames.Contains(candidate.Name)
+            && (EndsWithAny(candidate.ContainerName, ["Exception"])
+                || ContainsAny(candidate.ContainerQualifiedName, ["Exception"])
+                || ContainsAny(candidate.Signature, ["Exception"]));
+    }
+
+    private static bool IsConfigOrMetadataMember(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsDataMemberUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        if (!ContainsAny(candidate.Name, UnusedConfigMemberTerms))
+            return false;
+
+        var hasContext = ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Path, ["/config/", "/configuration/", "/options/", "/settings/", "/manifest/", "/manifests/"])
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "DataMember", "Diagnostic", "Metadata", "IConfiguration", "IOptions", "Options<"]);
+        return hasContext;
+    }
+
+    private static bool IsTypeLikeUnusedKind(string kind)
+    {
+        return kind is "class" or "struct" or "record" or "interface" or "enum" or "type";
+    }
+
+    private static bool IsDataMemberUnusedKind(string kind)
+    {
+        return kind is "property" or "field" or "constant" or "enum_member";
+    }
+
+    private static bool IsFunctionLikeUnusedKind(string kind)
+    {
+        return kind is "function" or "method";
+    }
+
+    private static bool EndsWithAny(string? value, IReadOnlyList<string> suffixes)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var suffix in suffixes)
+        {
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsAny(string? value, IReadOnlyList<string> fragments)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var fragment in fragments)
+        {
+            if (value.Contains(fragment, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isIntentionalSurfaceSuspect, string? visibility)
+    {
+        if (isIntentionalSurfaceSuspect)
         {
             return (
                 UnusedBucketReflectionOrConfig,
                 "low",
-                "public/exported symbol with config or attribute-driven reflection surface and no indexed references");
+                "symbol with attribute-driven reflection surface, serialization, config, metadata, test-hook, generated, documentation, or compatibility surface and no indexed references");
         }
 
         if (isPublicOrExported)
@@ -5171,11 +5389,16 @@ public partial class DbReader
             "non-public symbol with no indexed references");
     }
 
-    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isIntentionalSurfaceSuspect, string? visibility, IReadOnlyList<string> surfaceTags)
     {
         var tags = new List<string> { "no_indexed_references" };
-        if (isReflectionOrConfigSuspect)
+        if (isIntentionalSurfaceSuspect)
+        {
+            tags.Add("intentional_surface_suspect");
             tags.Add("reflection_or_config_suspect");
+        }
+        foreach (var surfaceTag in surfaceTags)
+            AddUnusedSurfaceTag(tags, surfaceTag);
         if (isPublicOrExported)
             tags.Add("public_or_exported");
         else if (IsPrivateLikeVisibility(visibility))

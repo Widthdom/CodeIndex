@@ -969,8 +969,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(9, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(6, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(3, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(4, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
             Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
@@ -987,9 +987,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
             Assert.Contains(symbols[3].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "reflection_or_config_suspect");
             Assert.Equal("ApplyConfiguration", symbols[7].GetProperty("name").GetString());
-            Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[7].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[7].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "config_or_metadata_surface");
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
-            Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[8].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[8].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "config_or_metadata_surface");
         }
         finally
         {
@@ -1094,7 +1096,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hidden", byBucket.GetProperty("likely_unused_private")[0].GetProperty("name").GetString());
             Assert.Equal("InternalOnly", byBucket.GetProperty("maybe_unused_nonpublic")[0].GetProperty("name").GetString());
-            Assert.Equal(6, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
+            Assert.Equal(3, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
             Assert.Equal("ConnectionString", byBucket.GetProperty("reflection_or_config_suspect")[0].GetProperty("name").GetString());
         }
         finally
@@ -1217,7 +1219,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(6, json.GetProperty("count").GetInt32());
+            Assert.Equal(3, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
             Assert.Equal("public_or_exported_no_refs", query.GetProperty("bucket").GetString());
             Assert.Equal("low", query.GetProperty("min_confidence").GetString());
