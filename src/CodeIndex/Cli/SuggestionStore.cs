@@ -1236,8 +1236,11 @@ public class SuggestionStore
             var backupPath = GetCorruptBackupPath();
             if (File.Exists(LongPath.EnsureWindowsPrefix(_filePath)))
             {
-                File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: false);
-                DataDirectorySecurity.ApplyPrivateFileMode(backupPath);
+                AtomicFileWriter.MoveFile(
+                    _filePath,
+                    backupPath,
+                    overwrite: false,
+                    applyDestinationMode: DataDirectorySecurity.ApplyPrivateFileMode);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

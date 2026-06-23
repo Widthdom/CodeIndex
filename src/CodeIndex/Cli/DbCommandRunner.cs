@@ -1004,7 +1004,7 @@ public static class DbCommandRunner
             CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
             CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
             DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}");
-            Directory.Move(tempPath, checkpointPath);
+            AtomicFileWriter.PublishDirectory(tempPath, checkpointPath);
         }
         catch
         {
@@ -1482,9 +1482,11 @@ public static class DbCommandRunner
         if (!TryGetRegularExistingFile(source, out var normalizedSource))
             return;
 
-        File.Move(normalizedSource, LongPath.EnsureWindowsPrefix(destination), overwrite);
-        if (privateDestination)
-            DataDirectorySecurity.ApplyPrivateFileMode(destination);
+        AtomicFileWriter.MoveFile(
+            normalizedSource,
+            destination,
+            overwrite,
+            privateDestination ? DataDirectorySecurity.ApplyPrivateFileMode : null);
     }
 
     private static bool TryGetRegularExistingFile(string path, out string normalizedPath)
