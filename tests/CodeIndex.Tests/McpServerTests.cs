@@ -13485,8 +13485,8 @@ public sealed class Caller
         Assert.Equal(9, structured["count"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["likely_unused_private"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
-        Assert.Equal(6, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
-        Assert.Equal(1, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
+        Assert.Equal(3, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
+        Assert.Equal(4, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
         Assert.Equal(1, structured["summary"]!["by_bucket"]!["likely_unused_private"]!.GetValue<int>());
         Assert.Equal(8, structured["summary"]!["by_confidence"]!["low"]!.GetValue<int>());
         Assert.Equal("low", structured["bucket_taxonomy"]!["reflection_or_config_suspect"]!["confidence"]!.GetValue<string>());
@@ -13499,9 +13499,9 @@ public sealed class Caller
         Assert.Equal("ConnectionString", symbols[3]!["name"]!.GetValue<string>());
         Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("ApplyConfiguration", symbols[7]!["name"]!.GetValue<string>());
-        Assert.Equal("public_or_exported_no_refs", symbols[7]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[7]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
-        Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
 
         var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
