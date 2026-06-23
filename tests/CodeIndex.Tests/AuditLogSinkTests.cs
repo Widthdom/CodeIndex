@@ -750,6 +750,40 @@ public class AuditLogSinkTests
         }
     }
 
+    [Fact]
+    public void WaitForIdle_CancelledTokenStopsWaiting_Issue3946()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_idle_cancel_{Guid.NewGuid():N}.jsonl");
+        using var writerEntered = new ManualResetEventSlim();
+        using var releaseWriter = new ManualResetEventSlim();
+        using var waitCancellation = new CancellationTokenSource();
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            sink.BeforeWriteForTests = () =>
+            {
+                writerEntered.Set();
+                releaseWriter.Wait();
+            };
+
+            sink.Record(CreateAuditEvent("search"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
+
+            waitCancellation.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                sink.WaitForIdle(TimeSpan.FromSeconds(5), waitCancellation.Token));
+
+            releaseWriter.Set();
+            WaitForAuditLogIdle(sink);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     private static void WaitForAuditLogIdle(AuditLogSink sink)
         => Assert.True(
             sink.WaitForIdle(TimeSpan.FromSeconds(5)),
