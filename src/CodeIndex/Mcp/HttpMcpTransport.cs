@@ -166,6 +166,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             SingleReader = true,
             SingleWriter = false,
+            // Queue slots are acquired before TryWrite. FullMode.Wait is a defensive
+            // channel contract; a full queue is rejected via request_queue_limit rather
+            // than blocking an HTTP handler indefinitely.
+            // TryWrite 前に queue slot を取得する。FullMode.Wait は防御的な channel 契約で、
+            // 満杯時は HTTP handler を無期限 block せず request_queue_limit で拒否する。
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
@@ -191,6 +196,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             {
                 SingleReader = true,
                 SingleWriter = false,
+                // Request logging is best-effort. Producers use TryWrite and increment
+                // http_request_log_queue_full_drop_count when this bounded channel is full.
+                // request log は best-effort。producer は TryWrite を使い、満杯時は
+                // http_request_log_queue_full_drop_count を増やして drop する。
                 FullMode = BoundedChannelFullMode.Wait,
                 AllowSynchronousContinuations = false,
             });
@@ -1038,6 +1047,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (stream.TryReleaseSlot())
             Interlocked.Decrement(ref _eventStreamCount);
         AbortResponseBestEffort(stream.Response, "event stream response cleanup");
+        stream.Dispose();
     }
 
     private async Task RunKeepAliveLoopAsync(EventStream stream, CancellationToken cancellationToken)
@@ -1080,7 +1090,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
-    private sealed class EventStream(HttpListenerResponse response)
+    private sealed class EventStream(HttpListenerResponse response) : IDisposable
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
         private int _released;
@@ -1139,6 +1149,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 _writeGate.Release();
             }
         }
+
+        public void Dispose() => _writeGate.Dispose();
     }
 
     private bool HashEqualsConfiguredToken(string provided)

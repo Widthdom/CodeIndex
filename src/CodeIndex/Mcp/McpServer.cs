@@ -595,8 +595,8 @@ public partial class McpServer : IDisposable
 
     private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
     {
-        var writeGate = new SemaphoreSlim(1, 1);
-        var normalFrameGate = new SemaphoreSlim(1, 1);
+        using var writeGate = new SemaphoreSlim(1, 1);
+        using var normalFrameGate = new SemaphoreSlim(1, 1);
         var tasks = new List<Task>();
 
         while (_running)
@@ -3761,6 +3761,7 @@ public partial class McpServer : IDisposable
         }
         _shutdownCts.Dispose();
         _concurrencyGate.Dispose();
+        _textWriterGate.Dispose();
         GC.SuppressFinalize(this);
     }
 

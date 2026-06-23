@@ -127,6 +127,10 @@ internal sealed class AuditLogSink : IDisposable
         {
             SingleReader = true,
             SingleWriter = false,
+            // Producers use TryWrite, so a full queue becomes a best-effort drop with
+            // queue_full diagnostics instead of blocking the MCP request path.
+            // producer 側は TryWrite を使うため、満杯時は MCP request path を塞がず
+            // queue_full 診断付きの best-effort drop になる。
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
