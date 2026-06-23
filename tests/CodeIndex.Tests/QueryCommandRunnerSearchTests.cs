@@ -1141,7 +1141,9 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("DiagnosticRedactor", StringComparison.Ordinal));
+        Assert.Equal("catch (", emptyCatchQuery.GetProperty("query").GetString());
         Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+        Assert.Contains(emptyCatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("broad or empty catch", StringComparison.Ordinal));
         Assert.Equal(0, emptyCatchQuery.GetProperty("exclude_origins").GetArrayLength());
         Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
@@ -1311,7 +1313,7 @@ public partial class QueryCommandRunnerTests
                         {
                             Work();
                         }
-                        catch
+                        catch (Exception)
                         {
                         }
                     }
@@ -1326,6 +1328,17 @@ public partial class QueryCommandRunnerTests
                 {
                     // catch appears only in a comment and should not satisfy the recipe.
                     public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/parser.cs",
+                "csharp",
+                """
+                public sealed class Parser
+                {
+                    public int catchIndex = 0;
+                    public string Syntax = "catch (Exception)";
                 }
                 """);
 
@@ -1344,6 +1357,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/code.cs", result.GetProperty("path").GetString());
             Assert.Contains(result.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
             Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), file => file.GetProperty("path").GetString() == "src/comment.cs");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), file => file.GetProperty("path").GetString() == "src/parser.cs");
 
             var (commentExitCode, commentStdout, commentStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/empty-catch-review", "--db", dbPath, "--lang", "csharp", "--limit", "10", "--origin", "comment", "--json"],

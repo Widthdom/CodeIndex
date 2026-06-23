@@ -120,12 +120,17 @@ internal static class SearchAuditRecipes
                     "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token."),
                 new(
                     "empty-catch-review",
-                    "catch",
-                    "Find catch blocks that may be empty, overly broad, or swallowing diagnostic context.",
+                    "catch (",
+                    "Find C# catch clauses that may be empty, overly broad, or swallowing diagnostic context.",
                     ["audit", "bug"],
                     "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures.")
                 {
                     MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: broad or empty catch clauses can swallow recovery diagnostics or hide unexpected failures.",
+                        "positive: explicit rethrow, translation to a stable error contract, or documented best-effort cleanup can make a catch intentional."
+                    ],
                 },
                 new(
                     "broad-exception-catch",
