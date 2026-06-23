@@ -135,7 +135,7 @@ public static class ConsoleUi
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
-        ("batch", "cdidx batch [--db <path>]  # stdin is JSON Lines: one JSON string array per line; invalid lines emit per-line JSON errors and make the process exit non-zero"),
+        ("batch", "cdidx batch [--db <path>] [--json-summary]  # stdin is JSON Lines: one JSON string array per line; invalid lines emit per-line JSON errors and make the process exit non-zero"),
         ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--json]"),
         ("hooks-uninstall", "cdidx hooks uninstall [--project <path>] [--force] [--json]"),
         ("hooks-status", "cdidx hooks status [--project <path>] [--json]"),

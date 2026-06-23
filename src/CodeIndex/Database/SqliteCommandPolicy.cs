@@ -1,3 +1,4 @@
+using System.Data;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
@@ -5,14 +6,19 @@ namespace CodeIndex.Database;
 
 internal static class SqliteCommandPolicy
 {
+    private const string SqliteDateTimeTextFormat = "yyyy-MM-dd HH:mm:ss.FFFFFFF";
+
     public static SqliteParameter AddText(SqliteCommand command, string name, string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return Add(command, name, SqliteType.Text, value);
+        return AddTyped(command, name, SqliteType.Text, DbType.String, value, value.Length);
     }
 
     public static SqliteParameter AddNullableText(SqliteCommand command, string name, string? value)
-        => Add(command, name, SqliteType.Text, value);
+        => AddTyped(command, name, SqliteType.Text, DbType.String, value, value?.Length);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, string? value)
+        => AddNullableText(command, name, value);
 
     public static SqliteParameter AddHashText(SqliteCommand command, string name, string value)
         => AddText(command, name, value);
@@ -21,22 +27,68 @@ internal static class SqliteCommandPolicy
         => AddNullableText(command, name, value);
 
     public static SqliteParameter AddInt32(SqliteCommand command, string name, int value)
-        => Add(command, name, SqliteType.Integer, value);
+        => AddTyped(command, name, SqliteType.Integer, DbType.Int32, value);
 
     public static SqliteParameter AddNullableInt32(SqliteCommand command, string name, int? value)
-        => Add(command, name, SqliteType.Integer, value);
+        => AddTyped(command, name, SqliteType.Integer, DbType.Int32, value);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, int value)
+        => AddInt32(command, name, value);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, int? value)
+        => AddNullableInt32(command, name, value);
 
     public static SqliteParameter AddInt64(SqliteCommand command, string name, long value)
-        => Add(command, name, SqliteType.Integer, value);
+        => AddTyped(command, name, SqliteType.Integer, DbType.Int64, value);
 
     public static SqliteParameter AddNullableInt64(SqliteCommand command, string name, long? value)
-        => Add(command, name, SqliteType.Integer, value);
+        => AddTyped(command, name, SqliteType.Integer, DbType.Int64, value);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, long value)
+        => AddInt64(command, name, value);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, long? value)
+        => AddNullableInt64(command, name, value);
 
     public static SqliteParameter AddBoolean(SqliteCommand command, string name, bool value)
-        => Add(command, name, SqliteType.Integer, value ? 1 : 0);
+        => AddTyped(command, name, SqliteType.Integer, DbType.Int32, value ? 1 : 0);
 
     public static SqliteParameter AddNullableBoolean(SqliteCommand command, string name, bool? value)
-        => Add(command, name, SqliteType.Integer, value.HasValue ? (value.Value ? 1 : 0) : null);
+        => AddTyped(command, name, SqliteType.Integer, DbType.Int32, value.HasValue ? (value.Value ? 1 : 0) : null);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, bool value)
+        => AddBoolean(command, name, value);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, bool? value)
+        => AddNullableBoolean(command, name, value);
+
+    public static SqliteParameter AddDateTime(SqliteCommand command, string name, DateTime value)
+    {
+        var text = value.ToString(SqliteDateTimeTextFormat, CultureInfo.InvariantCulture);
+        return AddTyped(command, name, SqliteType.Text, DbType.String, text, text.Length);
+    }
+
+    public static SqliteParameter AddNullableDateTime(SqliteCommand command, string name, DateTime? value)
+        => value.HasValue
+            ? AddDateTime(command, name, value.Value)
+            : AddTyped(command, name, SqliteType.Text, DbType.String, null);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, DateTime value)
+        => AddDateTime(command, name, value);
+
+    public static SqliteParameter Add(SqliteCommand command, string name, DateTime? value)
+        => AddNullableDateTime(command, name, value);
+
+    public static SqliteParameter AddCopy(SqliteCommand command, SqliteParameter source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ValidateParameterName(source.ParameterName);
+
+        var parameter = AddTyped(command, source.ParameterName, source.SqliteType, source.DbType, source.Value);
+        if (source.Size > 0)
+            parameter.Size = source.Size;
+        return parameter;
+    }
 
     public static SqliteParameter AddLimit(SqliteCommand command, string name, int value)
     {
@@ -135,11 +187,14 @@ internal static class SqliteCommandPolicy
         return $"SELECT COUNT(*) FROM (SELECT 1 FROM {SqliteIdentifier.Quote(tableName)} LIMIT {limitParameterName})";
     }
 
-    private static SqliteParameter Add(SqliteCommand command, string name, SqliteType type, object? value)
+    private static SqliteParameter AddTyped(SqliteCommand command, string name, SqliteType sqliteType, DbType dbType, object? value, int? size = null)
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateParameterName(name);
-        var parameter = command.Parameters.Add(name, type);
+        var parameter = command.Parameters.Add(name, sqliteType);
+        parameter.DbType = dbType;
+        if (size.HasValue)
+            parameter.Size = size.Value;
         parameter.Value = value ?? DBNull.Value;
         return parameter;
     }

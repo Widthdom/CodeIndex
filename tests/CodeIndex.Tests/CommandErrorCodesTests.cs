@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -135,7 +136,7 @@ public class CommandErrorCodesTests
         Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
         Assert.Equal("error", json.GetProperty("status").GetString());
         Assert.Equal("E014_REGEX_MATCH_TIMEOUT", json.GetProperty("error_code").GetString());
-        Assert.Equal("regex_timeout", json.GetProperty("category").GetString());
+        Assert.Equal(RegexTimeoutPolicy.RegexTimeoutCategory, json.GetProperty("category").GetString());
     }
 
     [Fact]

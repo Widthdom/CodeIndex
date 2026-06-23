@@ -7,8 +7,8 @@ internal static class ExclusiveFileLock
 {
     internal static FileStream Open(string lockPath)
     {
-        var stream = new FileStream(
-            LongPath.EnsureWindowsPrefix(lockPath),
+        var stream = DataDirectorySecurity.OpenPrivateFileStream(
+            lockPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
             FileShare.None);

@@ -282,16 +282,16 @@ public class ProgramCliTests
     }
 
     [Fact]
-    public void Completions_OptionLikeShellTokenReturnsUsageError()
+    public void Completions_JsonFlagReturnsStructuredUnsupportedError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "--json"]);
 
         Assert.Equal(1, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json is not supported for completions", stderr);
-        Assert.Contains("powershell", stderr);
-        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
-        Assert.DoesNotContain("Unknown shell", stderr);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("--json is not supported for completions.", document.RootElement.GetProperty("message").GetString());
+        Assert.Contains("powershell", document.RootElement.GetProperty("hint").GetString());
     }
 
     [Theory]
@@ -308,7 +308,7 @@ public class ProgramCliTests
     [InlineData("inspect", "cdidx inspect <query>")]
     [InlineData("definition", "cdidx definition <query>")]
     [InlineData("find", "cdidx find <query>")]
-    [InlineData("excerpt", "cdidx excerpt <path>")]
+    [InlineData("excerpt", "cdidx excerpt <path[:line|:start-end]>")]
     [InlineData("hotspots", "cdidx hotspots")]
     [InlineData("deps", "cdidx deps")]
     [InlineData("map", "cdidx map")]
@@ -328,10 +328,11 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
-        if (command is "mcp" or "completions")
+        if (command is "mcp" or "completions" or "references" or "backfill-fold" or "excerpt" or "inspect" or "status")
         {
             Assert.Contains("Notes:", stdout);
-            Assert.Contains("--json is not supported", stdout);
+            if (command is "mcp" or "completions")
+                Assert.Contains("--json is not supported", stdout);
         }
         else
         {
@@ -765,7 +766,6 @@ public class ProgramCliTests
 
     [Theory]
     [InlineData("completions")]
-    [InlineData("completions", "--json")]
     [InlineData("completions", "bash", "extra")]
     public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
     {
@@ -775,8 +775,23 @@ public class ProgramCliTests
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("Usage: cdidx completions <shell>", stderr);
         Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
-        if (args is ["completions", "--json"])
-            Assert.Contains("--json is not supported for completions", stderr);
+    }
+
+    [Theory]
+    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json")]
+    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json=array")]
+    [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "--json")]
+    [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "zsh", "--json")]
+    [InlineData(CommandExitCodes.InvalidArgument, "config show supports --json only; --json=<format> is not supported.", "config", "show", "--json=array")]
+    public void UtilityCommands_JsonFlagsReturnStructuredUnsupportedErrors(int expectedExitCode, string expectedMessage, params string[] args)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(args);
+
+        Assert.Equal(expectedExitCode, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(expectedMessage, document.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -859,6 +874,22 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ListJsonEmptyReturnsArray_Issue3896()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal(0, doc.RootElement.GetArrayLength());
+    }
+
+    [Fact]
     public void Suggestions_ListUsesSharedDataDirResolutionWhenDbIsOmitted()
     {
         using var fixture = SuggestionFixture.Create();
@@ -894,6 +925,20 @@ public class ProgramCliTests
         Assert.Equal(0, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
         Assert.False(doc.RootElement.TryGetProperty("last_submit_attempt", out _));
         Assert.False(doc.RootElement.TryGetProperty("last_submit_error", out _));
+    }
+
+    [Fact]
+    public void Suggestions_ShowJsonMissingIdReturnsStructuredError_Issue3896()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "show", "missing", "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal("error", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Suggestion not found: missing", doc.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]

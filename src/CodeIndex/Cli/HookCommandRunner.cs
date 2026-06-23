@@ -214,7 +214,7 @@ public static class HookCommandRunner
 
     private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath, string projectPath)
     {
-        using (var stream = new FileStream(ioStagedHookPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (var stream = CreateStagedHookFileStream(ioStagedHookPath))
         {
             using (var writer = new StreamWriter(
                 stream,
@@ -231,6 +231,9 @@ public static class HookCommandRunner
 
         MakeExecutable(ioStagedHookPath);
     }
+
+    internal static FileStream CreateStagedHookFileStream(string ioStagedHookPath)
+        => DataDirectorySecurity.OpenPrivateFileStream(ioStagedHookPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
 
     private static void ReplaceFile(string sourceFileName, string destinationFileName, string? destinationBackupFileName)
     {

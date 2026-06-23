@@ -1,4 +1,5 @@
 using System.Reflection;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -168,6 +169,19 @@ public static partial class ExtractorPluginRegistry
             return false;
         }
 
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                "Plugin assembly skipped: symbolic links and reparse points are not supported.",
+                countsAsSkippedFile: true,
+                category: "plugin_reparse_point");
+            return false;
+        }
+
         if (fileInfo.Length > MaxPluginAssemblyBytes)
         {
             RecordDiagnostic(
@@ -203,19 +217,19 @@ public static partial class ExtractorPluginRegistry
 
     private static void TryRegisterPluginType(Type type, string pluginPath)
     {
+        var supportsSymbolExtraction = typeof(ISymbolExtractor).IsAssignableFrom(type);
+        var supportsReferenceExtraction = typeof(IReferenceExtractor).IsAssignableFrom(type);
+        if (!supportsSymbolExtraction && !supportsReferenceExtraction)
+            return;
+
         try
         {
-            if (typeof(ISymbolExtractor).IsAssignableFrom(type)
-                && Activator.CreateInstance(type) is ISymbolExtractor symbolExtractor)
-            {
+            var instance = Activator.CreateInstance(type);
+            if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
                 Register(symbolExtractor);
-            }
 
-            if (typeof(IReferenceExtractor).IsAssignableFrom(type)
-                && Activator.CreateInstance(type) is IReferenceExtractor referenceExtractor)
-            {
+            if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
                 Register(referenceExtractor);
-            }
         }
         catch (Exception ex)
         {

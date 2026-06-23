@@ -150,8 +150,10 @@ names visible so documentation and tests stay synchronized.
 index stamp from `indexed_head_sha` when available, and falls back to the older
 full-scan-only `indexed_head_commit` only for legacy DBs.
 
-Runtime diagnostics under `extractors.diagnostics[]` and `hook_diagnostics[]`
-include sanitized `category` machine codes alongside bounded paths and messages.
+Runtime diagnostics under `extractors` include `retained_load_context_count` so
+long-running processes can see how many plugin assembly load contexts are still
+held. `extractors.diagnostics[]` and `hook_diagnostics[]` include sanitized
+`category` machine codes alongside bounded paths and messages.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 
@@ -331,8 +333,10 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 `indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の
 full-scan 限定 `indexed_head_commit` に fallback します。
 
-`extractors.diagnostics[]` と `hook_diagnostics[]` の runtime diagnostics は、
-bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
+`extractors` の runtime diagnostics は `retained_load_context_count` を含むため、
+長時間実行プロセスは保持中の plugin assembly load context 数を確認できます。
+`extractors.diagnostics[]` と `hook_diagnostics[]` は、bounded な path と message に加えて
+sanitization 済みの `category` machine code を含みます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 

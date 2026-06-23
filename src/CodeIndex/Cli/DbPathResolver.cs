@@ -337,7 +337,7 @@ public static class DbPathResolver
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", key);
+            SqliteCommandPolicy.Add(cmd, "@key", key);
             var raw = cmd.ExecuteScalar();
             return raw is string value && !string.IsNullOrWhiteSpace(value) ? value : null;
         }
@@ -355,7 +355,7 @@ public static class DbPathResolver
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT 1 FROM codeindex_meta WHERE key = @key LIMIT 1";
-            cmd.Parameters.AddWithValue("@key", key);
+            SqliteCommandPolicy.Add(cmd, "@key", key);
             return cmd.ExecuteScalar() != null;
         }
         catch (Exception ex) when (IsMetadataProbeException(ex))

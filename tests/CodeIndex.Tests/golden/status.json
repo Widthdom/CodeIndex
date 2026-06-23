@@ -106,6 +106,7 @@
     "pattern_config_count": 0,
     "symbol_extractor_count": 0,
     "reference_extractor_count": 0,
+    "retained_load_context_count": 0,
     "skipped_file_count": 0,
     "diagnostic_count": 0,
     "diagnostic_limit": 20,

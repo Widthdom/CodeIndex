@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -254,8 +255,7 @@ public static partial class ExtractorPluginRegistry
         try
         {
             var info = new DirectoryInfo(directory);
-            return (info.Attributes & FileAttributes.ReparsePoint) != 0
-                   || !string.IsNullOrEmpty(info.LinkTarget);
+            return FileSystemBoundary.IsSymlinkOrReparsePoint(info);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -6,7 +6,7 @@ internal static class DiagnosticSanitizer
 {
     private const int MaxDiagnosticFieldLength = 240;
     private const int MaxSanitizerInputLength = MaxDiagnosticFieldLength * 8;
-    internal const string RegexTimeoutFallbackMessage = "[message omitted after sanitization timeout]";
+    internal const string RegexTimeoutFallbackMessage = RegexTimeoutPolicy.DiagnosticSanitizerTimeoutFallback;
 
     public static string ForPath(string? path)
     {
@@ -51,7 +51,7 @@ internal static class DiagnosticSanitizer
         }
         catch (RegexMatchTimeoutException)
         {
-            return RegexTimeoutFallbackMessage;
+            return RegexTimeoutPolicy.RedactionFallback(RegexRedactionSurface.DiagnosticSanitizerMessage);
         }
     }
 

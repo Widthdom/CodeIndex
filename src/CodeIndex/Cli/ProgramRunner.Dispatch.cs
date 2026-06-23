@@ -72,6 +72,21 @@ internal static partial class ProgramRunner
     {
         if (args[0] is "--license" or "license")
         {
+            var wantsJson = ContainsJsonOutputFlag(args.Skip(1));
+            if (wantsJson)
+            {
+                exitCode = CommandErrorWriter.WriteJsonOrHuman(
+                    true,
+                    context.JsonOptions,
+                    "license does not support --json or --json=<format>.",
+                    CommandExitCodes.UsageError,
+                    "rerun without --json; license output is human-readable text.",
+                    usage: "cdidx license");
+                GlobalToolLog.Info($"command_complete exit_code={exitCode} license_json_unsupported=true");
+                EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
+                return true;
+            }
+
             if (args[0] == "license" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
             {
                 ConsoleUi.PrintCommandUsage("license");
@@ -99,7 +114,7 @@ internal static partial class ProgramRunner
                 return true;
             }
 
-            exitCode = RunCompletions(args[1..], args[0] == "completions" ? "completions" : "--completions");
+            exitCode = RunCompletions(args[1..], context.JsonOptions, args[0] == "completions" ? "completions" : "--completions");
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
             EmitCommandMetric("completions", args, context.StartTimestamp, context.Stopwatch, exitCode);
             return true;

@@ -149,7 +149,7 @@ internal sealed class RepoMapBuilder
 
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         using var reader = cmd.ExecuteTrackedReader();
@@ -424,7 +424,7 @@ internal sealed class RepoMapBuilder
 
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<RepoEntrypointResult>();
