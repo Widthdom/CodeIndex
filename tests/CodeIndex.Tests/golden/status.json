@@ -12,6 +12,19 @@
   "wal_checkpoint_succeeded": false,
   "read_only_immutable_fallback": false,
   "wal_stale_snapshot_risk": false,
+  "sqlite_connection_policy": {
+    "active_mode": "read_write",
+    "open_mode": "read_write",
+    "pooling": true,
+    "immutable_uri": false,
+    "command_timeout_seconds": 30,
+    "long_running_commands_require_cancellation": true,
+    "read_only_fallback": false,
+    "wal_checkpoint_attempted": false,
+    "wal_checkpoint_succeeded": false,
+    "read_only_immutable_fallback": false,
+    "wal_stale_snapshot_risk": false
+  },
   "git_head": null,
   "git_is_dirty": null,
   "languages": {

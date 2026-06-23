@@ -279,7 +279,7 @@ public sealed class DbSchemaCache
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
             columns.Add(reader.GetString(1));
@@ -293,7 +293,7 @@ public sealed class DbSchemaCache
             return indexes;
 
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA index_list('{tableName.Replace("'", "''")}')";
+        cmd.CommandText = SqliteCommandPolicy.IndexListPragmaSql(tableName);
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {

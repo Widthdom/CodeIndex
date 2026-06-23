@@ -244,14 +244,9 @@ public static partial class IndexCommandRunner
 
         try
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = resolvedDbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            };
-            using var connection = new SqliteConnection(builder.ConnectionString);
+            using var connection = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(resolvedDbPath, SqliteConnectionPolicyMode.ReadOnly));
             connection.Open();
-            using var command = connection.CreateCommand();
+            using var command = SqliteConnectionPolicy.CreateCommand(connection);
             command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
             command.Parameters.AddWithValue("@key", DbContext.LastFullScanElapsedMsMetaKey);
             var raw = command.ExecuteScalar() as string;

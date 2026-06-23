@@ -280,15 +280,7 @@ public static class DbPathResolver
     }
 
     internal static string BuildSqliteConnectionString(string dbPath, SqliteOpenMode? mode = null)
-    {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-        };
-        if (mode.HasValue)
-            builder.Mode = mode.Value;
-        return builder.ConnectionString;
-    }
+        => SqliteConnectionPolicy.BuildConnectionString(dbPath, mode);
 
     private static string? TryReadIndexedProjectRoot(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);

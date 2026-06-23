@@ -748,7 +748,7 @@ public class DbWriter
               AND i.kind IN ('replacement_char', 'non_utf8_likely')
               AND (i.origin IS NULL OR i.severity IS NULL)
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@path", relativePath);
+        SqliteCommandPolicy.AddText(cmd, "@path", relativePath);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -765,7 +765,7 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE lang = @lang LIMIT 1";
-        cmd.Parameters.AddWithValue("@lang", lang);
+        SqliteCommandPolicy.AddText(cmd, "@lang", lang);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -773,24 +773,24 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id";
-        cmd.Parameters.AddWithValue("@file_id", fileId);
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbols count for file");
     }
 
     public int CountReferencesForFile(long fileId)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id";
-        cmd.Parameters.AddWithValue("@file_id", fileId);
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
     }
 
     public bool HasIssueForFile(long fileId, string kind)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1";
-        cmd.Parameters.AddWithValue("@file_id", fileId);
-        cmd.Parameters.AddWithValue("@kind", kind);
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        SqliteCommandPolicy.AddText(cmd, "@kind", kind);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -3452,7 +3452,7 @@ public class DbWriter
     private bool ColumnExists(string table, string column)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(table);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
