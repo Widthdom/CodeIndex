@@ -243,9 +243,25 @@ internal static partial class ProgramRunner
     }
 
     private static bool IsConfigShowCommand(IReadOnlyList<string> args)
-        => args.Count >= 2
-           && string.Equals(args[0], "config", StringComparison.Ordinal)
-           && string.Equals(args[1], "show", StringComparison.Ordinal);
+    {
+        var commandIndex = 0;
+        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
+        {
+            var option = args[commandIndex];
+            var optionName = option.Split('=', 2)[0];
+            commandIndex++;
+            if (!option.Contains('=', StringComparison.Ordinal)
+                && TopLevelValueOptionNames.Contains(optionName)
+                && commandIndex < args.Count)
+            {
+                commandIndex++;
+            }
+        }
+
+        return commandIndex + 1 < args.Count
+               && string.Equals(args[commandIndex], "config", StringComparison.Ordinal)
+               && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal);
+    }
 
     private static int RunTestExtractor(string[] args, JsonSerializerOptions jsonOptions)
     {

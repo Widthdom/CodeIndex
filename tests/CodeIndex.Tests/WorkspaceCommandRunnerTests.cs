@@ -618,6 +618,13 @@ public class WorkspaceCommandRunnerTests
             var configFile = document.RootElement.GetProperty("config_file");
             Assert.Equal("invalid", configFile.GetProperty("status").GetString());
             Assert.Contains("Invalid JSON", configFile.GetProperty("error").GetString(), StringComparison.Ordinal);
+
+            var (prettyExitCode, prettyStdout, prettyStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["--pretty", "config", "show", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, prettyExitCode);
+            Assert.Empty(prettyStderr);
+            using var prettyDocument = JsonDocument.Parse(prettyStdout);
+            Assert.Equal("invalid", prettyDocument.RootElement.GetProperty("config_file").GetProperty("status").GetString());
         }
         finally
         {
