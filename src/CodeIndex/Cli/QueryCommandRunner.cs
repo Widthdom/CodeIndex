@@ -37,6 +37,8 @@ public static partial class QueryCommandRunner
     internal const int MaxStatusSymbolKindNameLength = 64;
     private const int MaxSearchProjectionFieldsCsvLength = 256;
     private const int MaxSearchProjectionFieldsCsvEntries = 16;
+    private const int MaxOutlineProjectionFieldsCsvLength = 256;
+    private const int MaxOutlineProjectionFieldsCsvEntries = 16;
     private const int DefaultSearchGroupedPerFileLimit = 3;
     private const int MaxSearchGroupedPerFileLimit = 20;
     private const int MaxSearchNextStepLimit = 10;
@@ -212,6 +214,7 @@ public static partial class QueryCommandRunner
         "--per-file-limit",
         "--max-json-bytes",
         "--search-fields",
+        "--outline-fields",
         "--focus-line",
         "--focus-column",
         "--focus-length",
@@ -450,6 +453,14 @@ public static partial class QueryCommandRunner
                 "--cursor for search must be a search pagination cursor returned by recipe search.",
                 GetUsageLineOrThrow("search"),
                 "Use `--cursor <next_cursor>` only with `--recipe`; `unused:<offset>` cursors are for `cdidx unused`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.OutlineCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for search must be a search pagination cursor returned by recipe search.",
+                GetUsageLineOrThrow("search"),
+                "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
         if (options.AuditScopeExplicit && options.RecipeName == null)
@@ -1488,6 +1499,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
                 Console.WriteLine($"    {query.Description}");
                 Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
+                if (query.BroadCatchTaxonomy is not null)
+                {
+                    Console.WriteLine($"    broad catch boundaries: {string.Join(", ", query.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
+                    Console.WriteLine($"    broad catch diagnostics: {string.Join(", ", query.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
+                }
             }
         }
 
@@ -1687,6 +1703,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine(queryResult.Description);
                 Console.WriteLine($"labels: {string.Join(", ", queryResult.RecommendedLabels)}");
                 Console.WriteLine($"false positives: {queryResult.FalsePositiveGuidance}");
+                if (queryResult.BroadCatchTaxonomy is not null)
+                {
+                    Console.WriteLine($"broad catch boundaries: {string.Join(", ", queryResult.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
+                    Console.WriteLine($"broad catch diagnostics: {string.Join(", ", queryResult.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
+                }
                 Console.WriteLine($"results: {queryResult.Count}");
                 foreach (var result in queryResult.Results)
                 {
@@ -1815,6 +1836,7 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 [],
+                null,
                 rows.Count,
                 options.Limit,
                 0,
@@ -1896,6 +1918,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -1955,6 +1978,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -2325,6 +2349,11 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
+        if (queryResult.BroadCatchTaxonomy is not null)
+        {
+            AppendSearchIssueDraftBroadCatchTaxonomy(sb, queryResult.BroadCatchTaxonomy);
+            sb.AppendLine();
+        }
         sb.AppendLine("## Replay command");
         sb.AppendLine("```sh");
         sb.AppendLine(BuildSearchRecipeReplayCommand(recipe, options, queryResult.Name));
@@ -2336,6 +2365,20 @@ public static partial class QueryCommandRunner
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
         sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
         return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendSearchIssueDraftBroadCatchTaxonomy(StringBuilder sb, SearchRecipeBroadCatchTaxonomyJsonResult taxonomy)
+    {
+        sb.AppendLine("## Broad-catch taxonomy");
+        sb.AppendLine(taxonomy.TriageGuidance);
+        sb.AppendLine();
+        sb.AppendLine("### Boundary categories");
+        foreach (var category in taxonomy.BoundaryCategories)
+            sb.AppendLine($"- `{category.Name}`: {category.Description} Expected diagnostic behavior: {category.ExpectedDiagnosticBehavior}");
+        sb.AppendLine();
+        sb.AppendLine("### Diagnostic behavior categories");
+        foreach (var behavior in taxonomy.DiagnosticBehaviors)
+            sb.AppendLine($"- `{behavior.Name}`: {behavior.Description}");
     }
 
     private static void AppendSearchIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
@@ -2441,6 +2484,9 @@ public static partial class QueryCommandRunner
     private static string FormatUnusedCursor(int offset)
         => string.Create(CultureInfo.InvariantCulture, $"unused:{offset}");
 
+    private static string FormatOutlineCursor(int offset)
+        => string.Create(CultureInfo.InvariantCulture, $"outline:{offset}");
+
     private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
     {
         cursor = default;
@@ -2469,6 +2515,16 @@ public static partial class QueryCommandRunner
     {
         offset = 0;
         const string prefix = "unused:";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
+            && offset >= 0;
+    }
+
+    private static bool TryParseOutlineCursor(string value, out int offset)
+    {
+        offset = 0;
+        const string prefix = "outline:";
         if (!value.StartsWith(prefix, StringComparison.Ordinal))
             return false;
         return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
@@ -2539,6 +2595,7 @@ public static partial class QueryCommandRunner
             [.. query.MatchOrigins],
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
+            query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
@@ -5519,6 +5576,193 @@ public static partial class QueryCommandRunner
         return BuildCompactTruncationMetadata(sectionLimit, sections);
     }
 
+    private static bool HasOutlineJsonControls(QueryCommandOptions options, IReadOnlyList<string> kindFilters)
+        => options.OutlineFieldsExplicit
+           || kindFilters.Count > 0
+           || options.LimitExplicit
+           || options.OutlineCursorOffset.HasValue;
+
+    private static List<string> BuildOutlineKindFilters(string? rawKind)
+    {
+        if (string.IsNullOrWhiteSpace(rawKind))
+            return [];
+
+        return rawKind
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(kind => kind.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static List<OutlineSymbol> ApplyOutlineKindFilters(IReadOnlyList<OutlineSymbol> symbols, IReadOnlyList<string> kindFilters)
+    {
+        if (kindFilters.Count == 0)
+            return symbols.ToList();
+
+        var filterSet = kindFilters.ToHashSet(StringComparer.Ordinal);
+        return symbols.Where(symbol => filterSet.Contains(symbol.Kind.ToLowerInvariant())).ToList();
+    }
+
+    private static List<OutlineSymbol> ApplyOutlineHumanPaging(IReadOnlyList<OutlineSymbol> symbols, QueryCommandOptions options)
+    {
+        if (!options.LimitExplicit && !options.OutlineCursorOffset.HasValue)
+            return symbols.ToList();
+
+        var offset = Math.Min(options.OutlineCursorOffset ?? 0, symbols.Count);
+        return symbols.Skip(offset).Take(options.Limit).ToList();
+    }
+
+    private static JsonObject BuildOutlineJsonPayload(
+        OutlineResult outline,
+        IReadOnlyList<OutlineSymbol> filteredSymbols,
+        IReadOnlyList<string> kindFilters,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        bool compact)
+    {
+        var totalMatchingSymbols = filteredSymbols.Count;
+        var offset = Math.Min(options.OutlineCursorOffset ?? 0, totalMatchingSymbols);
+        var remainingSymbols = offset == 0
+            ? filteredSymbols.ToList()
+            : filteredSymbols.Skip(offset).ToList();
+
+        if (compact)
+        {
+            var compactLimit = GetCompactSectionLimit(options);
+            var compactOutline = BuildOutlineView(outline, remainingSymbols, totalMatchingSymbols);
+            var compactTruncation = ApplyOutlineCompactCaps(compactOutline, compactLimit);
+            var payload = JsonSerializer.SerializeToNode(compactOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+            AddOutlinePagingJsonFields(payload, kindFilters, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
+            ApplyOutlineFieldSelection(payload, compactOutline.Symbols, options, jsonOptions);
+            AddCompactJsonFields(payload, compactLimit, compactTruncation);
+            return payload;
+        }
+
+        var shouldPage = options.LimitExplicit || options.OutlineCursorOffset.HasValue;
+        var pageSymbols = shouldPage
+            ? remainingSymbols.Take(options.Limit).ToList()
+            : remainingSymbols;
+        var pagedOutline = BuildOutlineView(outline, pageSymbols, totalMatchingSymbols);
+        var pagedPayload = JsonSerializer.SerializeToNode(pagedOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+        AddOutlinePagingJsonFields(pagedPayload, kindFilters, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
+        ApplyOutlineFieldSelection(pagedPayload, pageSymbols, options, jsonOptions);
+        return pagedPayload;
+    }
+
+    private static OutlineResult BuildOutlineView(OutlineResult outline, List<OutlineSymbol> symbols, int symbolCount)
+        => new()
+        {
+            Path = outline.Path,
+            Lang = outline.Lang,
+            TotalLines = outline.TotalLines,
+            SymbolCount = symbolCount,
+            Symbols = symbols,
+        };
+
+    private static void AddOutlinePagingJsonFields(
+        JsonObject payload,
+        IReadOnlyList<string> kindFilters,
+        int totalSymbolCount,
+        int offset,
+        int returnedSymbolCount,
+        JsonSerializerOptions jsonOptions)
+    {
+        var nextOffset = offset + returnedSymbolCount;
+        var hasMore = nextOffset < totalSymbolCount;
+        payload["total_symbol_count"] = totalSymbolCount;
+        payload["returned_symbol_count"] = returnedSymbolCount;
+        payload["cursor_offset"] = offset;
+        payload["next_cursor"] = hasMore ? JsonValue.Create(FormatOutlineCursor(nextOffset)) : null;
+        payload["has_more"] = hasMore;
+        if (kindFilters.Count > 0)
+            payload["kind_filter"] = JsonSerializer.SerializeToNode(kindFilters.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+    }
+
+    private static void ApplyOutlineFieldSelection(
+        JsonObject payload,
+        IReadOnlyList<OutlineSymbol> symbols,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        if (!options.OutlineFieldsExplicit)
+            return;
+
+        if (options.OutlineFields == null)
+        {
+            payload["selected_fields"] = JsonSerializer.SerializeToNode(new List<string> { "all" }, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+            return;
+        }
+
+        payload["selected_fields"] = JsonSerializer.SerializeToNode(options.OutlineFields, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        var projectedSymbols = new JsonArray();
+        foreach (var symbol in symbols)
+            projectedSymbols.Add(BuildProjectedOutlineSymbol(symbol, options.OutlineFields));
+        payload["symbols"] = projectedSymbols;
+    }
+
+    private static JsonObject BuildProjectedOutlineSymbol(OutlineSymbol symbol, IReadOnlyList<string> fields)
+    {
+        var payload = new JsonObject();
+        foreach (var field in fields)
+        {
+            switch (field)
+            {
+                case "kind":
+                    payload["kind"] = symbol.Kind;
+                    break;
+                case "name":
+                    payload["name"] = symbol.Name;
+                    break;
+                case "display_name":
+                    payload["display_name"] = symbol.DisplayName;
+                    break;
+                case "path":
+                    payload["path"] = symbol.Path;
+                    break;
+                case "line":
+                    payload["line"] = symbol.Line;
+                    break;
+                case "start_line":
+                    payload["start_line"] = symbol.StartLine;
+                    break;
+                case "end_line":
+                    payload["end_line"] = symbol.EndLine;
+                    break;
+                case "depth":
+                    payload["depth"] = symbol.Depth;
+                    break;
+                case "body_start_line":
+                    payload["body_start_line"] = symbol.BodyStartLine;
+                    break;
+                case "body_end_line":
+                    payload["body_end_line"] = symbol.BodyEndLine;
+                    break;
+                case "signature":
+                    payload["signature"] = symbol.Signature;
+                    break;
+                case "signature_truncated":
+                    payload["signature_truncated"] = symbol.SignatureTruncated;
+                    break;
+                case "signature_original_length":
+                    payload["signature_original_length"] = symbol.SignatureOriginalLength;
+                    break;
+                case "container_kind":
+                    payload["container_kind"] = symbol.ContainerKind;
+                    break;
+                case "container_name":
+                    payload["container_name"] = symbol.ContainerName;
+                    break;
+                case "visibility":
+                    payload["visibility"] = symbol.Visibility;
+                    break;
+                case "return_type":
+                    payload["return_type"] = symbol.ReturnType;
+                    break;
+            }
+        }
+        return payload;
+    }
+
     private static JsonObject BuildCompactTruncationMetadata(int sectionLimit, JsonObject sections)
         => new()
         {
@@ -5955,8 +6199,18 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "outline"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidOutlineKindFilterError(options))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("outline", options))
             return CommandExitCodes.UsageError;
+        if (options.SearchCursor.HasValue || options.UnusedCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "outline --cursor must use an outline pagination cursor.",
+                GetUsageLineOrThrow("outline"),
+                "Use the `next_cursor` value returned by `cdidx outline <path> --json --limit <n>`.");
+            return CommandExitCodes.UsageError;
+        }
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
         return WithDb(options, jsonOptions, reader =>
@@ -5971,14 +6225,18 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.NotFound;
             }
 
+            var kindFilters = BuildOutlineKindFilters(options.Kind);
+            var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);
             if (options.Json)
             {
                 if (options.Compact)
                 {
-                    var compactLimit = GetCompactSectionLimit(options);
-                    var compactTruncation = ApplyOutlineCompactCaps(outline, compactLimit);
-                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-                    AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: true);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else if (HasOutlineJsonControls(options, kindFilters))
+                {
+                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: false);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -5990,14 +6248,15 @@ public static partial class QueryCommandRunner
             {
                 var outlineContent = reader.GetExcerpt(filePath, 1, outline.TotalLines)?.Content;
 
-                Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
+                Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {filteredSymbols.Count} symbols)");
                 Console.WriteLine();
-                var duplicateNames = outline.Symbols
+                var duplicateNames = filteredSymbols
                     .GroupBy(sym => sym.Name, StringComparer.Ordinal)
                     .Where(group => group.Count() > 1)
                     .Select(group => group.Key)
                     .ToHashSet(StringComparer.Ordinal);
-                foreach (var sym in outline.Symbols)
+                var displaySymbols = ApplyOutlineHumanPaging(filteredSymbols, options);
+                foreach (var sym in displaySymbols)
                 {
                     // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
                     var indent = sym.Depth > 0 ? new string(' ', 4 * sym.Depth) : "";
@@ -8211,6 +8470,14 @@ public static partial class QueryCommandRunner
                 "Use the `next_cursor` value from `cdidx unused --json`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.OutlineCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                GetUsageLineOrThrow("unused"),
+                "`outline:<offset>` cursors are for `cdidx outline <path>`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.UnusedCursorOffset.HasValue && options.CountOnly)
         {
             WriteUsageError(
@@ -9128,6 +9395,8 @@ public static partial class QueryCommandRunner
         var excludeOrigins = new List<string>();
         var resultKinds = new List<string>();
         List<string>? searchFields = null;
+        List<string>? outlineFields = null;
+        bool outlineFieldsExplicit = false;
         bool firstPerFile = false;
         bool resultsOnly = false;
         bool nextSteps = false;
@@ -9174,6 +9443,7 @@ public static partial class QueryCommandRunner
         var issueLabels = new List<string>();
         SearchCursor? searchCursor = null;
         int? unusedCursorOffset = null;
+        int? outlineCursorOffset = null;
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
@@ -9645,8 +9915,10 @@ public static partial class QueryCommandRunner
                             searchCursor = parsedCursor;
                         else if (TryParseUnusedCursor(cursorValue!, out var parsedUnusedCursorOffset))
                             unusedCursorOffset = parsedUnusedCursorOffset;
+                        else if (TryParseOutlineCursor(cursorValue!, out var parsedOutlineCursorOffset))
+                            outlineCursorOffset = parsedOutlineCursorOffset;
                         else
-                            AddParseError("Error: --cursor must be a search pagination cursor or an unused pagination cursor returned as `next_cursor`.");
+                            AddParseError("Error: --cursor must be a search, unused, or outline pagination cursor returned as `next_cursor`.");
                     }
                     else
                     {
@@ -10074,6 +10346,20 @@ public static partial class QueryCommandRunner
                     else
                     {
                         AddParseError("Error: --check is not supported by this command.");
+                    }
+                    break;
+                case "--outline-fields":
+                    if (TryReadStringOptionValue(args, ref i, "--outline-fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var outlineFieldsValue, out var outlineFieldsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--outline-fields", outlineFieldsValue!);
+                        outlineFields = ParseOutlineProjectionFields(outlineFieldsValue!, AddParseError);
+                        outlineFieldsExplicit = true;
+                        json = true;
+                        outputFormat = OutputFormatJson;
+                    }
+                    else
+                    {
+                        AddParseError(outlineFieldsError!);
                     }
                     break;
                 case "--stale-after":
@@ -10508,6 +10794,8 @@ public static partial class QueryCommandRunner
             ExcludeOrigins = excludeOrigins,
             ResultKinds = resultKinds,
             SearchFields = searchFields,
+            OutlineFields = outlineFields,
+            OutlineFieldsExplicit = outlineFieldsExplicit,
             FirstPerFile = firstPerFile,
             ResultsOnly = resultsOnly,
             NextSteps = nextSteps,
@@ -10547,6 +10835,7 @@ public static partial class QueryCommandRunner
             IssueLabels = issueLabels,
             SearchCursor = searchCursor,
             UnusedCursorOffset = unusedCursorOffset,
+            OutlineCursorOffset = outlineCursorOffset,
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
@@ -10790,6 +11079,74 @@ public static partial class QueryCommandRunner
         if (fields.Count == 0)
             addParseError("Error: --search-fields requires at least one field name.");
         return fields;
+    }
+
+    private static List<string>? ParseOutlineProjectionFields(string rawValue, Action<string> addParseError)
+    {
+        var fields = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var all = false;
+        if (!ValidateCsvBounds("--outline-fields", rawValue, MaxOutlineProjectionFieldsCsvLength, MaxOutlineProjectionFieldsCsvEntries, addParseError))
+            return fields;
+
+        void AddField(string field)
+        {
+            if (seen.Add(field))
+                fields.Add(field);
+        }
+
+        foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var field = rawField.ToLowerInvariant().Replace('-', '_');
+            switch (field)
+            {
+                case "all":
+                    all = true;
+                    continue;
+                case "kind":
+                case "name":
+                case "display_name":
+                case "path":
+                case "line":
+                case "start_line":
+                case "end_line":
+                case "depth":
+                case "body_start_line":
+                case "body_end_line":
+                case "signature":
+                case "signature_truncated":
+                case "signature_original_length":
+                case "container_kind":
+                case "container_name":
+                case "visibility":
+                case "return_type":
+                    AddField(field);
+                    break;
+                case "range":
+                case "lines":
+                    AddField("start_line");
+                    AddField("end_line");
+                    break;
+                case "body":
+                case "body_range":
+                    AddField("body_start_line");
+                    AddField("body_end_line");
+                    break;
+                case "container":
+                    AddField("container_kind");
+                    AddField("container_name");
+                    break;
+                default:
+                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, or aliases range, lines, body, body_range, container.");
+                    continue;
+            }
+        }
+
+        if (all && fields.Count > 0)
+            addParseError("Error: --outline-fields all cannot be combined with specific field names.");
+        if (!all && fields.Count == 0)
+            addParseError("Error: --outline-fields requires at least one field name.");
+        return all ? null : fields;
     }
 
     private static void AddSearchMatchOrigins(string optionName, string rawValue, List<string> origins, Action<string> addParseError)
@@ -11806,6 +12163,36 @@ public static partial class QueryCommandRunner
                 $"invalid --kind value `{ConsoleUi.FormatBoundedValue(options.Kind)}`.",
                 $"use one of: {string.Join(", ", acceptedKinds)}.",
                 GetUsageLineOrThrow(commandName));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryWriteInvalidOutlineKindFilterError(QueryCommandOptions options)
+    {
+        if (options.Kind == null)
+            return false;
+
+        var kinds = BuildOutlineKindFilters(options.Kind);
+        if (kinds.Count == 0)
+        {
+            CommandErrorWriter.Write(
+                $"invalid --kind value `{ConsoleUi.FormatBoundedValue(options.Kind)}`.",
+                $"use one or more of: {string.Join(", ", KnownSymbolKindFilters)}.",
+                GetUsageLineOrThrow("outline"));
+            return true;
+        }
+
+        foreach (var kind in kinds)
+        {
+            if (KnownSymbolKindFilters.Contains(kind))
+                continue;
+
+            CommandErrorWriter.Write(
+                $"invalid --kind value `{ConsoleUi.FormatBoundedValue(kind)}`.",
+                $"use one or more of: {string.Join(", ", KnownSymbolKindFilters)}.",
+                GetUsageLineOrThrow("outline"));
             return true;
         }
 
@@ -13840,8 +14227,9 @@ public static partial class QueryCommandRunner
         ["--repo"] = "pass a GitHub repository in owner/name form for `--open-issues github`, e.g. `--repo Widthdom/CodeIndex`.",
         ["--issue-title"] = "pass an issue title hint for ad hoc search issue-drafts, e.g. `--issue-title \"Thread.Yield audit\"`.",
         ["--issue-label"] = "pass an issue label hint for search issue-drafts, e.g. `--issue-label audit`; repeat or comma-separate values.",
-        ["--cursor"] = "pass the `next_cursor` returned by a prior recipe search response; use it with one selected recipe query.",
-        ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--cursor"] = "pass the `next_cursor` returned by a prior paged response, such as a recipe search cursor, `outline:<offset>`, or `unused:<offset>`.",
+        ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/outline/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--outline-fields"] = "pass outline symbol field names such as `name,line,signature`, or `all` for the full symbol payload.",
         ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
         ["--confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
@@ -14263,6 +14651,8 @@ public sealed class QueryCommandOptions
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
     public List<string>? SearchFields { get; init; }
+    public List<string>? OutlineFields { get; init; }
+    public bool OutlineFieldsExplicit { get; init; }
     public bool FirstPerFile { get; init; }
     public bool ResultsOnly { get; init; }
     public bool NextSteps { get; init; }
@@ -14302,6 +14692,7 @@ public sealed class QueryCommandOptions
     public List<string> IssueLabels { get; init; } = [];
     public SearchCursor? SearchCursor { get; init; }
     public int? UnusedCursorOffset { get; init; }
+    public int? OutlineCursorOffset { get; init; }
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
