@@ -625,20 +625,12 @@ public static partial class QueryCommandRunner
                     "Remove --prefix, or run the individual query from the recipe list yourself.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCompact and not OutputFormatIssueDrafts)
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount and not OutputFormatCompact and not OutputFormatIssueDrafts)
             {
                 WriteUsageError(
-                    "--format count/csv/tsv/lsp/qf/sarif is not supported with --recipe.",
+                    "--format csv/tsv/lsp/qf/sarif is not supported with --recipe.",
                     GetUsageLineOrThrow("search"),
-                    "Use `--json` for grouped recipe results, `--format compact` for summary-first compact JSON, or `--format issue-drafts` for draft exports.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.CountOnly)
-            {
-                WriteUsageError(
-                    "--count is not supported with --recipe.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
+                    "Use `--count` / `--format count` for count-only recipe output, `--json` for grouped recipe results, `--format compact` for summary-first compact JSON, or `--format issue-drafts` for draft exports.");
                 return CommandExitCodes.UsageError;
             }
             if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -649,6 +641,9 @@ public static partial class QueryCommandRunner
                     "Use plain `--json` for the grouped recipe object.");
                 return CommandExitCodes.UsageError;
             }
+
+            if (options.CountOnly)
+                return RunSearchRecipeCount(options, jsonOptions, exact);
 
             if (options.OutputFormat == OutputFormatIssueDrafts)
                 return RunSearchRecipeIssueDrafts(options, jsonOptions, exact, cancellationToken);
@@ -1753,6 +1748,53 @@ public static partial class QueryCommandRunner
         });
     }
 
+    private static int RunSearchRecipeCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
+        {
+            WriteUsageError(
+                selectionError!,
+                GetUsageLineOrThrow("search"),
+                "Use `cdidx search --recipe risky-code/raw-diagnostic-echo`, or `--include-query` / `--exclude-query` with a recipe name.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var recipe = selection.Recipe;
+        var scope = BuildSearchRecipeScope(recipe, options);
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryCounts = CountSearchRecipeQueryResults(
+                reader,
+                selection.Queries,
+                scope,
+                options,
+                userExact,
+                out var total,
+                out var fileCount);
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new SearchRecipeCountRunJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        ToSearchRecipeListItem(recipe, selection.Queries),
+                        scope,
+                        selection.Queries.Count,
+                        total,
+                        fileCount,
+                        queryCounts),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountRunJsonResult));
+            }
+            else
+            {
+                Console.WriteLine(total.ToString(CultureInfo.InvariantCulture));
+                CommandErrorWriter.WriteStderr($"({total} recipe results in {fileCount} files across {selection.Queries.Count} queries)");
+            }
+
+            return CommandExitCodes.Success;
+        });
+    }
+
     private static int RunSearchIssueDrafts(
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
@@ -1808,6 +1850,9 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 rows.Count,
+                rows.Count,
+                rows.Count,
+                0,
                 options.Limit,
                 0,
                 BuildSearchRecipeTopFiles(rows),
@@ -1889,6 +1934,9 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
                 rows.Count,
+                rows.Count,
+                rows.Count + minimumOmitted,
+                minimumOmitted,
                 options.Limit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
@@ -1948,6 +1996,9 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
                 rows.Count,
+                rows.Count,
+                rows.Count + minimumOmitted,
+                minimumOmitted,
                 options.Limit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
@@ -1965,6 +2016,107 @@ public static partial class QueryCommandRunner
         }
 
         return queryResults;
+    }
+
+    private static List<SearchRecipeCountQueryJsonResult> CountSearchRecipeQueryResults(
+        DbReader reader,
+        IReadOnlyList<SearchAuditRecipeQuery> recipeQueries,
+        SearchRecipeScopeJsonResult scope,
+        QueryCommandOptions options,
+        bool userExact,
+        out int total,
+        out int fileCount)
+    {
+        var queryCounts = new List<SearchRecipeCountQueryJsonResult>();
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        total = 0;
+        foreach (var recipeQuery in recipeQueries)
+        {
+            var exact = userExact || recipeQuery.ExactSubstring;
+            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var requiredPathPatterns = GetSearchRecipeRequiredPathPatterns(options, recipeQuery);
+            var topFiles = new List<SearchRecipeTopFileJsonResult>();
+            QueryCountResult count;
+            if (requiredPathPatterns is { Count: > 0 })
+            {
+                var results = reader.Search(
+                    recipeQuery.Query,
+                    int.MaxValue,
+                    options.Lang,
+                    false,
+                    queryScope.PathPatterns,
+                    queryScope.ExcludePaths,
+                    queryScope.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    cursor: options.SearchCursor,
+                    guardFilters: options.GuardFilters,
+                    guardWindow: options.GuardWindow,
+                    guardScope: options.GuardScope,
+                    requiredPathPatterns: requiredPathPatterns);
+                var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+                count = new QueryCountResult(rows.Count, rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
+                foreach (var path in rows.Select(row => row.Result.Path))
+                    paths.Add(path);
+                topFiles = BuildSearchRecipeTopFiles(rows);
+            }
+            else
+            {
+                count = reader.CountSearchResults(
+                    recipeQuery.Query,
+                    options.Lang,
+                    false,
+                    queryScope.PathPatterns,
+                    queryScope.ExcludePaths,
+                    queryScope.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    options.GuardFilters,
+                    options.GuardWindow,
+                    options.GuardScope);
+                var fileCounts = reader.CountSearchResultsByFile(
+                    recipeQuery.Query,
+                    options.Lang,
+                    false,
+                    queryScope.PathPatterns,
+                    queryScope.ExcludePaths,
+                    queryScope.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    options.GuardFilters,
+                    options.GuardWindow,
+                    options.GuardScope);
+                foreach (var file in fileCounts)
+                    paths.Add(file.Path);
+                topFiles = BuildSearchRecipeTopFiles(fileCounts);
+            }
+
+            total += count.Count;
+            queryCounts.Add(new SearchRecipeCountQueryJsonResult(
+                recipeQuery.Name,
+                recipeQuery.Query,
+                recipeQuery.Description,
+                recipeQuery.Severity,
+                count.Count,
+                count.Count,
+                0,
+                count.Count,
+                count.FileCount,
+                false,
+                topFiles));
+        }
+
+        fileCount = paths.Count;
+        return queryCounts;
     }
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
@@ -2080,6 +2232,14 @@ public static partial class QueryCommandRunner
         => rows
             .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
             .Select(group => new SearchRecipeTopFileJsonResult(group.Key, group.Count()))
+            .OrderByDescending(file => file.Count)
+            .ThenBy(file => file.Path, StringComparer.Ordinal)
+            .Take(10)
+            .ToList();
+
+    private static List<SearchRecipeTopFileJsonResult> BuildSearchRecipeTopFiles(IReadOnlyList<SearchFileCountResult> fileCounts)
+        => fileCounts
+            .Select(file => new SearchRecipeTopFileJsonResult(file.Path, file.Count))
             .OrderByDescending(file => file.Count)
             .ThenBy(file => file.Path, StringComparer.Ordinal)
             .Take(10)

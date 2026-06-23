@@ -916,12 +916,37 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("emitted_count")] int EmittedCount,
+    [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
+internal sealed record SearchRecipeCountRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("queries")] List<SearchRecipeCountQueryJsonResult> Queries);
+
+internal sealed record SearchRecipeCountQueryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("matched_count")] int MatchedCount,
+    [property: JsonPropertyName("emitted_count")] int EmittedCount,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles);
 
 internal sealed record SearchRecipeCompactRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -943,6 +968,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("emitted_count")] int EmittedCount,
+    [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
