@@ -7,11 +7,25 @@ namespace CodeIndex.Cli;
 /// Source-code detection result with a stable reason code for diagnostics.
 /// 診断用の安定した理由コードを持つソースコード検出結果。
 /// </summary>
-public readonly record struct SourceCodeDetectionResult(bool ContainsSourceCode, string? ReasonCode)
+public readonly record struct SourceCodeDetectionResult(
+    bool ContainsSourceCode,
+    string? ReasonCode,
+    IReadOnlyDictionary<string, int> ReasonCounts)
 {
-    public static SourceCodeDetectionResult NoSourceCode { get; } = new(false, null);
+    private static readonly IReadOnlyDictionary<string, int> EmptyReasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
-    public static SourceCodeDetectionResult Detected(string reasonCode) => new(true, reasonCode);
+    public SourceCodeDetectionResult(bool containsSourceCode, string? reasonCode)
+        : this(containsSourceCode, reasonCode, EmptyReasonCounts)
+    {
+    }
+
+    public static SourceCodeDetectionResult NoSourceCode { get; } = new(false, null, EmptyReasonCounts);
+
+    public static SourceCodeDetectionResult Detected(string reasonCode) =>
+        new(true, reasonCode, new Dictionary<string, int>(StringComparer.Ordinal) { [reasonCode] = 1 });
+
+    public static SourceCodeDetectionResult Detected(string reasonCode, IReadOnlyDictionary<string, int> reasonCounts) =>
+        new(true, reasonCode, reasonCounts);
 }
 
 /// <summary>
@@ -137,25 +151,27 @@ public static class SourceCodeDetector
         // 各ヒューリスティックを独立して実行する。
         // 1つでもマッチすればテキストをフラグする。
 
-        if (HasCodeStatementPattern(text))
-            return SourceCodeDetectionResult.Detected(ReasonStatementEnding);
+        var reasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        string? primaryReason = null;
 
-        if (HasConsecutiveCodeLines(text))
-            return SourceCodeDetectionResult.Detected(ReasonIndentedCodeLines);
+        CountReason(ReasonStatementEnding, HasCodeStatementPattern(text));
+        CountReason(ReasonIndentedCodeLines, HasConsecutiveCodeLines(text));
+        CountReason(ReasonBlockStructure, HasBlockStructure(text));
+        CountReason(ReasonRepeatedImports, HasRepeatedImports(text));
+        CountReason(ReasonFunctionDefinition, HasMultiLineFunctionDefinition(text));
+        CountReason(ReasonFencedCodeBlock, HasFencedCodeBlock(text));
 
-        if (HasBlockStructure(text))
-            return SourceCodeDetectionResult.Detected(ReasonBlockStructure);
+        return primaryReason is null
+            ? SourceCodeDetectionResult.NoSourceCode
+            : SourceCodeDetectionResult.Detected(primaryReason, reasonCounts);
 
-        if (HasRepeatedImports(text))
-            return SourceCodeDetectionResult.Detected(ReasonRepeatedImports);
-
-        if (HasMultiLineFunctionDefinition(text))
-            return SourceCodeDetectionResult.Detected(ReasonFunctionDefinition);
-
-        if (HasFencedCodeBlock(text))
-            return SourceCodeDetectionResult.Detected(ReasonFencedCodeBlock);
-
-        return SourceCodeDetectionResult.NoSourceCode;
+        void CountReason(string reasonCode, bool matched)
+        {
+            if (!matched)
+                return;
+            reasonCounts[reasonCode] = reasonCounts.TryGetValue(reasonCode, out var count) ? count + 1 : 1;
+            primaryReason ??= reasonCode;
+        }
     }
 
     // ---------------------------------------------------------------

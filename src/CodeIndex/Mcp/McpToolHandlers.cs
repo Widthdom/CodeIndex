@@ -6977,6 +6977,7 @@ public partial class McpServer
             {
                 ["field"] = field,
                 ["reason_code"] = detection.ReasonCode ?? "unknown",
+                ["reason_code_counts"] = CreateSourceCodeReasonCounts(detection),
             },
         };
         return CreateToolErrorResponse(
@@ -6986,6 +6987,21 @@ public partial class McpServer
             suggestion: "Describe the gap in natural language without including code.",
             retrySafe: false,
             extraData: extraData);
+    }
+
+    private static JsonObject CreateSourceCodeReasonCounts(SourceCodeDetectionResult detection)
+    {
+        var counts = new JsonObject();
+        if (detection.ReasonCounts is null)
+            return counts;
+
+        foreach (var reason in detection.ReasonCounts)
+        {
+            if (reason.Value > 0)
+                counts[reason.Key] = reason.Value;
+        }
+
+        return counts;
     }
 
     private static string[]? ReadEvidencePaths(JsonNode? node, out string? error)
