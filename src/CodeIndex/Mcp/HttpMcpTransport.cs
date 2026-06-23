@@ -79,6 +79,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly int _maxQueuedRequests;
     private readonly int _maxConcurrentHandlers;
     private readonly int _maxEventStreams;
+    private readonly TimeSpan _eventStreamWriteTimeout;
     private readonly Task _acceptLoop;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
@@ -124,7 +125,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         int? maxQueuedRequests = null,
         int? maxConcurrentHandlers = null,
         int? maxEventStreams = null,
-        int? requestLogQueueCapacity = null)
+        int? requestLogQueueCapacity = null,
+        TimeSpan? eventStreamWriteTimeout = null)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(
             maxRequestBodyBytes,
@@ -161,6 +163,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             DefaultMaxEventStreams,
             MaxConfiguredEventStreams,
             "HTTP MCP event stream limit");
+        _eventStreamWriteTimeout = eventStreamWriteTimeout ?? EventStreamWriteTimeout;
         _requestLogQueueCapacity = ResolveRequestLogQueueCapacity(requestLogQueueCapacity);
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
@@ -212,6 +215,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             "accept loop",
             _acceptCts.Token);
     }
+
+    internal Func<CancellationToken, Task>? BeforeEventStreamWriteForTests { get; set; }
 
     public string Name => "http";
 
@@ -816,8 +821,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             await stream.WriteJsonRpcEventAsync(frame, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpMcpTimeoutException)
+        catch (HttpMcpTimeoutException ex)
         {
+            stream.RecordDiagnostic(FormatTimeoutDiagnostic(ex.Category));
             RemoveEventStream(id, stream);
         }
         catch
@@ -1014,7 +1020,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
 
         var streamId = Guid.NewGuid();
-        var stream = new EventStream(context.Response);
+        var stream = new EventStream(context.Response, _eventStreamWriteTimeout, BeforeEventStreamWriteForTests);
         try
         {
             context.Response.StatusCode = (int)HttpStatusCode.OK;
@@ -1048,6 +1054,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         finally
         {
             RemoveEventStream(streamId, stream);
+            request.Diagnostic ??= stream.Diagnostic;
             LogRequest(request, (int)HttpStatusCode.OK);
             CloseResponseBestEffort(context.Response, "event stream response cleanup");
         }
@@ -1102,12 +1109,21 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
-    private sealed class EventStream(HttpListenerResponse response) : IDisposable
+    private sealed class EventStream(
+        HttpListenerResponse response,
+        TimeSpan writeTimeout,
+        Func<CancellationToken, Task>? beforeWriteForTests) : IDisposable
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private string? _diagnostic;
         private int _released;
 
         public HttpListenerResponse Response { get; } = response;
+
+        public string? Diagnostic => Volatile.Read(ref _diagnostic);
+
+        public void RecordDiagnostic(string diagnostic)
+            => Volatile.Write(ref _diagnostic, diagnostic);
 
         public async Task WriteJsonRpcEventAsync(string frame, CancellationToken cancellationToken)
         {
@@ -1136,7 +1152,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             using var writeScope = OperationTimeoutScope.Create(
                 OperationTimeoutCategories.SseWrite,
-                EventStreamWriteTimeout,
+                writeTimeout,
                 cancellationToken);
             try
             {
@@ -1144,17 +1160,19 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             }
             catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, EventStreamWriteTimeout, ex);
+                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
             }
 
             try
             {
+                if (beforeWriteForTests is not null)
+                    await beforeWriteForTests(writeScope.Token).ConfigureAwait(false);
                 await Response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).ConfigureAwait(false);
                 await Response.OutputStream.FlushAsync(writeScope.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, EventStreamWriteTimeout, ex);
+                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
             }
             finally
             {

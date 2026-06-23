@@ -986,6 +986,30 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_OutOfBandSseWriteTimeout_LogsStableDiagnostic_Issue3990()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            requestLogger: records.Enqueue,
+            eventStreamWriteTimeout: TimeSpan.FromMilliseconds(10));
+        harness.BeforeEventStreamWriteForTests = token => Task.Delay(Timeout.InfiniteTimeSpan, token);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
+
+        using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":3990,"method":"initialize","params":{}}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await WaitUntilAsync(() => !harness.HasEventStreams, "the timed-out event stream to be removed");
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 2);
+        var eventRecord = Assert.Single(snapshot.Where(record => record.Method == "GET" && record.Path == "/events"));
+        Assert.Equal("timeout:sse_write", eventRecord.Diagnostic);
+    }
+
+    [Fact]
     public async Task HttpTransport_IndexWithProgressToken_EmitsProgressOnEventsStreamAndReturnsResult()
     {
         var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_progress_{Guid.NewGuid():N}");
@@ -1534,6 +1558,12 @@ public class HttpMcpTransportTests : IDisposable
 
         public long RequestLogQueueFullDropCount => _transport.RequestLogQueueFullDropCount;
 
+        public Func<CancellationToken, Task>? BeforeEventStreamWriteForTests
+        {
+            get => _transport.BeforeEventStreamWriteForTests;
+            set => _transport.BeforeEventStreamWriteForTests = value;
+        }
+
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
@@ -1554,7 +1584,8 @@ public class HttpMcpTransportTests : IDisposable
             int? maxRequestBodyBytes = null,
             int? maxResponseBodyBytes = null,
             int? maxQueuedRequests = null,
-            int? requestLogQueueCapacity = null)
+            int? requestLogQueueCapacity = null,
+            TimeSpan? eventStreamWriteTimeout = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
             var transport = new HttpMcpTransport(
@@ -1566,7 +1597,8 @@ public class HttpMcpTransportTests : IDisposable
                 maxRequestBodyBytes: maxRequestBodyBytes,
                 maxResponseBodyBytes: maxResponseBodyBytes,
                 maxQueuedRequests: maxQueuedRequests,
-                requestLogQueueCapacity: requestLogQueueCapacity);
+                requestLogQueueCapacity: requestLogQueueCapacity,
+                eventStreamWriteTimeout: eventStreamWriteTimeout);
             var server = authenticator is null
                 ? new McpServer(dbPath, ConsoleUi.LoadVersion())
                 : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);
