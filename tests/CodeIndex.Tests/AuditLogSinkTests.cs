@@ -249,6 +249,7 @@ public class AuditLogSinkTests
     [Theory]
     [InlineData(";")]
     [InlineData(",")]
+    [InlineData("'")]
     public void SanitizeArgValue_LongUriCredentialStartingWithDelimiter_RedactsWholeValue_Issue3909(string delimiter)
     {
         var password = delimiter + new string('q', AuditLogSink.MaxSecretValueScanChars);

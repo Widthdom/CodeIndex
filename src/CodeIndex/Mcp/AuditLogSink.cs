@@ -810,7 +810,7 @@ internal sealed class AuditLogSink : IDisposable
             {
                 if (LooksLikeDelimitedHostPort(scanText, authorityStart, userInfoSeparator, passwordStart, index))
                     return false;
-                return sawDisplayedPassword || (index == passwordStart && character is ';' or ',');
+                return sawDisplayedPassword || index == passwordStart;
             }
             if (index < visibleLength)
                 sawDisplayedPassword = true;
