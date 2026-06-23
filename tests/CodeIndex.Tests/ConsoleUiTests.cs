@@ -87,6 +87,20 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void StopSpinner_DoesNotUseThreadSleep_Issue3963()
+    {
+        var method = typeof(ConsoleUi).GetMethod(
+            nameof(ConsoleUi.StopSpinner),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            [typeof(CancellationTokenSource)],
+            modifiers: null);
+
+        Assert.NotNull(method);
+        Assert.False(CallsThreadSleep(method));
+    }
+
+    [Fact]
     public void PrintUsage_WithBanner_IncludesAsciiArt()
     {
         var output = CaptureFullUsageOutput();
@@ -2045,6 +2059,37 @@ public class ConsoleUiTests
                 if (module.ResolveMember(token) is MethodInfo called
                     && called.Name == nameof(Task.Wait)
                     && called.DeclaringType == typeof(Task))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            i += OperandByteCount(opCode, il, i);
+        }
+
+        return false;
+    }
+
+    private static bool CallsThreadSleep(MethodInfo method)
+    {
+        var body = method.GetMethodBody();
+        var il = body?.GetILAsByteArray();
+        if (il == null)
+            return false;
+
+        var module = method.Module;
+        for (var i = 0; i < il.Length;)
+        {
+            var opCode = ReadOpCode(il, ref i);
+            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt) && i + 4 <= il.Length)
+            {
+                var token = BitConverter.ToInt32(il, i);
+                i += 4;
+                if (module.ResolveMember(token) is MethodInfo called
+                    && called.DeclaringType == typeof(Thread)
+                    && string.Equals(called.Name, nameof(Thread.Sleep), StringComparison.Ordinal))
                 {
                     return true;
                 }

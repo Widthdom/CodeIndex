@@ -56,6 +56,13 @@ public readonly record struct SearchCursor(double Score, long ChunkId, int Offse
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public readonly record struct UnusedCountResult(
+    int Count,
+    int FileCount,
+    bool IncludesSql,
+    IReadOnlyDictionary<string, int> BucketCounts,
+    IReadOnlyDictionary<string, int> ConfidenceCounts);
+
 public readonly record struct SearchFileCountResult(string Path, int Count);
 
 public readonly record struct FindScanSummary(
@@ -456,6 +463,14 @@ public sealed class LspLocation
 {
     public string Uri { get; set; } = string.Empty;
     public LspRange Range { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Kind { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Severity { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Source { get; set; }
 }
 
 public class ExactZeroHintResult
@@ -883,6 +898,8 @@ public class StatusResult
     [JsonPropertyName("wal_stale_snapshot_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WalStaleSnapshotReason { get; set; }
+    [JsonPropertyName("sqlite_connection_policy")]
+    public StatusSqliteConnectionPolicy SqliteConnectionPolicy { get; set; } = new();
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     /// <summary>
@@ -1186,6 +1203,41 @@ public class StatusResult
     [JsonPropertyName("last_failed_or_partial_index_run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusFailedOrPartialIndexRun? LastFailedOrPartialIndexRun { get; set; }
+}
+
+public sealed class StatusSqliteConnectionPolicy
+{
+    [JsonPropertyName("active_mode")]
+    public string ActiveMode { get; set; } = string.Empty;
+    [JsonPropertyName("open_mode")]
+    public string OpenMode { get; set; } = string.Empty;
+    [JsonPropertyName("pooling")]
+    public bool Pooling { get; set; } = true;
+    [JsonPropertyName("immutable_uri")]
+    public bool ImmutableUri { get; set; }
+    [JsonPropertyName("command_timeout_seconds")]
+    public int CommandTimeoutSeconds { get; set; }
+    [JsonPropertyName("long_running_commands_require_cancellation")]
+    public bool LongRunningCommandsRequireCancellation { get; set; }
+    [JsonPropertyName("read_only_fallback")]
+    public bool ReadOnlyFallback { get; set; }
+    [JsonPropertyName("wal_checkpoint_attempted")]
+    public bool WalCheckpointAttempted { get; set; }
+    [JsonPropertyName("wal_checkpoint_succeeded")]
+    public bool WalCheckpointSucceeded { get; set; }
+    [JsonPropertyName("read_only_immutable_fallback")]
+    public bool ReadOnlyImmutableFallback { get; set; }
+    [JsonPropertyName("wal_checkpoint_skipped_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalCheckpointSkippedReason { get; set; }
+    [JsonPropertyName("wal_checkpoint_failure_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalCheckpointFailureReason { get; set; }
+    [JsonPropertyName("wal_stale_snapshot_risk")]
+    public bool WalStaleSnapshotRisk { get; set; }
+    [JsonPropertyName("wal_stale_snapshot_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalStaleSnapshotReason { get; set; }
 }
 
 public sealed class StatusProcessMetrics

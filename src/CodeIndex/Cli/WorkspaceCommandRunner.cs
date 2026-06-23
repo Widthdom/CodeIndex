@@ -69,7 +69,7 @@ internal static class WorkspaceCommandRunner
     {
         var state = ActiveWorkspace.Load();
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new ActiveWorkspaceJsonResult(state, null), jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(ActiveWorkspaceJsonResult.From(state, null), jsonOptions));
         else if (state == null)
             Console.WriteLine("No active workspace set.");
         else
@@ -129,7 +129,7 @@ internal static class WorkspaceCommandRunner
         }
 
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new ActiveWorkspaceJsonResult(state, ActiveWorkspace.StatePath), jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(ActiveWorkspaceJsonResult.From(state, ActiveWorkspace.StatePath), jsonOptions));
         else
             Console.WriteLine($"Active workspace set to {state.Name}: {state.DbPath}");
         return CommandExitCodes.Success;

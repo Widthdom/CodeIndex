@@ -1,10 +1,11 @@
 using System.Text;
+using CodeIndex.Security;
 
 namespace CodeIndex.Mcp;
 
 internal sealed class BoundedJsonUtf8Stream(int maxBytes, bool captureSerialized, Func<int, Exception> createLimitExceededException) : Stream
 {
-    private readonly MemoryStream? _buffer = captureSerialized ? new MemoryStream(Math.Min(Math.Max(maxBytes, 0), 16 * 1024)) : null;
+    private readonly MemoryStream? _buffer = captureSerialized ? new MemoryStream(SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity(maxBytes)) : null;
 
     public int BytesWritten { get; private set; }
 

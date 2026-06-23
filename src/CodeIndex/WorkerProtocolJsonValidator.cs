@@ -4,18 +4,24 @@ namespace CodeIndex;
 
 internal static class WorkerProtocolJsonValidator
 {
+    internal const int DefaultMaxJsonDepth = 32;
     private const int DefaultMaxJsonProperties = 1_000_000;
+    internal static int? MaxJsonDepthForTesting { get; set; }
     internal static int? MaxJsonPropertiesForTesting { get; set; }
     internal static int? MaxStringCharactersForTesting { get; set; }
 
+    internal static JsonSerializerOptions CreateSerializerOptions(JsonSerializerOptions options)
+        => new(options) { MaxDepth = DefaultMaxJsonDepth };
+
     internal static bool TryValidate(string json, int maxStringCharacters, out string error)
     {
+        var maxDepth = ResolveMaxJsonDepth();
         var maxProperties = MaxJsonPropertiesForTesting ?? DefaultMaxJsonProperties;
         var effectiveMaxStringCharacters = MaxStringCharactersForTesting ?? maxStringCharacters;
         var propertyCount = 0;
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = maxDepth });
             ValidateElement(document.RootElement, maxProperties, effectiveMaxStringCharacters, ref propertyCount, out error);
             return error.Length == 0;
         }
@@ -24,6 +30,12 @@ internal static class WorkerProtocolJsonValidator
             error = SafeDiagnosticFormatter.FormatCategoryType("worker_protocol_error", nameof(JsonException));
             return false;
         }
+    }
+
+    private static int ResolveMaxJsonDepth()
+    {
+        var maxDepth = MaxJsonDepthForTesting ?? DefaultMaxJsonDepth;
+        return maxDepth > 0 ? maxDepth : DefaultMaxJsonDepth;
     }
 
     private static void ValidateElement(

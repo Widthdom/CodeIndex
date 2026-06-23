@@ -478,6 +478,7 @@ not indexed, and their checksum stays tied to the pointer identity until you run
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
+cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
@@ -489,14 +490,18 @@ and `bucket_taxonomy` for the `likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
 `reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
 symbols under those bucket keys. Use `--bucket <name>` to return only one
-bucket, and `--min-confidence <medium|low>` to omit lower-confidence classes.
-JSON output includes `query_context` so applied bucket and confidence filters
-are visible to downstream audit tooling. Use `--compact` for audit summaries
-that keep counts, confidence buckets, taxonomy, and filter context without
-returning the full `symbols` array; add `--by-bucket` only when grouped symbol
-arrays are explicitly needed.
-Public APIs, framework entrypoints, generated hooks, reflection, and
-configuration-based usage can be false positives. C#
+bucket, and `--min-confidence <medium|low>` or its `--confidence` alias to omit
+lower-confidence classes. Use `--actionable` to preset the query to private,
+medium-confidence cleanup candidates while excluding tests. JSON output includes
+`query_context` so applied bucket and confidence filters are visible to
+downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
+`summary.by_bucket` / `summary.by_confidence`, matching the full JSON summary.
+Use `--compact` for audit summaries that keep counts, confidence buckets,
+taxonomy, and filter context without returning the full `symbols` array; add
+`--by-bucket` only when grouped symbol arrays are explicitly needed.
+Public APIs, framework entrypoints, DTOs, serialization contracts, generated
+hooks, test-only hooks, Markdown headings, reflection, and configuration-based
+usage can be false positives and are routed into lower-confidence buckets. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
@@ -929,12 +934,21 @@ This recomputes `name_folded` / `*_folded` columns from the existing DB rows and
 If you suspect the SQLite file itself is corrupted (queries crashing with a SQLite error, unexpected `database disk image is malformed` messages), you can probe it explicitly:
 
 ```bash
-cdidx db --integrity-check                              # run PRAGMA integrity_check
-cdidx db --integrity-check --db ./.cdidx/codeindex.db   # point at a specific DB
-cdidx db --integrity-check --json                       # machine-readable result
+cdidx db integrity                                      # run PRAGMA integrity_check
+cdidx db --integrity-check                              # same legacy spelling
+cdidx db integrity --db ./.cdidx/codeindex.db           # point at a specific DB
+cdidx db integrity --json                               # machine-readable result
+cdidx db schema --summary-only --json                   # counts without full SQL payloads
+cdidx db schema --type table --name files --json         # exact schema object projection
+cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
+cdidx db checkpoint before-prune --dry-run --json        # preview snapshot files and bytes
 ```
 
 This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption is detected. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
+
+`db schema` keeps the current full schema dump by default for support bundles. Add `--summary-only` to return only object counts, combine `--type <table|index|trigger|view>` and `--name <object>` for an exact projection, and use `--limit`, `--max-sql-chars`, and `--exclude-internal` to keep schema diagnostics bounded.
+
+`db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Running `db checkpoint` without `--dry-run` creates the snapshot next to the DB; `db restore <name>` replaces the DB and keeps a pre-restore backup directory.
 
 ### Search code
 
@@ -955,6 +969,7 @@ cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --g
 cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # require a guard earlier on the same line
 cdidx search --list-recipes                             # show reusable audit recipes
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
+cdidx search --recipe bounded-read-evidence --json      # show positive evidence for bounded file-read helper paths
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
 cdidx search --recipe risky-code --show-excluded --json      # include recipe scope/exclusion diagnostics
@@ -1011,7 +1026,12 @@ normalized repository-relative artifact URIs.
 
 Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
-recommended labels, query text, exact-match mode, and false-positive guidance.
+recommended labels, query text, exact-match mode, false-positive guidance, and
+query-specific audit taxonomy metadata. For example,
+`risky-code/broad-exception-catch` includes broad-catch boundary categories and
+expected diagnostic behaviors so users can distinguish intentional top-level,
+cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
+should be narrowed or rethrown.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, and
 the opt-in broad `broad-token-audit` recipe.
@@ -1076,13 +1096,20 @@ JSON string array per stdin line. Each array starts with a query command name,
 followed by that command's normal arguments. Each stdin line is capped at
 1,048,576 characters, each decoded string argument is capped at 8,192
 characters, and each command can carry at most 256 arguments after the command
-name:
+name. With no input, `batch` exits 0 and prints nothing by default. Pass
+`--json-summary` when a non-interactive caller needs an explicit final JSON
+object with `commands_processed`, including `0` for immediate EOF:
 
 ```bash
 printf '%s\n' \
   '["search","Authenticate","--json","--exact"]' \
   '["symbols","AuthFixture","--json","--exact-name"]' \
   | cdidx batch --db .cdidx/codeindex.db
+```
+
+```bash
+printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
+# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 Output:
@@ -1211,9 +1238,13 @@ When you pass `--lang` for an unsupported language, human-readable graph command
 ```bash
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
 ```
 
 Shows all symbols in a single file ordered deterministically by line, start column when available, kind, and name, with signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
+
+For large files, `outline --json` supports `--kind <kind[,kind]>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, and `has_more`; it also reports `kind_filter` and `selected_fields` when those filters are used. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata.
 
 ### Reconstruct a file excerpt
 
@@ -1381,6 +1412,7 @@ same source location.
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
+| `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, or `body`; pass `all` for the full symbol payload with paging metadata. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
@@ -1405,12 +1437,12 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `xml-parser-security`, or `filesystem-traversal`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
-| `--cursor <cursor>` | `search --recipe <name/query>` | Fetch the next page for one selected recipe child query. Use the `next_cursor` returned by recipe JSON or compact output. |
+| `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | Choose recipe path scope. `source` is the default and suppresses tests, docs, changelog text, and recipe definitions using recipe metadata; `all` intentionally searches every indexed path unless other filters exclude it. JSON recipe output reports the effective scope, path filters, and exclusions. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
-| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, supported formats, filter support, and limit semantics. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
@@ -1434,7 +1466,7 @@ same source location.
 | `--exact-substring` | `search` | Preferred explicit name for search exactness: case-sensitive exact substring (FTS5 bypassed). |
 | `--prefix` | `search` | Opt into FTS5 prefix-phrase expansion for every token in the query. Without this flag the literal-safe path quotes each token as a strict FTS5 phrase, so a bare `search 計算` only matches the token `計算` and not `計算する` (unicode61 keeps adjacent CJK codepoints as one token). Appending `*` to a single token (`search 計算*`) opts in for that token only; `--prefix` opts in for the whole query. Cannot be combined with `--exact` / `--exact-substring` (those bypass FTS5 entirely). |
 | `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Preferred explicit name for symbol-name exactness: NFKC + Unicode CaseFold exact equality (`Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` is still distinct from plain `i`. For C#, pass the canonical extracted name (`operator +`, `operator checked +`, `explicit operator Money`, `implicit operator decimal`, `Item`) rather than source keywords like `this` / `explicit`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` and `csharp_symbol_name_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, human-readable output warns and CLI JSON / MCP `structuredContent` expose degraded-state metadata. |
-| `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `inspect`, `hotspots`, `unused`, `validate` | Filter by kind (case-insensitive; `--kind FUNCTION` is treated as `--kind function`). `definition` / `symbols` / `inspect` / `hotspots` / `unused` use symbol kinds (`function`, `lambda`, `async_function`, `generator`, `async_generator`, `test.method`, `class`, `struct`, `interface`, `protocol`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`); `references` accepts all indexed reference kinds (`call`, `instantiate`, `subscribe`, `attribute`, `annotation`, `type_reference`); `callers` / `callees` accept only the call-graph kinds (`call`, `instantiate`, `subscribe`) and reject non-call-graph kinds (`--kind attribute` / `--kind annotation` / `--kind type_reference`) with a usage error — metadata rows are attributed to the enclosing body-range symbol rather than the annotated target, and `type_reference` rows are compile-time type-position edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) rather than runtime calls, so `callers` / `callees` cannot answer either correctly; use `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` instead. `inspect` filters the definition candidates and primary file context while keeping graph evidence keyed to the queried symbol name. `references` defaults to every indexed reference kind so metadata usages remain visible, while `callers` / `callees` / `hotspots` / `impact` default to the call-graph kinds only (`call`, `instantiate`, `subscribe`) and exclude metadata edges (`attribute`, `annotation`, `type_reference`). Identical constructor `call` + `instantiate` rows at one physical site still collapse; `validate` uses issue kinds such as `bom` |
+| `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `inspect`, `outline`, `hotspots`, `unused`, `validate` | Filter by kind (case-insensitive; `--kind FUNCTION` is treated as `--kind function`). `outline` also accepts comma-separated symbol kinds, such as `--kind function,class`. `definition` / `symbols` / `inspect` / `outline` / `hotspots` / `unused` use symbol kinds (`function`, `lambda`, `async_function`, `generator`, `async_generator`, `test.method`, `class`, `struct`, `interface`, `protocol`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`); `references` accepts all indexed reference kinds (`call`, `instantiate`, `subscribe`, `attribute`, `annotation`, `type_reference`); `callers` / `callees` accept only the call-graph kinds (`call`, `instantiate`, `subscribe`) and reject non-call-graph kinds (`--kind attribute` / `--kind annotation` / `--kind type_reference`) with a usage error — metadata rows are attributed to the enclosing body-range symbol rather than the annotated target, and `type_reference` rows are compile-time type-position edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) rather than runtime calls, so `callers` / `callees` cannot answer either correctly; use `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` instead. `inspect` filters the definition candidates and primary file context while keeping graph evidence keyed to the queried symbol name. `references` defaults to every indexed reference kind so metadata usages remain visible, while `callers` / `callees` / `hotspots` / `impact` default to the call-graph kinds only (`call`, `instantiate`, `subscribe`) and exclude metadata edges (`attribute`, `annotation`, `type_reference`). Identical constructor `call` + `instantiate` rows at one physical site still collapse; `validate` uses issue kinds such as `bom` |
 | `--rank-by <weighted\|count\|kind>` | `callers`, `callees` | Choose the caller/callee ranking model. `weighted` is the default and scores `instantiate=3.0`, `call=1.0`, `subscribe=0.1`; `count` sorts by raw `reference_count`; `kind` groups by reference kind first, then count. |
 | `--body` | `definition`, `references`, `callers`, `callees`, `impact`, `inspect` | Include reconstructed body content or capped graph-location excerpts |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | Return only counts. `search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` / `hotspots` ignore `--limit` and return authoritative totals; only `impact` still reports the visible page count and may truncate with `--limit` (with `--json`: a single count object; commands that expose file counts add `files`) |
@@ -2374,7 +2406,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
-`suggest_improvement` always stores accepted suggestions locally. Its response includes `submitted_to_github` and `github_submission_reason` so clients can distinguish `submitted`, `token_not_configured`, `repo_not_configured`, `network_error`, and `api_error`; failed GitHub attempts also include `github_submission_error`. If the source-code guard rejects `description`, `context`, or `toolInvocationContext`, the error `structuredContent` includes `source_code_rejection.field` and `source_code_rejection.reason_code` without echoing the rejected text.
+`suggest_improvement` always stores accepted suggestions locally. Its response includes `submitted_to_github` and `github_submission_reason` so clients can distinguish `submitted`, `token_not_configured`, `repo_not_configured`, `network_error`, and `api_error`; failed GitHub attempts also include `github_submission_error`. If the source-code guard rejects `description`, `context`, or `toolInvocationContext`, the error `structuredContent` includes `source_code_rejection.field`, the primary `source_code_rejection.reason_code`, and bounded `source_code_rejection.reason_code_counts` diagnostics without echoing the rejected text. The guard is a convenience filter for accidental pasted code, not a data-loss-prevention or security boundary; encoded or obfuscated code-like text may pass through.
 
 The MCP `index` tool returns a `diagnostics` object when non-fatal indexing problems occur. It includes category counts and up to 50 bounded items for recoverable indexing errors and skipped file-size measurements; item paths are project-relative when possible, and messages are redacted and bounded so permission or path failures can be acted on without leaking local absolute paths or token-shaped values.
 
@@ -3047,6 +3079,7 @@ object ではなく bare issue array を期待する場合は `--json=array` を
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
+cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
@@ -3058,8 +3091,17 @@ cdidx unused --json --by-bucket
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
 `--by-bucket` は返却された symbols も bucket key ごとに grouped します。
 `--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
-より低い confidence class を除外できます。JSON 出力には `query_context` も含まれるため、audit tooling は適用された bucket と confidence filter を直接確認できます。count、confidence bucket、taxonomy、filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
-になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
+より低い confidence class を除外できます。`--confidence` はその alias です。
+`--actionable` は private かつ medium confidence の削除候補に絞り、tests を除外する
+preset です。JSON 出力には `query_context` も含まれるため、audit tooling は適用された
+bucket と confidence filter を直接確認できます。count-only JSON には
+`returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
+full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
+filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に
+必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、DTO、
+serialization contract、generated hook、test-only hook、Markdown heading、reflection、
+config 経由の使用は false positive になりうるため、低 confidence bucket に寄せられます。
+C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
 
@@ -3509,12 +3551,21 @@ cdidx backfill-fold
 SQLite ファイル自体が破損していると疑われる場合（クエリが SQLite エラーで落ちる、`database disk image is malformed` といったメッセージが出る等）には、整合性を明示的に確認できます:
 
 ```bash
-cdidx db --integrity-check                              # PRAGMA integrity_check を実行
-cdidx db --integrity-check --db ./.cdidx/codeindex.db   # 特定 DB を指定
-cdidx db --integrity-check --json                       # 機械可読な結果
+cdidx db integrity                                      # PRAGMA integrity_check を実行
+cdidx db --integrity-check                              # 従来の同義表記
+cdidx db integrity --db ./.cdidx/codeindex.db           # 特定 DB を指定
+cdidx db integrity --json                               # 機械可読な結果
+cdidx db schema --summary-only --json                   # SQL 本文なしで件数だけ確認
+cdidx db schema --type table --name files --json         # schema object を exact に絞り込み
+cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
+cdidx db checkpoint before-prune --dry-run --json        # snapshot 対象 file と byte 数を preview
 ```
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
+
+`db schema` は support bundle 向けに、既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると exact projection を適用できます。schema diagnostics を小さく保つには `--limit`、`--max-sql-chars`、`--exclude-internal` を使います。
+
+`db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。`--dry-run` なしの `db checkpoint` は DB の隣に snapshot を作り、`db restore <name>` は DB を置き換えて pre-restore backup directory を保持します。
 
 `--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
 
@@ -3546,6 +3597,7 @@ cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --g
 cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # 同じ行の前方 guard を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
+cdidx search --recipe bounded-read-evidence --json      # 上限付き file-read helper 経路の陽性根拠を表示
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
 cdidx search --recipe risky-code --show-excluded --json      # recipe scope / exclusion diagnostics を含める
@@ -3597,7 +3649,11 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
 `filesystem-traversal`、`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
-説明、推奨 label、query text、exact-match mode、false-positive guidance を表示します。
+説明、推奨 label、query text、exact-match mode、false-positive guidance、query 固有の
+audit taxonomy metadata を表示します。たとえば `risky-code/broad-exception-catch` は
+broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
+top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
+rethrow が必要な catch を区別できます。
 `--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
 `--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
@@ -3657,13 +3713,20 @@ cdidx search "authenticate" --json --verbose
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
 stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
 各 stdin 行は 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、
-各 command は command 名の後ろに最大 256 引数までです:
+各 command は command 名の後ろに最大 256 引数までです。入力がない場合、`batch` は既定で
+exit 0 かつ無出力です。非対話の呼び出し元が即時 EOF を明示的に判定したい場合は
+`--json-summary` を渡すと、`commands_processed: 0` を含む最終 JSON オブジェクトを出力できます:
 
 ```bash
 printf '%s\n' \
   '["search","Authenticate","--json","--exact"]' \
   '["symbols","AuthFixture","--json","--exact-name"]' \
   | cdidx batch --db .cdidx/codeindex.db
+```
+
+```bash
+printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
+# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 出力:
@@ -3790,9 +3853,13 @@ cdidx callees AddToGitExclude --exclude-tests
 ```bash
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
 ```
 
 1ファイル内の全シンボルを行、利用可能な場合は開始列、種別、名前の決定的な順序で、シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
+
+大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` に対応します。自動化側は必要な symbol page と field だけを取得できます。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` が入り、kind や field を指定した場合は `kind_filter` と `selected_fields` も返します。`--outline-fields all` を渡すと、symbol payload はフルのまま paging metadata だけを追加できます。
 
 ### ファイル抜粋を再構成する
 
@@ -3961,6 +4028,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
+| `--outline-fields <csv>` | `outline` | outline JSON の symbol field を投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body` などを指定でき、`all` を渡すと full symbol payload と paging metadata を返す。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
@@ -3984,12 +4052,12 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、`filesystem-traversal` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
-| `--cursor <cursor>` | `search --recipe <name/query>` | 選択した recipe child query の次ページを取得する。recipe JSON または compact output が返す `next_cursor` を指定する。 |
+| `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | recipe の path scope を選ぶ。既定の `source` は recipe metadata により tests、docs、changelog text、recipe 定義を抑制する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。Recipe の JSON 出力には有効な scope、path filter、exclusion が含まれる。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
-| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、対応 format、filter support、limit semantics 付きで一覧表示する。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
@@ -4013,7 +4081,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--prefix` | `search` | クエリの全トークンを FTS5 prefix phrase に昇格させる opt-in。フラグなしでは literal-safe 経路が各トークンを strict な FTS5 phrase として引用するため、素の `search 計算` は `計算` トークンにのみマッチし `計算する` は拾わない（unicode61 が連続 CJK コードポイントを 1 トークン扱いする仕様）。トークン末尾に `*` を付ける（`search 計算*`）とそのトークンだけが prefix phrase になる shorthand、`--prefix` はクエリ全体に適用する。`--exact` / `--exact-substring` と併用不可（exact は FTS5 を経由しないため）。 |
 | `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | symbol-name exactness 用の推奨 explicit alias。NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。C# では `this` / `explicit` のような source keyword ではなく、抽出済みの canonical name（`operator +`、`operator checked +`、`explicit operator Money`、`implicit operator decimal`、`Item`）を渡す。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` と `csharp_symbol_name_ready` で判定）。read-only な旧DBに fallback exact-match index が無い場合は、人間向け出力が WARN を表示し、CLI JSON と MCP `structuredContent` が縮退メタデータを返す。 |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ（大文字小文字を区別しない。`--lang Python` は `--lang python` と同じ扱い）。`c#`、`cs`、`kt`、`kts` のような一般的な別名も受け付ける。未知の値を指定すると、人間向け出力の 0 件応答に `Available: <言語一覧>` ヒントが付く。 |
-| `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `inspect`, `hotspots`, `unused`, `validate` | 種別でフィルタ（大文字小文字を区別しない。`--kind FUNCTION` は `--kind function` と同じ扱い）。`definition` / `symbols` / `inspect` / `hotspots` / `unused` は symbol kind（`function`、`lambda`、`async_function`、`generator`、`async_generator`、`test.method`、`class`、`struct`、`interface`、`protocol`、`enum`、`property`、`event`、`delegate`、`namespace`、`import`）、`references` は全ての reference kind（`call`、`instantiate`、`subscribe`、`attribute`、`annotation`、`type_reference`）を受け付ける。`callers` / `callees` は call-graph 種別のみ（`call`、`instantiate`、`subscribe`）を受け付け、非 call-graph 種別（`--kind attribute` / `--kind annotation` / `--kind type_reference`）は usage error で拒否する — metadata 行は注釈対象そのものではなく body-range 上の外側シンボルに帰属し、`type_reference` は宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な型位置エッジであり実行時呼び出しではないため、`callers` / `callees` はいずれの kind にも正しく答えられない。metadata / 型位置参照の列挙は `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` を使う。`inspect` は定義候補と primary file context を絞り込み、graph evidence はクエリした symbol name に紐づけたまま返す。`references` の既定は全 reference kind を表示して metadata 参照も見えるままにするが、`callers` / `callees` / `hotspots` / `impact` の既定は call-graph kind（`call`、`instantiate`、`subscribe`）のみで、`attribute` / `annotation` / `type_reference` のような metadata edge は除外する。同じ物理位置にある constructor の `call` + `instantiate` 重複行は引き続き集約する。`validate` は `bom` などの issue kind を使う |
+| `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `inspect`, `outline`, `hotspots`, `unused`, `validate` | 種別でフィルタ（大文字小文字を区別しない。`--kind FUNCTION` は `--kind function` と同じ扱い）。`outline` は `--kind function,class` のようなカンマ区切りの symbol kind も受け付ける。`definition` / `symbols` / `inspect` / `outline` / `hotspots` / `unused` は symbol kind（`function`、`lambda`、`async_function`、`generator`、`async_generator`、`test.method`、`class`、`struct`、`interface`、`protocol`、`enum`、`property`、`event`、`delegate`、`namespace`、`import`）、`references` は全ての reference kind（`call`、`instantiate`、`subscribe`、`attribute`、`annotation`、`type_reference`）を受け付ける。`callers` / `callees` は call-graph 種別のみ（`call`、`instantiate`、`subscribe`）を受け付け、非 call-graph 種別（`--kind attribute` / `--kind annotation` / `--kind type_reference`）は usage error で拒否する — metadata 行は注釈対象そのものではなく body-range 上の外側シンボルに帰属し、`type_reference` は宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な型位置エッジであり実行時呼び出しではないため、`callers` / `callees` はいずれの kind にも正しく答えられない。metadata / 型位置参照の列挙は `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` を使う。`inspect` は定義候補と primary file context を絞り込み、graph evidence はクエリした symbol name に紐づけたまま返す。`references` の既定は全 reference kind を表示して metadata 参照も見えるままにするが、`callers` / `callees` / `hotspots` / `impact` の既定は call-graph kind（`call`、`instantiate`、`subscribe`）のみで、`attribute` / `annotation` / `type_reference` のような metadata edge は除外する。同じ物理位置にある constructor の `call` + `instantiate` 重複行は引き続き集約する。`validate` は `bom` などの issue kind を使う |
 | `--body` | `definition`, `references`, `callers`, `callees`, `impact`, `inspect` | 再構成した本文、または上限付きの graph 位置抜粋を含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | 件数だけを返す。`search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` / `hotspots` は `--limit` を無視した総件数を返し、`impact` だけは visible page count のままで `--limit` によって切り詰められることがある（`--json` 併用時は単一の count オブジェクト。files 件数を出すコマンドは `files` も返す） |
 | `--group-by <symbol\|file\|statement>` | `hotspots` | hotspot の集計単位を選ぶ。既定は非 SQL scope では `symbol`、`--lang sql` では既存の statement-oriented grouping を保つため `statement`。JSON には `grouped_by` が入り、mixed-language 呼び出しでも現在の単位を確認できる。`file` は symbol hotspot の参照量を対象ファイル単位にまとめる。 |
@@ -4931,7 +4999,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
 
-`suggest_improvement` は受理した提案を常にローカル保存します。応答には `submitted_to_github` と `github_submission_reason` が含まれ、クライアントは `submitted`、`token_not_configured`、`repo_not_configured`、`network_error`、`api_error` を区別できます。GitHub 送信に失敗した場合は `github_submission_error` も含まれます。ソースコードガードが `description`、`context`、または `toolInvocationContext` を拒否した場合、エラーの `structuredContent` には拒否された本文を反映せずに `source_code_rejection.field` と `source_code_rejection.reason_code` が含まれます。
+`suggest_improvement` は受理した提案を常にローカル保存します。応答には `submitted_to_github` と `github_submission_reason` が含まれ、クライアントは `submitted`、`token_not_configured`、`repo_not_configured`、`network_error`、`api_error` を区別できます。GitHub 送信に失敗した場合は `github_submission_error` も含まれます。ソースコードガードが `description`、`context`、または `toolInvocationContext` を拒否した場合、エラーの `structuredContent` には拒否された本文を反映せずに `source_code_rejection.field`、主理由の `source_code_rejection.reason_code`、および上限付き診断の `source_code_rejection.reason_code_counts` が含まれます。このガードは誤って貼り付けられたコードを拾う便宜的なフィルタであり、データ漏えい防止やセキュリティ境界ではありません。エンコードまたは難読化されたコード風テキストは通過する可能性があります。
 
 MCP の `index` tool は、致命的ではない indexing 問題が発生した場合に `diagnostics` object を返します。recoverable な indexing error と file-size 測定 skip について category count と最大 50 件の bounded item を含み、path は可能な限り project-relative、message は redaction と上限適用済みなので、local absolute path や token 風の値を漏らさず permission / path 問題を判断できます。
 

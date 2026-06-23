@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -41,6 +42,74 @@ public class HttpMcpTransportTests : IDisposable
         var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken: "abc,def"));
 
         Assert.Contains("commas", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_TimeoutDiagnosticsUseStableCategories_Issue3990()
+    {
+        Assert.Equal(
+            "timeout:http_response_write",
+            HttpMcpTransport.FormatTimeoutDiagnosticForTests(OperationTimeoutCategories.HttpResponseWrite));
+        Assert.Equal(
+            "timeout:sse_write",
+            HttpMcpTransport.FormatTimeoutDiagnosticForTests(OperationTimeoutCategories.SseWrite));
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseWriteTimeout_AbortsNonCooperativeWrite_Issue3990()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: true, hangFlush: false);
+        var abortCount = 0;
+
+        var ex = await Assert.ThrowsAnyAsync<TimeoutException>(() =>
+            HttpMcpTransport.WriteBytesWithTimeoutForTestsAsync(
+                stream,
+                [1, 2, 3],
+                TimeSpan.FromMilliseconds(25),
+                OperationTimeoutCategories.HttpResponseWrite,
+                () => abortCount++));
+
+        Assert.Contains("category=http_response_write", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, abortCount);
+        Assert.Equal(1, stream.WriteCalls);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseWriteCancellationPropagatesCallerToken_Issue3928()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: true, hangFlush: false);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+        var abortCount = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            HttpMcpTransport.WriteBytesWithTimeoutForTestsAsync(
+                stream,
+                [1, 2, 3],
+                TimeSpan.FromSeconds(5),
+                OperationTimeoutCategories.HttpResponseWrite,
+                () => abortCount++,
+                cts.Token));
+
+        Assert.Equal(0, abortCount);
+        Assert.Equal(1, stream.WriteCalls);
+    }
+
+    [Fact]
+    public async Task HttpTransport_SseFlushTimeout_AbortsNonCooperativeFlush_Issue3990()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: false, hangFlush: true);
+        var abortCount = 0;
+
+        var ex = await Assert.ThrowsAnyAsync<TimeoutException>(() =>
+            HttpMcpTransport.FlushWithTimeoutForTestsAsync(
+                stream,
+                TimeSpan.FromMilliseconds(25),
+                OperationTimeoutCategories.SseWrite,
+                () => abortCount++));
+
+        Assert.Contains("category=sse_write", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, abortCount);
+        Assert.Equal(1, stream.FlushCalls);
     }
 
     [Fact]
@@ -1008,6 +1077,30 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_OutOfBandSseWriteTimeout_LogsStableDiagnostic_Issue3990()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            requestLogger: records.Enqueue,
+            eventStreamWriteTimeout: TimeSpan.FromMilliseconds(10));
+        harness.BeforeEventStreamWriteForTests = token => Task.Delay(Timeout.InfiniteTimeSpan, token);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
+
+        using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":3990,"method":"initialize","params":{}}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await WaitUntilAsync(() => !harness.HasEventStreams, "the timed-out event stream to be removed");
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 2);
+        var eventRecord = Assert.Single(snapshot.Where(record => record.Method == "GET" && record.Path == "/events"));
+        Assert.Equal("timeout:sse_write", eventRecord.Diagnostic);
+    }
+
+    [Fact]
     public async Task HttpTransport_IndexWithProgressToken_EmitsProgressOnEventsStreamAndReturnsResult()
     {
         var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_progress_{Guid.NewGuid():N}");
@@ -1635,6 +1728,12 @@ public class HttpMcpTransportTests : IDisposable
 
         public long RequestLogQueueFullDropCount => _transport.RequestLogQueueFullDropCount;
 
+        public Func<CancellationToken, Task>? BeforeEventStreamWriteForTests
+        {
+            get => _transport.BeforeEventStreamWriteForTests;
+            set => _transport.BeforeEventStreamWriteForTests = value;
+        }
+
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
@@ -1655,7 +1754,8 @@ public class HttpMcpTransportTests : IDisposable
             int? maxRequestBodyBytes = null,
             int? maxResponseBodyBytes = null,
             int? maxQueuedRequests = null,
-            int? requestLogQueueCapacity = null)
+            int? requestLogQueueCapacity = null,
+            TimeSpan? eventStreamWriteTimeout = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
             var transport = new HttpMcpTransport(
@@ -1667,7 +1767,8 @@ public class HttpMcpTransportTests : IDisposable
                 maxRequestBodyBytes: maxRequestBodyBytes,
                 maxResponseBodyBytes: maxResponseBodyBytes,
                 maxQueuedRequests: maxQueuedRequests,
-                requestLogQueueCapacity: requestLogQueueCapacity);
+                requestLogQueueCapacity: requestLogQueueCapacity,
+                eventStreamWriteTimeout: eventStreamWriteTimeout);
             var server = authenticator is null
                 ? new McpServer(dbPath, ConsoleUi.LoadVersion())
                 : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);
@@ -1739,6 +1840,64 @@ public class HttpMcpTransportTests : IDisposable
         {
             length = 0;
             return false;
+        }
+    }
+
+    private sealed class NonCancellableHangingStream(bool hangWrite, bool hangFlush) : Stream
+    {
+        private readonly TaskCompletionSource _writeBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _flushBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int WriteCalls { get; private set; }
+        public int FlushCalls { get; private set; }
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+            FlushCalls++;
+            if (hangFlush)
+                _flushBlocker.Task.GetAwaiter().GetResult();
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            FlushCalls++;
+            return hangFlush ? _flushBlocker.Task : Task.CompletedTask;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            WriteCalls++;
+            if (hangWrite)
+                _writeBlocker.Task.GetAwaiter().GetResult();
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            WriteCalls++;
+            return hangWrite ? new ValueTask(_writeBlocker.Task) : ValueTask.CompletedTask;
         }
     }
 }

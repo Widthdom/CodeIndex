@@ -748,7 +748,7 @@ public class DbWriter
               AND i.kind IN ('replacement_char', 'non_utf8_likely')
               AND (i.origin IS NULL OR i.severity IS NULL)
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@path", relativePath);
+        SqliteCommandPolicy.AddText(cmd, "@path", relativePath);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -765,7 +765,7 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE lang = @lang LIMIT 1";
-        cmd.Parameters.AddWithValue("@lang", lang);
+        SqliteCommandPolicy.AddText(cmd, "@lang", lang);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -773,24 +773,24 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id";
-        cmd.Parameters.AddWithValue("@file_id", fileId);
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbols count for file");
     }
 
     public int CountReferencesForFile(long fileId)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id";
-        cmd.Parameters.AddWithValue("@file_id", fileId);
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
     }
 
     public bool HasIssueForFile(long fileId, string kind)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1";
-        cmd.Parameters.AddWithValue("@file_id", fileId);
-        cmd.Parameters.AddWithValue("@kind", kind);
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        SqliteCommandPolicy.AddText(cmd, "@kind", kind);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -891,7 +891,7 @@ public class DbWriter
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = "SELECT id, path FROM files WHERE path <> @path";
-            cmd.Parameters.AddWithValue("@path", retainedRelativePath);
+            SqliteCommandPolicy.Add(cmd, "@path", retainedRelativePath);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -1852,7 +1852,7 @@ public class DbWriter
         // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
         using var delCmd = _conn.CreateCommand();
         delCmd.CommandText = "DELETE FROM file_issues WHERE file_id = @fid";
-        delCmd.Parameters.AddWithValue("@fid", fileId);
+        SqliteCommandPolicy.Add(delCmd, "@fid", fileId);
         delCmd.ExecuteNonQuery();
 
         if (issues.Count == 0) return;
@@ -3452,7 +3452,7 @@ public class DbWriter
     private bool ColumnExists(string table, string column)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(table);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -3507,7 +3507,7 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-        cmd.Parameters.AddWithValue("@key", key);
+        SqliteCommandPolicy.Add(cmd, "@key", key);
         return cmd.ExecuteScalar() as string;
     }
     public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
@@ -3518,7 +3518,7 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
-        cmd.Parameters.AddWithValue("@name", name);
+        SqliteCommandPolicy.Add(cmd, "@name", name);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -3745,7 +3745,7 @@ public class DbWriter
             : rewriteAll
             ? "SELECT 0"
             : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-        symbols.Parameters.AddWithValue("@lastSymbolId", lastSymbolId);
+        SqliteCommandPolicy.Add(symbols, "@lastSymbolId", lastSymbolId);
 
         using var references = _conn.CreateCommand();
         references.CommandText = rewriteAll
@@ -3757,7 +3757,7 @@ public class DbWriter
                 FROM symbol_references
                 WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                    OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-        references.Parameters.AddWithValue("@lastReferenceId", phase == "references" ? lastReferenceId : 0);
+        SqliteCommandPolicy.Add(references, "@lastReferenceId", phase == "references" ? lastReferenceId : 0);
 
         return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
     }
@@ -3781,7 +3781,7 @@ public class DbWriter
             cmd.CommandText = rewriteAll
                 ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
                 : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-            cmd.Parameters.AddWithValue("@lastSymbolId", lastSymbolId);
+            SqliteCommandPolicy.Add(cmd, "@lastSymbolId", lastSymbolId);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -3829,7 +3829,7 @@ public class DbWriter
                     FROM symbol_references
                     WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                        OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-            cmd.Parameters.AddWithValue("@lastReferenceId", lastReferenceId);
+            SqliteCommandPolicy.Add(cmd, "@lastReferenceId", lastReferenceId);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {

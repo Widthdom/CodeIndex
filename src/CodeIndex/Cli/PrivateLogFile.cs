@@ -275,7 +275,7 @@ internal static class PrivateLogFile
         try
         {
             var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
                 throw new IOException("Refusing to use private log target because it is a symbolic link or reparse point.");
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -283,15 +283,8 @@ internal static class PrivateLogFile
         }
     }
 
-    private static string ClassifyFailure(Exception exception) =>
-        exception switch
-        {
-            UnauthorizedAccessException => "permission_denied",
-            FileNotFoundException or DirectoryNotFoundException => "not_found",
-            NotSupportedException => "not_supported",
-            IOException => "io_error",
-            _ => "operation_failed",
-        };
+    private static string ClassifyFailure(Exception exception)
+        => FileSystemBoundary.ClassifyProbeFailure(exception);
 
     private static string FormatDiagnosticTarget(string path)
     {

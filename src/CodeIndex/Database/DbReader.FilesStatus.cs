@@ -29,7 +29,7 @@ public partial class DbReader
         sql += $" ORDER BY {PathBucketOrder}, f.path";
         fileCmd.CommandText = sql;
         if (lang != null)
-            fileCmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(fileCmd, "@lang", lang);
         AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
 
         var candidateFiles = CountFindCandidateFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -154,10 +154,10 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         fileCmd.CommandText = sql;
         if (lang != null)
-            fileCmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.AddText(fileCmd, "@lang", lang);
         AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
 
-        return Convert.ToInt32(fileCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        return SqliteCommandPolicy.ReadInt32Scalar(fileCmd, "find candidate file count");
     }
 
     public FindCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
@@ -177,7 +177,7 @@ public partial class DbReader
         sql += $" ORDER BY {PathBucketOrder}, f.path";
         fileCmd.CommandText = sql;
         if (lang != null)
-            fileCmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(fileCmd, "@lang", lang);
         AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
 
         var candidateFiles = CountFindCandidateFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -275,7 +275,7 @@ public partial class DbReader
             FROM chunks c
             WHERE c.file_id = @fileId
             ORDER BY c.start_line, c.chunk_index";
-        chunkCmd.Parameters.AddWithValue("@fileId", fileId);
+        SqliteCommandPolicy.Add(chunkCmd, "@fileId", fileId);
 
         var lastEmittedLine = 0;
         using var chunkReader = chunkCmd.ExecuteTrackedReader();
@@ -474,7 +474,7 @@ public partial class DbReader
 
         using var fileCmd = _conn.CreateCommand();
         fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
-        fileCmd.Parameters.AddWithValue("@path", path);
+        SqliteCommandPolicy.Add(fileCmd, "@path", path);
 
         using var fileReader = fileCmd.ExecuteTrackedReader();
         if (!fileReader.TrackedRead())
@@ -495,11 +495,11 @@ public partial class DbReader
             chunkSql += " AND c.start_line <= @endLine";
         chunkSql += " ORDER BY c.start_line, c.chunk_index";
         chunkCmd.CommandText = chunkSql;
-        chunkCmd.Parameters.AddWithValue("@path", path);
+        SqliteCommandPolicy.Add(chunkCmd, "@path", path);
         if (startLine.HasValue)
-            chunkCmd.Parameters.AddWithValue("@startLine", startLine.Value);
+            SqliteCommandPolicy.Add(chunkCmd, "@startLine", startLine.Value);
         if (endLine.HasValue)
-            chunkCmd.Parameters.AddWithValue("@endLine", endLine.Value);
+            SqliteCommandPolicy.Add(chunkCmd, "@endLine", endLine.Value);
 
         using var chunkReader = chunkCmd.ExecuteTrackedReader();
         while (chunkReader.TrackedRead())
@@ -682,7 +682,7 @@ public partial class DbReader
                 GROUP BY s.file_id
             ) AS symbol_counts ON symbol_counts.file_id = f.id
             {BuildFileReferenceCountJoinSql("file_match")}";
-        cmd.Parameters.AddWithValue("@path", path);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
 
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
@@ -890,6 +890,16 @@ public partial class DbReader
             WalCheckpointFailureReason = _walCheckpointFailureReason,
             WalStaleSnapshotRisk = WalStaleSnapshotRisk,
             WalStaleSnapshotReason = WalStaleSnapshotReason,
+            SqliteConnectionPolicy = SqliteConnectionPolicy.BuildStatus(
+                _isReadOnly,
+                _readOnlyFallback,
+                _walCheckpointAttempted,
+                _walCheckpointSucceeded,
+                _readOnlyImmutableFallback,
+                _walCheckpointSkippedReason,
+                _walCheckpointFailureReason,
+                WalStaleSnapshotRisk,
+                WalStaleSnapshotReason),
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
@@ -1136,7 +1146,7 @@ public partial class DbReader
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", key);
+            SqliteCommandPolicy.Add(cmd, "@key", key);
             return cmd.ExecuteScalar() as string;
         }
         catch (SqliteException)

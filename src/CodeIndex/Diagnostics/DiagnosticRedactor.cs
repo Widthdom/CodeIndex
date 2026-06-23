@@ -14,13 +14,13 @@ internal static class DiagnosticRedactor
     internal const string SuggestionRedactedBearerToken = "[REDACTED:bearer_token]";
     internal const string SuggestionRedactedCredential = "[REDACTED:credential]";
     internal const string SuggestionRedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
-    internal const string SuggestionRedactedRegexTimeout = "[REDACTED:redaction_timeout]";
+    internal const string SuggestionRedactedRegexTimeout = RegexTimeoutPolicy.SuggestionTextTimeoutFallback;
     internal const int SuggestionRedactionFieldLengthLimit = 32768;
     internal const string SuggestionRedactionTruncationMarker = "[REDACTED:truncated]";
     internal const int MaxReportLogJsonLineChars = 64 * 1024;
     internal const int MaxReportLogJsonDepth = 32;
 
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan RegexTimeout = RegexTimeoutPolicy.RedactionRegexTimeout;
     private static readonly JsonDocumentOptions ReportLogJsonDocumentOptions = new()
     {
         MaxDepth = MaxReportLogJsonDepth,
@@ -203,6 +203,14 @@ internal static class DiagnosticRedactor
 
     internal static string RedactSensitiveText(string value, string placeholder = AngleRedacted, bool redactPaths = false)
     {
+        return RegexTimeoutPolicy.RedactOrFallback(
+            RegexRedactionSurface.DiagnosticText,
+            () => RedactSensitiveTextCore(value, placeholder, redactPaths),
+            placeholder);
+    }
+
+    private static string RedactSensitiveTextCore(string value, string placeholder, bool redactPaths)
+    {
         if (string.IsNullOrEmpty(value))
             return value;
 
@@ -268,9 +276,9 @@ internal static class DiagnosticRedactor
         }
         catch (RegexMatchTimeoutException)
         {
-            types.Add("redaction_timeout");
+            types.Add(RegexTimeoutPolicy.RedactionTimeoutType);
             redactedTypes = types;
-            return SuggestionRedactedRegexTimeout;
+            return RegexTimeoutPolicy.RedactionFallback(RegexRedactionSurface.SuggestionText);
         }
     }
 

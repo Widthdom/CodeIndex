@@ -100,26 +100,32 @@ public static class ConsoleUi
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query>|--path <file> --line <line> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--line <line>|--start-line <line>] [--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name]"),
-        ("outline", "cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>]"),
+        ("outline", "cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <outline:offset>] [--kind <kind[,kind]>] [--outline-fields <csv>]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
         ("doctor", "cdidx doctor [--json] [--redact-paths] [--env-inventory]"),
-        ("db", "cdidx db --integrity-check|schema|prune [--dry-run|--apply] [--db <path>] [--json] | cdidx db checkpoint [name<=128] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name<=128> [--db <path>] [--json] | cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
+        ("db", "cdidx db integrity|--integrity-check [--db <path>] [--json]"),
+        ("db", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),
+        ("db", "cdidx db prune --dry-run|--apply [--db <path>] [--json]"),
+        ("db", "cdidx db checkpoint [name<=128] [--dry-run] [--db <path>] [--json]"),
+        ("db", "cdidx db checkpoints --list [--db <path>] [--json]"),
+        ("db", "cdidx db restore <name<=128> [--db <path>] [--json]"),
+        ("db", "cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
-        ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <unused:offset>] [--audit-scope <source|all>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
+        ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <unused:offset>] [--audit-scope <source|all>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>|--confidence <medium|low>] [--actionable] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
-        ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line; max 1,048,576 chars/line and 256 arguments"),
+        ("batch", "cdidx batch [--db <path>] [--json-summary]  # reads JSON string arrays from stdin, one query command per line; max 1,048,576 chars/line and 256 arguments"),
         ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
@@ -132,6 +138,10 @@ public static class ConsoleUi
     [
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("completions", "--json is not supported; output is a shell script for the selected shell."),
+        ("db", "schema defaults to the full sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for bounded diagnostics."),
+        ("db", "checkpoint --dry-run reports the DB/WAL/SHM files and byte count without creating the checkpoint directory."),
+        ("db", "checkpoint creates a filesystem snapshot next to the DB; restore replaces the DB and keeps a pre-restore backup directory."),
+        ("db", "prune --dry-run only counts orphan rows; prune --apply deletes them and may run WAL checkpoint maintenance."),
     ];
 
     public static string FormatSummaryLine(string label, object? value, int labelWidth = SummaryLabelWidth, string indent = "")
@@ -337,9 +347,9 @@ public static class ConsoleUi
             return null;
         }
 
-        var cts = new CancellationTokenSource();
+        var cts = new SpinnerCancellationTokenSource();
         var ct = cts.Token;
-        _ = BackgroundTaskObserver.Run(async token =>
+        var spinnerTask = BackgroundTaskObserver.Run(async token =>
         {
             int i = 0;
             while (!token.IsCancellationRequested)
@@ -355,6 +365,7 @@ public static class ConsoleUi
                 try { await Task.Delay(SpinnerFrameDelayMs, token).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
             }
         }, "cdidx", "console spinner", ct);
+        cts.SetSpinnerTask(spinnerTask);
         return cts;
     }
 
@@ -366,8 +377,18 @@ public static class ConsoleUi
     {
         if (cts == null) return;
         cts.Cancel();
-        // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
-        Thread.Sleep(SpinnerStopDelayMs);
+        if (cts is SpinnerCancellationTokenSource spinnerCts)
+        {
+            try
+            {
+                spinnerCts.SpinnerTask.GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // Spinner shutdown is best-effort; BackgroundTaskObserver reports faults.
+                // spinner shutdown は best-effort。fault は BackgroundTaskObserver が報告する。
+            }
+        }
         if (ShouldUseInteractiveConsole())
         {
             lock (TerminalLock)
@@ -377,6 +398,16 @@ public static class ConsoleUi
             }
         }
         cts.Dispose();
+    }
+
+    private sealed class SpinnerCancellationTokenSource : CancellationTokenSource
+    {
+        private Task _spinnerTask = Task.CompletedTask;
+
+        public Task SpinnerTask => _spinnerTask;
+
+        public void SetSpinnerTask(Task spinnerTask)
+            => _spinnerTask = spinnerTask;
     }
 
     internal static void SetProgressAnimationEnabled(bool? enabled)
@@ -1054,6 +1085,9 @@ public static class ConsoleUi
         Console.WriteLine("  --visibility <v[,v]>       Filter symbols/definitions/unused/hotspots by visibility: public, protected, internal, private");
         WriteHelpLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
         WriteHelpLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused/hotspots ignore --limit, impact still uses visible page counts");
+        WriteHelpLine("  --bucket <bucket>          unused only: filter one unused confidence bucket");
+        WriteHelpLine("  --min-confidence <s>       unused only: filter medium or low confidence candidates; --confidence is an alias");
+        WriteHelpLine("  --actionable               unused only: preset for private medium-confidence cleanup candidates");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
         WriteHelpLine($"  --require-before/--require-after <query>  search only: keep primary matches only when the guard query appears within --guard-window lines before/after the match (default {DbReader.DefaultSearchGuardWindow}, max {DbReader.MaxSearchGuardWindow})");
@@ -1119,7 +1153,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
         Console.WriteLine("  cdidx deps --path src/ --exclude-tests          Show file-level dependency edges");
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
-        Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
+        Console.WriteLine("  cdidx unused --lang csharp --actionable          Find private cleanup candidates");
         Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback");
         Console.WriteLine("  cdidx hotspots --group-by=file --json           Compare hotspot volume by target file");
         Console.WriteLine("  cdidx hotspots --group-by-name --exclude-tests  Collapse same-name hotspots across files");
