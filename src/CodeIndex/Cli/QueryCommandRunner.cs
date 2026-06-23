@@ -3168,11 +3168,11 @@ public static partial class QueryCommandRunner
     }
 
     private static void WriteFormattedCount(int count, JsonSerializerOptions jsonOptions)
-        => Console.WriteLine(new JsonObject
+        => CommandOutputWriter.WriteJsonNode(new JsonObject
         {
             ["count"] = count,
             ["total_estimated"] = count,
-        }.ToJsonString(jsonOptions));
+        }, jsonOptions);
 
     private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
     {
