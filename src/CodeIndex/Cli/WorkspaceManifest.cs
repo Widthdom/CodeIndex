@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -17,7 +18,45 @@ internal sealed record WorkspaceListJsonResult(
     IReadOnlyList<WorkspaceMember> Members,
     WorkspaceManifestStatusJsonResult ManifestStatus);
 
-internal sealed record ActiveWorkspaceJsonResult(ActiveWorkspaceState? ActiveWorkspace, string? Path);
+internal sealed record ActiveWorkspaceJsonResult
+{
+    [JsonPropertyName("active")]
+    public bool Active { get; init; }
+
+    [JsonPropertyName("workspace")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public ActiveWorkspaceState? Workspace { get; init; }
+
+    [JsonPropertyName("active_workspace")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ActiveWorkspaceState? ActiveWorkspace => Workspace;
+
+    [JsonPropertyName("path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Path { get; init; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = "inactive";
+
+    [JsonPropertyName("reason")]
+    public string Reason { get; init; } = "not_set";
+
+    [JsonPropertyName("code")]
+    public string Code { get; init; } = "active_workspace_not_set";
+
+    internal static ActiveWorkspaceJsonResult From(ActiveWorkspaceState? state, string? path)
+        => state is null
+            ? new ActiveWorkspaceJsonResult()
+            : new ActiveWorkspaceJsonResult
+            {
+                Active = true,
+                Workspace = state,
+                Path = path,
+                Status = "active",
+                Reason = "active",
+                Code = "active_workspace_set",
+            };
+}
 
 internal sealed record ConfigShowJsonResult(
     string? ConfigPath,

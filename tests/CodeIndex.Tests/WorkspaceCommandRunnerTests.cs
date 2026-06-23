@@ -683,6 +683,41 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceCurrentJsonNoActiveWorkspace_ReturnsExplicitInactiveState_Issue3939()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_current_no_active");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_current_no_active_config");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.CurrentDirectory = root;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["current", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.False(payload.GetProperty("active").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, payload.GetProperty("workspace").ValueKind);
+            Assert.Equal("inactive", payload.GetProperty("status").GetString());
+            Assert.Equal("not_set", payload.GetProperty("reason").GetString());
+            Assert.Equal("active_workspace_not_set", payload.GetProperty("code").GetString());
+            Assert.False(payload.TryGetProperty("active_workspace", out _));
+            Assert.False(payload.TryGetProperty("path", out _));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void ActiveWorkspace_AffectsQueryResolutionButNotIndexResolution()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_project");
