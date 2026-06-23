@@ -5016,6 +5016,40 @@ jobs:
     }
 
     [Fact]
+    public void RunExcerpt_JsonNoSemanticTokensOmitsSemanticPayload_Issue3942()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_no_semantic_tokens_3942");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json", "--no-semantic-tokens"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("start_line").GetInt32());
+            Assert.Equal(3, json.GetProperty("end_line").GetInt32());
+            Assert.Contains("public class Sample", json.GetProperty("content").GetString());
+            Assert.False(json.TryGetProperty("semantic_tokens", out _));
+            Assert.True(json.TryGetProperty("content_line_spans", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_JsonClampsLongSingleLineContentWithoutFocus()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line_no_focus");

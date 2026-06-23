@@ -360,6 +360,7 @@ internal static class CliFlagSchema
             new() { Name = "--focus-line", ValuePlaceholder = "<line>", Description = "Focused line to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-column", ValuePlaceholder = "<n>", Description = "Focused column to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-length", ValuePlaceholder = "<n>", Description = "Focused span width when clamping", Commands = Set("excerpt") },
+            new() { Name = "--no-semantic-tokens", Description = "Excerpt JSON: omit semantic_tokens to keep payloads compact", Commands = Set("excerpt") },
             new() { Name = "--max-hops", ValuePlaceholder = "<n>", Description = "Impact: max BFS hops", Commands = Set("impact") },
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },

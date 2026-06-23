@@ -5284,7 +5284,8 @@ public static partial class QueryCommandRunner
             if (options.Json)
             {
                 ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath);
-                excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
+                if (!options.NoSemanticTokens)
+                    excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
             }
 
             if (options.Json)
@@ -11193,6 +11194,9 @@ public static partial class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--no-semantic-tokens":
+                    noSemanticTokens = true;
+                    break;
                 case "--exclude-comments":
                     excludeComments = true;
                     break;
@@ -11582,6 +11586,8 @@ public static partial class QueryCommandRunner
             LanguageLookups = languageLookups,
             LanguageExtensionLookups = languageExtensionLookups,
             LanguageAliasLookups = languageAliasLookups,
+            SourceOnly = sourceOnly,
+            NoSemanticTokens = noSemanticTokens,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
@@ -15522,6 +15528,8 @@ public sealed class QueryCommandOptions
     public List<string> LanguageLookups { get; init; } = [];
     public List<string> LanguageExtensionLookups { get; init; } = [];
     public List<string> LanguageAliasLookups { get; init; } = [];
+    public bool SourceOnly { get; init; }
+    public bool NoSemanticTokens { get; init; }
     public string? ParseError { get; init; }
 }
 
