@@ -447,6 +447,39 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void EnvironmentVariableInventory_IncludesSecretAndPolicyClassifications()
+    {
+        var byName = EnvironmentVariableInventory.Items.ToDictionary(item => item.Name, StringComparer.Ordinal);
+
+        var githubToken = Assert.Contains("CDIDX_GITHUB_TOKEN", byName);
+        Assert.Equal(EnvironmentVariableInventory.SensitivitySecret, githubToken.Sensitivity);
+        Assert.Equal("security", githubToken.Policy);
+        Assert.Equal("no", githubToken.ConfigFileSupported);
+        Assert.Contains(githubToken.Locations, location => location.Path.EndsWith("GitHubIssueReporter.cs", StringComparison.Ordinal));
+
+        var maxLineWidth = Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, byName);
+        Assert.Equal(EnvironmentVariableInventory.SensitivityPublic, maxLineWidth.Sensitivity);
+        Assert.Equal("display", maxLineWidth.Policy);
+        Assert.Equal("yes", maxLineWidth.ConfigFileSupported);
+    }
+
+    [Fact]
+    public void RunDoctor_EnvironmentInventory_PrintsAuditView()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--env-inventory"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains("environment_inventory:", stdout);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains("sensitivity: secret", stdout);
+        Assert.Contains("CDIDX_MCP_RATE_LIMIT_RPS", stdout);
+        Assert.Contains("policy   : performance", stdout);
+    }
+
+    [Fact]
     public void Run_QueryTraceStderr_BoundsPathArraysAndValues_Issue3123()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-bounds");

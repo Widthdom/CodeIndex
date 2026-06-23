@@ -412,8 +412,14 @@ internal static partial class ProgramRunner
 
     private static int RunDoctor(string[] args, string appVersion)
     {
+        if (args.Length == 1 && args[0] == "--env-inventory")
+        {
+            WriteEnvironmentInventory();
+            return CommandExitCodes.Success;
+        }
+
         if (args.Length > 0)
-            return CommandErrorWriter.Write($"Unknown doctor argument: {args[0]}", CommandExitCodes.InvalidArgument, "use `cdidx doctor`.");
+            return CommandErrorWriter.Write($"Unknown doctor argument: {args[0]}", CommandExitCodes.InvalidArgument, "use `cdidx doctor [--env-inventory]`.");
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
         Console.WriteLine("cdidx doctor");
@@ -450,6 +456,26 @@ internal static partial class ProgramRunner
         foreach (var (key, value) in EnumerateCdidxEnvironment())
             Console.WriteLine(ConsoleUi.FormatSummaryLine(key, value, indent: "  "));
         return CommandExitCodes.Success;
+    }
+
+    private static void WriteEnvironmentInventory()
+    {
+        Console.WriteLine("environment_inventory:");
+        foreach (var item in EnvironmentVariableInventory.Items.OrderBy(static item => item.Name, StringComparer.Ordinal))
+        {
+            var firstLocation = item.Locations.FirstOrDefault();
+            var location = firstLocation is null
+                ? "<unknown>"
+                : $"{firstLocation.Path}:{firstLocation.Line}";
+            Console.WriteLine($"  {item.Name}");
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("category", item.Category, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("sensitivity", item.Sensitivity, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("policy", item.Policy, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("default", item.DefaultBehavior, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("config", item.ConfigFileSupported, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("location", location, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("description", item.Description, indent: "    "));
+        }
     }
 
     private static IEnumerable<(string Key, string Value)> EnumerateCdidxEnvironment()
