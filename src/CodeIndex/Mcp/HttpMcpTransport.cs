@@ -676,6 +676,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             LogRequest(request, (int)HttpStatusCode.OK);
             return true;
         }
+        catch (HttpMcpTimeoutException ex)
+        {
+            request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "out-of-band response timeout");
+            LogRequest(request, (int)HttpStatusCode.InternalServerError);
+            return true;
+        }
         catch
         {
             AbortResponseBestEffort(context.Response, "out-of-band response failure");
@@ -1001,7 +1008,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             MarkRejected(request, EventStreamLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
             context.Response.AddHeader(RejectionReasonHeader, EventStreamLimitRejection);
-            await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
+            await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
             return;
         }
@@ -1028,6 +1035,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             await context.Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "event stream timeout");
         }
         catch
         {
