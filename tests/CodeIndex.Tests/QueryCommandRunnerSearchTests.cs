@@ -1186,7 +1186,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, emptyCatchQuery.GetProperty("exclude_origins").GetArrayLength());
         Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
         Assert.Equal("new Regex(", regexQuery.GetProperty("query").GetString());
-        Assert.Contains(regexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex alias", StringComparison.Ordinal));
+        Assert.Contains(regexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bounded-regex-alias", StringComparison.Ordinal));
         Assert.Equal("info", boundedRegexAliasQuery.GetProperty("severity").GetString());
         Assert.Contains(boundedRegexAliasQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
@@ -1595,7 +1595,7 @@ public partial class QueryCommandRunnerTests
             var fullyQualified = queries.Single(item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
 
             Assert.Contains("src/raw.cs", constructionPaths);
-            Assert.Contains("src/bounded.cs", constructionPaths);
+            Assert.DoesNotContain("src/bounded.cs", constructionPaths);
             Assert.DoesNotContain("src/diagnostic.cs", constructionPaths);
             Assert.Equal("src/bounded.cs", Assert.Single(boundedAlias.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
             Assert.Contains(boundedAlias.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
@@ -1604,7 +1604,7 @@ public partial class QueryCommandRunnerTests
             var (dotnetExitCode, dotnetStdout, dotnetStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [
                     "--recipe", "dotnet-risk-patterns",
-                    "--include-query", "fully-qualified-regex-construction",
+                    "--include-query", "regex-construction,bounded-regex-alias,fully-qualified-regex-construction",
                     "--db", dbPath,
                     "--json",
                     "--limit", "10",
@@ -1615,9 +1615,20 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, dotnetExitCode);
             Assert.Equal(string.Empty, dotnetStderr);
             using var dotnetDocument = ParseJsonOutput(dotnetStdout);
-            var dotnetQuery = Assert.Single(dotnetDocument.RootElement.GetProperty("queries").EnumerateArray());
-            Assert.Equal("fully-qualified-regex-construction", dotnetQuery.GetProperty("name").GetString());
-            Assert.Equal("src/full.cs", Assert.Single(dotnetQuery.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
+            var dotnetQueries = dotnetDocument.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            var dotnetConstructionPaths = dotnetQueries
+                .Single(item => item.GetProperty("name").GetString() == "regex-construction")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var dotnetBoundedAlias = dotnetQueries.Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
+            var dotnetFullyQualified = dotnetQueries.Single(item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
+
+            Assert.Contains("src/raw.cs", dotnetConstructionPaths);
+            Assert.DoesNotContain("src/bounded.cs", dotnetConstructionPaths);
+            Assert.Equal("src/bounded.cs", Assert.Single(dotnetBoundedAlias.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
+            Assert.Equal("src/full.cs", Assert.Single(dotnetFullyQualified.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
         }
         finally
         {

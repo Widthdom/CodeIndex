@@ -205,10 +205,14 @@ internal static class SearchAuditRecipes
                     ["audit", "performance"],
                     "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs.")
                 {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
-                        "positive: files with a BoundedRegex alias are likely using the repository wrapper rather than raw BCL Regex."
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
                 },
                 new(
@@ -663,10 +667,14 @@ internal static class SearchAuditRecipes
                     ["audit", "performance"],
                     "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs.")
                 {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
-                        "positive: files with a BoundedRegex alias are likely using the repository wrapper rather than raw BCL Regex."
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
                 },
                 new(
@@ -1327,6 +1335,7 @@ internal sealed record SearchAuditRecipeQuery(
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
     public List<string> RiskEvidence { get; init; } = [];
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
+    public List<string> RejectFileQueries { get; init; } = [];
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public List<string> MatchOrigins { get; init; } = [];

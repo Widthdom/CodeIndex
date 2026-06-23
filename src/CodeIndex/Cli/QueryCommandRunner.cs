@@ -1887,6 +1887,7 @@ public static partial class QueryCommandRunner
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
@@ -1952,6 +1953,7 @@ public static partial class QueryCommandRunner
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
@@ -2192,6 +2194,58 @@ public static partial class QueryCommandRunner
 
         return queryResults;
     }
+
+    private static List<SearchResult> ApplySearchRecipeFileRejectQueries(
+        DbReader reader,
+        List<SearchResult> results,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.RejectFileQueries.Count == 0 || results.Count == 0)
+            return results;
+
+        var rejectedPaths = new Dictionary<string, bool>(StringComparer.Ordinal);
+        return results
+            .Where(result => !ShouldRejectSearchRecipeFile(reader, result.Path, options, recipeQuery, rejectedPaths))
+            .ToList();
+    }
+
+    private static bool ShouldRejectSearchRecipeFile(
+        DbReader reader,
+        string path,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        Dictionary<string, bool> rejectedPaths)
+    {
+        if (rejectedPaths.TryGetValue(path, out var rejected))
+            return rejected;
+
+        foreach (var rejectQuery in recipeQuery.RejectFileQueries)
+        {
+            var matches = reader.Search(
+                rejectQuery,
+                1,
+                options.Lang,
+                rawQuery: false,
+                pathPatterns: [path],
+                excludePathPatterns: null,
+                excludeTests: false,
+                deduplicate: true,
+                since: options.Since,
+                exact: true,
+                prefix: false,
+                visibilityRank: false);
+            if (matches.Count == 0)
+                continue;
+
+            rejectedPaths[path] = true;
+            return true;
+        }
+
+        rejectedPaths[path] = false;
+        return false;
+    }
+
     private static SearchIssueDraftJsonResult ToSearchIssueDraft(
         SearchAuditRecipe recipe,
         SearchRecipeQueryResultJsonResult queryResult,
