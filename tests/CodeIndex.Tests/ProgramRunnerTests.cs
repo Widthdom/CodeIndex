@@ -1626,6 +1626,36 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void CreateInstallerProcessStartInfo_ScrubsEnvironmentByAllowlist_Issue3910()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "HTTPS_PROXY",
+                "CDIDX_VERIFY_POLICY",
+                "CDIDX_TEST_INSTALLER_POLICY_3910",
+                "CDIDX_SECRET_INSTALLER_POLICY_3910");
+            env.Set("HTTPS_PROXY", "http://proxy.example.test:8080");
+            env.Set("CDIDX_VERIFY_POLICY", "strict");
+            env.Set("CDIDX_TEST_INSTALLER_POLICY_3910", "test-only");
+            env.Set("CDIDX_SECRET_INSTALLER_POLICY_3910", "secret");
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx installer env {Guid.NewGuid():N}");
+            var script = Path.Combine(root, "install.sh");
+
+            var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+            Assert.Equal("http://proxy.example.test:8080", startInfo.Environment["HTTPS_PROXY"]);
+            Assert.Equal("strict", startInfo.Environment["CDIDX_VERIFY_POLICY"]);
+            Assert.Equal(root, startInfo.Environment["CDIDX_INSTALL_DIR"]);
+            Assert.False(startInfo.Environment.ContainsKey("CDIDX_TEST_INSTALLER_POLICY_3910"));
+            Assert.False(startInfo.Environment.ContainsKey("CDIDX_SECRET_INSTALLER_POLICY_3910"));
+        }
+    }
+
+    [Fact]
     public void RunInstallerProcess_StartFailureReturnsInstallError_Issue3685()
     {
         lock (TestConsoleLock.Gate)
@@ -2517,6 +2547,67 @@ exit 7
                 CancellationToken.None));
 
         Assert.Contains($"{ProgramRunner.MaxReleaseChecksumBytes} byte limit", ex.Message);
+    }
+
+    [Fact]
+    public async Task DownloadReleaseChecksumManifestAsync_HttpFailureUsesBoundedRedactedDiagnostics_Issue3973()
+    {
+        var errorBody = """
+            {
+              "message": "denied",
+              "authorization": "Bearer secret-token-3973",
+              "details": "release asset unavailable"
+            }
+            """;
+        using var client = new HttpClient(new StaticResponseHandler(
+            new StringContent(errorBody, Encoding.UTF8, "application/json"),
+            HttpStatusCode.Forbidden))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            ProgramRunner.DownloadReleaseChecksumManifestAsync(
+                client,
+                "v1.27.0",
+                TimeSpan.FromSeconds(1),
+                CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
+        Assert.Contains("GitHub release download failed for sha256sums.txt: 403:", ex.Message);
+        Assert.Contains("[redacted]", ex.Message);
+        Assert.DoesNotContain("secret-token-3973", ex.Message);
+        Assert.True(ex.Message.Length < 700, ex.Message);
+    }
+
+    [Fact]
+    public async Task DownloadInstallerScriptAsync_UsesReleaseDownloadHeadersWithoutApiMediaType_Issue3973()
+    {
+        var handler = new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("#!/bin/sh\n")));
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx_install_header_{Guid.NewGuid():N}.sh");
+        try
+        {
+            await ProgramRunner.DownloadInstallerScriptAsync(
+                client,
+                "v1.27.0",
+                scriptPath,
+                TimeSpan.FromSeconds(1),
+                CancellationToken.None);
+
+            Assert.NotNull(handler.LastRequest);
+            Assert.Contains(handler.LastRequest!.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+            Assert.Empty(handler.LastRequest.Headers.Accept);
+            Assert.False(handler.LastRequest.Headers.Contains("X-GitHub-Api-Version"));
+        }
+        finally
+        {
+            if (File.Exists(scriptPath))
+                File.Delete(scriptPath);
+        }
     }
 
     [Fact]

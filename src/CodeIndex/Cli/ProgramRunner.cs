@@ -3629,6 +3629,7 @@ internal static partial class ProgramRunner
             fileName: ResolveTrustedBashPath(),
             workingDirectory: Path.GetDirectoryName(fullScriptPath) ?? string.Empty);
         CodeIndex.ProcessLaunchPolicy.AddArguments(startInfo, fullScriptPath, releaseTag);
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyUpgradeInstallerEnvironment(startInfo);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
     }
@@ -4012,7 +4013,7 @@ internal static partial class ProgramRunner
             Uri.EscapeDataString(assetName));
 
     private static HttpClient CreateUpgradeHttpClient()
-        => new() { Timeout = TimeSpan.FromSeconds(20) };
+        => GitHubHttpClientFactory.CreateReleaseDownloadHttpClient(TimeSpan.FromSeconds(20));
 
     internal static async Task<string> DownloadReleaseChecksumManifestAsync(
         HttpClient client,
@@ -4025,11 +4026,15 @@ internal static partial class ProgramRunner
             timeout,
             cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
+        GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             downloadScope.Token).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
+            response,
+            ReleaseChecksumAssetName,
+            downloadScope.Token).ConfigureAwait(false);
         var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
             response.Content,
             MaxReleaseChecksumBytes,
@@ -4101,11 +4106,15 @@ internal static partial class ProgramRunner
             timeout,
             cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
+        GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             downloadScope.Token).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
+            response,
+            InstallerScriptAssetName,
+            downloadScope.Token).ConfigureAwait(false);
         await BoundedHttpContentReader.WriteToPrivateFileAsync(
             response.Content,
             scriptPath,

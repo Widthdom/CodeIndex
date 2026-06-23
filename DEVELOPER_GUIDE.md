@@ -412,6 +412,14 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 
 `cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `install.sh`, verifies the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the installer for the latest release.
 
+Upgrade installer and git subprocesses scrub the inherited process environment
+before launch. They forward only the shared subprocess allowlist needed for
+PATH/home/temp/proxy/certificate behavior plus tool-specific knobs such as
+`CDIDX_INSTALL_DIR`, installer verification variables, and selected `GIT_*`
+controls. `CDIDX_TEST_*` variables are not a public runtime contract; they are
+forwarded only to isolated worker processes so repository tests can exercise
+worker-only hooks without exposing the rest of the host environment.
+
 `cdidx upgrade --json` has a stdout contract suitable for automation. Check-only
 and no-update results use the update-check fields
 (`current_version`, `latest_version`, `update_available`, `from_cache`,
@@ -2720,6 +2728,13 @@ endpoint を確認します。`cdidx upgrade --check-only` はこの check を�
 `cdidx upgrade` は signed release installer の薄い wrapper で、`install.sh` を download し、
 現在の binary directory が writable か確認し、`CDIDX_INSTALL_DIR` をその directory に向けて
 latest release の installer を実行します。
+
+Upgrade installer と git subprocess は、起動前に継承環境を scrub します。
+forward するのは、PATH / home / temp / proxy / certificate 挙動に必要な共有 subprocess
+allowlist と、`CDIDX_INSTALL_DIR`、installer verification variables、選択された `GIT_*`
+controls のような tool-specific knob だけです。`CDIDX_TEST_*` variables は public runtime
+contract ではありません。repository tests が worker-only hook を検証できるよう、isolated worker
+process にだけ forward します。
 
 `cdidx upgrade --json` は automation 向けの stdout contract を持ちます。check-only と
 no-update の結果は update-check fields (`current_version`, `latest_version`,
