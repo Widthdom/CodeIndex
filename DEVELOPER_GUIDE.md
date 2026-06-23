@@ -2184,9 +2184,14 @@ bare `ArrayPool<byte>.Shared.Return(...)` at sensitive boundaries.
 When adding `ArrayPool<byte>` or in-memory accumulation (`MemoryStream`,
 captured `Utf8JsonWriter` output, report/archive buffers), first classify the
 data as sensitive bytes, bounded non-sensitive payload, generated JSON,
-archive/report bytes, or diagnostic snippet. Sensitive paths need a test that
-proves the cleared range; bounded accumulation paths need a test or constant
-that proves the maximum byte budget.
+archive/report bytes, or diagnostic snippet. Sensitive paths should route
+through `SensitiveBufferPolicy.ReturnSensitiveTokenBuffer`,
+`ReturnSensitivePayloadBuffer`, `ReturnSensitiveCopyBuffer`, or
+`ClearUsedSensitiveBytes`; these helper names are intended to be positive
+evidence during security audits. Bounded generated JSON capture should use
+`SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity`. Sensitive paths
+need a test that proves the cleared range; bounded accumulation paths need a
+test or constant that proves the maximum byte budget.
 
 ## Custom Language Extraction
 
@@ -4052,7 +4057,11 @@ Cloud セッションは開発ループの中で `dotnet build` にフォール�
 
 `ArrayPool<byte>` や in-memory accumulation（`MemoryStream`、captured `Utf8JsonWriter` output、
 report/archive buffer）を追加するときは、まず data を sensitive bytes、bounded non-sensitive payload、
-generated JSON、archive/report bytes、diagnostic snippet に分類してください。Sensitive path には
+generated JSON、archive/report bytes、diagnostic snippet に分類してください。Sensitive path は
+`SensitiveBufferPolicy.ReturnSensitiveTokenBuffer`、`ReturnSensitivePayloadBuffer`、
+`ReturnSensitiveCopyBuffer`、`ClearUsedSensitiveBytes` を経由させてください。これらの helper 名は
+security audit で positive evidence として拾えるようにしています。Bounded generated JSON capture は
+`SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity` を使ってください。Sensitive path には
 cleared range を証明するテストが必要です。Bounded accumulation path には maximum byte budget を
 証明するテストまたは定数が必要です。
 

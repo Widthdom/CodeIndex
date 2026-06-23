@@ -8,6 +8,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
+using CodeIndex.Security;
 
 namespace CodeIndex.Lsp;
 
@@ -161,9 +162,7 @@ internal sealed class LspServer : IDisposable
 
         public void Dispose()
         {
-            ClearSensitivePayloadBuffer(Buffer, _usedBytes);
-            if (_rented)
-                ArrayPool<byte>.Shared.Return(Buffer, clearArray: false);
+            SensitiveBufferPolicy.ReturnSensitivePayloadBuffer(Buffer, _usedBytes, _rented);
         }
     }
 
@@ -401,7 +400,7 @@ internal sealed class LspServer : IDisposable
     }
 
     internal static void ClearSensitivePayloadBufferForTests(byte[] buffer, int usedBytes) =>
-        ClearSensitivePayloadBuffer(buffer, usedBytes);
+        SensitiveBufferPolicy.ClearUsedSensitiveBytes(buffer, usedBytes);
 
     private static SensitivePayloadBufferLease RentSensitivePayloadBuffer(int byteCount)
     {
@@ -412,13 +411,6 @@ internal sealed class LspServer : IDisposable
             ? ArrayPool<byte>.Shared.Rent(byteCount)
             : new byte[byteCount];
         return new SensitivePayloadBufferLease(buffer, byteCount, rented);
-    }
-
-    private static void ClearSensitivePayloadBuffer(byte[] buffer, int usedBytes)
-    {
-        if (usedBytes <= 0 || buffer.Length == 0)
-            return;
-        Array.Clear(buffer, 0, Math.Min(usedBytes, buffer.Length));
     }
 
     private static string SanitizeUnknownMethod(string method)
@@ -2179,7 +2171,7 @@ internal sealed class LspServer : IDisposable
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            SensitiveBufferPolicy.ReturnNonSensitiveProtocolBuffer(buffer);
         }
     }
 
