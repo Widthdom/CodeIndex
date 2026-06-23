@@ -3143,8 +3143,68 @@ public partial class DbReader
             });
         }
 
+        PopulateGroupedHotspotDefinitionSiteDetails(results, query, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
         return results;
     }
+
+    private void PopulateGroupedHotspotDefinitionSiteDetails(
+        List<GroupedHotspotResult> results,
+        SymbolHotspotRowsQuery query,
+        string? kind,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        IReadOnlyList<string>? visibilityFilters,
+        IReadOnlyList<string>? excludeVisibilityFilters)
+    {
+        if (results.Count == 0)
+            return;
+
+        var groupPredicates = new List<string>(results.Count);
+        for (var i = 0; i < results.Count; i++)
+            groupPredicates.Add($"(hs.name = @detailName{i} AND hs.kind = @detailKind{i})");
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = query.Sql + $@"
+            SELECT hs.name,
+                   hs.kind,
+                   hs.path,
+                   hs.lang,
+                   hs.line,
+                   hs.visibility,
+                   hs.container_name,
+                   hs.logical_target_key
+            FROM ranked_sites hs
+            WHERE {string.Join(" OR ", groupPredicates)}
+            ORDER BY hs.name, hs.kind, hs.path, hs.line, COALESCE(hs.container_name, ''), COALESCE(hs.visibility, '')";
+        AddSymbolHotspotParameters(cmd, query, limit: null, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        for (var i = 0; i < results.Count; i++)
+        {
+            cmd.Parameters.AddWithValue($"@detailName{i}", results[i].Symbol.Name);
+            cmd.Parameters.AddWithValue($"@detailKind{i}", results[i].Symbol.Kind);
+        }
+
+        var byGroup = results.ToDictionary(result => GetGroupedHotspotKey(result.Symbol.Name, result.Symbol.Kind), result => result, StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var key = GetGroupedHotspotKey(reader.GetString(0), reader.GetString(1));
+            if (!byGroup.TryGetValue(key, out var group))
+                continue;
+            group.DefinitionSiteDetails.Add(new GroupedHotspotDefinitionSite
+            {
+                Path = reader.GetString(2),
+                Lang = GetNullableString(reader, 3),
+                Line = reader.GetInt32(4),
+                Visibility = GetNullableString(reader, 5),
+                Container = GetNullableString(reader, 6),
+                LogicalTargetKey = GetNullableString(reader, 7),
+            });
+        }
+    }
+
+    private static string GetGroupedHotspotKey(string name, string kind)
+        => name + "\0" + kind;
 
     /// <summary>
     /// Find symbols that have no matching references in the reference table (potential dead code).

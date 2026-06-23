@@ -1062,7 +1062,7 @@ public static class ConsoleUi
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         WriteHelpLine("  --group-by <unit>          search: with --count, group rows by file or symbol; hotspots: group by symbol, file, or statement");
-        WriteHelpLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON paths are capped per group with paths_truncated");
+        WriteHelpLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON keeps capped paths plus full definition_site_details");
         WriteHelpLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
         WriteHelpLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
         WriteHelpLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");

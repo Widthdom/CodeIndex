@@ -7727,7 +7727,9 @@ public static partial class QueryCommandRunner
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
                             g.Paths,
-                            g.PathsTruncated))
+                            g.PathsTruncated,
+                            BuildGroupedHotspotRepresentative(g),
+                            g.DefinitionSiteDetails.Select(ToGroupedHotspotSiteJson).ToList()))
                         .ToList();
                     var payload = new JsonObject
                     {
@@ -8030,6 +8032,32 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static GroupedSymbolHotspotSiteJsonResult BuildGroupedHotspotRepresentative(GroupedHotspotResult result)
+    {
+        var representative = result.DefinitionSiteDetails.FirstOrDefault(site =>
+            string.Equals(site.Path, result.Symbol.Path, StringComparison.Ordinal)
+            && site.Line == result.Symbol.Line);
+        if (representative != null)
+            return ToGroupedHotspotSiteJson(representative);
+
+        return new GroupedSymbolHotspotSiteJsonResult(
+            result.Symbol.Path,
+            result.Symbol.Lang,
+            result.Symbol.Line,
+            result.Symbol.Visibility,
+            result.Symbol.ContainerName,
+            LogicalTargetKey: null);
+    }
+
+    private static GroupedSymbolHotspotSiteJsonResult ToGroupedHotspotSiteJson(GroupedHotspotDefinitionSite site)
+        => new(
+            site.Path,
+            site.Lang,
+            site.Line,
+            site.Visibility,
+            site.Container,
+            site.LogicalTargetKey);
 
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {

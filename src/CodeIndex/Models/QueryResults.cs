@@ -236,6 +236,17 @@ public class GroupedHotspotResult
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
     public bool PathsTruncated { get; set; }
+    public List<GroupedHotspotDefinitionSite> DefinitionSiteDetails { get; set; } = [];
+}
+
+public class GroupedHotspotDefinitionSite
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int Line { get; set; }
+    public string? Visibility { get; set; }
+    public string? Container { get; set; }
+    public string? LogicalTargetKey { get; set; }
 }
 
 public class SymbolHotspotResult

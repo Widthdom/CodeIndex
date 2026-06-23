@@ -179,7 +179,7 @@ public class ConsoleUiTests
         Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
         Assert.Contains("--bytes                    files: sort by size and show raw byte counts in human", output);
         Assert.Contains("map: show raw byte counts; JSON always keeps raw", output);
-        Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON paths are capped per group with paths_truncated", output);
+        Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON keeps capped paths plus full definition_site_details", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx search --query --path --path README.md   Search for a literal option token", output);
         Assert.Contains("cdidx hotspots --group-by-name --exclude-tests", output);
@@ -909,7 +909,7 @@ public class ConsoleUiTests
 
     [Theory]
     [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
-    [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows; JSON paths capped per group]", "--exact-name[Exact symbol-name equality]")]
+    [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details]", "--exact-name[Exact symbol-name equality]")]
     public void PrintCompletions_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
     {
         var output = ConsoleUi.GetCompletionScript(shell);

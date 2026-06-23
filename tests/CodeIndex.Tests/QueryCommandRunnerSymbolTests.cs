@@ -4755,6 +4755,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
+            Assert.Equal(hotspot.GetProperty("path").GetString(), hotspot.GetProperty("representative").GetProperty("path").GetString());
+            Assert.Equal(2, hotspot.GetProperty("definition_site_details").GetArrayLength());
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/FirstHelper.cs");
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/SecondHelper.cs");
         }
         finally
         {
@@ -5187,6 +5191,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(25, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(20, hotspot.GetProperty("paths").GetArrayLength());
             Assert.True(hotspot.GetProperty("paths_truncated").GetBoolean());
+            Assert.Equal(25, hotspot.GetProperty("definition_site_details").GetArrayLength());
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/Helper24.cs");
         }
         finally
         {
@@ -5282,6 +5288,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/a_first.cs", hotspot.GetProperty("path").GetString());
             Assert.Equal(3, hotspot.GetProperty("line").GetInt32());
+            Assert.Equal("src/a_first.cs", hotspot.GetProperty("representative").GetProperty("path").GetString());
+            Assert.Equal(3, hotspot.GetProperty("representative").GetProperty("line").GetInt32());
         }
         finally
         {

@@ -358,7 +358,7 @@ internal static class CliFlagSchema
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
             new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|statement>", Description = "Search: group --count rows by file or symbol; hotspots: choose grouping unit", Commands = Set("hotspots", "search") },
-            new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON paths capped per group", Commands = Set("hotspots") },
+            new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", Commands = Set("status") },

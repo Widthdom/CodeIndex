@@ -512,6 +512,15 @@ internal sealed record SymbolHotspotJsonResult(
     string? Visibility,
     string? Container);
 
+internal sealed record GroupedSymbolHotspotSiteJsonResult(
+    string Path,
+    string? Lang,
+    int Line,
+    string? Visibility,
+    string? Container,
+    [property: JsonPropertyName("logical_target_key")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LogicalTargetKey);
+
 internal sealed record GroupedSymbolHotspotJsonResult(
     string Name,
     string Kind,
@@ -523,7 +532,9 @@ internal sealed record GroupedSymbolHotspotJsonResult(
     string? Container,
     int DefinitionSites,
     List<string> Paths,
-    bool PathsTruncated);
+    bool PathsTruncated,
+    [property: JsonPropertyName("representative")] GroupedSymbolHotspotSiteJsonResult Representative,
+    [property: JsonPropertyName("definition_site_details")] List<GroupedSymbolHotspotSiteJsonResult> DefinitionSiteDetails);
 
 internal sealed record VersionInfoJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -584,6 +595,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(FreshnessHintResult))]
 [JsonSerializable(typeof(FtsQueryDiagnostics))]
 [JsonSerializable(typeof(GroupedHotspotResult))]
+[JsonSerializable(typeof(GroupedSymbolHotspotSiteJsonResult))]
 [JsonSerializable(typeof(GroupedSymbolHotspotJsonResult))]
 [JsonSerializable(typeof(ImpactAnalysisResult))]
 [JsonSerializable(typeof(ImpactCycleResult))]
