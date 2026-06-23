@@ -1,4 +1,4 @@
-using System.Globalization;
+using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -67,34 +67,13 @@ internal static class DbPragmaPolicy
             MaxBusyTimeoutMs);
 
     private static int ReadPositiveIntEnvironment(string name, int fallback, int maximum)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
-            && parsed > 0
-            && parsed <= maximum
-                ? parsed
-                : fallback;
-    }
+        => EnvironmentOptionParser.ReadInt32(name, fallback, minimum: 1, maximum).Value;
 
     private static int ReadNonNegativeIntEnvironment(string name, int fallback, int maximum)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
-            && parsed >= 0
-            && parsed <= maximum
-                ? parsed
-                : fallback;
-    }
+        => EnvironmentOptionParser.ReadInt32(name, fallback, minimum: 0, maximum).Value;
 
     private static long ReadNonNegativeLongEnvironment(string name, long fallback, long maximum)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        return long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
-            && parsed >= 0
-            && parsed <= maximum
-                ? parsed
-                : fallback;
-    }
+        => EnvironmentOptionParser.ReadInt64(name, fallback, minimum: 0, maximum).Value;
 }
 
 internal readonly record struct DbConnectionPragmaSettings(
