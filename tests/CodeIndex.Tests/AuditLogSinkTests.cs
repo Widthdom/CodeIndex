@@ -719,8 +719,54 @@ public class AuditLogSinkTests
         }
     }
 
+    [Fact]
+    public void WaitForIdle_UsesCompletionSignalInsteadOfPollingSleep_Issue3963()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_idle_{Guid.NewGuid():N}.jsonl");
+        using var writerEntered = new ManualResetEventSlim();
+        using var releaseWriter = new ManualResetEventSlim();
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            sink.BeforeWriteForTests = () =>
+            {
+                writerEntered.Set();
+                releaseWriter.Wait();
+            };
+
+            sink.Record(CreateAuditEvent("search"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
+
+            Assert.False(sink.WaitForIdle(TimeSpan.Zero));
+
+            releaseWriter.Set();
+            WaitForAuditLogIdle(sink);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
     private static void WaitForAuditLogIdle(AuditLogSink sink)
         => Assert.True(
             sink.WaitForIdle(TimeSpan.FromSeconds(5)),
             "Timed out waiting for the audit log writer to drain.");
+
+    private static AuditLogSink.AuditEvent CreateAuditEvent(string tool)
+        => new(
+            Timestamp: ManualTimeProvider.FixtureUtcNow,
+            Tool: tool,
+            CallerName: null,
+            CallerVersion: null,
+            RequestId: null,
+            ArgKeys: Array.Empty<string>(),
+            ArgLengths: Array.Empty<KeyValuePair<string, int>>(),
+            ArgValues: null,
+            ResultCount: 1,
+            ElapsedMs: 1.0,
+            ErrorCode: 0,
+            ErrorType: null);
 }

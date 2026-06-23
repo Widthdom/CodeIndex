@@ -126,10 +126,16 @@ public static class ReportCommandRunner
     private static string? RedactLocalJsonPath(string? path) =>
         string.IsNullOrWhiteSpace(path) ? path : RedactedPlaceholder;
 
-    internal static ReportBundle BuildBundle(ReportCommandOptions options, string version)
+    internal static ReportBundle BuildBundle(
+        ReportCommandOptions options,
+        string version,
+        DateTimeOffset? generatedAtUtcForTesting = null)
     {
-        var bundle = new ReportBundle();
-        var nowUtc = DateTimeOffset.UtcNow;
+        var nowUtc = generatedAtUtcForTesting ?? DateTimeOffset.UtcNow;
+        var bundle = new ReportBundle
+        {
+            GeneratedAtUtc = nowUtc,
+        };
 
         var metadata = new ReportMetadata(
             Version: version,
@@ -764,7 +770,7 @@ public static class ReportCommandRunner
                     {
                         DataStream = new MemoryStream(bytes, writable: false),
                         Mode = BundleFileMode,
-                        ModificationTime = DateTimeOffset.UtcNow,
+                        ModificationTime = bundle.GeneratedAtUtc,
                     };
                     tar.WriteEntry(entry);
                 }
@@ -861,6 +867,7 @@ internal sealed class ReportCommandOptions
 internal sealed class ReportBundle
 {
     public List<(string Name, byte[] Bytes)> Files { get; } = new();
+    public DateTimeOffset GeneratedAtUtc { get; set; } = DateTimeOffset.UnixEpoch;
     public List<ReportSchemaTable> SchemaTables { get; set; } = new();
     public bool SchemaTablesTruncated { get; set; }
     public bool LogIncluded { get; set; }

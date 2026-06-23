@@ -103,6 +103,31 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void PingHealth_UsesInjectedTimeProvider_Issue3963()
+    {
+        var clock = new ManualTimeProvider(ManualTimeProvider.FixtureUtcNow);
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            auditLog: null,
+            maxConcurrency: 1,
+            timeProvider: clock);
+        var requestAt = ManualTimeProvider.FixtureUtcNow.AddSeconds(7);
+        clock.SetUtcNow(requestAt);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"ping"}""")!;
+
+        var response = server.HandleMessage(request);
+
+        var result = response!["result"]!.AsObject();
+        Assert.Equal(7, result["uptime_s"]!.GetValue<long>());
+        Assert.Equal(requestAt.ToString("O", CultureInfo.InvariantCulture), result["last_request_at"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void RunConcurrentFrameLoop_DoesNotUseSpinWaitPolling_Issue3509()
     {
         var method = typeof(McpServer).GetMethod("RunConcurrentFrameLoopAsync", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -300,7 +325,9 @@ public class McpServerTests : IDisposable
         {
             var error = document.RootElement.GetProperty("error");
             Assert.Equal("Request timed out", error.GetProperty("message").GetString());
-            Assert.True(error.GetProperty("data").GetProperty("isolated_action_draining").GetBoolean());
+            var data = error.GetProperty("data");
+            Assert.Equal(OperationTimeoutCategories.McpRequest, data.GetProperty("timeout_category").GetString());
+            Assert.True(data.GetProperty("isolated_action_draining").GetBoolean());
         }
         var draining = server.BuildRequestTimeoutDiagnosticsStatus();
         Assert.Equal(1, draining["isolated_action_draining_count"]!.GetValue<long>());
@@ -4335,10 +4362,17 @@ public sealed class Caller
     private sealed class ThrowingWriteTransport : IMcpTransport
     {
         private readonly Queue<string?> _frames;
+        private readonly Exception _exception;
 
         public ThrowingWriteTransport(string name, params string?[] frames)
+            : this(name, new IOException("pipe closed"), frames)
+        {
+        }
+
+        public ThrowingWriteTransport(string name, Exception exception, params string?[] frames)
         {
             Name = name;
+            _exception = exception;
             _frames = new Queue<string?>(frames);
             _frames.Enqueue(null);
         }
@@ -4356,7 +4390,7 @@ public sealed class Caller
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
             WriteCount++;
-            throw new IOException("pipe closed");
+            throw _exception;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -4368,6 +4402,20 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         var transport = new ThrowingWriteTransport(
             "throwing-sequential",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_TransportTimeoutWriteFailure_DoesNotThrow_Issue3990()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "throwing-timeout",
+            new TimeoutException("HTTP MCP operation timed out; category=http_response_write; timeout_ms=15000."),
             """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
 
         await server.RunAsync(transport, CancellationToken.None);
@@ -15611,6 +15659,7 @@ public sealed class Caller
             Assert.Equal(-32603, error["code"]!.GetValue<int>());
             Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
             Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+            Assert.Equal(OperationTimeoutCategories.McpRequest, error["data"]!["timeout_category"]!.GetValue<string>());
             Assert.True(error["data"]!["elapsed_ms"]!.GetValue<long>() >= 1);
             Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
             Assert.Equal("internal_error", error["data"]!["category"]!.GetValue<string>());

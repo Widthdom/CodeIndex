@@ -63,6 +63,7 @@ internal sealed class AuditLogSink : IDisposable
     private readonly Channel<byte[]> _recordQueue;
     private readonly Task _writerTask;
     private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
+    private readonly ManualResetEventSlim _idleEvent = new(initialState: true);
     private long _bytesWritten;
     private long _pendingRecordCount;
     private long _droppedRecordCount;
@@ -126,6 +127,10 @@ internal sealed class AuditLogSink : IDisposable
         {
             SingleReader = true,
             SingleWriter = false,
+            // Producers use TryWrite, so a full queue becomes a best-effort drop with
+            // queue_full diagnostics instead of blocking the MCP request path.
+            // producer 側は TryWrite を使うため、満杯時は MCP request path を塞がず
+            // queue_full 診断付きの best-effort drop になる。
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
@@ -189,11 +194,12 @@ internal sealed class AuditLogSink : IDisposable
         }
 
         var encoded = _utf8NoBom.GetBytes(line + "\n");
-        Interlocked.Increment(ref _pendingRecordCount);
+        if (Interlocked.Increment(ref _pendingRecordCount) == 1)
+            _idleEvent.Reset();
         if (_recordQueue.Writer.TryWrite(encoded))
             return;
 
-        Interlocked.Decrement(ref _pendingRecordCount);
+        MarkRecordCompleted();
         if (Volatile.Read(ref _disposed) == 0)
             RecordDropped("queue_full", new AuditLogQueueFullException());
     }
@@ -208,9 +214,15 @@ internal sealed class AuditLogSink : IDisposable
             }
             finally
             {
-                Interlocked.Decrement(ref _pendingRecordCount);
+                MarkRecordCompleted();
             }
         }
+    }
+
+    private void MarkRecordCompleted()
+    {
+        if (Interlocked.Decrement(ref _pendingRecordCount) <= 0)
+            _idleEvent.Set();
     }
 
     private void WriteEncodedRecord(byte[] encoded)
@@ -314,19 +326,12 @@ internal sealed class AuditLogSink : IDisposable
             // Disposal is best-effort; audit logging must not block process shutdown.
             // dispose は best-effort。監査ログでプロセス終了を止めない。
         }
+        if (_writerTask.IsCompleted)
+            _idleEvent.Dispose();
     }
 
     internal bool WaitForIdle(TimeSpan timeout)
-    {
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (Interlocked.Read(ref _pendingRecordCount) > 0)
-        {
-            if (DateTimeOffset.UtcNow >= deadline)
-                return false;
-            Thread.Sleep(10);
-        }
-        return true;
-    }
+        => Interlocked.Read(ref _pendingRecordCount) <= 0 || _idleEvent.Wait(timeout);
 
     private static int ResolveQueueCapacity(int? queueCapacity)
     {
