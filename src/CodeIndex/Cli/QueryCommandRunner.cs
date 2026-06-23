@@ -5602,22 +5602,12 @@ public static partial class QueryCommandRunner
         }
 
         var keep = new HashSet<string>(RepoMapSummaryJsonProperties, StringComparer.Ordinal);
-        if (MapSectionEnabled(options, "languages"))
-            keep.Add("languages");
-        if (MapSectionEnabled(options, "tree"))
-            keep.Add("modules");
-        if (MapSectionEnabled(options, "hotspots"))
-        {
-            keep.Add("topFiles");
-            keep.Add("symbolRichFiles");
-            keep.Add("referenceRichFiles");
-            keep.Add("entrypoints");
-        }
-        if (MapSectionEnabled(options, "metrics"))
-            keep.Add("largestFiles");
+        foreach (var section in options.MapSections)
+            AddRepoMapSectionJsonProperties(keep, section);
 
         KeepRepoMapJsonProperties(payload, keep);
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
+        payload["section_properties"] = BuildRepoMapSectionProperties(options.MapSections);
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
         if (options.Compact && compactTruncation != null)
@@ -5644,10 +5634,41 @@ public static partial class QueryCommandRunner
         "graph_table_available",
     };
 
+    private static readonly IReadOnlyDictionary<string, string[]> RepoMapSectionJsonProperties = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    {
+        ["languages"] = ["languages"],
+        ["tree"] = ["modules"],
+        ["hotspots"] = ["top_files", "symbol_rich_files", "reference_rich_files", "entrypoints"],
+        ["metrics"] = ["largest_files"],
+    };
+
     private static void KeepRepoMapJsonProperties(JsonObject payload, IReadOnlySet<string> keep)
     {
         foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
             payload.Remove(propertyName);
+    }
+
+    private static void AddRepoMapSectionJsonProperties(HashSet<string> keep, string section)
+    {
+        if (!RepoMapSectionJsonProperties.TryGetValue(section, out var properties))
+            return;
+
+        foreach (var property in properties)
+            keep.Add(property);
+    }
+
+    private static JsonObject BuildRepoMapSectionProperties(IEnumerable<string> sections)
+    {
+        var payload = new JsonObject();
+        foreach (var section in sections)
+        {
+            if (!RepoMapSectionJsonProperties.TryGetValue(section, out var properties))
+                continue;
+
+            payload[section] = new JsonArray(properties.Select(property => JsonValue.Create(property)).ToArray<JsonNode?>());
+        }
+
+        return payload;
     }
 
     private static int GetCompactSectionLimit(QueryCommandOptions options)
