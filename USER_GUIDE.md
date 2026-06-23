@@ -1025,7 +1025,12 @@ normalized repository-relative artifact URIs.
 
 Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
-recommended labels, query text, exact-match mode, and false-positive guidance.
+recommended labels, query text, exact-match mode, false-positive guidance, and
+query-specific audit taxonomy metadata. For example,
+`risky-code/broad-exception-catch` includes broad-catch boundary categories and
+expected diagnostic behaviors so users can distinguish intentional top-level,
+cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
+should be narrowed or rethrown.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, and
 the opt-in broad `broad-token-audit` recipe.
@@ -1424,7 +1429,7 @@ same source location.
 | `--cursor <cursor>` | `search --recipe <name/query>` | Fetch the next page for one selected recipe child query. Use the `next_cursor` returned by recipe JSON or compact output. |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | Choose recipe path scope. `source` is the default and suppresses tests, docs, changelog text, and recipe definitions using recipe metadata; `all` intentionally searches every indexed path unless other filters exclude it. JSON recipe output reports the effective scope, path filters, and exclusions. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
-| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, supported formats, filter support, and limit semantics. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
@@ -3630,7 +3635,11 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
 `filesystem-traversal`、`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
-説明、推奨 label、query text、exact-match mode、false-positive guidance を表示します。
+説明、推奨 label、query text、exact-match mode、false-positive guidance、query 固有の
+audit taxonomy metadata を表示します。たとえば `risky-code/broad-exception-catch` は
+broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
+top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
+rethrow が必要な catch を区別できます。
 `--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
 `--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
@@ -4022,7 +4031,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--cursor <cursor>` | `search --recipe <name/query>` | 選択した recipe child query の次ページを取得する。recipe JSON または compact output が返す `next_cursor` を指定する。 |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | recipe の path scope を選ぶ。既定の `source` は recipe metadata により tests、docs、changelog text、recipe 定義を抑制する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。Recipe の JSON 出力には有効な scope、path filter、exclusion が含まれる。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
-| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、対応 format、filter support、limit semantics 付きで一覧表示する。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |

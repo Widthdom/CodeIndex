@@ -1488,6 +1488,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
                 Console.WriteLine($"    {query.Description}");
                 Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
+                if (query.BroadCatchTaxonomy is not null)
+                {
+                    Console.WriteLine($"    broad catch boundaries: {string.Join(", ", query.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
+                    Console.WriteLine($"    broad catch diagnostics: {string.Join(", ", query.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
+                }
             }
         }
 
@@ -1687,6 +1692,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine(queryResult.Description);
                 Console.WriteLine($"labels: {string.Join(", ", queryResult.RecommendedLabels)}");
                 Console.WriteLine($"false positives: {queryResult.FalsePositiveGuidance}");
+                if (queryResult.BroadCatchTaxonomy is not null)
+                {
+                    Console.WriteLine($"broad catch boundaries: {string.Join(", ", queryResult.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
+                    Console.WriteLine($"broad catch diagnostics: {string.Join(", ", queryResult.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
+                }
                 Console.WriteLine($"results: {queryResult.Count}");
                 foreach (var result in queryResult.Results)
                 {
@@ -1815,6 +1825,7 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 [],
+                null,
                 rows.Count,
                 options.Limit,
                 0,
@@ -1896,6 +1907,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -1955,6 +1967,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 options.Limit,
                 minimumOmitted,
@@ -2325,6 +2338,11 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
+        if (queryResult.BroadCatchTaxonomy is not null)
+        {
+            AppendSearchIssueDraftBroadCatchTaxonomy(sb, queryResult.BroadCatchTaxonomy);
+            sb.AppendLine();
+        }
         sb.AppendLine("## Replay command");
         sb.AppendLine("```sh");
         sb.AppendLine(BuildSearchRecipeReplayCommand(recipe, options, queryResult.Name));
@@ -2336,6 +2354,20 @@ public static partial class QueryCommandRunner
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
         sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
         return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendSearchIssueDraftBroadCatchTaxonomy(StringBuilder sb, SearchRecipeBroadCatchTaxonomyJsonResult taxonomy)
+    {
+        sb.AppendLine("## Broad-catch taxonomy");
+        sb.AppendLine(taxonomy.TriageGuidance);
+        sb.AppendLine();
+        sb.AppendLine("### Boundary categories");
+        foreach (var category in taxonomy.BoundaryCategories)
+            sb.AppendLine($"- `{category.Name}`: {category.Description} Expected diagnostic behavior: {category.ExpectedDiagnosticBehavior}");
+        sb.AppendLine();
+        sb.AppendLine("### Diagnostic behavior categories");
+        foreach (var behavior in taxonomy.DiagnosticBehaviors)
+            sb.AppendLine($"- `{behavior.Name}`: {behavior.Description}");
     }
 
     private static void AppendSearchIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
@@ -2539,6 +2571,7 @@ public static partial class QueryCommandRunner
             [.. query.MatchOrigins],
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
+            query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
