@@ -9,6 +9,61 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Theory]
+    [InlineData(3, "Current", "property", 3, 3)]
+    [InlineData(4, "Run", "function", 4, 7)]
+    [InlineData(6, "Run", "function", 4, 7)]
+    public void RunInspect_PathLineJson_ReturnsExactOrEnclosingSymbol_Issue3915(
+        int line,
+        string expectedName,
+        string expectedKind,
+        int expectedStartLine,
+        int expectedEndLine)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_path_line_symbol");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/InspectTarget.cs",
+                "csharp",
+                """
+                public class InspectTarget
+                {
+                    public int Current => 1;
+                    public void Run()
+                    {
+                        Helper();
+                    }
+                    private void Helper() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["--path", "src/InspectTarget.cs", "--line", line.ToString(CultureInfo.InvariantCulture), "--db", dbPath, "--json", "--limit", "3"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var definition = root.GetProperty("definitions").EnumerateArray().First();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal($"src/InspectTarget.cs:{line.ToString(CultureInfo.InvariantCulture)}", root.GetProperty("query").GetString());
+            Assert.Equal(expectedName, definition.GetProperty("name").GetString());
+            Assert.Equal(expectedKind, definition.GetProperty("kind").GetString());
+            Assert.Equal(expectedStartLine, definition.GetProperty("start_line").GetInt32());
+            Assert.Equal(expectedEndLine, definition.GetProperty("end_line").GetInt32());
+            Assert.NotEmpty(root.GetProperty("nearby_symbols").EnumerateArray());
+            Assert.Equal(line, root.GetProperty("source_excerpt").GetProperty("requested_start_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunInspect_StrictNotFoundReturnsNotFoundForEmptyAnalysis_Issue1425()
     {

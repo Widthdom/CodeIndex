@@ -5657,19 +5657,33 @@ public static partial class QueryCommandRunner
             var inspectQuery = pathLineInspectMode
                 ? $"{inspectPath}:{options.StartLine!.Value}"
                 : options.Query!;
-            var analysis = reader.AnalyzeSymbol(
-                inspectQuery,
-                inspectLimit,
-                options.Lang,
-                options.IncludeBody,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
-                exact,
-                options.MaxLineWidth,
-                options.BodyStartLine,
-                options.BodyLines,
-                kind: options.Kind);
+            var analysis = pathLineInspectMode
+                ? reader.AnalyzeFileLine(
+                    inspectPath!,
+                    options.StartLine!.Value,
+                    inspectLimit,
+                    options.Lang,
+                    options.IncludeBody,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    options.MaxLineWidth,
+                    options.BodyStartLine,
+                    options.BodyLines,
+                    kind: options.Kind)
+                : reader.AnalyzeSymbol(
+                    inspectQuery,
+                    inspectLimit,
+                    options.Lang,
+                    options.IncludeBody,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    exact,
+                    options.MaxLineWidth,
+                    options.BodyStartLine,
+                    options.BodyLines,
+                    kind: options.Kind);
             var sourceExcerpt = BuildInspectSourceExcerpt(reader, options, analysis, inspectPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
