@@ -246,43 +246,43 @@ public partial class DbReader
                 queryParam = NameFold.Fold(query) ?? query;
             else
                 queryParam = query;
-            cmd.Parameters.AddWithValue("@query", queryParam);
-            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            SqliteCommandPolicy.Add(cmd, "@query", queryParam);
+            SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
             AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+            SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (referencesSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
                     : referencesSuffixAlias;
-                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+                SqliteCommandPolicy.Add(cmd, "@queryAttributeAlias", aliasParam);
             }
             if (referencesCssScssVariableAlias != null)
             {
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(referencesCssScssVariableAlias) ?? referencesCssScssVariableAlias
                     : referencesCssScssVariableAlias;
-                cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+                SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
             }
-            cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
-            cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
+            SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
+            SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         }
         else
         {
-            cmd.Parameters.AddWithValue("@rankingQuery", "");
-            cmd.Parameters.AddWithValue("@rankingQueryPrefix", "%");
+            SqliteCommandPolicy.Add(cmd, "@rankingQuery", "");
+            SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", "%");
         }
-        cmd.Parameters.AddWithValue("@preferExactCase", exact && query != null ? 1 : 0);
-        cmd.Parameters.AddWithValue("@rawQuery", exact && query != null ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact && query != null ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact && query != null ? query : string.Empty);
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (includeOrdering)
         {
-            cmd.Parameters.AddWithValue("@limit", limit);
-            cmd.Parameters.AddWithValue("@offset", offset);
+            SqliteCommandPolicy.Add(cmd, "@limit", limit);
+            SqliteCommandPolicy.Add(cmd, "@offset", offset);
         }
         return cmd;
     }
@@ -615,24 +615,24 @@ public partial class DbReader
                 : _foldReady
                     ? NameFold.Fold(query) ?? query
                     : query;
-            cmd.Parameters.AddWithValue("@query", value);
-            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            SqliteCommandPolicy.Add(cmd, "@query", value);
+            SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
             AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+            SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (countSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(countSuffixAlias) ?? countSuffixAlias
                     : countSuffixAlias;
-                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+                SqliteCommandPolicy.Add(cmd, "@queryAttributeAlias", aliasParam);
             }
         }
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
@@ -754,29 +754,29 @@ public partial class DbReader
                 : _foldReady
                     ? NameFold.Fold(query) ?? query
                     : query;
-            cmd.Parameters.AddWithValue("@query", value);
-            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            SqliteCommandPolicy.Add(cmd, "@query", value);
+            SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
             AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+            SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (totalSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(totalSuffixAlias) ?? totalSuffixAlias
                     : totalSuffixAlias;
-                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+                SqliteCommandPolicy.Add(cmd, "@queryAttributeAlias", aliasParam);
             }
             if (totalCssScssVariableAlias != null)
             {
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(totalCssScssVariableAlias) ?? totalCssScssVariableAlias
                     : totalCssScssVariableAlias;
-                cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+                SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
             }
         }
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);

@@ -700,7 +700,7 @@ public static partial class IndexCommandRunner
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name LIMIT 1";
-        command.Parameters.AddWithValue("@name", tableName);
+        SqliteCommandPolicy.Add(command, "@name", tableName);
         return command.ExecuteScalar() != null;
     }
 
@@ -711,7 +711,7 @@ public static partial class IndexCommandRunner
 
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
-        command.Parameters.AddWithValue("@key", key);
+        SqliteCommandPolicy.Add(command, "@key", key);
         return command.ExecuteScalar() as string;
     }
 
