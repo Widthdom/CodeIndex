@@ -1,4 +1,5 @@
 using CodeIndex;
+using CodeIndex.Database;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -424,6 +425,25 @@ internal static class SearchAuditRecipes
                     "Find broad filesystem entry traversal that may need explicit exception handling and pruning policy.",
                     ["audit", "performance", "security"],
                     "False positives include isolated test cleanup and known-small directories."),
+                new(
+                    "enumerate-without-options",
+                    "Directory.Enumerate",
+                    "Find direct Directory.Enumerate* calls that do not have nearby EnumerationOptions evidence and may need traversal policy review.",
+                    ["audit", "performance", "security"],
+                    "False positives include known-small directories, already-budgeted traversal helpers, and wrappers that enforce cancellation or reparse-point policy.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: direct Directory.Enumerate* calls without nearby EnumerationOptions can inherit default recursion, inaccessible-path, and reparse-point behavior.",
+                        "positive: known-small directories, cancellation/budget checks, and shared traversal wrappers can explain intentional direct enumeration."
+                    ],
+                    GuardFilters =
+                    [
+                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "EnumerationOptions"),
+                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "EnumerationOptions")
+                    ],
+                    MatchOrigins = ["code"],
+                },
                 new(
                     "enumeration-options",
                     "EnumerationOptions",
@@ -934,6 +954,7 @@ internal sealed record SearchAuditRecipeQuery(
 {
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
     public List<string> RiskEvidence { get; init; } = [];
+    public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public List<string> MatchOrigins { get; init; } = [];
@@ -982,6 +1003,7 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("guard_filters")] List<SearchRecipeGuardFilterJsonResult> GuardFilters,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
@@ -989,6 +1011,12 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
+
+internal sealed record SearchRecipeGuardFilterJsonResult(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("direction")] string Direction,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("option")] string Option);
 
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1030,6 +1058,7 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("guard_filters")] List<SearchRecipeGuardFilterJsonResult> GuardFilters,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
@@ -1060,6 +1089,7 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("guard_filters")] List<SearchRecipeGuardFilterJsonResult> GuardFilters,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,

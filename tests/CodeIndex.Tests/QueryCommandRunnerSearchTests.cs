@@ -1133,6 +1133,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
+        var enumerateWithoutOptionsQuery = traversalRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "enumerate-without-options");
 
         Assert.True(root.GetProperty("count").GetInt32() >= 6);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
@@ -1171,6 +1175,14 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
+        Assert.Equal("Directory.Enumerate", enumerateWithoutOptionsQuery.GetProperty("query").GetString());
+        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("without nearby EnumerationOptions", StringComparison.Ordinal));
+        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
+            filter.GetProperty("option").GetString() == "--reject-before" &&
+            filter.GetProperty("query").GetString() == "EnumerationOptions");
+        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
+            filter.GetProperty("option").GetString() == "--reject-after" &&
+            filter.GetProperty("query").GetString() == "EnumerationOptions");
         Assert.Equal("all", broadTokenRecipe.GetProperty("default_scope").GetString());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
@@ -1260,7 +1272,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["enumerate-files", "enumerate-directories", "enumerate-file-system-entries", "enumeration-options"]);
+            ["enumerate-files", "enumerate-directories", "enumerate-file-system-entries", "enumerate-without-options", "enumeration-options"]);
         AssertRecipe(
             "broad-token-audit",
             SearchAuditRecipes.AllAuditScope,
@@ -2243,6 +2255,71 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, query.GetProperty("count").GetInt32());
             var result = Assert.Single(query.GetProperty("results").EnumerateArray());
             Assert.Contains(result.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CommandErrorWriter", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_FilesystemTraversalRecipeFiltersNearbyEnumerationOptions_Issue3920()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_enumeration_options");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/unguarded.cs",
+                "csharp",
+                """
+                public sealed class UnguardedTraversal
+                {
+                    public void Run(string root)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root))
+                        {
+                            Console.WriteLine(path);
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/options.cs",
+                "csharp",
+                """
+                public sealed class OptionsTraversal
+                {
+                    public void Run(string root)
+                    {
+                        var options = new EnumerationOptions { RecurseSubdirectories = true };
+                        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+                        {
+                            Console.WriteLine(path);
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "filesystem-traversal/enumerate-without-options", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+
+            Assert.Equal("enumerate-without-options", query.GetProperty("name").GetString());
+            Assert.Equal(1, query.GetProperty("count").GetInt32());
+            Assert.Equal("src/unguarded.cs", result.GetProperty("path").GetString());
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/options.cs");
+            Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-before");
+            Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-after");
         }
         finally
         {

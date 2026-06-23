@@ -1801,6 +1801,7 @@ public static partial class QueryCommandRunner
                 BuildAdHocIssueDraftLabels(options),
                 "Review the evidence paths and surrounding code before filing.",
                 [],
+                [],
                 exact,
                 SearchAuditRecipes.DefaultQuerySeverity,
                 [],
@@ -1853,6 +1854,7 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(options.Limit),
@@ -1867,7 +1869,7 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
@@ -1883,6 +1885,7 @@ public static partial class QueryCommandRunner
                 recipeQuery.RecommendedLabels,
                 recipeQuery.FalsePositiveGuidance,
                 [.. recipeQuery.RiskEvidence],
+                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
                 exact,
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
@@ -1916,6 +1919,7 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(options.Limit),
@@ -1930,7 +1934,7 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
@@ -1945,6 +1949,7 @@ public static partial class QueryCommandRunner
                 recipeQuery.Description,
                 recipeQuery.Severity,
                 [.. recipeQuery.RiskEvidence],
+                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
                 [.. recipeQuery.MatchOrigins],
@@ -1968,6 +1973,19 @@ public static partial class QueryCommandRunner
         }
 
         return queryResults;
+    }
+
+    private static IReadOnlyList<SearchGuardFilter> BuildSearchRecipeGuardFilters(QueryCommandOptions options, SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.GuardFilters.Count == 0)
+            return options.GuardFilters;
+        if (options.GuardFilters.Count == 0)
+            return recipeQuery.GuardFilters;
+
+        var guardFilters = new List<SearchGuardFilter>(recipeQuery.GuardFilters.Count + options.GuardFilters.Count);
+        guardFilters.AddRange(recipeQuery.GuardFilters);
+        guardFilters.AddRange(options.GuardFilters);
+        return guardFilters;
     }
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
@@ -2538,6 +2556,7 @@ public static partial class QueryCommandRunner
             query.RecommendedLabels,
             query.FalsePositiveGuidance,
             [.. query.RiskEvidence],
+            ToSearchRecipeGuardFilterJsonResults(query.GuardFilters),
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
@@ -2545,6 +2564,15 @@ public static partial class QueryCommandRunner
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
             query.ExactSubstring)).ToList());
+
+    private static List<SearchRecipeGuardFilterJsonResult> ToSearchRecipeGuardFilterJsonResults(IReadOnlyList<SearchGuardFilter> guardFilters)
+        => guardFilters
+            .Select(filter => new SearchRecipeGuardFilterJsonResult(
+                filter.Role == SearchGuardRole.Require ? "require" : "reject",
+                filter.Direction == SearchGuardDirection.Before ? "before" : "after",
+                filter.Query,
+                BuildSearchGuardReplayOptionName(filter)))
+            .ToList();
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
         List<SearchResult> results,
