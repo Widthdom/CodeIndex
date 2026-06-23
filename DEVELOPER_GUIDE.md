@@ -2159,6 +2159,42 @@ The flag parser (`ProgramRunner.TryConsumeAuditLogFlags`) is run before `QueryCo
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
 - No unnecessary production packages. Test-only packages are allowed when they clearly improve the harness and stay scoped to `tests/CodeIndex.Tests/`; they do not relax the production dependency rule.
 
+## Sensitive Buffer Policy
+
+Pooled byte buffers that may hold credentials, request payloads, local file
+bytes, or other user-controlled content must be cleared before the buffer can
+be observed again. Prefer a helper whose name states the policy instead of a
+bare `ArrayPool<byte>.Shared.Return(...)` at sensitive boundaries.
+
+- **Token material** uses full-buffer clearing when returning rented arrays.
+  `McpAuthenticationLimits.HashToken` hashes only the UTF-8 bytes written for
+  the token, zeroes that used range immediately, and returns the rented array
+  with `clearArray: true` so unused bytes from a previous rent are also erased.
+- **LSP request payloads** clear only the used payload range before returning a
+  rented buffer. The lease knows the declared content length, so clearing the
+  used range is the stable contract; bytes beyond that range are not part of
+  the payload and should not force a full rented-array clear on every request.
+- **Bounded HTTP copy buffers** are treated as possibly sensitive because they
+  can carry installer, archive, or response bytes before those bytes are
+  written to private storage. They clear the whole rented copy buffer before
+  returning it.
+- **ASCII protocol headers and generated JSON/report bytes** are not treated as
+  sensitive merely because they use pooled or accumulated storage. They still
+  need explicit maximum-byte budgets, but they do not require clearing unless
+  the call site starts carrying credentials or source payloads.
+
+When adding `ArrayPool<byte>` or in-memory accumulation (`MemoryStream`,
+captured `Utf8JsonWriter` output, report/archive buffers), first classify the
+data as sensitive bytes, bounded non-sensitive payload, generated JSON,
+archive/report bytes, or diagnostic snippet. Sensitive paths should route
+through `SensitiveBufferPolicy.ReturnSensitiveTokenBuffer`,
+`ReturnSensitivePayloadBuffer`, `ReturnSensitiveCopyBuffer`, or
+`ClearUsedSensitiveBytes`; these helper names are intended to be positive
+evidence during security audits. Bounded generated JSON capture should use
+`SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity`. Sensitive paths
+need a test that proves the cleared range; bounded accumulation paths need a
+test or constant that proves the maximum byte budget.
+
 ## Custom Language Extraction
 
 Downstream users can add lightweight language support without rebuilding
@@ -4023,6 +4059,35 @@ Cloud セッションは開発ループの中で `dotnet build` にフォール�
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
 - 不要な本番パッケージは入れない。test-only package は、テストハーネスの改善に明確に寄与し、`tests/CodeIndex.Tests/` に閉じる限り許容されるが、本番依存ルールを緩めるものではない。
+
+## センシティブバッファの方針
+
+認証情報、リクエスト payload、ローカルファイルの byte、その他 user-controlled content
+を保持しうる pooled byte buffer は、その buffer が再観測される前に clear する必要があります。
+センシティブ境界では素の `ArrayPool<byte>.Shared.Return(...)` より、方針を名前で示す helper を優先してください。
+
+- **Token material** は rented array を返すときに full-buffer clearing を使います。
+  `McpAuthenticationLimits.HashToken` は token として実際に書いた UTF-8 byte だけを hash し、
+  その used range をすぐ zero 化したうえで、rented array を `clearArray: true` で返すため、
+  過去の rent 由来の未使用 byte も消去されます。
+- **LSP request payload** は rented buffer を返す前に used payload range だけを clear します。
+  lease が宣言済み content length を保持しているため、used range clearing が安定した契約です。
+  その範囲外の byte は payload ではなく、リクエストごとに full rented-array clear を強制しません。
+- **Bounded HTTP copy buffer** は installer、archive、response byte を private storage に書く前に
+  通す可能性があるため、センシティブとして扱います。返却前に rented copy buffer 全体を clear します。
+- **ASCII protocol header と生成された JSON/report byte** は pooled / accumulated storage を使っていても、
+  それだけではセンシティブ扱いにしません。明示的な maximum-byte budget は必要ですが、call site が
+  認証情報や source payload を運び始めない限り clearing は必須ではありません。
+
+`ArrayPool<byte>` や in-memory accumulation（`MemoryStream`、captured `Utf8JsonWriter` output、
+report/archive buffer）を追加するときは、まず data を sensitive bytes、bounded non-sensitive payload、
+generated JSON、archive/report bytes、diagnostic snippet に分類してください。Sensitive path は
+`SensitiveBufferPolicy.ReturnSensitiveTokenBuffer`、`ReturnSensitivePayloadBuffer`、
+`ReturnSensitiveCopyBuffer`、`ClearUsedSensitiveBytes` を経由させてください。これらの helper 名は
+security audit で positive evidence として拾えるようにしています。Bounded generated JSON capture は
+`SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity` を使ってください。Sensitive path には
+cleared range を証明するテストが必要です。Bounded accumulation path には maximum byte budget を
+証明するテストまたは定数が必要です。
 
 ## カスタム言語抽出
 
