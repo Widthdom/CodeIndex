@@ -7723,6 +7723,8 @@ public static partial class QueryCommandRunner
                             g.Symbol.Line,
                             g.ReferenceCount,
                             g.ReferenceScore,
+                            g.RankingScore,
+                            g.GenericNamePenalty,
                             g.Symbol.Visibility,
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
@@ -8004,6 +8006,8 @@ public static partial class QueryCommandRunner
                         r.Symbol.Line,
                         r.ReferenceCount,
                         r.ReferenceScore,
+                        r.RankingScore,
+                        r.GenericNamePenalty,
                         r.Symbol.Visibility,
                         r.Symbol.ContainerName))
                     .ToList();

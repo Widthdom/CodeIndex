@@ -233,6 +233,8 @@ public class GroupedHotspotResult
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
     public double ReferenceScore { get; set; }
+    public double RankingScore { get; set; }
+    public double GenericNamePenalty { get; set; } = 1.0;
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
     public bool PathsTruncated { get; set; }
@@ -254,6 +256,8 @@ public class SymbolHotspotResult
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
     public double ReferenceScore { get; set; }
+    public double RankingScore { get; set; }
+    public double GenericNamePenalty { get; set; } = 1.0;
 }
 
 public class FileHotspotResult

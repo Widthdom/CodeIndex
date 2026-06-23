@@ -509,6 +509,8 @@ internal sealed record SymbolHotspotJsonResult(
     int Line,
     int ReferenceCount,
     double ReferenceScore,
+    double RankingScore,
+    double GenericNamePenalty,
     string? Visibility,
     string? Container);
 
@@ -528,6 +530,8 @@ internal sealed record GroupedSymbolHotspotJsonResult(
     int Line,
     int ReferenceCount,
     double ReferenceScore,
+    double RankingScore,
+    double GenericNamePenalty,
     string? Visibility,
     string? Container,
     int DefinitionSites,

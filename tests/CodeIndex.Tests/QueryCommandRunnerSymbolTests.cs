@@ -4753,6 +4753,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("SharedHelper", hotspot.GetProperty("name").GetString());
             Assert.Equal("function", hotspot.GetProperty("kind").GetString());
             Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32());
+            Assert.Equal(2.0, hotspot.GetProperty("reference_score").GetDouble(), precision: 6);
+            Assert.Equal(2.0, hotspot.GetProperty("ranking_score").GetDouble(), precision: 6);
+            Assert.Equal(1.0, hotspot.GetProperty("generic_name_penalty").GetDouble(), precision: 6);
             Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
             Assert.Equal(hotspot.GetProperty("path").GetString(), hotspot.GetProperty("representative").GetProperty("path").GetString());
