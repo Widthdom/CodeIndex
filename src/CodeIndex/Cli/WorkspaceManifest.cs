@@ -16,7 +16,11 @@ internal sealed record WorkspaceManifest(
 internal sealed record WorkspaceListJsonResult(
     WorkspaceManifest? Manifest,
     IReadOnlyList<WorkspaceMember> Members,
-    WorkspaceManifestStatusJsonResult ManifestStatus);
+    WorkspaceManifestStatusJsonResult ManifestStatus)
+{
+    [JsonPropertyName("manifest_found")]
+    public bool ManifestFound => Manifest is not null;
+}
 
 internal sealed record ActiveWorkspaceJsonResult
 {
@@ -90,7 +94,22 @@ internal sealed record WorkspaceManifestStatusJsonResult(
     string Reason,
     string? Path,
     IReadOnlyList<string> SearchedPaths,
-    IReadOnlyList<string> SupportedFiles);
+    IReadOnlyList<string> SupportedFiles)
+{
+    [JsonPropertyName("manifest_found")]
+    public bool ManifestFound => Path is not null;
+
+    [JsonPropertyName("code")]
+    public string Code
+        => Path is not null
+            ? "workspace_manifest_found"
+            : Reason switch
+            {
+                "invalid" => "workspace_manifest_invalid",
+                "not_found" => "workspace_manifest_not_found",
+                _ => "workspace_manifest_unavailable",
+            };
+}
 
 internal sealed record ConfigEffectiveValueJsonResult(
     string EnvironmentVariable,

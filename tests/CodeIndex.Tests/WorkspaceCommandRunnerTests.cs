@@ -648,7 +648,7 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
-    public void WorkspaceStatusJsonNoManifest_IncludesDiscoveryMetadata_Issue3905()
+    public void WorkspaceStatusJsonNoManifest_IncludesDiscoveryMetadata_Issues3905_3956()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_status_no_manifest");
         var previous = Environment.CurrentDirectory;
@@ -663,11 +663,14 @@ public class WorkspaceCommandRunnerTests
             Assert.Empty(stderr);
             using var document = JsonDocument.Parse(stdout);
             var payload = document.RootElement;
+            Assert.False(payload.GetProperty("manifest_found").GetBoolean());
             Assert.False(payload.TryGetProperty("manifest", out _));
             Assert.Empty(payload.GetProperty("members").EnumerateArray());
             var manifestStatus = payload.GetProperty("manifest_status");
             Assert.Equal("not_found", manifestStatus.GetProperty("status").GetString());
             Assert.Equal("not_found", manifestStatus.GetProperty("reason").GetString());
+            Assert.False(manifestStatus.GetProperty("manifest_found").GetBoolean());
+            Assert.Equal("workspace_manifest_not_found", manifestStatus.GetProperty("code").GetString());
             Assert.Contains(
                 manifestStatus.GetProperty("supported_files").EnumerateArray(),
                 item => item.GetString() == WorkspaceManifestLoader.FileName);
