@@ -83,6 +83,20 @@ internal static class DataDirectorySecurity
         File.SetUnixFileMode(path, PrivateFileMode);
     }
 
+    internal static FileStream OpenPrivateFileStream(string path, FileMode mode, FileAccess access, FileShare share)
+    {
+        var options = new FileStreamOptions
+        {
+            Mode = mode,
+            Access = access,
+            Share = share,
+        };
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            options.UnixCreateMode = PrivateFileMode;
+
+        return new FileStream(LongPath.EnsureWindowsPrefix(path), options);
+    }
+
     private static DirectoryInfo CreateDirectoryWithPrivateMode(string path)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

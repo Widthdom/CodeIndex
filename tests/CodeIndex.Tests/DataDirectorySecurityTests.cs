@@ -226,6 +226,45 @@ public class DataDirectorySecurityTests
     }
 
     [Fact]
+    public void OpenPrivateFileStream_OnPosix_CreatesPrivateFilesUpFront_Issue3984()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_private_create_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(root);
+            var createNewPath = Path.Combine(root, "watch-spool.jsonl");
+            using (var stream = DataDirectorySecurity.OpenPrivateFileStream(
+                createNewPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.Read))
+            {
+                stream.WriteByte(1);
+                AssertPrivateFileMode(createNewPath);
+            }
+
+            var openOrCreatePath = Path.Combine(root, "codeindex.db.lock");
+            using (var stream = DataDirectorySecurity.OpenPrivateFileStream(
+                openOrCreatePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None))
+            {
+                stream.WriteByte(1);
+                AssertPrivateFileMode(openOrCreatePath);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void WritePrivateText_MoveFailure_DoesNotLeaveTempFile()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_file_atomic_{Guid.NewGuid():N}");
@@ -287,5 +326,14 @@ public class DataDirectorySecurityTests
             Directory.Delete(path, recursive: true);
         else if (File.Exists(path))
             File.Delete(path);
+    }
+
+    private static void AssertPrivateFileMode(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
+        Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
     }
 }

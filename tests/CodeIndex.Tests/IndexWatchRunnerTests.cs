@@ -267,6 +267,28 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void CreateSubRunSpoolFileStream_OnPosix_CreatesPrivateFileUpFront_Issue3984()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var spoolPath = Path.Combine(projectRoot, "subrun.jsonl");
+
+            using var stream = IndexWatchRunner.CreateSubRunSpoolFileStream(spoolPath);
+
+            Assert.True(stream.CanWrite);
+            AssertPrivateFileMode(spoolPath);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void BuildBatchPathSamples_BoundsLongRelativePaths_Issue3804()
     {
         var method = typeof(IndexWatchRunner).GetMethod("BuildBatchPathSamples", BindingFlags.NonPublic | BindingFlags.Static);
@@ -795,6 +817,15 @@ public class IndexWatchRunnerTests
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private static void AssertPrivateFileMode(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
+        Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
     }
 
     private sealed class SignalingStringWriter : StringWriter

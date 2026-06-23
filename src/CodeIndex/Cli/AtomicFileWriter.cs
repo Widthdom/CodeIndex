@@ -101,15 +101,7 @@ internal static class AtomicFileWriter
         if (profile != WriteProfile.Sensitive || OperatingSystem.IsWindows())
             return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
 
-        return new FileStream(
-            path,
-            new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                UnixCreateMode = DataDirectorySecurity.PrivateFileMode,
-            });
+        return DataDirectorySecurity.OpenPrivateFileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
     }
 
     private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
