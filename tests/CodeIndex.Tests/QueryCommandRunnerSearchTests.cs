@@ -1125,6 +1125,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "empty-catch-review");
+        var regexQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "regex-construction");
+        var boundedRegexAliasQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
 
         Assert.True(root.GetProperty("count").GetInt32() >= 6);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
@@ -1146,6 +1154,10 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(emptyCatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("broad or empty catch", StringComparison.Ordinal));
         Assert.Equal(0, emptyCatchQuery.GetProperty("exclude_origins").GetArrayLength());
         Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
+        Assert.Equal("new Regex(", regexQuery.GetProperty("query").GetString());
+        Assert.Contains(regexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex alias", StringComparison.Ordinal));
+        Assert.Equal("info", boundedRegexAliasQuery.GetProperty("severity").GetString());
+        Assert.Contains(boundedRegexAliasQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
         Assert.Contains("broad-token-audit", tokenQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
@@ -1214,6 +1226,8 @@ public partial class QueryCommandRunnerTests
                 "thread-sleep",
                 "path-case-heuristic",
                 "regex-construction",
+                "bounded-regex-alias",
+                "fully-qualified-regex-construction",
                 "regex-timeout-handling",
                 "environment-secret-source",
                 "authorization-handling",
@@ -1234,7 +1248,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "regex-construction", "cancellation-token-none", "sync-over-async"]);
+            ["sqlite-addwithvalue", "regex-construction", "bounded-regex-alias", "cancellation-token-none", "sync-over-async"]);
         AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,
@@ -1370,6 +1384,100 @@ public partial class QueryCommandRunnerTests
             var commentQuery = Assert.Single(commentDocument.RootElement.GetProperty("queries").EnumerateArray());
             Assert.Equal(0, commentQuery.GetProperty("count").GetInt32());
             Assert.Empty(commentQuery.GetProperty("results").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RegexRecipeSeparatesBoundedAliasAndRawConstruction_Issue3919()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_regex_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/raw.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public sealed class RawRegex
+                {
+                    public object Build()
+                    {
+                        var regex = new Regex("token");
+                        var diagnostic = new RegexTimeoutDiagnostic();
+                        return regex;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/bounded.cs",
+                "csharp",
+                """
+                using Regex = CodeIndex.Indexer.BoundedRegex;
+
+                public sealed class BoundedRegexUse
+                {
+                    public object Build() => new Regex("token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/full.cs",
+                "csharp",
+                """
+                public sealed class FullyQualifiedRegexUse
+                {
+                    public object Build() => new System.Text.RegularExpressions.Regex("token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/diagnostic.cs",
+                "csharp",
+                """
+                public sealed class RegexDiagnosticOnly
+                {
+                    public object Build() => new RegexTimeoutDiagnostic();
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code",
+                    "--include-query", "regex-construction,bounded-regex-alias,fully-qualified-regex-construction",
+                    "--db", dbPath,
+                    "--json",
+                    "--limit", "10",
+                    "--lang", "csharp"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            var constructionPaths = queries
+                .Single(item => item.GetProperty("name").GetString() == "regex-construction")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var boundedAlias = queries.Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
+            var fullyQualified = queries.Single(item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
+
+            Assert.Contains("src/raw.cs", constructionPaths);
+            Assert.Contains("src/bounded.cs", constructionPaths);
+            Assert.DoesNotContain("src/diagnostic.cs", constructionPaths);
+            Assert.Equal("src/bounded.cs", Assert.Single(boundedAlias.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
+            Assert.Contains(boundedAlias.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
+            Assert.Equal("src/full.cs", Assert.Single(fullyQualified.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
         }
         finally
         {

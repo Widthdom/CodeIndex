@@ -193,10 +193,46 @@ internal static class SearchAuditRecipes
                 },
                 new(
                     "regex-construction",
-                    "new Regex",
+                    "new Regex(",
                     "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
                     ["audit", "performance"],
-                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
+                        "positive: files with a BoundedRegex alias are likely using the repository wrapper rather than raw BCL Regex."
+                    ],
+                },
+                new(
+                    "bounded-regex-alias",
+                    "using Regex = CodeIndex.Indexer.BoundedRegex",
+                    "Find files where `new Regex(...)` is backed by the repository bounded regex wrapper alias.",
+                    ["audit", "performance"],
+                    "This is positive evidence for regex-construction hits; still review whether the bounded wrapper receives trusted patterns and inputs.",
+                    ExactSubstring: true)
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: the Regex identifier aliases CodeIndex.Indexer.BoundedRegex, separating wrapper construction from raw BCL Regex.",
+                        "risk: alias evidence does not prove every regex input is small; check the matching construction site when the same file also appears in regex-construction."
+                    ],
+                },
+                new(
+                    "fully-qualified-regex-construction",
+                    "new System.Text.RegularExpressions.Regex",
+                    "Find fully qualified raw BCL regex construction that bypasses a bounded wrapper alias.",
+                    ["audit", "performance"],
+                    "False positives include tests and code that supplies explicit timeouts or RegexOptions.NonBacktracking.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
+                        "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
+                    ],
+                },
                 new(
                     "regex-timeout-handling",
                     "RegexMatchTimeoutException",
@@ -304,10 +340,32 @@ internal static class SearchAuditRecipes
                     "False positives include test-only SQL snippets and values whose inferred SQLite type is intentionally unconstrained."),
                 new(
                     "regex-construction",
-                    "new Regex",
+                    "new Regex(",
                     "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
                     ["audit", "performance"],
-                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
+                        "positive: files with a BoundedRegex alias are likely using the repository wrapper rather than raw BCL Regex."
+                    ],
+                },
+                new(
+                    "bounded-regex-alias",
+                    "using Regex = CodeIndex.Indexer.BoundedRegex",
+                    "Find files where `new Regex(...)` is backed by the repository bounded regex wrapper alias.",
+                    ["audit", "performance"],
+                    "This is positive evidence for regex-construction hits; still review whether the bounded wrapper receives trusted patterns and inputs.",
+                    ExactSubstring: true)
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: the Regex identifier aliases CodeIndex.Indexer.BoundedRegex, separating wrapper construction from raw BCL Regex.",
+                        "risk: alias evidence does not prove every regex input is small; check the matching construction site when the same file also appears in regex-construction."
+                    ],
+                },
                 new(
                     "cancellation-token-none",
                     "CancellationToken.None",
