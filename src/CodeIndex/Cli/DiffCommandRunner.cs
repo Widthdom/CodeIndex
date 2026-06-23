@@ -740,7 +740,7 @@ public static class DiffCommandRunner
         if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
             throw new IOException($"database not found: {dbPath}");
 
-        var connectionString = DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly);
+        var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly);
 
         var connection = new SqliteConnection(connectionString);
         connection.Open();
@@ -749,10 +749,9 @@ public static class DiffCommandRunner
 
     private static long ExecuteLong(SqliteConnection connection, string sql)
     {
-        using var command = connection.CreateCommand();
+        using var command = SqliteConnectionPolicy.CreateCommand(connection);
         command.CommandText = sql;
-        var value = command.ExecuteScalar();
-        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+        return SqliteCommandPolicy.ReadInt64Scalar(command, "diff database header value");
     }
 
     private static DiffDbHeader ReadHeader(string dbPath)
@@ -769,23 +768,23 @@ public static class DiffCommandRunner
 
     private static long ExecuteCountIfTableExists(SqliteConnection connection, string table)
     {
-        using (var exists = connection.CreateCommand())
+        using (var exists = SqliteConnectionPolicy.CreateCommand(connection))
         {
             exists.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $table";
-            exists.Parameters.AddWithValue("$table", table);
+            SqliteCommandPolicy.AddText(exists, "$table", table);
             if (exists.ExecuteScalar() is null)
                 return 0;
         }
 
-        using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM {SqliteIdentifier.Quote(table)}";
-        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        using var command = SqliteConnectionPolicy.CreateCommand(connection);
+        command.CommandText = SqliteCommandPolicy.CountRowsSql(table);
+        return SqliteCommandPolicy.ReadInt64Scalar(command, $"diff table row count {table}");
     }
 
     private static bool ColumnExists(SqliteConnection connection, string table, string column)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
+        using var command = SqliteConnectionPolicy.CreateCommand(connection);
+        command.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(table);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

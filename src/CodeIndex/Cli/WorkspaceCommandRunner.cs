@@ -26,19 +26,35 @@ internal static class WorkspaceCommandRunner
 
     private static int List(bool json, JsonSerializerOptions jsonOptions)
     {
-        var manifest = WorkspaceManifestLoader.Find(Environment.CurrentDirectory);
-        if (manifest == null)
+        var discovery = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
+        if (discovery.Path == null)
         {
             if (json)
-                Console.WriteLine(JsonSerializer.Serialize(new WorkspaceListJsonResult(null, Array.Empty<WorkspaceMember>()), jsonOptions));
+            {
+                var manifestStatus = new WorkspaceManifestStatusJsonResult(
+                    discovery.Status,
+                    discovery.Reason,
+                    null,
+                    discovery.SearchedPaths,
+                    discovery.SupportedFiles);
+                Console.WriteLine(JsonSerializer.Serialize(new WorkspaceListJsonResult(null, Array.Empty<WorkspaceMember>(), manifestStatus), jsonOptions));
+            }
             else
                 Console.WriteLine("No cdidx.workspace.json or .cdidx-workspace.json found.");
             return CommandExitCodes.Success;
         }
 
+        var manifest = WorkspaceManifestLoader.Load(discovery.Path);
+
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(new WorkspaceListJsonResult(manifest, manifest.Members), jsonOptions));
+            var manifestStatus = new WorkspaceManifestStatusJsonResult(
+                "loaded",
+                "loaded",
+                manifest.Path,
+                discovery.SearchedPaths,
+                discovery.SupportedFiles);
+            Console.WriteLine(JsonSerializer.Serialize(new WorkspaceListJsonResult(manifest, manifest.Members, manifestStatus), jsonOptions));
             return CommandExitCodes.Success;
         }
 
@@ -53,7 +69,7 @@ internal static class WorkspaceCommandRunner
     {
         var state = ActiveWorkspace.Load();
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new ActiveWorkspaceJsonResult(state, null), jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(ActiveWorkspaceJsonResult.From(state, null), jsonOptions));
         else if (state == null)
             Console.WriteLine("No active workspace set.");
         else
@@ -113,7 +129,7 @@ internal static class WorkspaceCommandRunner
         }
 
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new ActiveWorkspaceJsonResult(state, ActiveWorkspace.StatePath), jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(ActiveWorkspaceJsonResult.From(state, ActiveWorkspace.StatePath), jsonOptions));
         else
             Console.WriteLine($"Active workspace set to {state.Name}: {state.DbPath}");
         return CommandExitCodes.Success;

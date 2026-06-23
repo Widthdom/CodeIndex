@@ -1208,6 +1208,8 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-serializer-deserialize");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-async-deserialize");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-addwithvalue");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-quoted-identifier");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-typed-parameter");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
@@ -1329,7 +1331,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "cancellation-token-none", "sync-over-async"]);
+            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "cancellation-token-none", "sync-over-async"]);
         AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,

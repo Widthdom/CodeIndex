@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -12,15 +13,119 @@ internal sealed record WorkspaceManifest(
     string DefaultDbName,
     IReadOnlyList<WorkspaceMember> Members);
 
-internal sealed record WorkspaceListJsonResult(WorkspaceManifest? Manifest, IReadOnlyList<WorkspaceMember> Members);
+internal sealed record WorkspaceListJsonResult(
+    WorkspaceManifest? Manifest,
+    IReadOnlyList<WorkspaceMember> Members,
+    WorkspaceManifestStatusJsonResult ManifestStatus)
+{
+    [JsonPropertyName("manifest_found")]
+    public bool ManifestFound => Manifest is not null;
+}
 
-internal sealed record ActiveWorkspaceJsonResult(ActiveWorkspaceState? ActiveWorkspace, string? Path);
+internal sealed record ActiveWorkspaceJsonResult
+{
+    [JsonPropertyName("active")]
+    public bool Active { get; init; }
+
+    [JsonPropertyName("workspace")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public ActiveWorkspaceState? Workspace { get; init; }
+
+    [JsonPropertyName("active_workspace")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ActiveWorkspaceState? ActiveWorkspace => Workspace;
+
+    [JsonPropertyName("path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Path { get; init; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = "inactive";
+
+    [JsonPropertyName("reason")]
+    public string Reason { get; init; } = "not_set";
+
+    [JsonPropertyName("code")]
+    public string Code { get; init; } = "active_workspace_not_set";
+
+    internal static ActiveWorkspaceJsonResult From(ActiveWorkspaceState? state, string? path)
+        => state is null
+            ? new ActiveWorkspaceJsonResult()
+            : new ActiveWorkspaceJsonResult
+            {
+                Active = true,
+                Workspace = state,
+                Path = path,
+                Status = "active",
+                Reason = "active",
+                Code = "active_workspace_set",
+            };
+}
 
 internal sealed record ConfigShowJsonResult(
     string? ConfigPath,
     ActiveWorkspaceState? ActiveWorkspace,
     IReadOnlyList<string> Precedence,
+    IReadOnlyList<string> SupportedFiles,
+    ConfigFileStatusJsonResult ConfigFile,
+    ActiveWorkspaceStatusJsonResult ActiveWorkspaceStatus,
+    WorkspaceManifestStatusJsonResult WorkspaceManifest,
+    IReadOnlyList<string> SearchedPaths,
+    IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> EffectiveConfig);
+
+internal sealed record ConfigFileStatusJsonResult(
+    string Status,
+    string Reason,
+    string? Path,
+    string? Error,
+    IReadOnlyList<string> SearchedPaths,
     IReadOnlyList<string> SupportedFiles);
+
+internal sealed record ActiveWorkspaceStatusJsonResult(
+    string Status,
+    string Reason,
+    string? Path,
+    string? Name,
+    string? Root,
+    string? DbPath);
+
+internal sealed record WorkspaceManifestStatusJsonResult(
+    string Status,
+    string Reason,
+    string? Path,
+    IReadOnlyList<string> SearchedPaths,
+    IReadOnlyList<string> SupportedFiles)
+{
+    [JsonPropertyName("manifest_found")]
+    public bool ManifestFound => Path is not null;
+
+    [JsonPropertyName("code")]
+    public string Code
+        => Path is not null
+            ? "workspace_manifest_found"
+            : Reason switch
+            {
+                "invalid" => "workspace_manifest_invalid",
+                "not_found" => "workspace_manifest_not_found",
+                _ => "workspace_manifest_unavailable",
+            };
+}
+
+internal sealed record ConfigEffectiveValueJsonResult(
+    string EnvironmentVariable,
+    string Value,
+    string Source,
+    string DefaultValue,
+    bool Sensitive,
+    string ConfigFileSupported,
+    string Policy);
+
+internal sealed record WorkspaceManifestDiscoveryResult(
+    string? Path,
+    IReadOnlyList<string> SearchedPaths,
+    IReadOnlyList<string> SupportedFiles,
+    string Status,
+    string Reason);
 
 internal static class WorkspaceManifestLoader
 {
@@ -33,9 +138,18 @@ internal static class WorkspaceManifestLoader
     internal const int MaxManifestMemberDiagnostics = 8;
     internal const int MaxManifestDiscoveryAncestors = 256;
     internal const int MaxDefaultDbNameChars = 255;
+    private static readonly IReadOnlyList<string> DiscoveryFileNames = [DotFileName, FileName];
+    internal static readonly IReadOnlyList<string> SupportedFiles = [FileName, DotFileName];
 
     internal static WorkspaceManifest? Find(string startingDirectory)
     {
+        var discovery = Discover(startingDirectory);
+        return discovery.Path is null ? null : Load(discovery.Path);
+    }
+
+    internal static WorkspaceManifestDiscoveryResult Discover(string startingDirectory)
+    {
+        var searchedPaths = new List<string>();
         DirectoryInfo? current;
         try
         {
@@ -57,17 +171,18 @@ internal static class WorkspaceManifestLoader
                 throw new InvalidDataException($"Workspace manifest discovery exceeded the {MaxManifestDiscoveryAncestors} ancestor limit from {ConsoleUi.FormatBoundedValue(startingDirectory)}.");
             searchedAncestors++;
 
-            foreach (var name in new[] { DotFileName, FileName })
+            foreach (var name in DiscoveryFileNames)
             {
                 var candidate = Path.Combine(current.FullName, name);
+                searchedPaths.Add(candidate);
                 if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
-                    return Load(candidate);
+                    return new WorkspaceManifestDiscoveryResult(candidate, searchedPaths, SupportedFiles, "found", "found");
             }
 
             current = current.Parent;
         }
 
-        return null;
+        return new WorkspaceManifestDiscoveryResult(null, searchedPaths, SupportedFiles, "not_found", "not_found");
     }
 
     internal static WorkspaceManifest Load(string path)

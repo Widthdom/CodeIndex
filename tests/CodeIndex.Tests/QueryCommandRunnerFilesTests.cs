@@ -2580,6 +2580,11 @@ public partial class QueryCommandRunnerTests
             Assert.False(document.RootElement.GetProperty("read_only_fallback").GetBoolean());
             Assert.False(document.RootElement.GetProperty("wal_checkpoint_attempted").GetBoolean());
             Assert.False(document.RootElement.GetProperty("wal_checkpoint_succeeded").GetBoolean());
+            var policy = document.RootElement.GetProperty("sqlite_connection_policy");
+            Assert.Equal("read_only", policy.GetProperty("active_mode").GetString());
+            Assert.Equal(SqliteConnectionPolicy.DefaultCommandTimeoutSeconds, policy.GetProperty("command_timeout_seconds").GetInt32());
+            Assert.True(policy.GetProperty("long_running_commands_require_cancellation").GetBoolean());
+            Assert.False(policy.GetProperty("read_only_fallback").GetBoolean());
         }
         finally
         {

@@ -51,7 +51,7 @@ public static partial class ExtractorPluginRegistry
     {
         try
         {
-            return Directory.EnumerateFiles(directory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
+            return CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory, "*.dll").GetEnumerator();
         }
         catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
@@ -193,7 +193,7 @@ public static partial class ExtractorPluginRegistry
     {
         try
         {
-            return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly).GetEnumerator();
+            return CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory, searchPattern).GetEnumerator();
         }
         catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {

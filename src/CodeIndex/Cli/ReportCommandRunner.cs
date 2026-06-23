@@ -126,10 +126,16 @@ public static class ReportCommandRunner
     private static string? RedactLocalJsonPath(string? path) =>
         string.IsNullOrWhiteSpace(path) ? path : RedactedPlaceholder;
 
-    internal static ReportBundle BuildBundle(ReportCommandOptions options, string version)
+    internal static ReportBundle BuildBundle(
+        ReportCommandOptions options,
+        string version,
+        DateTimeOffset? generatedAtUtcForTesting = null)
     {
-        var bundle = new ReportBundle();
-        var nowUtc = DateTimeOffset.UtcNow;
+        var nowUtc = generatedAtUtcForTesting ?? DateTimeOffset.UtcNow;
+        var bundle = new ReportBundle
+        {
+            GeneratedAtUtc = nowUtc,
+        };
 
         var metadata = new ReportMetadata(
             Version: version,
@@ -241,17 +247,13 @@ public static class ReportCommandRunner
         }
 
         var tables = new List<ReportSchemaTable>();
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = normalizedDbPath,
-            Mode = SqliteOpenMode.ReadOnly,
-        }.ConnectionString;
+        var connectionString = SqliteConnectionPolicy.BuildConnectionString(normalizedDbPath, SqliteConnectionPolicyMode.ReadOnly);
 
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
 
         var tableNames = new List<string>();
-        using (var listCmd = connection.CreateCommand())
+        using (var listCmd = SqliteConnectionPolicy.CreateCommand(connection))
         {
             listCmd.CommandText = $"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT {MaxSchemaTables + 1}";
             using var reader = listCmd.ExecuteReader();
@@ -270,9 +272,10 @@ public static class ReportCommandRunner
             var rowCountTruncated = false;
             try
             {
-                using var countCmd = connection.CreateCommand();
-                countCmd.CommandText = $"SELECT COUNT(*) FROM (SELECT 1 FROM {SqliteIdentifier.Quote(name)} LIMIT {MaxSchemaRowCountScanRows + 1})";
-                var cappedCount = Convert.ToInt64(countCmd.ExecuteScalar());
+                using var countCmd = SqliteConnectionPolicy.CreateCommand(connection);
+                countCmd.CommandText = SqliteCommandPolicy.CountRowsWithLimitSql(name, "$limit");
+                SqliteCommandPolicy.AddLimit(countCmd, "$limit", MaxSchemaRowCountScanRows + 1);
+                var cappedCount = SqliteCommandPolicy.ReadInt64Scalar(countCmd, $"report schema row count {name}");
                 rowCountTruncated = cappedCount > MaxSchemaRowCountScanRows;
                 rowCount = rowCountTruncated ? MaxSchemaRowCountScanRows : cappedCount;
             }
@@ -482,11 +485,7 @@ public static class ReportCommandRunner
         try
         {
             var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
-            var connectionString = new SqliteConnectionStringBuilder
-            {
-                DataSource = normalizedDbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            }.ConnectionString;
+            var connectionString = SqliteConnectionPolicy.BuildConnectionString(normalizedDbPath, SqliteConnectionPolicyMode.ReadOnly);
             using var connection = new SqliteConnection(connectionString);
             connection.Open();
             var tables = LoadTableNames(connection);
@@ -583,7 +582,7 @@ public static class ReportCommandRunner
     private static HashSet<string> LoadTableNames(SqliteConnection connection)
     {
         var tables = new HashSet<string>(StringComparer.Ordinal);
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table'";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
@@ -596,7 +595,7 @@ public static class ReportCommandRunner
         var columns = new HashSet<string>(StringComparer.Ordinal);
         if (!LoadTableNames(connection).Contains(tableName))
             return columns;
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.CommandText = $"PRAGMA table_info(\"{tableName.Replace("\"", "\"\"", StringComparison.Ordinal)}\")";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
@@ -607,7 +606,7 @@ public static class ReportCommandRunner
     private static Dictionary<string, string?> LoadCodeIndexMeta(SqliteConnection connection)
     {
         var meta = new Dictionary<string, string?>(StringComparer.Ordinal);
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.CommandText = "SELECT key, value FROM codeindex_meta";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
@@ -617,17 +616,17 @@ public static class ReportCommandRunner
 
     private static int ReadUserVersion(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.CommandText = "PRAGMA user_version";
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static long CountFilesByLanguage(SqliteConnection connection, string lang)
     {
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.CommandText = "SELECT COUNT(*) FROM files WHERE lang = $lang";
-        cmd.Parameters.AddWithValue("$lang", lang);
-        return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        SqliteCommandPolicy.AddText(cmd, "$lang", lang);
+        return SqliteCommandPolicy.ReadInt64Scalar(cmd, $"report language file count {lang}");
     }
 
     private static string? GetMeta(Dictionary<string, string?> meta, string key)
@@ -771,7 +770,7 @@ public static class ReportCommandRunner
                     {
                         DataStream = new MemoryStream(bytes, writable: false),
                         Mode = BundleFileMode,
-                        ModificationTime = DateTimeOffset.UtcNow,
+                        ModificationTime = bundle.GeneratedAtUtc,
                     };
                     tar.WriteEntry(entry);
                 }
@@ -868,6 +867,7 @@ internal sealed class ReportCommandOptions
 internal sealed class ReportBundle
 {
     public List<(string Name, byte[] Bytes)> Files { get; } = new();
+    public DateTimeOffset GeneratedAtUtc { get; set; } = DateTimeOffset.UnixEpoch;
     public List<ReportSchemaTable> SchemaTables { get; set; } = new();
     public bool SchemaTablesTruncated { get; set; }
     public bool LogIncluded { get; set; }

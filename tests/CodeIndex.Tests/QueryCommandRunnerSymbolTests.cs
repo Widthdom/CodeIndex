@@ -60,6 +60,74 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_JsonArrayReturnsSingleArray_Issue3935()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_json_array_issue3935");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+            var row = Assert.Single(rows);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", row.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_EditorAndDiagnosticFormatsReturnLocations_Issue3935()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_editor_formats_issue3935");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+            string[] baseArgs = ["Run", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function"];
+
+            var (lspExitCode, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "lsp"], _jsonOptions));
+            using var lspDocument = ParseJsonOutput(lspStdout);
+            var lspLocation = Assert.Single(lspDocument.RootElement.EnumerateArray().ToList());
+            Assert.Equal(CommandExitCodes.Success, lspExitCode);
+            Assert.Equal(string.Empty, lspStderr);
+            Assert.Contains("/src/App.cs", lspLocation.GetProperty("uri").GetString());
+            Assert.True(lspLocation.GetProperty("range").GetProperty("start").GetProperty("line").GetInt32() >= 0);
+
+            var (qfExitCode, qfStdout, qfStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "qf"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, qfExitCode);
+            Assert.Equal(string.Empty, qfStderr);
+            Assert.Contains("src/App.cs:", qfStdout);
+            Assert.Contains("Run", qfStdout);
+
+            var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "sarif"], _jsonOptions));
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            var result = Assert.Single(sarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("results")
+                .EnumerateArray()
+                .ToList());
+            Assert.Equal(CommandExitCodes.Success, sarifExitCode);
+            Assert.Equal(string.Empty, sarifStderr);
+            Assert.Equal("2.1.0", sarifDocument.RootElement.GetProperty("version").GetString());
+            Assert.Contains("Run", result.GetProperty("message").GetProperty("text").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_JsonBodyIncludesTruncationMetadata_Issue3131()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_truncated_issue3131");
@@ -969,8 +1037,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(9, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(6, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(3, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(4, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
             Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
@@ -987,9 +1055,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
             Assert.Contains(symbols[3].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "reflection_or_config_suspect");
             Assert.Equal("ApplyConfiguration", symbols[7].GetProperty("name").GetString());
-            Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[7].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[7].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "config_or_metadata_surface");
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
-            Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[8].GetProperty("unused_bucket").GetString());
+            Assert.Contains(symbols[8].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "config_or_metadata_surface");
         }
         finally
         {
@@ -1094,7 +1164,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hidden", byBucket.GetProperty("likely_unused_private")[0].GetProperty("name").GetString());
             Assert.Equal("InternalOnly", byBucket.GetProperty("maybe_unused_nonpublic")[0].GetProperty("name").GetString());
-            Assert.Equal(6, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
+            Assert.Equal(3, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
             Assert.Equal("ConnectionString", byBucket.GetProperty("reflection_or_config_suspect")[0].GetProperty("name").GetString());
         }
         finally
@@ -1202,6 +1272,34 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_CountJsonIncludesBucketSummary_Issue3944()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(9, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(3, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(4, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(3, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(8, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("low").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_CountJsonWithBucketFilterCountsFilteredSymbols()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -1217,10 +1315,42 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(6, json.GetProperty("count").GetInt32());
+            Assert.Equal(3, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(3, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(3, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal("public_or_exported_no_refs", query.GetProperty("bucket").GetString());
             Assert.Equal("low", query.GetProperty("min_confidence").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_ActionableUsesConfidenceAliasForPrivateCandidates_Issue3977()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--actionable", "--confidence", "medium"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var query = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", query.GetProperty("bucket").GetString());
+            Assert.Equal("medium", query.GetProperty("min_confidence").GetString());
+            Assert.True(query.GetProperty("actionable").GetBoolean());
+            Assert.True(query.GetProperty("exclude_tests").GetBoolean());
+            Assert.Equal("private", query.GetProperty("visibility")[0].GetString());
         }
         finally
         {
@@ -3842,8 +3972,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("Likely unused private (1)", stdout);
             Assert.Contains("Maybe unused non-public (1)", stdout);
-            Assert.Contains("Public/exported with no refs (6)", stdout);
-            Assert.Contains("Reflection/config suspects (1)", stdout);
+            Assert.Contains("Public/exported with no refs (3)", stdout);
+            Assert.Contains("Intentional-surface suspects (4)", stdout);
             Assert.Contains("confidence=medium", stdout);
             Assert.Contains("confidence=low", stdout);
             Assert.Contains("returned potentially unused symbols; returned buckets:", stderr);
@@ -4685,8 +4815,15 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("SharedHelper", hotspot.GetProperty("name").GetString());
             Assert.Equal("function", hotspot.GetProperty("kind").GetString());
             Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32());
+            Assert.Equal(2.0, hotspot.GetProperty("reference_score").GetDouble(), precision: 6);
+            Assert.Equal(2.0, hotspot.GetProperty("ranking_score").GetDouble(), precision: 6);
+            Assert.Equal(1.0, hotspot.GetProperty("generic_name_penalty").GetDouble(), precision: 6);
             Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
+            Assert.Equal(hotspot.GetProperty("path").GetString(), hotspot.GetProperty("representative").GetProperty("path").GetString());
+            Assert.Equal(2, hotspot.GetProperty("definition_site_details").GetArrayLength());
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/FirstHelper.cs");
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/SecondHelper.cs");
         }
         finally
         {
@@ -5119,6 +5256,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(25, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(20, hotspot.GetProperty("paths").GetArrayLength());
             Assert.True(hotspot.GetProperty("paths_truncated").GetBoolean());
+            Assert.Equal(25, hotspot.GetProperty("definition_site_details").GetArrayLength());
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/Helper24.cs");
         }
         finally
         {
@@ -5214,6 +5353,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/a_first.cs", hotspot.GetProperty("path").GetString());
             Assert.Equal(3, hotspot.GetProperty("line").GetInt32());
+            Assert.Equal("src/a_first.cs", hotspot.GetProperty("representative").GetProperty("path").GetString());
+            Assert.Equal(3, hotspot.GetProperty("representative").GetProperty("line").GetInt32());
         }
         finally
         {
@@ -5915,5 +6056,23 @@ public partial class QueryCommandRunnerTests
             SqliteConnection.ClearAllPools();
             try { File.Delete(dbPath); } catch { }
         }
+    }
+
+    private static string CreateSymbolsEditorFormatFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/App.cs",
+            "csharp",
+            """
+            namespace Demo;
+
+            public class App
+            {
+                public void Run() { }
+            }
+            """);
+        return dbPath;
     }
 }

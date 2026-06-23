@@ -248,7 +248,7 @@ public static class DbPathResolver
             if (!SqliteFileUri.TryGetPathBeforeQuery(dbPath, out var trimmed, out var boundsError))
                 throw boundsError ?? new FormatException("Invalid SQLite file URI.");
 
-            if (!PathUriNormalizer.TryNormalizeFileUriPath(trimmed, out var normalizedUriPath, out var uriPathError))
+            if (!CodeIndex.FileUriPolicy.TryNormalizeFileUriPath(trimmed, out var normalizedUriPath, out var uriPathError))
                 throw new FormatException(uriPathError ?? "Invalid SQLite file URI path.");
             normalizedDbPath = normalizedUriPath;
             return true;
@@ -280,15 +280,7 @@ public static class DbPathResolver
     }
 
     internal static string BuildSqliteConnectionString(string dbPath, SqliteOpenMode? mode = null)
-    {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-        };
-        if (mode.HasValue)
-            builder.Mode = mode.Value;
-        return builder.ConnectionString;
-    }
+        => SqliteConnectionPolicy.BuildConnectionString(dbPath, mode);
 
     private static string? TryReadIndexedProjectRoot(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
