@@ -4541,7 +4541,7 @@ public class FileIndexer
 
         try
         {
-            using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(filePath));
+            using var stream = BoundedFile.OpenReadForPrefixProbe(filePath);
             if (!stream.CanRead)
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 

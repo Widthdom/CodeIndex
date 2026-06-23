@@ -1109,6 +1109,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "filesystem-traversal");
+        var boundedReadRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "bounded-read-evidence");
         var broadTokenRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1130,7 +1134,7 @@ public partial class QueryCommandRunnerTests
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "broad-exception-catch");
 
-        Assert.True(root.GetProperty("count").GetInt32() >= 6);
+        Assert.True(root.GetProperty("count").GetInt32() >= 7);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
         Assert.Equal("source", recipe.GetProperty("default_scope").GetString());
         Assert.Contains(recipe.GetProperty("default_path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
@@ -1168,6 +1172,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
+        Assert.Contains(boundedReadRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "bounded-memory-accumulator");
         Assert.Equal("all", broadTokenRecipe.GetProperty("default_scope").GetString());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
@@ -1198,7 +1203,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
+            ["risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1256,6 +1261,12 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["enumerate-files", "enumerate-directories", "enumerate-file-system-entries", "enumeration-options"]);
+        AssertRecipe(
+            "bounded-read-evidence",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["bounded-file-open-helper", "bounded-memory-accumulator", "bounded-full-byte-read-helper"]);
         AssertRecipe(
             "broad-token-audit",
             SearchAuditRecipes.AllAuditScope,
@@ -1918,6 +1929,78 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(queryText, query.GetProperty("query").GetString());
             Assert.Equal(1, query.GetProperty("count").GetInt32());
             Assert.Equal("src/audit.cs", query.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+    }
+
+    [Fact]
+    public void RunSearch_BoundedReadEvidenceRecipeFindsBoundedHelpers_Issue3994()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_bounded_read_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/BoundedFile.cs",
+                "csharp",
+                """
+                internal static class BoundedFile
+                {
+                    internal static Stream OpenReadForHash(string path)
+                        => BoundedFile.OpenRead(path, FileShare.Read);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/BoundedLineReader.cs",
+                "csharp",
+                """
+                internal static class BoundedLineReader
+                {
+                    internal static void TryReadUtf8File(Stream stream, int maxBytes)
+                    {
+                        using var accumulator = new MemoryStream(Math.Min(maxBytes, 8192));
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs",
+                "csharp",
+                """
+                internal sealed class FileContentLoader
+                {
+                    private byte[] ReadRawBytesWithSizeLimit(string path) => [];
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "bounded-read-evidence", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            AssertRecipeQueryHit(root, "bounded-file-open-helper", "BoundedFile.OpenRead", "src/CodeIndex/BoundedFile.cs");
+            AssertRecipeQueryHit(root, "bounded-memory-accumulator", "MemoryStream", "src/CodeIndex/BoundedLineReader.cs");
+            AssertRecipeQueryHit(root, "bounded-full-byte-read-helper", "ReadRawBytesWithSizeLimit", "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertRecipeQueryHit(JsonElement root, string queryName, string queryText, string path)
+        {
+            var query = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == queryName);
+
+            Assert.Equal(queryText, query.GetProperty("query").GetString());
+            Assert.Equal(1, query.GetProperty("count").GetInt32());
+            Assert.Equal(path, query.GetProperty("results")[0].GetProperty("path").GetString());
         }
     }
 
