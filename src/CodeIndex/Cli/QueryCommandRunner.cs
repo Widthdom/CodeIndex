@@ -3129,7 +3129,15 @@ public static partial class QueryCommandRunner
         => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + Math.Max(1, result.Length));
 
     private static LspLocation ToLspLocation(FileIssue result)
-        => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
+    {
+        var line = Math.Max(1, result.Line);
+        var location = BuildLspLocation(result.Path, line, 1, line, 2);
+        location.Kind = result.Kind;
+        location.Message = result.Message;
+        location.Severity = string.IsNullOrWhiteSpace(result.Severity) ? FileIssue.SeverityWarning : result.Severity;
+        location.Source = "cdidx validate";
+        return location;
+    }
 
     private static LspLocation ToLspLocation(SymbolResult result)
     {
