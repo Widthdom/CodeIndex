@@ -206,6 +206,7 @@ public static partial class QueryCommandRunner
         "--result-kind",
         "--sample",
         "--per-file-limit",
+        "--total-limit",
         "--max-json-bytes",
         "--search-fields",
         "--focus-line",
@@ -639,6 +640,14 @@ public static partial class QueryCommandRunner
                     "Use plain `--json` for the grouped recipe object.");
                 return CommandExitCodes.UsageError;
             }
+            if (options.MaxJsonBytes.HasValue && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
+            {
+                WriteUsageError(
+                    "--max-json-bytes is only supported with NDJSON recipe row output.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--recipe <name> --json=ndjson --max-json-bytes <n>` or `--results-only --max-json-bytes <n>` for bounded recipe streams.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
             {
                 WriteUsageError(
@@ -818,7 +827,7 @@ public static partial class QueryCommandRunner
                 "Use `--results-only --json=ndjson`, or remove --results-only when using --json=array.");
             return CommandExitCodes.UsageError;
         }
-        if (options.MaxJsonBytes.HasValue && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson))
+        if (options.MaxJsonBytes.HasValue && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
         {
             WriteUsageError(
                 "--max-json-bytes is only supported with NDJSON search output.",
@@ -1737,7 +1746,7 @@ public static partial class QueryCommandRunner
                         scope,
                         selection.Queries.Count,
                         compactTotal,
-                        BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, compactTotal),
+                        BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
                         compactQueryResults),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult));
                 return CommandExitCodes.Success;
@@ -1754,7 +1763,7 @@ public static partial class QueryCommandRunner
                         scope,
                         selection.Queries.Count,
                         total,
-                        BuildSearchRecipeRunSummary(queryResults, options.Limit, total),
+                        BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total),
                         queryResults),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult));
                 return CommandExitCodes.Success;
@@ -2117,9 +2126,10 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
             var results = reader.Search(
                 recipeQuery.Query,
-                FetchLimitForSearchEnvelope(options.Limit),
+                FetchLimitForSearchEnvelope(resultLimit),
                 options.Lang,
                 false,
                 queryScope.PathPatterns,
@@ -2137,7 +2147,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
-            var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
+            var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
@@ -2157,7 +2167,7 @@ public static partial class QueryCommandRunner
                 rows.Count,
                 rows.Count + minimumOmitted,
                 minimumOmitted,
-                options.Limit,
+                resultLimit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
@@ -2182,9 +2192,10 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
             var results = reader.Search(
                 recipeQuery.Query,
-                FetchLimitForSearchEnvelope(options.Limit),
+                FetchLimitForSearchEnvelope(resultLimit),
                 options.Lang,
                 false,
                 queryScope.PathPatterns,
@@ -2202,7 +2213,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
-            var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
+            var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
             queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
@@ -2219,7 +2230,7 @@ public static partial class QueryCommandRunner
                 rows.Count,
                 rows.Count + minimumOmitted,
                 minimumOmitted,
-                options.Limit,
+                resultLimit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
                 truncated,
@@ -2397,9 +2408,11 @@ public static partial class QueryCommandRunner
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int limitPerQuery,
+        int? totalLimit,
         int emittedResultCount)
         => new(
             limitPerQuery,
+            totalLimit,
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
@@ -2409,9 +2422,11 @@ public static partial class QueryCommandRunner
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
         IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
         int limitPerQuery,
+        int? totalLimit,
         int emittedResultCount)
         => new(
             limitPerQuery,
+            totalLimit,
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
@@ -2524,6 +2539,18 @@ public static partial class QueryCommandRunner
         => options.PathPatterns.Count > 0 && recipeQuery.PathPatterns.Count > 0
             ? options.PathPatterns
             : null;
+
+    private static int GetSearchRecipeEffectiveResultLimit(QueryCommandOptions options, int emittedSoFar)
+    {
+        if (!options.TotalLimit.HasValue)
+            return options.Limit;
+
+        var remaining = options.TotalLimit.Value - emittedSoFar;
+        if (remaining <= 0)
+            return 0;
+
+        return Math.Min(options.Limit, remaining);
+    }
 
     private static int FetchLimitForSearchEnvelope(int limit)
     {
@@ -3381,7 +3408,7 @@ public static partial class QueryCommandRunner
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         Console.WriteLine(JsonSerializer.Serialize(
             new JsonStreamDoneResult(
-                Done: true,
+                Done: !interrupted,
                 Count: count,
                 Interrupted: interrupted,
                 ReadOnlyFallback: includeDiagnostics ? reader!.ReadOnlyFallback : null,
@@ -9185,6 +9212,7 @@ public static partial class QueryCommandRunner
         string jsonOutputFormat = JsonOutputFormatNdjson;
         bool jsonOutputFormatExplicit = false;
         int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
+        int? totalLimit = null;
         string? lang = null;
         string? kind = null;
         string? unusedBucket = null;
@@ -9581,6 +9609,17 @@ public static partial class QueryCommandRunner
                     }
                     else
                         AddParseError(limitError!);
+                    break;
+                case "--total-limit":
+                    if (!TryReadRawOptionValue(args, ref i, "--total-limit", inlineValue, out var totalLimitValue, out var missingTotalLimitError))
+                        AddParseError(missingTotalLimitError!);
+                    else if (TryParseNonNegativeInt(totalLimitValue!, "--total-limit", out var parsedTotalLimit, out var totalLimitError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--total-limit", totalLimitValue!);
+                        totalLimit = parsedTotalLimit;
+                    }
+                    else
+                        AddParseError(totalLimitError!);
                     break;
                 case "--lang":
                     if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
@@ -10526,6 +10565,7 @@ public static partial class QueryCommandRunner
             JsonOutputFormatExplicit = jsonOutputFormatExplicit,
             OutputFormat = outputFormat,
             Limit = limit,
+            TotalLimit = totalLimit,
             LimitExplicit = limitExplicit,
             Lang = lang,
             Kind = kind,
@@ -14280,6 +14320,7 @@ public sealed class QueryCommandOptions
     public bool JsonOutputFormatExplicit { get; init; }
     public string OutputFormat { get; init; } = "text";
     public int Limit { get; init; } = 20;
+    public int? TotalLimit { get; init; }
     public bool LimitExplicit { get; init; }
     public string? Lang { get; init; }
     public string? Kind { get; init; }

@@ -894,6 +894,7 @@ internal sealed record SearchRecipeRunJsonResult(
 
 internal sealed record SearchRecipeRunSummaryJsonResult(
     [property: JsonPropertyName("limit_per_query")] int LimitPerQuery,
+    [property: JsonPropertyName("total_limit")] int? TotalLimit,
     [property: JsonPropertyName("emitted_result_count")] int EmittedResultCount,
     [property: JsonPropertyName("truncated_query_count")] int TruncatedQueryCount,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,

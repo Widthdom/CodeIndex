@@ -327,6 +327,7 @@ internal static class CliFlagSchema
             new() { Name = "--first-per-file", Description = "Search: keep the first returned match for each file", Commands = Set("search") },
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search grouped output: representative matches per file", Commands = Set("search") },
+            new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search recipes: cap emitted rows across all child queries", Commands = Set("search") },
             new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search NDJSON: stop before emitting more than this many JSON bytes", Commands = Set("search") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },

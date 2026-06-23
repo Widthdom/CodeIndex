@@ -1972,6 +1972,103 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RecipeTotalLimitCapsAcrossChildQueries_Issue3904()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_total_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System;
+                using System.Threading;
+
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                        Thread.Sleep(10);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--json", "--limit", "10", "--total-limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var emittedRows = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Sum(query => query.GetProperty("results").GetArrayLength());
+            var threadSleep = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(query => query.GetProperty("name").GetString() == "thread-sleep");
+
+            Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, emittedRows);
+            Assert.Equal(1, root.GetProperty("summary").GetProperty("total_limit").GetInt32());
+            Assert.Equal(0, threadSleep.GetProperty("result_limit").GetInt32());
+            Assert.True(threadSleep.GetProperty("minimum_omitted_result_count").GetInt32() >= 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MaxJsonBytesRejectsCompactOutput_Issue3904()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["token", "--format", "compact", "--max-json-bytes", "1024"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--max-json-bytes is only supported with NDJSON search output", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_NdjsonByteCapMarksDoneFalseWhenInterrupted_Issue3904()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_byte_cap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/token.cs",
+                "csharp",
+                "public sealed class TokenStore { private string token = \"secret\"; }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["token", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var done = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.False(done.GetProperty("done").GetBoolean());
+            Assert.True(done.GetProperty("interrupted").GetBoolean());
+            Assert.Equal(0, done.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonParseRecipeGroupsApiFamilies_Issues3710_3714()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_parse_recipe");
