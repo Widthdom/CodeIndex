@@ -130,7 +130,7 @@ internal static partial class ProgramRunner
         // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
         // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
         var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
-        if (configResult.Failed)
+        if (configResult.Failed && !IsConfigShowCommand(args))
         {
             return CommandErrorWriter.Write(
                 StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
@@ -241,6 +241,11 @@ internal static partial class ProgramRunner
             return unhandledExitCode;
         }
     }
+
+    private static bool IsConfigShowCommand(IReadOnlyList<string> args)
+        => args.Count >= 2
+           && string.Equals(args[0], "config", StringComparison.Ordinal)
+           && string.Equals(args[1], "show", StringComparison.Ordinal);
 
     private static int RunTestExtractor(string[] args, JsonSerializerOptions jsonOptions)
     {

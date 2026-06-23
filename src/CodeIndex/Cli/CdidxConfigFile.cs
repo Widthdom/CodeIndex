@@ -41,6 +41,14 @@ internal static class CdidxConfigFile
     internal const int MaxConfigSourceDetailChars = 160;
     internal const int MaxUnknownKeyDiagnostics = 8;
     internal const int MaxUnknownConfigKeyChars = 128;
+    private const string StatusLoaded = "loaded";
+    private const string StatusFound = "found";
+    private const string StatusNotFound = "not_found";
+    private const string StatusDisabled = "disabled";
+    private const string StatusInvalid = "invalid";
+    private const string SourceDefault = "default";
+    private const string SourceEnvironment = "environment";
+    private const string SourceConfigFile = "config_file";
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -75,6 +83,7 @@ internal static class CdidxConfigFile
         WorkspaceManifestLoader.FileName,
         WorkspaceManifestLoader.DotFileName,
     };
+    private static readonly IReadOnlyList<string> SupportedConfigFiles = [ProjectConfigRelativePath, FileName];
 
     internal sealed record LoadResult(string? Path, string? Error)
     {
@@ -85,6 +94,13 @@ internal static class CdidxConfigFile
         internal bool Loaded => Path is not null && Error is null;
         internal bool Failed => Error is not null;
     }
+
+    internal sealed record ConfigFileDiscoveryResult(
+        string? Path,
+        IReadOnlyList<string> SearchedPaths,
+        IReadOnlyList<string> SupportedFiles,
+        string Status,
+        string Reason);
 
     internal readonly record struct ConfigDiagnosticText(string Text, int OriginalLength, bool Truncated);
 
@@ -502,10 +518,14 @@ internal static class CdidxConfigFile
     }
 
     private static string? FindConfigFile(string startingDirectory)
+        => DiscoverConfigFile(startingDirectory).Path;
+
+    private static ConfigFileDiscoveryResult DiscoverConfigFile(string startingDirectory)
     {
         if (string.IsNullOrWhiteSpace(startingDirectory))
-            return null;
+            return new ConfigFileDiscoveryResult(null, Array.Empty<string>(), SupportedConfigFiles, StatusNotFound, StatusNotFound);
 
+        var searchedPaths = new List<string>();
         DirectoryInfo? current;
         try
         {
@@ -513,22 +533,25 @@ internal static class CdidxConfigFile
         }
         catch
         {
-            return null;
+            return new ConfigFileDiscoveryResult(null, searchedPaths, SupportedConfigFiles, StatusInvalid, "invalid_start_directory");
         }
 
         while (current is not null)
         {
-            var projectCandidate = Path.Combine(current.FullName, ProjectConfigRelativePath);
-            if (File.Exists(LongPath.EnsureWindowsPrefix(projectCandidate)))
-                return projectCandidate;
-            var candidate = Path.Combine(current.FullName, FileName);
-            if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
-                return candidate;
+            foreach (var relativePath in SupportedConfigFiles)
+            {
+                var candidate = Path.Combine(current.FullName, relativePath);
+                searchedPaths.Add(candidate);
+                if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
+                    return new ConfigFileDiscoveryResult(candidate, searchedPaths, SupportedConfigFiles, StatusFound, StatusFound);
+            }
+
             if (IsConfigDiscoveryBoundary(current))
                 break;
             current = current.Parent;
         }
-        return null;
+
+        return new ConfigFileDiscoveryResult(null, searchedPaths, SupportedConfigFiles, StatusNotFound, StatusNotFound);
     }
 
     private static bool IsConfigDiscoveryBoundary(DirectoryInfo directory)
@@ -589,28 +612,201 @@ internal static class CdidxConfigFile
 
     internal static int RunShow(string[] args, JsonSerializerOptions jsonOptions)
     {
-        var json = args.Contains("--json", StringComparer.Ordinal);
-        args = args.Where(a => a != "--json").ToArray();
-        if (args.Length > 0)
-            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
+        var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        var json = false;
+        var remaining = new List<string>();
+        foreach (var arg in args)
+        {
+            if (arg == "--json")
+            {
+                json = true;
+                continue;
+            }
 
-        var path = FindConfigFile(Environment.CurrentDirectory);
+            if (arg.StartsWith("--json=", StringComparison.Ordinal))
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    true,
+                    jsonOptions,
+                    "config show supports --json only; --json=<format> is not supported.",
+                    CommandExitCodes.InvalidArgument,
+                    "use `cdidx config show --json`.");
+            }
+
+            remaining.Add(arg);
+        }
+
+        if (remaining.Count > 0)
+            return CommandErrorWriter.WriteJsonOrHuman(wantsJson, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
+
+        var disabled = string.Equals(Environment.GetEnvironmentVariable(DisableEnvVar), "1", StringComparison.Ordinal);
+        var discovery = DiscoverConfigFile(Environment.CurrentDirectory);
+        var loadResult = disabled
+            ? new LoadResult(null, Error: null)
+            : Load(Environment.CurrentDirectory, Environment.GetEnvironmentVariable);
+        var path = disabled ? null : discovery.Path;
         var active = ActiveWorkspace.Load();
+        var workspaceManifest = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         var payload = new ConfigShowJsonResult(
             path,
             active,
             ["cli", "env", "config_file", "active_workspace", "cwd_default"],
-            [ProjectConfigRelativePath, FileName]);
+            SupportedConfigFiles,
+            BuildConfigFileStatus(disabled, discovery, loadResult),
+            BuildActiveWorkspaceStatus(active),
+            BuildWorkspaceManifestStatus(workspaceManifest),
+            discovery.SearchedPaths,
+            BuildEffectiveConfig(loadResult));
         if (json)
             Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
         else
         {
-            Console.WriteLine($"Config path      : {path ?? "(none)"}");
+            Console.WriteLine($"Config path      : {payload.ConfigFile.Path ?? "(none)"}");
+            Console.WriteLine($"Config status    : {payload.ConfigFile.Status}");
             Console.WriteLine($"Active workspace : {(active == null ? "(none)" : active.Name + " -> " + active.DbPath)}");
             Console.WriteLine("Precedence       : CLI > env > config file > active workspace > CWD default");
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static ConfigFileStatusJsonResult BuildConfigFileStatus(
+        bool disabled,
+        ConfigFileDiscoveryResult discovery,
+        LoadResult loadResult)
+    {
+        if (disabled)
+        {
+            return new ConfigFileStatusJsonResult(
+                StatusDisabled,
+                DisableEnvVar,
+                null,
+                null,
+                discovery.SearchedPaths,
+                discovery.SupportedFiles);
+        }
+
+        if (loadResult.Failed)
+        {
+            return new ConfigFileStatusJsonResult(
+                StatusInvalid,
+                StatusInvalid,
+                loadResult.Path ?? discovery.Path,
+                loadResult.Error,
+                discovery.SearchedPaths,
+                discovery.SupportedFiles);
+        }
+
+        if (discovery.Path is not null)
+        {
+            return new ConfigFileStatusJsonResult(
+                StatusLoaded,
+                StatusLoaded,
+                discovery.Path,
+                null,
+                discovery.SearchedPaths,
+                discovery.SupportedFiles);
+        }
+
+        return new ConfigFileStatusJsonResult(
+            discovery.Status == StatusInvalid ? StatusInvalid : StatusNotFound,
+            discovery.Reason,
+            null,
+            null,
+            discovery.SearchedPaths,
+            discovery.SupportedFiles);
+    }
+
+    private static ActiveWorkspaceStatusJsonResult BuildActiveWorkspaceStatus(ActiveWorkspaceState? active)
+    {
+        if (active is null)
+            return new ActiveWorkspaceStatusJsonResult(StatusNotFound, StatusNotFound, null, null, null, null);
+
+        return new ActiveWorkspaceStatusJsonResult(
+            StatusLoaded,
+            StatusLoaded,
+            ResolveActiveWorkspaceStatePathForStatus(),
+            active.Name,
+            active.Root,
+            active.DbPath);
+    }
+
+    private static string? ResolveActiveWorkspaceStatePathForStatus()
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable)))
+            return null;
+
+        try
+        {
+            return ActiveWorkspace.StatePath;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static WorkspaceManifestStatusJsonResult BuildWorkspaceManifestStatus(WorkspaceManifestDiscoveryResult discovery)
+        => new(
+            discovery.Path is null ? discovery.Status : StatusFound,
+            discovery.Path is null ? discovery.Reason : StatusFound,
+            discovery.Path,
+            discovery.SearchedPaths,
+            discovery.SupportedFiles);
+
+    private static IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> BuildEffectiveConfig(LoadResult loadResult)
+    {
+        var result = new SortedDictionary<string, ConfigEffectiveValueJsonResult>(StringComparer.Ordinal);
+        foreach (var item in EnvironmentVariableInventory.Items.OrderBy(static item => item.Name, StringComparer.Ordinal))
+        {
+            var sensitive = item.Sensitivity == EnvironmentVariableInventory.SensitivitySecret;
+            var processValue = Environment.GetEnvironmentVariable(item.Name);
+            var scopedValue = CdidxEnvironment.GetEnvironmentVariable(item.Name);
+            var configSource = CdidxEnvironment.GetConfigSource(item.Name);
+            var hasLoadedConfigValue = loadResult.Settings.TryGetValue(item.Name, out var loadedConfigValue);
+            string rawValue;
+            string source;
+            if (processValue is not null)
+            {
+                rawValue = processValue;
+                source = SourceEnvironment;
+            }
+            else if (hasLoadedConfigValue)
+            {
+                rawValue = loadedConfigValue!;
+                source = SourceConfigFile;
+            }
+            else if (configSource is not null && scopedValue is not null)
+            {
+                rawValue = scopedValue;
+                source = SourceConfigFile;
+            }
+            else
+            {
+                rawValue = item.DefaultBehavior;
+                source = SourceDefault;
+            }
+
+            result[item.Name] = new ConfigEffectiveValueJsonResult(
+                item.Name,
+                FormatEffectiveConfigValue(item.Name, rawValue, sensitive),
+                source,
+                item.DefaultBehavior,
+                sensitive,
+                item.ConfigFileSupported,
+                item.Policy);
+        }
+
+        return result;
+    }
+
+    private static string FormatEffectiveConfigValue(string envName, string rawValue, bool sensitive)
+    {
+        if (sensitive)
+            return "<redacted>";
+        if (rawValue.Length == 0)
+            return "<empty>";
+        return ConsoleUi.FormatBoundedValue(DiagnosticRedactor.RedactSensitiveText(rawValue, redactPaths: false));
     }
 
     private static void ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, UnknownKeyDiagnosticState unknownKeys, List<string> errors)

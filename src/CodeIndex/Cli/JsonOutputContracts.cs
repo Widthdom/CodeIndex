@@ -591,7 +591,10 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(CompactSearchResult))]
 [JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(ActiveWorkspaceStatusJsonResult))]
 [JsonSerializable(typeof(ConfigShowJsonResult))]
+[JsonSerializable(typeof(ConfigFileStatusJsonResult))]
+[JsonSerializable(typeof(ConfigEffectiveValueJsonResult))]
 [JsonSerializable(typeof(DbCheckpointJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListJsonResult))]
@@ -764,6 +767,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(VersionInfoJsonResult))]
 [JsonSerializable(typeof(WorkspaceListJsonResult))]
 [JsonSerializable(typeof(WorkspaceManifest))]
+[JsonSerializable(typeof(WorkspaceManifestStatusJsonResult))]
 [JsonSerializable(typeof(WorkspaceMember))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
 
