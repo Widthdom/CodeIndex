@@ -217,6 +217,21 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_LongUriCredentialPrefix_RedactsWholeValue_Issue3909()
+    {
+        var password = new string('p', AuditLogSink.MaxSecretValueScanChars);
+        var text = "https://user:" + password + "@example.test/path";
+        Assert.True(text.IndexOf('@', StringComparison.Ordinal) >= AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
     public void SanitizeArgValue_BudgetsPayloadBeforeClone_Issue3106()
     {
         var items = new JsonArray();

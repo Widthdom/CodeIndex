@@ -745,8 +745,67 @@ internal sealed class AuditLogSink : IDisposable
         var scanText = text.Length <= MaxSecretValueScanChars
             ? text
             : text[..MaxSecretValueScanChars];
-        return RegexTimeoutPolicy.IsRedactionMatchOrFallback(() => SecretValuePattern.IsMatch(scanText));
+        return RegexTimeoutPolicy.IsRedactionMatchOrFallback(
+            () => SecretValuePattern.IsMatch(scanText)
+                  || ContainsDisplayedUriUserInfoPrefix(scanText));
     }
+
+    private static bool ContainsDisplayedUriUserInfoPrefix(string scanText)
+    {
+        var visibleLength = Math.Min(scanText.Length, MaxArgValueStringChars);
+        var searchStart = 0;
+        while (searchStart < visibleLength)
+        {
+            var separator = scanText.IndexOf(
+                "://",
+                searchStart,
+                visibleLength - searchStart,
+                StringComparison.Ordinal);
+            if (separator < 0)
+                return false;
+
+            var authorityStart = separator + "://".Length;
+            for (var index = authorityStart; index < visibleLength; index++)
+            {
+                var character = scanText[index];
+                if (IsUriAuthorityTerminator(character) || character == '@')
+                    break;
+                if (character == ':' && index > authorityStart)
+                {
+                    if (HasDisplayedUriUserInfoPasswordPrefix(scanText, index + 1, visibleLength))
+                        return true;
+                    break;
+                }
+            }
+
+            searchStart = authorityStart;
+        }
+
+        return false;
+    }
+
+    private static bool HasDisplayedUriUserInfoPasswordPrefix(string scanText, int passwordStart, int visibleLength)
+    {
+        if (passwordStart >= visibleLength)
+            return false;
+
+        var sawDisplayedPassword = false;
+        for (var index = passwordStart; index < scanText.Length; index++)
+        {
+            var character = scanText[index];
+            if (character == '@')
+                return sawDisplayedPassword;
+            if (IsUriAuthorityTerminator(character))
+                return false;
+            if (index < visibleLength)
+                sawDisplayedPassword = true;
+        }
+
+        return sawDisplayedPassword;
+    }
+
+    private static bool IsUriAuthorityTerminator(char character) =>
+        char.IsWhiteSpace(character) || character is '/' or '?' or '#';
 
     private static JsonValue CreateTruncatedValue() => JsonValue.Create(TruncatedValue);
 
