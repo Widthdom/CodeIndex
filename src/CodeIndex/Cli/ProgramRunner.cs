@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Lsp;
@@ -3717,18 +3718,20 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(timeout);
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
             response.Content,
             MaxReleaseChecksumBytes,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         return Encoding.UTF8.GetString(bytes);
     }
 
@@ -3791,19 +3794,21 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(timeout);
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await BoundedHttpContentReader.WriteToPrivateFileAsync(
             response.Content,
             scriptPath,
             MaxInstallerScriptBytes,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
     }
 
     internal static bool CanWriteDirectory(string directory)

@@ -1147,9 +1147,11 @@ public partial class McpServer : IDisposable
         if (@params is not null)
             request["params"] = @params;
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
-        using var cancellationRegistration = timeoutCts.Token.Register(static state =>
+        using var timeoutScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.McpClientRequest,
+            TimeSpan.FromSeconds(10),
+            cancellationToken);
+        using var cancellationRegistration = timeoutScope.Token.Register(static state =>
         {
             var tuple = ((McpServer server, string key, TaskCompletionSource<JsonNode?> pending))state!;
             if (tuple.server._pendingClientRequests.TryRemove(tuple.key, out var _))
@@ -1158,7 +1160,7 @@ public partial class McpServer : IDisposable
 
         try
         {
-            await writer(request.ToJsonString(_jsonOptions), timeoutCts.Token).ConfigureAwait(false);
+            await writer(request.ToJsonString(_jsonOptions), timeoutScope.Token).ConfigureAwait(false);
             return await pending.Task.ConfigureAwait(false);
         }
         catch (InvalidOperationException)
