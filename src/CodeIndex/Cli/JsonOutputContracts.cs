@@ -687,6 +687,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryStatus))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusSqliteConnectionPolicy))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]

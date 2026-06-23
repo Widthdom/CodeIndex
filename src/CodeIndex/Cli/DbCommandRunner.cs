@@ -705,8 +705,7 @@ public static class DbCommandRunner
         ReportMaintenanceProgress("integrity_check", "open_connection", dbPath);
         connection.Open();
         ApplyBusyTimeout(connection, cancellationToken);
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})";
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection, $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})");
         ReportMaintenanceProgress("integrity_check", "read_rows", dbPath);
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
@@ -754,7 +753,7 @@ public static class DbCommandRunner
                 SqlTruncated: false);
         }
 
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         var whereSql = BuildSchemaWhereSql(options);
         cmd.CommandText = $@"
             SELECT type, name, tbl_name, substr(sql, 1, @sql_limit)
@@ -811,7 +810,7 @@ public static class DbCommandRunner
             ["view"] = 0,
         };
 
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         var whereSql = BuildSchemaWhereSql(options);
         cmd.CommandText = $@"
             SELECT type, COUNT(*)
@@ -960,7 +959,7 @@ public static class DbCommandRunner
     private static void ApplyBusyTimeout(SqliteConnection connection, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.CommandText = $"PRAGMA busy_timeout={DbPragmaPolicy.ReadBusyTimeoutMs(DbContext.BusyTimeoutEnvironmentVariable)}";
         cmd.ExecuteNonQuery();
     }
@@ -968,7 +967,7 @@ public static class DbCommandRunner
     private static int Count(SqliteConnection connection, SqliteTransaction? transaction, string sql, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var cmd = connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
         cmd.Transaction = transaction;
         cmd.CommandText = sql;
         var result = SqliteCommandPolicy.ReadInt32Scalar(cmd, "db maintenance row count");
@@ -992,8 +991,7 @@ public static class DbCommandRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("prune", "wal_checkpoint_truncate", connection.DataSource);
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            using var cmd = SqliteConnectionPolicy.CreateCommand(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
             DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
             cmd.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
