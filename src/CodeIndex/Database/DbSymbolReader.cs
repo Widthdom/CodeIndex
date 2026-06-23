@@ -284,9 +284,6 @@ public partial class DbReader
     private static void EnsureVisibilityFilterParameterBudget(IReadOnlyCollection<string>? visibilityFilters, IReadOnlyCollection<string>? excludeVisibilityFilters)
         => SqliteDynamicSql.EnsureParameterBudget((visibilityFilters?.Count ?? 0) + (excludeVisibilityFilters?.Count ?? 0), "visibility filters");
 
-    private static bool HasVisibilityFilters(IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
-        => visibilityFilters is { Count: > 0 } || excludeVisibilityFilters is { Count: > 0 };
-
     private static List<string> ExpandVisibilityFilterValues(IReadOnlyList<string> filters)
     {
         var expanded = new List<string>();
@@ -5400,18 +5397,6 @@ public partial class DbReader
     private static bool LooksLikeAttributeBoundaryLine(string line)
     {
         return line.IndexOf('[') >= 0 || line.IndexOf(']') >= 0;
-    }
-
-    private static int CountChar(string text, char value)
-    {
-        var count = 0;
-        foreach (var ch in text)
-        {
-            if (ch == value)
-                count++;
-        }
-
-        return count;
     }
 
     private static List<string> BuildUnusedIntentionalSurfaceTags(UnusedCandidateSymbol candidate, string kind)
