@@ -772,11 +772,11 @@ internal sealed class AuditLogSink : IDisposable
             for (var index = authorityStart; index < visibleLength; index++)
             {
                 var character = scanText[index];
-                if (IsUriAuthorityTerminator(character) || character == '@')
+                if (IsUriAuthorityTerminator(character) || IsUriBoundaryDelimiter(character) || character == '@')
                     break;
                 if (character == ':' && index > authorityStart)
                 {
-                    if (HasDisplayedUriUserInfoPasswordPrefix(scanText, index + 1, visibleLength))
+                    if (HasDisplayedUriUserInfoPasswordPrefix(scanText, authorityStart, index, visibleLength))
                         return true;
                     break;
                 }
@@ -788,8 +788,13 @@ internal sealed class AuditLogSink : IDisposable
         return false;
     }
 
-    private static bool HasDisplayedUriUserInfoPasswordPrefix(string scanText, int passwordStart, int visibleLength)
+    private static bool HasDisplayedUriUserInfoPasswordPrefix(
+        string scanText,
+        int authorityStart,
+        int userInfoSeparator,
+        int visibleLength)
     {
+        var passwordStart = userInfoSeparator + 1;
         if (passwordStart >= visibleLength)
             return false;
 
@@ -801,6 +806,9 @@ internal sealed class AuditLogSink : IDisposable
                 return sawDisplayedPassword;
             if (IsUriAuthorityTerminator(character))
                 return false;
+            if (IsUriBoundaryDelimiter(character))
+                return !LooksLikeDelimitedHostPort(scanText, authorityStart, userInfoSeparator, passwordStart, index)
+                       && sawDisplayedPassword;
             if (index < visibleLength)
                 sawDisplayedPassword = true;
         }
@@ -809,9 +817,39 @@ internal sealed class AuditLogSink : IDisposable
     }
 
     private static bool IsUriAuthorityTerminator(char character) =>
-        char.IsWhiteSpace(character)
-        || character is '/' or '?' or '#'
-        || character is '"' or '\'' or '<' or '>' or ')' or ']' or '}' or ',' or ';';
+        char.IsWhiteSpace(character) || character is '/' or '?' or '#';
+
+    private static bool IsUriBoundaryDelimiter(char character) =>
+        character is '"' or '\'' or '<' or '>' or ')' or ']' or '}' or ',' or ';';
+
+    private static bool LooksLikeDelimitedHostPort(
+        string scanText,
+        int authorityStart,
+        int portSeparator,
+        int portStart,
+        int delimiterIndex)
+    {
+        if (!LooksLikeLocalOrQualifiedHost(scanText.AsSpan(authorityStart, portSeparator - authorityStart)))
+            return false;
+        if (delimiterIndex <= portStart)
+            return false;
+        for (var index = portStart; index < delimiterIndex; index++)
+        {
+            if (!char.IsAsciiDigit(scanText[index]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool LooksLikeLocalOrQualifiedHost(ReadOnlySpan<char> host)
+    {
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (host.Length >= 3 && host[0] == '[' && host[^1] == ']')
+            return true;
+        return host.Contains('.');
+    }
 
     private static JsonValue CreateTruncatedValue() => JsonValue.Create(TruncatedValue);
 
