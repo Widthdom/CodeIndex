@@ -1,4 +1,5 @@
 using System.Reflection;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -165,6 +166,19 @@ public static partial class ExtractorPluginRegistry
                 "Plugin assembly skipped: path is a directory.",
                 countsAsSkippedFile: true,
                 category: "plugin_path_is_directory");
+            return false;
+        }
+
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                "Plugin assembly skipped: symbolic links and reparse points are not supported.",
+                countsAsSkippedFile: true,
+                category: "plugin_reparse_point");
             return false;
         }
 

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -283,7 +284,7 @@ internal static class ExportImportCommandRunner
                 DeleteSqliteSidecars(tempPath, "import temporary database sidecar");
             }
             if (tempDirectory != null)
-                TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory");
+                TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory", Path.GetTempPath(), "codeindex-import-");
         }
     }
 
@@ -390,7 +391,7 @@ internal static class ExportImportCommandRunner
                 DeleteSqliteSidecars(snapshotPath, "export temporary database sidecar");
             }
             if (snapshotDirectory != null)
-                TryDeleteDirectoryIfEmpty(snapshotDirectory, "export temporary directory");
+                TryDeleteDirectoryIfEmpty(snapshotDirectory, "export temporary directory", Path.GetTempPath(), "codeindex-export-");
         }
     }
 
@@ -1480,14 +1481,30 @@ internal static class ExportImportCommandRunner
         }
     }
 
-    private static void TryDeleteDirectoryIfEmpty(string path, string? cleanupDescription = null)
+    private static void TryDeleteDirectoryIfEmpty(
+        string path,
+        string? cleanupDescription,
+        string safeRoot,
+        string expectedNamePrefix)
     {
         try
         {
-            if (!Directory.Exists(path) || CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(path))
+            var options = new DirectoryCleanupBoundaryOptions(
+                expectedNamePrefix,
+                "target is outside the expected cleanup root",
+                "target name does not match the expected temporary-directory prefix",
+                "target is not a regular temporary directory");
+            if (!FileSystemBoundary.TryValidateDirectoryCleanupTarget(path, safeRoot, options, out var fullPath, out var validationFailure))
+            {
+                if (!string.IsNullOrWhiteSpace(cleanupDescription))
+                    CommandErrorWriter.WriteStderr($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                return;
+            }
+
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)) || CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(fullPath))
                 return;
 
-            Directory.Delete(path);
+            Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
