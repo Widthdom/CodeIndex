@@ -60,7 +60,7 @@ Development contracts:
 | `codeindex.db` plus WAL/SHM sidecars | Mode `0600` is applied when the files exist. |
 | `suggestions-*.json` suggestion stores | Written atomically with owner-only mode `0600` on POSIX. |
 | Atomic file writes | `AtomicFileWriter` writes to a sibling temp file, applies the requested POSIX mode before replacement, flushes file contents, renames over the target, and fsyncs the parent directory on Unix. Callers must use the `Sensitive` write profile for local state, caches, suggestions, checkpoints, and other private payloads; user-requested exports and reports use the default `Public` profile unless their content is explicitly private. If the parent directory flush fails after replacement, the command fails explicitly so callers know the file was replaced but directory durability was not confirmed. Windows skips directory fsync because the helper only promises it on supported Unix platforms. |
-| Index lock metadata sidecars and active workspace `active.json` | Written as owner-only files and read through small bounded buffers so stale or corrupted diagnostics cannot expose local paths more broadly or force unbounded allocation. |
+| Index locks, watch sub-run spools, staged hook scripts, lock metadata sidecars, and active workspace `active.json` | Created or written as owner-only files (`0600`) before contents are exposed, and read through small bounded buffers where applicable so stale or corrupted diagnostics cannot expose local paths more broadly or force unbounded allocation. |
 | Checkpoint roots, snapshot directories, manifest files, copied DB/WAL/SHM snapshots, and restore staging/backup directories | Forced owner-only on POSIX. |
 | `status --json` | Reports `data_dir_mode` and `db_file_mode` when the platform exposes Unix file modes. |
 
@@ -116,6 +116,7 @@ bash tools/build-install-sh.sh
 | Normalizer rule | Detail |
 |---|---|
 | Reproducible OPC metadata (#2756) | NuGet's OPC package writer generates a random `package/services/metadata/core-properties/*.psmdcp` part name on each pack run. The normalizer rewrites that part to `package/services/metadata/core-properties/core-properties.psmdcp`, updates the matching content-type and relationship references, and gives ZIP entries stable timestamps. This is the package reproducibility boundary for `.nupkg` and `.snupkg` archives. |
+| Rewrite durability (#3961) | Package normalization writes through collision-resistant `.cdidx-normalize-*.tmp` files beside the package, never deletes a pre-existing legacy `.normalize-tmp` neighbor before rewriting, flushes the completed temp file, replaces the package, and flushes the parent directory on Unix so post-replace durability failures are reported explicitly. Cancellation is checked between ZIP entries and stream chunks, and created temp files are cleaned up best-effort. |
 | Work bounds (#2892) | Before rewriting, the normalizer rejects packages with more than 4096 ZIP entries, any entry above 128 MiB uncompressed, total uncompressed content above 512 MiB, or XML reference text above 16 MiB so crafted packages cannot force unbounded normalization work. |
 | Unsafe ZIP names (#2894) | Before creating the destination archive, the normalizer rejects absolute paths, Windows drive roots, backslash separators, empty path segments, parent-directory segments, empty normalized names, and destination names that collide after path normalization. Those entries are not preserved into normalized packages. |
 | Unsafe ZIP attributes (#3552) | Before copying entries, the normalizer rejects POSIX symlink/device/special-file types and unsafe DOS attributes, then writes normalized entries with scrubbed deterministic external attributes instead of preserving source permission bits. |
@@ -252,7 +253,7 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. When the indexed project root cannot be resolved and project expansion falls back to the process current directory, CLI query context and MCP structured payloads include `project_filter_root` and `project_filter_root_fallback_reason`. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
 
-`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
+`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape. Immediate EOF with no commands remains exit 0 with no output by default; `--json-summary` appends a final JSON object with `commands_processed`, `line_errors`, `command_failures`, and `exit_code` for non-interactive callers that need an explicit empty-input signal.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
@@ -1035,10 +1036,11 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 
 | Output mode | Contract |
 |---|---|
-| Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `suggestions`) default to **human-readable output**. |
+| Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `outline`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
 | `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, and `unused` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and compatibility alias `file_count`. `unused --count --json` also includes `returned_bucket_counts` and `summary.by_bucket` / `summary.by_confidence`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
 | `search --json` sentinel | Appends a final `{"done":true,"count":N,"interrupted":false}` sentinel after result rows, including zero-result responses, so stream consumers can distinguish a clean end from a truncated/interrupted stream. |
+| `outline --json` controls | `outline --json` accepts `--kind <kind[,kind]>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` for bounded machine output. Controlled responses keep the normal outline envelope and add `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, plus `kind_filter` and `selected_fields` when those controls are active. These additive fields do not require an API version bump. |
 | `--json-envelope` commands | Applies to `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, and `hotspots`. |
 | `--json-envelope` shape | Wraps the per-line `--json` stream into a single `{"metadata": {...}, "results": [...]}` document. `metadata` carries `api_version`, `command`, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, and, when applicable, `query_normalized` and `indexed_at_head_sha`. |
 | Envelope migration | `--json-envelope` implies `--json`, so callers do not need to pass both. The default output remains the legacy NDJSON / array form for one release; the envelope will become the default in the next major release, when the flat form becomes opt-in via `--json-flat`. |
@@ -2158,6 +2160,42 @@ The flag parser (`ProgramRunner.TryConsumeAuditLogFlags`) is run before `QueryCo
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
 - No unnecessary production packages. Test-only packages are allowed when they clearly improve the harness and stay scoped to `tests/CodeIndex.Tests/`; they do not relax the production dependency rule.
 
+## Sensitive Buffer Policy
+
+Pooled byte buffers that may hold credentials, request payloads, local file
+bytes, or other user-controlled content must be cleared before the buffer can
+be observed again. Prefer a helper whose name states the policy instead of a
+bare `ArrayPool<byte>.Shared.Return(...)` at sensitive boundaries.
+
+- **Token material** uses full-buffer clearing when returning rented arrays.
+  `McpAuthenticationLimits.HashToken` hashes only the UTF-8 bytes written for
+  the token, zeroes that used range immediately, and returns the rented array
+  with `clearArray: true` so unused bytes from a previous rent are also erased.
+- **LSP request payloads** clear only the used payload range before returning a
+  rented buffer. The lease knows the declared content length, so clearing the
+  used range is the stable contract; bytes beyond that range are not part of
+  the payload and should not force a full rented-array clear on every request.
+- **Bounded HTTP copy buffers** are treated as possibly sensitive because they
+  can carry installer, archive, or response bytes before those bytes are
+  written to private storage. They clear the whole rented copy buffer before
+  returning it.
+- **ASCII protocol headers and generated JSON/report bytes** are not treated as
+  sensitive merely because they use pooled or accumulated storage. They still
+  need explicit maximum-byte budgets, but they do not require clearing unless
+  the call site starts carrying credentials or source payloads.
+
+When adding `ArrayPool<byte>` or in-memory accumulation (`MemoryStream`,
+captured `Utf8JsonWriter` output, report/archive buffers), first classify the
+data as sensitive bytes, bounded non-sensitive payload, generated JSON,
+archive/report bytes, or diagnostic snippet. Sensitive paths should route
+through `SensitiveBufferPolicy.ReturnSensitiveTokenBuffer`,
+`ReturnSensitivePayloadBuffer`, `ReturnSensitiveCopyBuffer`, or
+`ClearUsedSensitiveBytes`; these helper names are intended to be positive
+evidence during security audits. Bounded generated JSON capture should use
+`SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity`. Sensitive paths
+need a test that proves the cleared range; bounded accumulation paths need a
+test or constant that proves the maximum byte budget.
+
 ## Custom Language Extraction
 
 Downstream users can add lightweight language support without rebuilding
@@ -2275,7 +2313,7 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | `codeindex.db` と WAL/SHM sidecar | ファイルが存在する場合は mode `0600` を適用。 |
 | `suggestions-*.json` suggestion store | POSIX では owner-only の mode `0600` で atomic write します。 |
 | atomic file write | `AtomicFileWriter` は sibling temp file に書き込み、要求された POSIX mode を置換前に適用し、file content を flush してから target へ rename し、Unix では parent directory を fsync します。local state、cache、suggestion、checkpoint など private payload には `Sensitive` write profile を使い、user-requested export や report は内容が明示的に private でない限り既定の `Public` profile を使います。置換後に parent directory flush が失敗した場合、file は置換済みだが directory durability を確認できていないことが caller に分かるよう command は明示的に失敗します。Windows では、この helper の directory fsync 保証は supported Unix platform に限定されるため skip します。 |
-| index lock metadata sidecar と active workspace の `active.json` | owner-only file として書き、stale / corrupt diagnostic が local path を広く漏らしたり unbounded allocation を強制したりしないよう小さな bounded buffer で読みます。 |
+| index lock、watch sub-run spool、staged hook script、lock metadata sidecar、active workspace の `active.json` | 内容が露出する前に owner-only file (`0600`) として作成または書き込み、該当するものは stale / corrupt diagnostic が local path を広く漏らしたり unbounded allocation を強制したりしないよう小さな bounded buffer で読みます。 |
 | database checkpoint root、snapshot directory、manifest file、copy された DB/WAL/SHM snapshot、restore staging/backup directory | POSIX では owner-only に固定。 |
 | `status --json` | platform が Unix file mode を公開する場合、`data_dir_mode` と `db_file_mode` を報告。 |
 
@@ -2331,6 +2369,7 @@ bash tools/build-install-sh.sh
 | normalizer rule | 詳細 |
 |---|---|
 | 再現可能な OPC metadata (#2756) | NuGet の OPC package writer は `package/services/metadata/core-properties/*.psmdcp` part 名を pack ごとにランダム生成します。normalizer はその part を `package/services/metadata/core-properties/core-properties.psmdcp` に書き換え、対応する content-type / relationship 参照も更新し、ZIP entry timestamp を固定します。これが `.nupkg` / `.snupkg` archive の package 再現性境界です。 |
+| 書き換えの耐久性 (#3961) | package normalization は package の隣に衝突しにくい `.cdidx-normalize-*.tmp` を作って書き込み、既存の legacy `.normalize-tmp` 隣接ファイルを rewrite 前に削除せず、完成した temp file を flush してから package を置き換え、Unix では parent directory も flush するため、置き換え後の耐久性失敗を明示的に報告します。cancellation は ZIP entry 間と stream chunk 間で確認し、作成済み temp file は best-effort で削除します。 |
 | 作業量の上限 (#2892) | 書き換え前に、normalizer は 4096 を超える ZIP entry、128 MiB を超える uncompressed entry、512 MiB を超える合計 uncompressed content、または 16 MiB を超える XML 参照テキストを持つ package を拒否し、細工された package が無制限の normalize 作業を強制できないようにします。 |
 | unsafe ZIP name (#2894) | destination archive を作る前に、normalizer は absolute path、Windows drive root、backslash separator、空の path segment、parent-directory segment、空に正規化される名前、path 正規化後に衝突する destination 名を拒否します。これらの entry は normalized package に保持されません。 |
 | unsafe ZIP attributes (#3552) | entry のコピー前に、normalizer は POSIX symlink / device / special-file type と unsafe DOS 属性を拒否し、source の permission bit を保持せず deterministic に scrub した external attributes で normalized entry を書き込みます。 |
@@ -2503,7 +2542,7 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。indexed project root を解決できず process current directory に fallback して project expansion する場合、CLI query context と MCP structured payload は `project_filter_root` と `project_filter_root_fallback_reason` を含める。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
 
-`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
+`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。command がない即時 EOF は既定で exit 0 かつ無出力のまま維持される。非対話の呼び出し元が空入力を明示的に判定したい場合は、`--json-summary` が `commands_processed`、`line_errors`、`command_failures`、`exit_code` を含む最終 JSON オブジェクトを追加する。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
 
@@ -3305,10 +3344,11 @@ AI エージェント向け検索ルールのテンプレートについては�
 
 | output mode | 契約 |
 |---|---|
-| human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`suggestions`）は既定で**人間向け出力**です。 |
+| human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`outline`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
 | `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact`、`unused` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と互換 alias の `file_count` も含みます。`unused --count --json` は `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
 | `search --json` sentinel | result row の後に、0 件応答も含めて最後の `{"done":true,"count":N,"interrupted":false}` sentinel を追加します。stream consumer は clean end と truncated / interrupted stream を区別できます。 |
+| `outline --json` controls | `outline --json` は bounded な機械向け出力として `--kind <kind[,kind]>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` を受け付けます。制御付き応答は通常の outline envelope を維持し、`total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` を追加します。該当する場合は `kind_filter` と `selected_fields` も返します。これらは additive field なので API version bump は不要です。 |
 | `--json-envelope` 対象 command | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`excerpt`、`map`、`inspect`、`outline`、`status`、`validate`、`languages`、`impact`、`deps`、`unused`、`hotspots`。 |
 | `--json-envelope` shape | per-line `--json` stream を単一の `{"metadata": {...}, "results": [...]}` document に包みます。`metadata` は `api_version`、`command`、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、該当時は `query_normalized` と `indexed_at_head_sha` を持ちます。 |
 | envelope migration | `--json-envelope` は `--json` を imply するため、caller は両方を指定する必要がありません。既定 output は 1 release の間 legacy NDJSON / array form のままです。次の major release では envelope が既定になり、flat form は `--json-flat` による opt-in になります。 |
@@ -4021,6 +4061,35 @@ Cloud セッションは開発ループの中で `dotnet build` にフォール�
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
 - 不要な本番パッケージは入れない。test-only package は、テストハーネスの改善に明確に寄与し、`tests/CodeIndex.Tests/` に閉じる限り許容されるが、本番依存ルールを緩めるものではない。
+
+## センシティブバッファの方針
+
+認証情報、リクエスト payload、ローカルファイルの byte、その他 user-controlled content
+を保持しうる pooled byte buffer は、その buffer が再観測される前に clear する必要があります。
+センシティブ境界では素の `ArrayPool<byte>.Shared.Return(...)` より、方針を名前で示す helper を優先してください。
+
+- **Token material** は rented array を返すときに full-buffer clearing を使います。
+  `McpAuthenticationLimits.HashToken` は token として実際に書いた UTF-8 byte だけを hash し、
+  その used range をすぐ zero 化したうえで、rented array を `clearArray: true` で返すため、
+  過去の rent 由来の未使用 byte も消去されます。
+- **LSP request payload** は rented buffer を返す前に used payload range だけを clear します。
+  lease が宣言済み content length を保持しているため、used range clearing が安定した契約です。
+  その範囲外の byte は payload ではなく、リクエストごとに full rented-array clear を強制しません。
+- **Bounded HTTP copy buffer** は installer、archive、response byte を private storage に書く前に
+  通す可能性があるため、センシティブとして扱います。返却前に rented copy buffer 全体を clear します。
+- **ASCII protocol header と生成された JSON/report byte** は pooled / accumulated storage を使っていても、
+  それだけではセンシティブ扱いにしません。明示的な maximum-byte budget は必要ですが、call site が
+  認証情報や source payload を運び始めない限り clearing は必須ではありません。
+
+`ArrayPool<byte>` や in-memory accumulation（`MemoryStream`、captured `Utf8JsonWriter` output、
+report/archive buffer）を追加するときは、まず data を sensitive bytes、bounded non-sensitive payload、
+generated JSON、archive/report bytes、diagnostic snippet に分類してください。Sensitive path は
+`SensitiveBufferPolicy.ReturnSensitiveTokenBuffer`、`ReturnSensitivePayloadBuffer`、
+`ReturnSensitiveCopyBuffer`、`ClearUsedSensitiveBytes` を経由させてください。これらの helper 名は
+security audit で positive evidence として拾えるようにしています。Bounded generated JSON capture は
+`SensitiveBufferPolicy.GetBoundedGeneratedJsonInitialCapacity` を使ってください。Sensitive path には
+cleared range を証明するテストが必要です。Bounded accumulation path には maximum byte budget を
+証明するテストまたは定数が必要です。
 
 ## カスタム言語抽出
 
