@@ -426,6 +426,8 @@ public static partial class QueryCommandRunner
         "--first-per-file",
         "--results-only",
         "--next-steps",
+        "--source-only",
+        "--no-semantic-tokens",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -480,7 +482,12 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true, allowIssueDraftsFormat: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            allowIssueDraftsFormat: true,
+            applySearchSourceDefaults: true);
         if (TryWriteUnsupportedOptionError("search", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
@@ -546,12 +553,12 @@ public static partial class QueryCommandRunner
                 "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
-        if (options.AuditScopeExplicit && options.RecipeName == null)
+        if (options.AuditScopeExplicit && options.RecipeName == null && options.ListRecipes)
         {
             WriteUsageError(
-                "--audit-scope is only supported with `cdidx search --recipe <name>`.",
+                "--audit-scope cannot be combined with `cdidx search --list-recipes`.",
                 GetUsageLineOrThrow("search"),
-                "Use `--audit-scope source` for the production-code default or `--audit-scope all` when intentionally auditing docs, tests, and recipe definitions.");
+                "Use `--query <text>` with --list-recipes to filter recipe discovery, or run an ad hoc search with `--source-only`.");
             return CommandExitCodes.UsageError;
         }
         if (options.ShowExcluded && options.RecipeName == null)
@@ -9860,7 +9867,8 @@ public static partial class QueryCommandRunner
         bool allowIssueDraftsFormat = false,
         bool validateDefaultLimit = true,
         bool validateDefaultSnippetLines = true,
-        bool validateDefaultMaxLineWidth = true)
+        bool validateDefaultMaxLineWidth = true,
+        bool applySearchSourceDefaults = false)
     {
         string? dbPath = null;
         string? dataDir = null;
@@ -9989,6 +9997,8 @@ public static partial class QueryCommandRunner
         var languageLookups = new List<string>();
         var languageExtensionLookups = new List<string>();
         var languageAliasLookups = new List<string>();
+        bool sourceOnly = false;
+        bool noSemanticTokens = false;
         ProjectFilterRootResolution? projectFilterRootResolution = null;
 
         void AddParseError(string error)
@@ -10371,6 +10381,11 @@ public static partial class QueryCommandRunner
                     break;
                 case "--list-recipes":
                     listRecipes = true;
+                    break;
+                case "--source-only":
+                    sourceOnly = true;
+                    auditScope = SearchAuditRecipes.DefaultAuditScope;
+                    auditScopeExplicit = true;
                     break;
                 case "--open-issues":
                     if (TryReadStringOptionValue(args, ref i, "--open-issues", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var openIssuesValue, out var openIssuesError))
@@ -11273,6 +11288,18 @@ public static partial class QueryCommandRunner
             AddParseError($"Error: duplicate --named-query name '{ConsoleUi.FormatBoundedValue(duplicateNamedQuery.Key)}'. Use unique names so grouped results are unambiguous.");
         if (duplicateConfidenceExplicit && duplicateThresholdExplicit)
             AddParseError("Error: --duplicate-confidence and --duplicate-threshold cannot be combined; use the preset or the explicit score threshold.");
+        if (parseErrors == null
+            && applySearchSourceDefaults
+            && auditScopeExplicit
+            && recipeName == null
+            && !listRecipes
+            && string.Equals(auditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            if (pathPatterns.Count == 0)
+                AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
+            AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
+            excludeTests = true;
+        }
 
         if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);

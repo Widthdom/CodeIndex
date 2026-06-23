@@ -1137,6 +1137,40 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_SourceOnlyAppliesProductionScopeToAdHocSearch_Issue3978()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_source_only_3978");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { void Run() { SourceOnlyNeedle(); } }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "public class AppTests { void Run() { SourceOnlyNeedle(); } }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "SourceOnlyNeedle\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["SourceOnlyNeedle", "--db", dbPath, "--source-only", "--count", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var queryContext = root.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal("source", queryContext.GetProperty("audit_scope").GetString());
+            Assert.Contains(queryContext.GetProperty("path").EnumerateArray(), path => path.GetString() == "src/**");
+            Assert.Contains(queryContext.GetProperty("exclude_path").EnumerateArray(), path => path.GetString() == "README.md");
+            Assert.Contains(queryContext.GetProperty("exclude_path").EnumerateArray(), path => path.GetString() == ".github/**");
+            Assert.True(queryContext.GetProperty("exclude_tests").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ListRecipesJsonIncludesBuiltInAuditMetadata_Issue3144()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
