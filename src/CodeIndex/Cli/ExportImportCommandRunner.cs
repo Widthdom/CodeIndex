@@ -19,7 +19,9 @@ internal static class ExportImportCommandRunner
     internal const long MaxImportDatabaseCompressionRatio = 1000;
     private const int ImportCopyBufferSize = 81920;
     private const int ManifestUnknownExtensionFileLimit = DbContext.UnknownExtensionFilePathSampleLimit;
-    private const int ManifestUnknownExtensionPathCharLimit = 4096;
+    private const int ManifestUnknownExtensionJsonDepth = 4;
+    internal const int ManifestUnknownExtensionDecodedItemLimit = ManifestUnknownExtensionFileLimit;
+    internal const int ManifestUnknownExtensionPathCharLimit = 4096;
     private const int ManifestUnknownExtensionFilesTotalCharLimit = 32 * 1024;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
@@ -1111,27 +1113,71 @@ internal static class ExportImportCommandRunner
     private static UnknownExtensionFileSample ReadUnknownExtensionFileSample(SqliteConnection connection)
     {
         var json = ReadMetaString(connection, DbContext.UnknownExtensionFilePathsMetaKey);
-        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxImportManifestBytes)
+        if (string.IsNullOrWhiteSpace(json) || Encoding.UTF8.GetByteCount(json) > MaxImportManifestBytes)
             return new(null, null, null, null);
 
         try
         {
-            var files = JsonSerializer.Deserialize<string[]>(json);
-            if (files == null)
+            var jsonBytes = Encoding.UTF8.GetBytes(json);
+            var reader = new Utf8JsonReader(
+                jsonBytes,
+                new JsonReaderOptions { MaxDepth = ManifestUnknownExtensionJsonDepth });
+            if (!reader.Read())
+                return new(null, null, null, null);
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                if (reader.Read())
+                    return new(null, null, null, null);
+
+                return new(null, 0, ManifestUnknownExtensionFileLimit, false);
+            }
+            if (reader.TokenType != JsonTokenType.StartArray)
+                return new(null, null, null, null);
+
+            var sample = new List<string>(ManifestUnknownExtensionFileLimit);
+            var decodedItems = 0;
+            var truncated = false;
+            var completed = false;
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray)
+                {
+                    completed = true;
+                    break;
+                }
+                if (reader.TokenType != JsonTokenType.String)
+                    return new(null, null, null, null);
+
+                decodedItems++;
+                if (decodedItems > ManifestUnknownExtensionDecodedItemLimit)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                var path = reader.GetString();
+                if (string.IsNullOrWhiteSpace(path))
+                    continue;
+
+                if (sample.Count >= ManifestUnknownExtensionFileLimit)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                sample.Add(path.Length <= ManifestUnknownExtensionPathCharLimit
+                    ? path
+                    : path[..ManifestUnknownExtensionPathCharLimit]);
+            }
+
+            if (!completed && !truncated)
+                return new(null, null, null, null);
+            if (completed && reader.Read())
+                return new(null, null, null, null);
+            if (sample.Count == 0)
                 return new(null, 0, ManifestUnknownExtensionFileLimit, false);
 
-            var validFiles = files
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .ToArray();
-            if (validFiles.Length == 0)
-                return new(null, 0, ManifestUnknownExtensionFileLimit, false);
-
-            var sample = validFiles
-                .Take(ManifestUnknownExtensionFileLimit)
-                .Select(path => path.Length <= ManifestUnknownExtensionPathCharLimit ? path : path[..ManifestUnknownExtensionPathCharLimit])
-                .ToArray();
-
-            return new(sample, sample.Length, ManifestUnknownExtensionFileLimit, validFiles.Length > sample.Length);
+            return new(sample.ToArray(), sample.Count, ManifestUnknownExtensionFileLimit, truncated);
         }
         catch (JsonException)
         {

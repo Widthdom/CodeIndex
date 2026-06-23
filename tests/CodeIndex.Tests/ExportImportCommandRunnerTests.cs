@@ -762,6 +762,56 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_ManifestBoundsUnknownExtensionSampleStringsBeforeMaterializing_Issue3908()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_string_bounds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longPath = new string('a', 5000) + ".unknown";
+            SetUnknownExtensionPathSamples(dbPath, [longPath]);
+
+            using var document = ExportArchiveManifest(projectRoot, dbPath);
+            var root = document.RootElement;
+            var exportedPath = root.GetProperty("unknown_extension_files")[0].GetString();
+
+            Assert.Equal(ExportImportCommandRunner.ManifestUnknownExtensionPathCharLimit, exportedPath?.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_ManifestBoundsUnknownExtensionSampleItemsBeforeMaterializing_Issue3908()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_item_bounds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var itemLimit = ExportImportCommandRunner.ManifestUnknownExtensionDecodedItemLimit;
+            var paths = Enumerable
+                .Range(0, itemLimit + 3)
+                .Select(index => $"samples/file-{index:D3}.unknown")
+                .ToArray();
+            SetUnknownExtensionPathSamples(dbPath, paths);
+
+            using var document = ExportArchiveManifest(projectRoot, dbPath);
+            var root = document.RootElement;
+            var files = root.GetProperty("unknown_extension_files");
+
+            Assert.Equal(DbContext.UnknownExtensionFilePathSampleLimit, files.GetArrayLength());
+            Assert.True(root.GetProperty("unknown_extension_file_sample_truncated").GetBoolean());
+            Assert.Equal(paths[DbContext.UnknownExtensionFilePathSampleLimit - 1], files[files.GetArrayLength() - 1].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImport_DryRunJsonReportsUnknownExtensionSampleMetadata_Issue3715()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("import_unknown_extensions_metadata");

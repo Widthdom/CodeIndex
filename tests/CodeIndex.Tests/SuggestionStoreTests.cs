@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Models;
 
@@ -159,6 +160,35 @@ public class SuggestionStoreTests : IDisposable
         Assert.Single(records);
         Assert.True(File.Exists(path));
         Assert.False(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public async Task ReadFilteredSnapshotAsync_ObservesCancellationDuringStreaming_Issue3908()
+    {
+        var records = new[]
+        {
+            MakeRecord("other", null, "first"),
+            MakeRecord("other", null, "second"),
+        };
+        var snapshot = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(records));
+        using var cts = new CancellationTokenSource();
+        var seen = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            SuggestionStore.ReadFilteredSnapshotAsync(
+                snapshot,
+                _ =>
+                {
+                    seen++;
+                    cts.Cancel();
+                    return true;
+                },
+                skip: 0,
+                take: null,
+                normalizeDefaults: false,
+                cts.Token));
+
+        Assert.Equal(1, seen);
     }
 
     // --- TryAdd tests / TryAdd テスト ---
