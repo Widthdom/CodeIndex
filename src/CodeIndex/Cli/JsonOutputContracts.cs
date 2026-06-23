@@ -39,6 +39,101 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("path")] string? Path = null,
     [property: JsonPropertyName("category")] string? Category = null);
 
+internal sealed record DoctorJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("commit")] string Commit,
+    [property: JsonPropertyName("rid")] string Rid,
+    [property: JsonPropertyName("os")] string Os,
+    [property: JsonPropertyName("kernel")] string Kernel,
+    [property: JsonPropertyName("dotnet")] string Dotnet,
+    [property: JsonPropertyName("process")] string Process,
+    [property: JsonPropertyName("base_dir")] string BaseDir,
+    [property: JsonPropertyName("cwd")] string Cwd,
+    [property: JsonPropertyName("terminal")] DoctorTerminalJsonResult Terminal,
+    [property: JsonPropertyName("display")] DoctorDisplayJsonResult Display,
+    [property: JsonPropertyName("paths")] DoctorPathsJsonResult Paths,
+    [property: JsonPropertyName("config")] DoctorConfigJsonResult Config,
+    [property: JsonPropertyName("cdidx_env")] IReadOnlyList<DoctorEnvironmentVariableJsonResult> CdidxEnv,
+    [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem> EnvironmentInventory,
+    [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction);
+
+internal sealed record DoctorTerminalJsonResult(
+    [property: JsonPropertyName("stdout_tty")] bool StdoutTty,
+    [property: JsonPropertyName("stderr_tty")] bool StderrTty,
+    [property: JsonPropertyName("columns")] string Columns,
+    [property: JsonPropertyName("no_color")] string NoColor,
+    [property: JsonPropertyName("term")] string Term,
+    [property: JsonPropertyName("locale")] string Locale,
+    [property: JsonPropertyName("ui_locale")] string UiLocale);
+
+internal sealed record DoctorDisplayJsonResult(
+    [property: JsonPropertyName("color")] DoctorDisplayDecisionJsonResult Color,
+    [property: JsonPropertyName("progress")] DoctorDisplayDecisionJsonResult Progress,
+    [property: JsonPropertyName("terminal_hint")] DoctorDisplayTerminalHintJsonResult TerminalHint,
+    [property: JsonPropertyName("max_line_width")] DoctorDisplayMaxLineWidthJsonResult MaxLineWidth,
+    [property: JsonPropertyName("ambiguous_width")] DoctorDisplayAmbiguousWidthJsonResult AmbiguousWidth,
+    [property: JsonPropertyName("truncation")] DoctorDisplayTruncationJsonResult Truncation);
+
+internal sealed record DoctorDisplayDecisionJsonResult(
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("reason")] string Reason);
+
+internal sealed record DoctorDisplayTerminalHintJsonResult(
+    [property: JsonPropertyName("has_hint")] bool HasHint,
+    [property: JsonPropertyName("disabled")] bool Disabled,
+    [property: JsonPropertyName("stdout_redirected")] bool StdoutRedirected,
+    [property: JsonPropertyName("string_writer_capture")] bool StringWriterCapture,
+    [property: JsonPropertyName("term")] string Term,
+    [property: JsonPropertyName("term_program")] string TermProgram,
+    [property: JsonPropertyName("ci")] string Ci,
+    [property: JsonPropertyName("windows_terminal")] string WindowsTerminal);
+
+internal sealed record DoctorDisplayMaxLineWidthJsonResult(
+    [property: JsonPropertyName("value")] int Value,
+    [property: JsonPropertyName("source_kind")] string SourceKind,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("used_fallback")] bool UsedFallback,
+    [property: JsonPropertyName("fallback")] int Fallback,
+    [property: JsonPropertyName("minimum")] int Minimum,
+    [property: JsonPropertyName("maximum")] int Maximum,
+    [property: JsonPropertyName("environment_variable")] string EnvironmentVariable,
+    [property: JsonPropertyName("raw_value")] string RawValue);
+
+internal sealed record DoctorDisplayAmbiguousWidthJsonResult(
+    [property: JsonPropertyName("wide")] bool Wide,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("locale")] string Locale);
+
+internal sealed record DoctorDisplayTruncationJsonResult(
+    [property: JsonPropertyName("default_max_line_width")] int DefaultMaxLineWidth,
+    [property: JsonPropertyName("max_allowed_line_width")] int MaxAllowedLineWidth,
+    [property: JsonPropertyName("diagnostic_value_char_limit")] int DiagnosticValueCharLimit,
+    [property: JsonPropertyName("marker_format")] string MarkerFormat);
+
+internal sealed record DoctorPathsJsonResult(
+    [property: JsonPropertyName("db")] string Db,
+    [property: JsonPropertyName("data_dir")] string DataDir,
+    [property: JsonPropertyName("data_source")] string DataSource,
+    [property: JsonPropertyName("log_dir")] string LogDir);
+
+internal sealed record DoctorConfigJsonResult(
+    [property: JsonPropertyName("dot_cdidxrc_json")] string DotCdidxrcJson,
+    [property: JsonPropertyName("disable_config_file")] string DisableConfigFile);
+
+internal sealed record DoctorEnvironmentVariableJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("sensitive")] bool Sensitive,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("original_length")] int OriginalLength);
+
+internal sealed record DoctorRedactionJsonResult(
+    [property: JsonPropertyName("paths_redacted")] bool PathsRedacted,
+    [property: JsonPropertyName("secrets_redacted")] bool SecretsRedacted);
+
 internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("current_version")] string CurrentVersion,
     [property: JsonPropertyName("latest_version")] string? LatestVersion,
@@ -543,7 +638,10 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(CompactSearchResult))]
 [JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(ActiveWorkspaceStatusJsonResult))]
 [JsonSerializable(typeof(ConfigShowJsonResult))]
+[JsonSerializable(typeof(ConfigFileStatusJsonResult))]
+[JsonSerializable(typeof(ConfigEffectiveValueJsonResult))]
 [JsonSerializable(typeof(DbCheckpointJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListJsonResult))]
@@ -680,6 +778,20 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(MacProfileDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryStatus))]
+[JsonSerializable(typeof(DoctorConfigJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayAmbiguousWidthJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayDecisionJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayMaxLineWidthJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayTerminalHintJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayTruncationJsonResult))]
+[JsonSerializable(typeof(DoctorEnvironmentVariableJsonResult))]
+[JsonSerializable(typeof(DoctorJsonResult))]
+[JsonSerializable(typeof(DoctorPathsJsonResult))]
+[JsonSerializable(typeof(DoctorRedactionJsonResult))]
+[JsonSerializable(typeof(DoctorTerminalJsonResult))]
+[JsonSerializable(typeof(EnvironmentVariableInventoryItem))]
+[JsonSerializable(typeof(EnvironmentVariableInventoryLocation))]
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
@@ -708,6 +820,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(VersionInfoJsonResult))]
 [JsonSerializable(typeof(WorkspaceListJsonResult))]
 [JsonSerializable(typeof(WorkspaceManifest))]
+[JsonSerializable(typeof(WorkspaceManifestStatusJsonResult))]
 [JsonSerializable(typeof(WorkspaceMember))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
 

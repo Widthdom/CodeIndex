@@ -219,10 +219,9 @@ internal static class SolutionProjectResolver
         IEnumerable<string> solutionEntries;
         try
         {
-            solutionEntries = Directory.EnumerateFiles(
+            solutionEntries = CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(
                 LongPath.EnsureWindowsPrefix(workspaceRoot),
-                "*.sln",
-                SearchOption.TopDirectoryOnly);
+                "*.sln");
         }
         catch (Exception ex) when (IsExpectedFilesystemDiscoveryException(ex))
         {
@@ -478,7 +477,7 @@ internal static class SolutionProjectResolver
             directory,
             "subdirectories",
             ProjectTraversalEntryKind.Directory,
-            EnumerateDirectoriesForTesting ?? Directory.EnumerateDirectories,
+            EnumerateDirectoriesForTesting ?? (directory => CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(directory)),
             limits,
             budget,
             traversalDiagnostics);
@@ -494,7 +493,7 @@ internal static class SolutionProjectResolver
             directory,
             "files",
             ProjectTraversalEntryKind.File,
-            EnumerateFilesForTesting ?? Directory.EnumerateFiles,
+            EnumerateFilesForTesting ?? (directory => CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory)),
             limits,
             budget,
             traversalDiagnostics);

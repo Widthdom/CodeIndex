@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using System.Data;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -59,5 +60,72 @@ public class DbConnectionPolicyTests
                 "PRAGMA temp_store=MEMORY",
             ],
             statements);
+    }
+
+    [Fact]
+    public void DbPragmaPolicy_ReadConnectionPragmaSettings_UsesScopedEnvironmentParser()
+    {
+        using var scope = CdidxEnvironment.Push(new Dictionary<string, string>
+        {
+            ["CDIDX_TEST_CACHE_SIZE_KB"] = "2048",
+            ["CDIDX_TEST_MMAP_SIZE_BYTES"] = "4096",
+        });
+
+        var settings = DbPragmaPolicy.ReadConnectionPragmaSettings(
+            "CDIDX_TEST_CACHE_SIZE_KB",
+            defaultCacheSizeKb: 1024,
+            maxCacheSizeKb: 8192,
+            "CDIDX_TEST_MMAP_SIZE_BYTES",
+            defaultMmapSizeBytes: 0,
+            maxMmapSizeBytes: 8192,
+            is64BitProcess: true);
+
+        Assert.Equal(2048, settings.CacheSizeKb);
+        Assert.Equal(4096, settings.MmapSizeBytes);
+    }
+
+    [Theory]
+    [InlineData(null, EnvironmentOptionParser.StatusUnset)]
+    [InlineData("", EnvironmentOptionParser.StatusInvalid)]
+    [InlineData("abc", EnvironmentOptionParser.StatusInvalid)]
+    [InlineData("0", EnvironmentOptionParser.StatusBelowMinimum)]
+    [InlineData("101", EnvironmentOptionParser.StatusAboveMaximum)]
+    public void EnvironmentOptionParser_ReadInt32_ReportsFallbackReason(string? value, string expectedStatus)
+    {
+        var values = value is null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string> { ["CDIDX_TEST_INT"] = value };
+        using var scope = CdidxEnvironment.Push(values);
+
+        var result = EnvironmentOptionParser.ReadInt32(
+            "CDIDX_TEST_INT",
+            fallback: 10,
+            minimum: 1,
+            maximum: 100);
+
+        Assert.Equal(10, result.Value);
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.True(result.UsedFallback);
+    }
+
+    [Fact]
+    public void EnvironmentOptionParser_ReadInt32_PreservesConfigSourceMetadata()
+    {
+        using var scope = CdidxEnvironment.Push(
+            new Dictionary<string, string> { ["CDIDX_TEST_INT"] = "42" },
+            new Dictionary<string, string> { ["CDIDX_TEST_INT"] = ".cdidx/config.json" });
+
+        var result = EnvironmentOptionParser.ReadInt32(
+            "CDIDX_TEST_INT",
+            fallback: 10,
+            minimum: 1,
+            maximum: 100);
+
+        Assert.Equal(42, result.Value);
+        Assert.Equal(EnvironmentOptionParser.StatusParsed, result.Status);
+        Assert.Equal(EnvironmentOptionParser.SourceKindConfig, result.SourceKind);
+        Assert.Equal(".cdidx/config.json", result.Source);
+        Assert.Equal(".cdidx/config.json", result.SourceDetail);
+        Assert.False(result.UsedFallback);
     }
 }

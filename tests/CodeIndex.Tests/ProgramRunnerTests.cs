@@ -447,6 +447,199 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void EnvironmentVariableInventory_IncludesSecretAndPolicyClassifications()
+    {
+        var byName = EnvironmentVariableInventory.Items.ToDictionary(item => item.Name, StringComparer.Ordinal);
+
+        var githubToken = Assert.Contains("CDIDX_GITHUB_TOKEN", byName);
+        Assert.Equal(EnvironmentVariableInventory.SensitivitySecret, githubToken.Sensitivity);
+        Assert.Equal("security", githubToken.Policy);
+        Assert.Equal("no", githubToken.ConfigFileSupported);
+        Assert.Contains(githubToken.Locations, location => location.Path.EndsWith("GitHubIssueReporter.cs", StringComparison.Ordinal));
+
+        var maxLineWidth = Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, byName);
+        Assert.Equal(EnvironmentVariableInventory.SensitivityPublic, maxLineWidth.Sensitivity);
+        Assert.Equal("display", maxLineWidth.Policy);
+        Assert.Equal("yes", maxLineWidth.ConfigFileSupported);
+    }
+
+    [Fact]
+    public void RunDoctor_EnvironmentInventory_PrintsAuditView()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--env-inventory"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains("environment_inventory:", stdout);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains("sensitivity: secret", stdout);
+        Assert.Contains("CDIDX_MCP_RATE_LIMIT_RPS", stdout);
+        Assert.Contains("policy   : performance", stdout);
+    }
+
+    [Fact]
+    public void RunDoctor_Json_PrintsStableSchemaAndRedactsSecrets_Issue3925()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN", "CDIDX_VISIBLE_PATH");
+        const string secret = "ghp_123456789012345678901234567890123456";
+        const string visiblePath = "/tmp/cdidx-visible-path-3925";
+        env.Set("CDIDX_GITHUB_TOKEN", secret);
+        env.Set("CDIDX_VISIBLE_PATH", visiblePath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.DoesNotContain(secret, stdout);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("1.10.0", root.GetProperty("version").GetString());
+        Assert.True(root.GetProperty("terminal").TryGetProperty("stdout_tty", out _));
+        Assert.True(root.GetProperty("paths").TryGetProperty("db", out _));
+        Assert.False(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.True(root.GetProperty("redaction").GetProperty("secrets_redacted").GetBoolean());
+
+        var envByName = root.GetProperty("cdidx_env")
+            .EnumerateArray()
+            .ToDictionary(
+                element => element.GetProperty("name").GetString()!,
+                element => element,
+                StringComparer.Ordinal);
+        Assert.Equal("<redacted>", envByName["CDIDX_GITHUB_TOKEN"].GetProperty("value").GetString());
+        Assert.True(envByName["CDIDX_GITHUB_TOKEN"].GetProperty("sensitive").GetBoolean());
+        Assert.Equal(visiblePath, envByName["CDIDX_VISIBLE_PATH"].GetProperty("value").GetString());
+        Assert.False(envByName["CDIDX_VISIBLE_PATH"].GetProperty("sensitive").GetBoolean());
+
+        var inventoryNames = root.GetProperty("environment_inventory")
+            .EnumerateArray()
+            .Select(element => element.GetProperty("name").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", inventoryNames);
+        Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, inventoryNames);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonRedactPaths_RedactsPathBearingDiagnostics_Issue3925()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_VISIBLE_PATH");
+        const string visiblePath = "/tmp/cdidx-visible-path-3925";
+        env.Set("CDIDX_VISIBLE_PATH", visiblePath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json", "--redact-paths"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.DoesNotContain(visiblePath, stdout);
+        Assert.DoesNotContain(Environment.CurrentDirectory, stdout);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.Contains("[redacted]", root.GetProperty("cwd").GetString(), StringComparison.Ordinal);
+
+        var visibleEnv = root.GetProperty("cdidx_env")
+            .EnumerateArray()
+            .Single(element => element.GetProperty("name").GetString() == "CDIDX_VISIBLE_PATH");
+        Assert.Contains("[redacted]", visibleEnv.GetProperty("value").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonUnsupportedMode_ReturnsStructuredJsonError_Issue3925()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json=array"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Contains("--json=<format>", root.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonIncludesDisplayEnvironmentDecisions_Issue3997()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "TERM",
+            "TERM_PROGRAM",
+            "WT_SESSION",
+            "WT_PROFILE_ID",
+            "CI",
+            "CLICOLOR_FORCE",
+            "NO_COLOR",
+            "CLICOLOR",
+            ConsoleUi.DisableProgressEnvironmentVariable,
+            ConsoleUi.PrefersReducedMotionEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable,
+            "LC_ALL",
+            "LC_CTYPE",
+            "LANG",
+            "CDIDX_GITHUB_TOKEN");
+        const string secret = "ghp_123456789012345678901234567890123456";
+        env.Set("TERM", "xterm-256color");
+        env.Set("TERM_PROGRAM", null);
+        env.Set("WT_SESSION", null);
+        env.Set("WT_PROFILE_ID", null);
+        env.Set("CI", null);
+        env.Set("CLICOLOR_FORCE", "1");
+        env.Set("NO_COLOR", null);
+        env.Set("CLICOLOR", null);
+        env.Set(ConsoleUi.DisableProgressEnvironmentVariable, "1");
+        env.Set(ConsoleUi.PrefersReducedMotionEnvironmentVariable, null);
+        env.Set(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "96");
+        env.Set("LC_ALL", null);
+        env.Set("LC_CTYPE", null);
+        env.Set("LANG", "ja_JP.UTF-8");
+        env.Set("CDIDX_GITHUB_TOKEN", secret);
+        ConsoleUi.SetColorMode(ColorMode.Auto);
+        ConsoleUi.SetProgressAnimationEnabled(null);
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.DoesNotContain(secret, stdout);
+            using var document = JsonDocument.Parse(stdout);
+            var display = document.RootElement.GetProperty("display");
+            var color = display.GetProperty("color");
+            Assert.True(color.GetProperty("enabled").GetBoolean());
+            Assert.Equal("CLICOLOR_FORCE", color.GetProperty("source").GetString());
+            var progress = display.GetProperty("progress");
+            Assert.False(progress.GetProperty("enabled").GetBoolean());
+            Assert.Equal(ConsoleUi.DisableProgressEnvironmentVariable, progress.GetProperty("source").GetString());
+            var terminalHint = display.GetProperty("terminal_hint");
+            Assert.True(terminalHint.GetProperty("has_hint").GetBoolean());
+            Assert.Equal("xterm-256color", terminalHint.GetProperty("term").GetString());
+            var maxLineWidth = display.GetProperty("max_line_width");
+            Assert.Equal(96, maxLineWidth.GetProperty("value").GetInt32());
+            Assert.Equal("environment", maxLineWidth.GetProperty("source_kind").GetString());
+            Assert.Equal(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, maxLineWidth.GetProperty("source").GetString());
+            Assert.Equal("parsed", maxLineWidth.GetProperty("status").GetString());
+            var ambiguousWidth = display.GetProperty("ambiguous_width");
+            Assert.True(ambiguousWidth.GetProperty("wide").GetBoolean());
+            Assert.Equal("LANG", ambiguousWidth.GetProperty("source").GetString());
+            Assert.Equal("ja_JP.UTF-8", ambiguousWidth.GetProperty("locale").GetString());
+            Assert.Equal(LineWidthFormatter.DefaultMaxLineWidth, display.GetProperty("truncation").GetProperty("default_max_line_width").GetInt32());
+        }
+        finally
+        {
+            ConsoleUi.SetColorMode(ColorMode.Auto);
+            ConsoleUi.SetProgressAnimationEnabled(null);
+        }
+    }
+
+    [Fact]
     public void Run_QueryTraceStderr_BoundsPathArraysAndValues_Issue3123()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-bounds");

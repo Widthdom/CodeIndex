@@ -105,7 +105,7 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
-        ("doctor", "cdidx doctor"),
+        ("doctor", "cdidx doctor [--json] [--redact-paths] [--env-inventory]"),
         ("db", "cdidx db --integrity-check|schema|prune [--dry-run|--apply] [--db <path>] [--json] | cdidx db checkpoint [name<=128] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name<=128> [--db <path>] [--json] | cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
@@ -402,6 +402,9 @@ public static class ConsoleUi
 
     internal static void SetProgressAnimationEnabled(bool? enabled)
         => _progressAnimationEnabledOverride = enabled;
+
+    internal static bool? GetProgressAnimationOverrideForDiagnostics()
+        => _progressAnimationEnabledOverride;
 
     internal static bool ShouldUseProgressAnimation()
     {
@@ -950,7 +953,7 @@ public static class ConsoleUi
         Console.WriteLine("  config show                Show resolved workspace config and precedence");
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
-        Console.WriteLine("  doctor                     Print a redacted environment summary for bug reports");
+        Console.WriteLine("  doctor                     Print a redacted environment summary or env-var inventory for bug reports");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  db schema                  Dump SQLite schema entries and PRAGMA user_version");
         Console.WriteLine("  db prune --dry-run|--apply Count or delete orphaned DB rows");
@@ -1913,6 +1916,9 @@ public static class ConsoleUi
     /// 色出力モードを設定する。Always / Never は環境変数と TTY 判定を上書きする。
     /// </summary>
     public static void SetColorMode(ColorMode mode) => _colorMode = mode;
+
+    internal static ColorMode GetColorModeForDiagnostics()
+        => _colorMode;
 
     internal static ColorMode GetColorMode() => _colorMode;
 

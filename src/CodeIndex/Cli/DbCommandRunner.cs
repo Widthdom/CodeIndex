@@ -1010,7 +1010,7 @@ public static class DbCommandRunner
             CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
             CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
             DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={GetUtcNow():O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}");
-            Directory.Move(tempPath, checkpointPath);
+            AtomicFileWriter.PublishDirectory(tempPath, checkpointPath);
         }
         catch
         {
@@ -1179,7 +1179,7 @@ public static class DbCommandRunner
         var directories = new List<string>();
         try
         {
-            foreach (var directory in Directory.EnumerateDirectories(parent, prefix + "*"))
+            foreach (var directory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(parent, prefix + "*"))
             {
                 if (directories.Count >= limit)
                     return (directories, Truncated: true);
@@ -1238,7 +1238,7 @@ public static class DbCommandRunner
         var directories = new List<string>();
         try
         {
-            foreach (var directory in Directory.EnumerateDirectories(root))
+            foreach (var directory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(root))
             {
                 if (directories.Count >= limit)
                     return (directories, Truncated: true);
@@ -1339,7 +1339,7 @@ public static class DbCommandRunner
         var files = new List<string>();
         try
         {
-            foreach (var file in EnumerateCheckpointFilesForTesting?.Invoke(checkpointPath) ?? Directory.EnumerateFiles(checkpointPath))
+            foreach (var file in EnumerateCheckpointFilesForTesting?.Invoke(checkpointPath) ?? CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(checkpointPath))
             {
                 if (files.Count >= limit)
                     return (files, Truncated: true);
@@ -1491,9 +1491,11 @@ public static class DbCommandRunner
         if (!TryGetRegularExistingFile(source, out var normalizedSource))
             return;
 
-        File.Move(normalizedSource, LongPath.EnsureWindowsPrefix(destination), overwrite);
-        if (privateDestination)
-            DataDirectorySecurity.ApplyPrivateFileMode(destination);
+        AtomicFileWriter.MoveFile(
+            normalizedSource,
+            destination,
+            overwrite,
+            privateDestination ? DataDirectorySecurity.ApplyPrivateFileMode : null);
     }
 
     private static bool TryGetRegularExistingFile(string path, out string normalizedPath)

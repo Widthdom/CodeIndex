@@ -130,7 +130,7 @@ internal static partial class ProgramRunner
         // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
         // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
         var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
-        if (configResult.Failed)
+        if (configResult.Failed && !IsConfigShowCommand(args))
         {
             return CommandErrorWriter.Write(
                 StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
@@ -240,6 +240,27 @@ internal static partial class ProgramRunner
             EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, unhandledExitCode, ex.GetType().Name);
             return unhandledExitCode;
         }
+    }
+
+    private static bool IsConfigShowCommand(IReadOnlyList<string> args)
+    {
+        var commandIndex = 0;
+        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
+        {
+            var option = args[commandIndex];
+            var optionName = option.Split('=', 2)[0];
+            commandIndex++;
+            if (!option.Contains('=', StringComparison.Ordinal)
+                && TopLevelValueOptionNames.Contains(optionName)
+                && commandIndex < args.Count)
+            {
+                commandIndex++;
+            }
+        }
+
+        return commandIndex + 1 < args.Count
+               && string.Equals(args[commandIndex], "config", StringComparison.Ordinal)
+               && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal);
     }
 
     private static int RunTestExtractor(string[] args, JsonSerializerOptions jsonOptions)
@@ -411,10 +432,48 @@ internal static partial class ProgramRunner
         }
     }
 
-    private static int RunDoctor(string[] args, string appVersion)
+    private static int RunDoctor(string[] args, string appVersion, JsonSerializerOptions jsonOptions)
     {
-        if (args.Length > 0)
-            return CommandErrorWriter.Write($"Unknown doctor argument: {args[0]}", CommandExitCodes.InvalidArgument, "use `cdidx doctor`.");
+        var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        var json = false;
+        var redactPaths = false;
+        var envInventory = false;
+        foreach (var arg in args)
+        {
+            switch (arg)
+            {
+                case "--json":
+                    json = true;
+                    break;
+                case "--redact-paths":
+                    redactPaths = true;
+                    break;
+                case "--env-inventory":
+                    envInventory = true;
+                    break;
+                default:
+                    return CommandErrorWriter.WriteJsonOrHuman(
+                        wantsJson,
+                        jsonOptions,
+                        arg.StartsWith("--json=", StringComparison.Ordinal)
+                            ? "doctor supports --json only; --json=<format> is not supported."
+                            : $"Unknown doctor argument: {arg}",
+                        CommandExitCodes.InvalidArgument,
+                        "use `cdidx doctor [--json] [--redact-paths] [--env-inventory]`.");
+            }
+        }
+
+        if (json)
+        {
+            WriteDoctorJson(appVersion, jsonOptions, redactPaths);
+            return CommandExitCodes.Success;
+        }
+
+        if (envInventory)
+        {
+            WriteEnvironmentInventory();
+            return CommandExitCodes.Success;
+        }
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
         Console.WriteLine("cdidx doctor");
@@ -437,6 +496,18 @@ internal static partial class ProgramRunner
         Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
         Console.WriteLine();
+        var display = BuildDoctorDisplayJson();
+        Console.WriteLine("display:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("color", display.Color.Enabled, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("color_source", display.Color.Source, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("terminal_hint", display.TerminalHint.HasHint, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("progress", display.Progress.Enabled, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("progress_source", display.Progress.Source, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_line_width", display.MaxLineWidth.Value, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_line_width_source", display.MaxLineWidth.Source, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("ambiguous_width", display.AmbiguousWidth.Wide, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("ambiguous_locale", display.AmbiguousWidth.Locale, indent: "  "));
+        Console.WriteLine();
         Console.WriteLine("paths:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("db", dbResolution.DbPath, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("data_dir", dbResolution.DataDir ?? "<explicit-db>", indent: "  "));
@@ -456,6 +527,237 @@ internal static partial class ProgramRunner
             Console.WriteLine(ConsoleUi.FormatSummaryLine(key, value, indent: "  "));
         return CommandExitCodes.Success;
     }
+
+    private static void WriteDoctorJson(string appVersion, JsonSerializerOptions jsonOptions, bool redactPaths)
+    {
+        var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
+        var build = ConsoleUi.LoadBuildMetadata();
+        var payload = new DoctorJsonResult(
+            ApiVersion: "1",
+            Version: appVersion,
+            Commit: build.Commit,
+            Rid: RuntimeInformation.RuntimeIdentifier,
+            Os: RuntimeInformation.OSDescription,
+            Kernel: Environment.OSVersion.VersionString,
+            Dotnet: RuntimeInformation.FrameworkDescription,
+            Process: RedactDoctorPath(Environment.ProcessPath ?? "<unknown>", redactPaths),
+            BaseDir: RedactDoctorPath(AppContext.BaseDirectory, redactPaths),
+            Cwd: RedactDoctorPath(Environment.CurrentDirectory, redactPaths),
+            Terminal: new DoctorTerminalJsonResult(
+                StdoutTty: !Console.IsOutputRedirected,
+                StderrTty: !Console.IsErrorRedirected,
+                Columns: FormatDoctorJsonEnvironmentValue("COLUMNS", redactPaths),
+                NoColor: FormatDoctorJsonEnvironmentValue("NO_COLOR", redactPaths),
+                Term: FormatDoctorJsonEnvironmentValue("TERM", redactPaths),
+                Locale: CultureInfo.CurrentCulture.Name,
+                UiLocale: CultureInfo.CurrentUICulture.Name),
+            Display: BuildDoctorDisplayJson(),
+            Paths: new DoctorPathsJsonResult(
+                Db: RedactDoctorPath(dbResolution.DbPath, redactPaths),
+                DataDir: RedactDoctorPath(dbResolution.DataDir ?? "<explicit-db>", redactPaths),
+                DataSource: dbResolution.DataDirSource ?? "explicit-db",
+                LogDir: RedactDoctorPath(GlobalToolLog.ResolveLogDirectoryForStatus(), redactPaths)),
+            Config: new DoctorConfigJsonResult(
+                DotCdidxrcJson: File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not_found",
+                DisableConfigFile: FormatDoctorJsonEnvironmentValue(CdidxConfigFile.DisableEnvVar, redactPaths)),
+            CdidxEnv: EnumerateCdidxEnvironmentJson(redactPaths).ToArray(),
+            EnvironmentInventory: EnvironmentVariableInventory.Items,
+            Redaction: new DoctorRedactionJsonResult(
+                PathsRedacted: redactPaths,
+                SecretsRedacted: true));
+
+        Console.WriteLine(JsonSerializer.Serialize(payload, CliJsonSerializerContextFactory.Create(jsonOptions).DoctorJsonResult));
+    }
+
+    private static DoctorDisplayJsonResult BuildDoctorDisplayJson()
+    {
+        var maxLineWidth = EnvironmentOptionParser.ReadInt32(
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable,
+            LineWidthFormatter.DefaultMaxLineWidth,
+            minimum: 0,
+            maximum: LineWidthFormatter.MaxAllowedLineWidth);
+
+        return new DoctorDisplayJsonResult(
+            Color: BuildDoctorColorDecision(),
+            Progress: BuildDoctorProgressDecision(),
+            TerminalHint: BuildDoctorTerminalHint(),
+            MaxLineWidth: new DoctorDisplayMaxLineWidthJsonResult(
+                maxLineWidth.Value,
+                maxLineWidth.SourceKind,
+                maxLineWidth.Source,
+                maxLineWidth.Status,
+                maxLineWidth.UsedFallback,
+                maxLineWidth.Fallback,
+                maxLineWidth.Minimum,
+                maxLineWidth.Maximum,
+                maxLineWidth.Name,
+                maxLineWidth.RawValue is null ? "<unset>" : ConsoleUi.FormatBoundedValue(maxLineWidth.RawValue)),
+            AmbiguousWidth: BuildDoctorAmbiguousWidthDecision(),
+            Truncation: new DoctorDisplayTruncationJsonResult(
+                LineWidthFormatter.DefaultMaxLineWidth,
+                LineWidthFormatter.MaxAllowedLineWidth,
+                ConsoleUi.DefaultDiagnosticValueCharLimit,
+                "... <truncated; original length N chars>"));
+    }
+
+    private static DoctorDisplayDecisionJsonResult BuildDoctorColorDecision()
+    {
+        var enabled = ConsoleUi.ShouldUseColor();
+        return ConsoleUi.GetColorModeForDiagnostics() switch
+        {
+            ColorMode.Always => new DoctorDisplayDecisionJsonResult(enabled, "flag", "--color=always"),
+            ColorMode.Never => new DoctorDisplayDecisionJsonResult(enabled, "flag", "--color=never"),
+            _ when IsDoctorForceColorRequested() => new DoctorDisplayDecisionJsonResult(enabled, "CLICOLOR_FORCE", "forced"),
+            _ when !string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("NO_COLOR")) => new DoctorDisplayDecisionJsonResult(enabled, "NO_COLOR", "disabled"),
+            _ when CdidxEnvironment.GetEnvironmentVariable("CLICOLOR") == "0" => new DoctorDisplayDecisionJsonResult(enabled, "CLICOLOR", "disabled"),
+            _ => new DoctorDisplayDecisionJsonResult(enabled, "terminal", enabled ? "ansi_available" : "not_interactive")
+        };
+    }
+
+    private static DoctorDisplayDecisionJsonResult BuildDoctorProgressDecision()
+    {
+        var enabled = ConsoleUi.ShouldUseProgressAnimation();
+        var progressOverride = ConsoleUi.GetProgressAnimationOverrideForDiagnostics();
+        if (progressOverride.HasValue)
+            return new DoctorDisplayDecisionJsonResult(enabled, "flag", progressOverride.Value ? "enabled_override" : "--no-progress");
+        if (IsTruthyDoctorEnvironmentValue(CdidxEnvironment.GetEnvironmentVariable(ConsoleUi.DisableProgressEnvironmentVariable)))
+            return new DoctorDisplayDecisionJsonResult(enabled, ConsoleUi.DisableProgressEnvironmentVariable, "disabled");
+        if (IsTruthyDoctorEnvironmentValue(CdidxEnvironment.GetEnvironmentVariable(ConsoleUi.PrefersReducedMotionEnvironmentVariable)))
+            return new DoctorDisplayDecisionJsonResult(enabled, ConsoleUi.PrefersReducedMotionEnvironmentVariable, "reduced_motion");
+        return new DoctorDisplayDecisionJsonResult(enabled, "default", "enabled");
+    }
+
+    private static DoctorDisplayTerminalHintJsonResult BuildDoctorTerminalHint()
+    {
+        var wtSession = FormatDoctorJsonEnvironmentValue("WT_SESSION", redactPaths: false);
+        var wtProfile = FormatDoctorJsonEnvironmentValue("WT_PROFILE_ID", redactPaths: false);
+        return new DoctorDisplayTerminalHintJsonResult(
+            HasDoctorTerminalEnvironmentHint(),
+            IsDoctorTerminalEnvironmentDisabled(),
+            Console.IsOutputRedirected,
+            Console.Out is StringWriter,
+            FormatDoctorJsonEnvironmentValue("TERM", redactPaths: false),
+            FormatDoctorJsonEnvironmentValue("TERM_PROGRAM", redactPaths: false),
+            FormatDoctorJsonEnvironmentValue("CI", redactPaths: false),
+            wtSession != "<unset>" ? wtSession : wtProfile);
+    }
+
+    private static DoctorDisplayAmbiguousWidthJsonResult BuildDoctorAmbiguousWidthDecision()
+    {
+        var locale = CdidxEnvironment.GetEnvironmentVariable("LC_ALL");
+        var source = "LC_ALL";
+        if (string.IsNullOrEmpty(locale))
+        {
+            locale = CdidxEnvironment.GetEnvironmentVariable("LC_CTYPE");
+            source = "LC_CTYPE";
+        }
+        if (string.IsNullOrEmpty(locale))
+        {
+            locale = CdidxEnvironment.GetEnvironmentVariable("LANG");
+            source = "LANG";
+        }
+        if (string.IsNullOrEmpty(locale))
+        {
+            locale = "<unset>";
+            source = "default";
+        }
+
+        var wide = locale.StartsWith("ja", StringComparison.OrdinalIgnoreCase)
+                   || locale.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                   || locale.StartsWith("ko", StringComparison.OrdinalIgnoreCase);
+        return new DoctorDisplayAmbiguousWidthJsonResult(wide, source, ConsoleUi.FormatBoundedValue(locale));
+    }
+
+    private static bool HasDoctorTerminalEnvironmentHint()
+    {
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_SESSION")))
+            return true;
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_PROFILE_ID")))
+            return true;
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("TERM_PROGRAM")))
+            return true;
+
+        var term = CdidxEnvironment.GetEnvironmentVariable("TERM");
+        return !string.IsNullOrWhiteSpace(term)
+               && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDoctorTerminalEnvironmentDisabled()
+        => string.Equals(CdidxEnvironment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)
+           || IsDoctorCiEnvironment();
+
+    private static bool IsDoctorCiEnvironment()
+    {
+        var ci = CdidxEnvironment.GetEnvironmentVariable("CI");
+        return !string.IsNullOrEmpty(ci)
+               && !ci.Equals("0", StringComparison.OrdinalIgnoreCase)
+               && !ci.Equals("false", StringComparison.OrdinalIgnoreCase)
+               && !ci.Equals("no", StringComparison.OrdinalIgnoreCase)
+               && !ci.Equals("off", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDoctorForceColorRequested()
+    {
+        var force = CdidxEnvironment.GetEnvironmentVariable("CLICOLOR_FORCE");
+        return !string.IsNullOrEmpty(force) && force != "0";
+    }
+
+    private static bool IsTruthyDoctorEnvironmentValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return value.Trim() is not ("0" or "false" or "False" or "FALSE" or "no" or "No" or "NO");
+    }
+
+    private static void WriteEnvironmentInventory()
+    {
+        Console.WriteLine("environment_inventory:");
+        foreach (var item in EnvironmentVariableInventory.Items.OrderBy(static item => item.Name, StringComparer.Ordinal))
+        {
+            var firstLocation = item.Locations.FirstOrDefault();
+            var location = firstLocation is null
+                ? "<unknown>"
+                : $"{firstLocation.Path}:{firstLocation.Line}";
+            Console.WriteLine($"  {item.Name}");
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("category", item.Category, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("sensitivity", item.Sensitivity, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("policy", item.Policy, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("default", item.DefaultBehavior, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("config", item.ConfigFileSupported, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("location", location, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("description", item.Description, indent: "    "));
+        }
+    }
+
+    private static IEnumerable<DoctorEnvironmentVariableJsonResult> EnumerateCdidxEnvironmentJson(bool redactPaths)
+    {
+        var rows = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+            .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
+            .OrderBy(e => e.Key, StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var sensitive = IsSensitiveEnvironmentName(row.Key);
+            var value = sensitive
+                ? "<redacted>"
+                : string.IsNullOrEmpty(row.Value)
+                    ? "<empty>"
+                    : RedactDoctorPath(row.Value, redactPaths);
+            var bounded = ConsoleUi.BoundDisplayText(value);
+            yield return new DoctorEnvironmentVariableJsonResult(row.Key, bounded.Text, sensitive, bounded.Truncated, bounded.OriginalLength);
+        }
+    }
+
+    private static string FormatDoctorJsonEnvironmentValue(string name, bool redactPaths)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return value == null ? "<unset>" : ConsoleUi.FormatBoundedValue(RedactDoctorPath(value, redactPaths));
+    }
+
+    private static string RedactDoctorPath(string value, bool redactPaths)
+        => redactPaths ? DiagnosticRedactor.RedactSensitiveText(value, "[redacted]", redactPaths: true) : value;
 
     private static IEnumerable<(string Key, string Value)> EnumerateCdidxEnvironment()
     {
@@ -3323,14 +3625,10 @@ internal static partial class ProgramRunner
     internal static ProcessStartInfo CreateInstallerProcessStartInfo(string scriptPath, string releaseTag, string installDir)
     {
         var fullScriptPath = Path.GetFullPath(scriptPath);
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ResolveTrustedBashPath(),
-            UseShellExecute = false,
-            WorkingDirectory = Path.GetDirectoryName(fullScriptPath) ?? string.Empty,
-        };
-        startInfo.ArgumentList.Add(fullScriptPath);
-        startInfo.ArgumentList.Add(releaseTag);
+        var startInfo = CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
+            fileName: ResolveTrustedBashPath(),
+            workingDirectory: Path.GetDirectoryName(fullScriptPath) ?? string.Empty);
+        CodeIndex.ProcessLaunchPolicy.AddArguments(startInfo, fullScriptPath, releaseTag);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
     }
