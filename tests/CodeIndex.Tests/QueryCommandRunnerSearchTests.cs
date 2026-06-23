@@ -43,6 +43,64 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_EditorAndDelimitedFormatsUsePrimaryMatchSpan_Issue3931()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_primary_match_span_3931");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App\n{\n    void Run()\n    {\n        var value = Needle;\n    }\n}\n");
+
+            var (lspExitCode, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--format", "lsp", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, lspExitCode);
+            Assert.Equal(string.Empty, lspStderr);
+            using (var document = ParseJsonOutput(lspStdout))
+            {
+                var location = Assert.Single(document.RootElement.EnumerateArray());
+                var range = location.GetProperty("range");
+                Assert.Equal(4, range.GetProperty("start").GetProperty("line").GetInt32());
+                Assert.Equal(20, range.GetProperty("start").GetProperty("character").GetInt32());
+                Assert.Equal(4, range.GetProperty("end").GetProperty("line").GetInt32());
+                Assert.Equal(26, range.GetProperty("end").GetProperty("character").GetInt32());
+            }
+
+            var (qfExitCode, qfStdout, qfStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--format", "qf", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, qfExitCode);
+            Assert.Equal(string.Empty, qfStderr);
+            Assert.Equal("src/app.cs:5:21:search match: Needle", qfStdout.Trim());
+
+            var (csvExitCode, csvStdout, csvStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--format", "csv", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, csvExitCode);
+            Assert.Equal(string.Empty, csvStderr);
+            var csvLines = csvStdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.TrimEnd('\r'))
+                .ToArray();
+            Assert.Equal(2, csvLines.Length);
+            var fields = csvLines[1].Split(',');
+            Assert.Equal("src/app.cs", fields[0]);
+            Assert.Equal("5", fields[1]);
+            Assert.Equal("21", fields[2]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonIncludesMatchOrigins_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_match_origins");
@@ -5752,6 +5810,35 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Contains("scanned 1/1 candidate files, 2 lines", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_FormatLspCoversFullMatchSpan_Issue3930()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_lsp_span_3930");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/todo.txt", "text", "alpha TODO beta\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["TODO", "--db", dbPath, "--path", "src/todo.txt", "--format", "lsp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = Assert.Single(document.RootElement.EnumerateArray());
+            var range = location.GetProperty("range");
+            Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
+            Assert.Equal(6, range.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(0, range.GetProperty("end").GetProperty("line").GetInt32());
+            Assert.Equal(10, range.GetProperty("end").GetProperty("character").GetInt32());
         }
         finally
         {

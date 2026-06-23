@@ -2949,40 +2949,138 @@ public static partial class QueryCommandRunner
     private static string SearchFacetKey(int line, int column, int length)
         => $"{line}:{column}:{length}";
 
+    private readonly record struct SearchLocationSpan(int Line, int Column, int Length);
+
+    private static bool TryGetSearchLocationSpan(SearchMatchFacet facet, out SearchLocationSpan span)
+    {
+        if (facet.Line <= 0 || facet.Column <= 0)
+        {
+            span = default;
+            return false;
+        }
+
+        span = new SearchLocationSpan(facet.Line, facet.Column, Math.Max(1, facet.Length));
+        return true;
+    }
+
+    private static bool TryGetPrimarySearchLocation(SearchDisplayRow row, out SearchLocationSpan span)
+    {
+        var focusLine = row.Compact.FocusLine.GetValueOrDefault();
+        var focusColumn = row.Compact.FocusColumn.GetValueOrDefault();
+        if (focusLine > 0)
+        {
+            var focusedFacet = row.Compact.MatchFacets
+                .Where(facet => facet.Line == focusLine && facet.Column > 0)
+                .OrderBy(facet => focusColumn > 0 ? Math.Abs(facet.Column - focusColumn) : 0)
+                .ThenBy(facet => facet.Column)
+                .ThenByDescending(facet => facet.Length)
+                .FirstOrDefault();
+            if (focusedFacet != null && TryGetSearchLocationSpan(focusedFacet, out span))
+                return true;
+
+            if (row.Compact.MatchLines.Contains(focusLine))
+            {
+                span = new SearchLocationSpan(focusLine, Math.Max(1, focusColumn), 1);
+                return true;
+            }
+        }
+
+        foreach (var facet in row.Compact.MatchFacets)
+        {
+            if (TryGetSearchLocationSpan(facet, out span))
+                return true;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+        {
+            if (line > 0)
+            {
+                span = new SearchLocationSpan(line, 1, 1);
+                return true;
+            }
+        }
+
+        span = default;
+        return false;
+    }
+
+    private static IEnumerable<SearchLocationSpan> GetSearchLocationSpans(SearchDisplayRow row, bool includeAllMatches)
+    {
+        if (includeAllMatches)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var emitted = false;
+            foreach (var facet in row.Compact.MatchFacets)
+            {
+                if (!TryGetSearchLocationSpan(facet, out var span))
+                    continue;
+                if (!seen.Add(SearchFacetKey(span.Line, span.Column, span.Length)))
+                    continue;
+
+                emitted = true;
+                yield return span;
+            }
+
+            if (emitted)
+                yield break;
+
+            foreach (var line in row.Compact.MatchLines)
+            {
+                if (line <= 0)
+                    continue;
+                var span = new SearchLocationSpan(line, 1, 1);
+                if (!seen.Add(SearchFacetKey(span.Line, span.Column, span.Length)))
+                    continue;
+
+                emitted = true;
+                yield return span;
+            }
+
+            if (emitted)
+                yield break;
+        }
+
+        if (TryGetPrimarySearchLocation(row, out var primary))
+            yield return primary;
+    }
+
     private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
             yield return new FormattedLocation(row.Result.Path, row.Result.StartLine, null, $"search match: {query}");
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return new FormattedLocation(row.Result.Path, line, null, $"search match: {query}");
+        foreach (var span in spans)
+            yield return new FormattedLocation(row.Result.Path, span.Line, span.Column, $"search match: {query}");
     }
 
     private static IEnumerable<LspLocation> ToSearchLspLocations(SearchDisplayRow row, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
             yield return ToLspLocation(row.Result);
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return BuildLspLocation(row.Result.Path, line, 1, line + 1, 1);
+        foreach (var span in spans)
+            yield return BuildLspLocation(row.Result.Path, span.Line, span.Column, span.Line, span.Column + span.Length);
     }
 
     private static IEnumerable<(string Path, int Line, int Column, string Message)> ToSearchQuickfixItems(SearchDisplayRow row, string query, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
             yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}");
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return (row.Result.Path, line, 1, $"search match: {query}");
+        foreach (var span in spans)
+            yield return (row.Result.Path, span.Line, span.Column, $"search match: {query}");
     }
 
     private static IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> ToSearchSarifItems(SearchDisplayRow row, string query, bool useMatchLines)
@@ -3086,10 +3184,18 @@ public static partial class QueryCommandRunner
         => BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
 
     private static LspLocation ToLspLocation(FileFindResult result)
-        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + 1);
+        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + Math.Max(1, result.Length));
 
     private static LspLocation ToLspLocation(FileIssue result)
-        => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
+    {
+        var line = Math.Max(1, result.Line);
+        var location = BuildLspLocation(result.Path, line, 1, line, 2);
+        location.Kind = result.Kind;
+        location.Message = result.Message;
+        location.Severity = string.IsNullOrWhiteSpace(result.Severity) ? FileIssue.SeverityWarning : result.Severity;
+        location.Source = "cdidx validate";
+        return location;
+    }
 
     private static LspLocation ToLspLocation(SymbolResult result)
     {
@@ -3279,11 +3385,19 @@ public static partial class QueryCommandRunner
         {
             var result = row.Result;
             var compact = row.Compact;
+            var line = result.StartLine;
+            var column = 1;
+            if (TryGetPrimarySearchLocation(row, out var span))
+            {
+                line = span.Line;
+                column = span.Column;
+            }
+
             var values = new[]
             {
                 result.Path,
-                result.StartLine.ToString(CultureInfo.InvariantCulture),
-                "1",
+                line.ToString(CultureInfo.InvariantCulture),
+                column.ToString(CultureInfo.InvariantCulture),
                 $"search match: {options.Query}",
                 options.Query ?? string.Empty,
                 string.Empty,

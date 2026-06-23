@@ -48,6 +48,67 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunValidate_FormatLspIncludesRangeAndDiagnosticMetadata_Issue3949()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_lsp_metadata_3949");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "CodeIndex.sln",
+                "solution",
+                "Microsoft Visual Studio Solution File\n");
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                using var fileCmd = db.Connection.CreateCommand();
+                fileCmd.CommandText = "SELECT id FROM files WHERE path = $path";
+                fileCmd.Parameters.AddWithValue("$path", "CodeIndex.sln");
+                var fileId = (long)fileCmd.ExecuteScalar()!;
+                writer.InsertIssues(fileId,
+                [
+                    new FileIssue
+                    {
+                        Path = "CodeIndex.sln",
+                        Kind = "solution_header",
+                        Line = 0,
+                        Message = "Solution header is invalid.",
+                        Severity = FileIssue.SeverityWarning,
+                    }
+                ]);
+                writer.MarkIssuesReady();
+            }
+
+            SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--format", "lsp", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = Assert.Single(document.RootElement.EnumerateArray());
+            var range = location.GetProperty("range");
+            Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
+            Assert.Equal(0, range.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(0, range.GetProperty("end").GetProperty("line").GetInt32());
+            Assert.Equal(1, range.GetProperty("end").GetProperty("character").GetInt32());
+            Assert.Equal("solution_header", location.GetProperty("kind").GetString());
+            Assert.Equal("Solution header is invalid.", location.GetProperty("message").GetString());
+            Assert.Equal(FileIssue.SeverityWarning, location.GetProperty("severity").GetString());
+            Assert.Equal("cdidx validate", location.GetProperty("source").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunValidate_SeverityFilterNarrowsIssues_Issue3008()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_severity_filter");
