@@ -2315,6 +2315,17 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
+            var (listExitCode, listStdout, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, listStderr);
+            Assert.Contains("broad catch boundaries: top_level_normalization", listStdout, StringComparison.Ordinal);
+            Assert.Contains("worker_process_boundary", listStdout, StringComparison.Ordinal);
+            Assert.Contains("broad catch diagnostics: stable_sanitized_diagnostic", listStdout, StringComparison.Ordinal);
+            Assert.Contains("narrow_or_rethrow_required", listStdout, StringComparison.Ordinal);
+
             var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/broad-exception-catch", "--db", dbPath, "--json", "--limit", "5"],
                 _jsonOptions));
