@@ -1685,7 +1685,7 @@ public class DbContext : IDisposable
         if (!TableExists("codeindex_meta")) return null;
         using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-        cmd.Parameters.AddWithValue("@key", key);
+        SqliteCommandPolicy.Add(cmd, "@key", key);
         var raw = cmd.ExecuteScalar();
         return raw is string s ? s : null;
     }
@@ -1710,7 +1710,7 @@ public class DbContext : IDisposable
     {
         using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
-        cmd.Parameters.AddWithValue("@name", name);
+        SqliteCommandPolicy.Add(cmd, "@name", name);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -2918,7 +2918,7 @@ public class DbContext : IDisposable
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = @name";
-        cmd.Parameters.AddWithValue("@name", name);
+        SqliteCommandPolicy.Add(cmd, "@name", name);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -2954,7 +2954,7 @@ public class DbContext : IDisposable
         stamp.CommandText = @"
             INSERT INTO codeindex_meta (key, value) VALUES ('codeindex_meta_schema_version', @version)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        stamp.Parameters.AddWithValue("@version", CodeIndexMetaSchemaVersion.ToString(CultureInfo.InvariantCulture));
+        SqliteCommandPolicy.Add(stamp, "@version", CodeIndexMetaSchemaVersion.ToString(CultureInfo.InvariantCulture));
         stamp.ExecuteNonQuery();
     }
 

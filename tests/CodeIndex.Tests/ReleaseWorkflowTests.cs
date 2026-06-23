@@ -228,6 +228,134 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "rewrite.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "stale temp", Encoding.UTF8);
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            Assert.False(File.Exists(legacyTempPath));
+            Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-normalize-*.tmp"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_ParentDirectoryFlushFailureReportsPackageAlreadyReplaced_Issue3961()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ParentDirectoryFlushFailureReportsPackageAlreadyReplaced_Issue3961));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "flush-failure.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            PackageNormalizeRewriteFile.FlushParentDirectoryForTesting = _ => throw new IOException("flush failed");
+
+            var exception = Assert.Throws<PackageNormalizeReplaceDurabilityException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+
+            Assert.Contains("Package replacement completed", exception.Message);
+            Assert.Contains("target package was already replaced", exception.Message);
+            Assert.Contains("parent directory could not be flushed", exception.Message);
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
+        }
+        finally
+        {
+            PackageNormalizeRewriteFile.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_ParentDirectoryFlushFailureReportsPostReplaceStateJson_Issue3961()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_ParentDirectoryFlushFailureReportsPostReplaceStateJson_Issue3961));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "flush-failure-cli.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            PackageNormalizeRewriteFile.FlushParentDirectoryForTesting = _ => throw new IOException("flush failed at /private/path");
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            var exitCode = PackageNormalizeCli.Run(["--json", packagePath], stdout, stderr);
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr.ToString());
+            using var doc = JsonDocument.Parse(stdout.ToString());
+            var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
+            var error = package.GetProperty("error").GetString();
+            Assert.Contains("Package replacement completed", error);
+            Assert.Contains("target package was already replaced", error);
+            Assert.Contains("parent directory could not be flushed", error);
+            Assert.DoesNotContain(projectRoot, error);
+            Assert.DoesNotContain("/private/path", error);
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            PackageNormalizeRewriteFile.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_CancellationAfterTempCreationDeletesTempAndLeavesPackage_Issue3961()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_CancellationAfterTempCreationDeletesTempAndLeavesPackage_Issue3961));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "cancelled.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            using var cancellation = new CancellationTokenSource();
+            string? tempPath = null;
+            PackageNormalizeRewriteFile.TempFileCreatedForTesting = path =>
+            {
+                tempPath = path;
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                PackageCorePropertiesNormalizer.NormalizePackage(
+                    packagePath,
+                    PackageNormalizeLimits.Default,
+                    warnings: null,
+                    cancellation.Token));
+
+            Assert.NotNull(tempPath);
+            Assert.False(File.Exists(tempPath));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            PackageNormalizeRewriteFile.TempFileCreatedForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizeCli_DryRunDoesNotRewritePackage()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_DryRunDoesNotRewritePackage));
@@ -245,11 +373,41 @@ public class ReleaseWorkflowTests
             Assert.Contains($"Would normalize {packagePath}", stdout);
             Assert.Contains("Summary: inspected=1 normalized=0 unchanged=0 failed=0 skipped=1", stdout);
             Assert.Equal(beforeHash, afterHash);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
 
             using var archive = ZipFile.OpenRead(packagePath);
             Assert.Contains(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
             Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_CancellationReportsFailureJson_Issue3961()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_CancellationReportsFailureJson_Issue3961));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "cancelled-cli.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            var exitCode = PackageNormalizeCli.Run(["--json", packagePath], stdout, stderr, cancellation.Token);
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr.ToString());
+            using var doc = JsonDocument.Parse(stdout.ToString());
+            Assert.Equal(1, doc.RootElement.GetProperty("failed").GetInt32());
+            var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
+            Assert.Equal("failed", package.GetProperty("status").GetString());
+            Assert.Equal("Package normalization was cancelled.", package.GetProperty("error").GetString());
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -385,7 +543,7 @@ public class ReleaseWorkflowTests
             Assert.Contains("[Content_Types].xml", exception.Message);
             var warning = Assert.Single(warnings);
             Assert.Contains("Could not delete temporary normalized package", warning);
-            Assert.Contains("cleanup-warning.nupkg.normalize-tmp", warning);
+            Assert.Contains(".cdidx-normalize-cleanup-warning.", warning);
             Assert.DoesNotContain(projectRoot, warning);
             Assert.DoesNotContain("/private/path", warning);
         }
@@ -490,65 +648,6 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
-    public void PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "flush-failure.nupkg");
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = _ => throw new IOException("fsync failed at /private/path");
-
-            var exception = Assert.Throws<PackageNormalizeReplaceCompletedException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
-
-            Assert.Contains("Package replace completed", exception.Message);
-            Assert.Contains("parent directory could not be flushed to disk", exception.Message);
-            Assert.Contains("flush-failure.nupkg", exception.Message);
-            Assert.DoesNotContain(projectRoot, exception.Message);
-            Assert.DoesNotContain("/private/path", exception.Message);
-            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
-
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-        }
-        finally
-        {
-            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = null;
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void PackageNormalizeCli_JsonPreservesParentDirectoryFlushFailureAfterReplace()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonPreservesParentDirectoryFlushFailureAfterReplace));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "flush-failure-json.nupkg");
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = _ => throw new IOException("fsync failed at /private/path");
-
-            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", packagePath]);
-
-            Assert.Equal(1, exitCode);
-            Assert.Empty(stderr);
-            using var doc = JsonDocument.Parse(stdout);
-            var error = doc.RootElement.GetProperty("packages").EnumerateArray().Single().GetProperty("error").GetString();
-            Assert.Contains("Package replace completed", error);
-            Assert.Contains("target file was already replaced", error);
-            Assert.Contains("flush-failure-json.nupkg", error);
-            Assert.DoesNotContain("Could not read or rewrite package", error);
-            Assert.DoesNotContain(projectRoot, error);
-            Assert.DoesNotContain("/private/path", error);
-        }
-        finally
-        {
-            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = null;
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
     public void PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
@@ -565,7 +664,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
             Assert.Contains("2 ZIP entries", exception.Message);
             Assert.Contains("limit of 1", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -594,7 +693,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
             Assert.Contains("payload.bin", exception.Message);
             Assert.Contains("per-entry limit of 5 bytes", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -624,7 +723,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
             Assert.Contains("b.txt", exception.Message);
             Assert.Contains("uncompressed size exceed the limit of 6 bytes", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -654,7 +753,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
             Assert.Contains("[Content_Types].xml", exception.Message);
             Assert.Contains("text limit of 5 characters", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -683,7 +782,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
             Assert.Contains(unsafeEntryName, exception.Message);
             Assert.Contains(expectedMessage, exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -707,7 +806,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
             Assert.Contains("docs/./readme.txt", exception.Message);
             Assert.Contains("duplicate destination name 'docs/readme.txt'", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -753,7 +852,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
             Assert.Contains("payload.bin", exception.Message);
             Assert.Contains("unsafe POSIX file type symlink", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -776,7 +875,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
             Assert.Contains("payload.bin", exception.Message);
             Assert.Contains("unsafe DOS attributes 0x04", exception.Message);
-            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
         }
         finally
         {
@@ -893,6 +992,12 @@ public class ReleaseWorkflowTests
         using var stderr = new StringWriter();
         var exitCode = PackageNormalizeCli.Run(args, stdout, stderr);
         return (exitCode, stdout.ToString(), stderr.ToString());
+    }
+
+    private static void AssertNoNormalizeTempFiles(string projectRoot, string packagePath)
+    {
+        Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-normalize-*.tmp"));
     }
 
     private static void CreateMinimalNuGetPackage(string packagePath, string corePropertiesFileName)

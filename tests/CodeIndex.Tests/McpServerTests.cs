@@ -2834,6 +2834,19 @@ public sealed class Caller
     }
 
     [Fact]
+    public void McpAuthenticationLimits_HashTokenUtf8ForTests_ClearsUsedTokenBytes_Issue3989()
+    {
+        var buffer = Enumerable.Repeat((byte)0xA5, 16).ToArray();
+        var destination = new byte[McpAuthenticationLimits.Sha256HashBytes];
+
+        McpAuthenticationLimits.HashTokenUtf8ForTests("token", buffer, destination);
+
+        Assert.Equal(McpAuthenticationLimits.HashTokenToArray("token"), destination);
+        Assert.Equal(new byte[] { 0, 0, 0, 0, 0 }, buffer[..5]);
+        Assert.All(buffer[5..], value => Assert.Equal(0xA5, value));
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
@@ -15479,6 +15492,11 @@ public sealed class Caller
         var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
         Assert.Equal("description", rejection["field"]!.GetValue<string>());
         Assert.Equal(SourceCodeDetector.ReasonStatementEnding, rejection["reason_code"]!.GetValue<string>());
+        var reasonCounts = rejection["reason_code_counts"]!.AsObject();
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonStatementEnding]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonIndentedCodeLines]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonBlockStructure]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonFunctionDefinition]!.GetValue<int>());
     }
 
     [Fact]
@@ -15506,6 +15524,8 @@ public sealed class Caller
         var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
         Assert.Equal("description", rejection["field"]!.GetValue<string>());
         Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, rejection["reason_code"]!.GetValue<string>());
+        var reasonCounts = rejection["reason_code_counts"]!.AsObject();
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonFencedCodeBlock]!.GetValue<int>());
         Assert.DoesNotContain(leakedToken, response.ToJsonString());
     }
 

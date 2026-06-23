@@ -941,6 +941,95 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_ProjectsFiltersAndPagesSymbols_Issue3986()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_projection_paging");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/many.cs",
+                "csharp",
+                """
+                public class Many
+                {
+                    public void M0() { }
+                    public int Value { get; set; }
+                    public void M1() { }
+                    public void M2() { }
+                }
+                """);
+
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--limit", "2", "--outline-fields", "name,line,kind"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            using var firstDocument = ParseJsonOutput(firstStdout);
+            var firstJson = firstDocument.RootElement;
+            var firstSymbols = firstJson.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(3, firstJson.GetProperty("symbol_count").GetInt32());
+            Assert.Equal(3, firstJson.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(2, firstJson.GetProperty("returned_symbol_count").GetInt32());
+            Assert.Equal(0, firstJson.GetProperty("cursor_offset").GetInt32());
+            Assert.True(firstJson.GetProperty("has_more").GetBoolean());
+            Assert.Equal("outline:2", firstJson.GetProperty("next_cursor").GetString());
+            Assert.Equal(new[] { "function" }, firstJson.GetProperty("kind_filter").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(new[] { "name", "line", "kind" }, firstJson.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(new[] { "M0", "M1" }, firstSymbols.Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            foreach (var symbol in firstSymbols)
+                Assert.Equal(new[] { "name", "line", "kind" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
+
+            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--limit", "2", "--cursor", "outline:2", "--outline-fields", "name,line,kind"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, secondStderr);
+            using var secondDocument = ParseJsonOutput(secondStdout);
+            var secondJson = secondDocument.RootElement;
+            var secondSymbols = secondJson.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(3, secondJson.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(1, secondJson.GetProperty("returned_symbol_count").GetInt32());
+            Assert.Equal(2, secondJson.GetProperty("cursor_offset").GetInt32());
+            Assert.False(secondJson.GetProperty("has_more").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, secondJson.GetProperty("next_cursor").ValueKind);
+            Assert.Single(secondSymbols);
+            Assert.Equal("M2", secondSymbols[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_RejectsInvalidKindFilter_Issue3986()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_invalid_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function,missing"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("invalid --kind value `missing`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_UsesNestedSymbolDepthInHumanOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");

@@ -307,7 +307,7 @@ public sealed class DbSchemaCache
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=@name";
-        cmd.Parameters.AddWithValue("@name", tableName);
+        SqliteCommandPolicy.Add(cmd, "@name", tableName);
         return cmd.ExecuteScalar() != null;
     }
 

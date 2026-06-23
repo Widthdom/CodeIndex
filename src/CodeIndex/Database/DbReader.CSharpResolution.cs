@@ -196,7 +196,7 @@ public partial class DbReader
                   AND s.container_qualified_name != ''
                   AND s.name = @memberName COLLATE NOCASE
                 GROUP BY s.container_qualified_name";
-            cmd.Parameters.AddWithValue("@memberName", memberName);
+            SqliteCommandPolicy.Add(cmd, "@memberName", memberName);
 
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
@@ -250,8 +250,8 @@ public partial class DbReader
               AND s.kind IN ('class', 'struct', 'interface')
               AND (s.name = @shortTypeName COLLATE NOCASE OR s.name = @containingTypeName COLLATE NOCASE)
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@shortTypeName", shortTypeName);
-        cmd.Parameters.AddWithValue("@containingTypeName", containingTypeName);
+        SqliteCommandPolicy.Add(cmd, "@shortTypeName", shortTypeName);
+        SqliteCommandPolicy.Add(cmd, "@containingTypeName", containingTypeName);
 
         signature = cmd.ExecuteScalar() as string;
         if (string.IsNullOrWhiteSpace(signature))
@@ -557,7 +557,7 @@ public partial class DbReader
               AND f.lang = 'csharp'
               AND s.kind = 'namespace'
             ORDER BY s.line";
-        cmd.Parameters.AddWithValue("@path", path);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
 
         var scopes = new List<CSharpNamespaceScope>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -679,7 +679,7 @@ public partial class DbReader
               AND f.lang = 'csharp'
               AND s.kind IN ('class', 'struct', 'interface')
             ORDER BY s.start_line";
-        cmd.Parameters.AddWithValue("@path", path);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
 
         var scopes = new List<CSharpContainingTypeScope>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -1110,7 +1110,7 @@ public partial class DbReader
               AND f.lang = 'csharp'
               AND (s.kind = 'import' OR s.kind = 'namespace')
             ORDER BY s.line";
-        cmd.Parameters.AddWithValue("@path", path);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
 
         var namespaceScopes = new List<(int StartLine, int EndLine)>();
         var imports = new List<(int Line, string Signature)>();

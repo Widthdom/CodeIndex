@@ -32,10 +32,10 @@ internal static class McpPathBoundary
 
     internal static bool IsPathWithinDirectory(string parentPath, string childPath)
     {
-        var parent = NormalizeDirectoryBoundaryPath(ResolveExistingDirectoryPath(parentPath));
-        var child = NormalizeDirectoryBoundaryPath(ResolveExistingDirectoryPath(childPath));
+        var parent = ResolveExistingDirectoryPath(parentPath);
+        var child = ResolveExistingDirectoryPath(childPath);
 
-        return PathCasing.IsPathEqualOrParent(parent, child);
+        return FileSystemBoundary.IsSameOrDescendant(parent, child);
     }
 
     internal static string? TryResolveRootPath(string? root)
@@ -47,14 +47,14 @@ internal static class McpPathBoundary
             if (!string.Equals(uri.Scheme, Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
                 return null;
             return PathUriNormalizer.TryNormalizeFileUriPath(root, out var normalized, out _)
-                ? NormalizeDirectoryBoundaryPath(normalized)
+                ? FileSystemBoundary.NormalizeDirectoryPath(normalized)
                 : null;
         }
         try
         {
-            return NormalizeDirectoryBoundaryPath(root);
+            return FileSystemBoundary.NormalizeDirectoryPath(root);
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or CodeIndexException)
         {
             return null;
         }
@@ -98,14 +98,5 @@ internal static class McpPathBoundary
         }
 
         return Path.GetFullPath(current);
-    }
-
-    private static string NormalizeDirectoryBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }

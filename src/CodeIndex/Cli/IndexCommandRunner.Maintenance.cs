@@ -205,7 +205,7 @@ public static partial class IndexCommandRunner
                 // Row rewrites commit before the final FoldReady stamp so interrupted
                 // backfills can resume from the remaining rows.
                 // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
-                using var transaction = writer.BeginTransaction();
+                using var transaction = writer.BeginTransaction(backfillCancellation.Token, "backfill fold readiness stamp");
                 verified = writer.MarkFoldReady();
                 if (!verified)
                 {
