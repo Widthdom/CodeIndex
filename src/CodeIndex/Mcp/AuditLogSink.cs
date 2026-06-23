@@ -807,8 +807,11 @@ internal sealed class AuditLogSink : IDisposable
             if (IsUriAuthorityTerminator(character))
                 return false;
             if (IsUriBoundaryDelimiter(character))
-                return !LooksLikeDelimitedHostPort(scanText, authorityStart, userInfoSeparator, passwordStart, index)
-                       && sawDisplayedPassword;
+            {
+                if (LooksLikeDelimitedHostPort(scanText, authorityStart, userInfoSeparator, passwordStart, index))
+                    return false;
+                return sawDisplayedPassword || (index == passwordStart && character is ';' or ',');
+            }
             if (index < visibleLength)
                 sawDisplayedPassword = true;
         }

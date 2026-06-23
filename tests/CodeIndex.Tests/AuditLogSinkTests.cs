@@ -246,6 +246,23 @@ public class AuditLogSinkTests
         Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData(";")]
+    [InlineData(",")]
+    public void SanitizeArgValue_LongUriCredentialStartingWithDelimiter_RedactsWholeValue_Issue3909(string delimiter)
+    {
+        var password = delimiter + new string('q', AuditLogSink.MaxSecretValueScanChars);
+        var text = "https://user:" + password + "@example.test/path";
+        Assert.True(text.IndexOf('@', StringComparison.Ordinal) >= AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
     [Fact]
     public void SanitizeArgValue_BareHostPortUri_DoesNotRedact_Issue3909()
     {
