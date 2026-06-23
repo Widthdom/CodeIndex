@@ -299,6 +299,102 @@ internal static class SearchAuditRecipes
                     ["audit", "security"],
                     "False positives include documentation and tests; use the broad-token-audit recipe or an ad hoc `token` search when you intentionally need lexical-token coverage.",
                     ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: auth-token material can be logged, persisted, or forwarded across trust boundaries without redaction.",
+                        "positive: placeholders, documentation, or explicit redaction helpers are usually lower-risk token mentions."
+                    ],
+                }
+            ]),
+        SourceScopedRecipe(
+            "auth-token-audit",
+            "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
+            [
+                new(
+                    "bearer-token",
+                    "Bearer",
+                    "Find bearer token handling that may need source, storage, logging, and outbound request review.",
+                    ["audit", "security"],
+                    "False positives include examples, tests, and redacted token placeholders.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: bearer tokens often authorize outbound requests and should not be logged, cached, or persisted without policy.",
+                        "positive: redacted placeholders, sanitized diagnostics, and isolated test fixtures are usually lower risk."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "authorization-header",
+                    "Authorization",
+                    "Find authorization header construction and forwarding paths that may carry token material.",
+                    ["audit", "security"],
+                    "False positives include non-secret authorization enum names and documentation-only references.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: Authorization headers can propagate bearer or API tokens into logs, telemetry, redirects, or unintended hosts.",
+                        "positive: shared outbound clients with redaction, host allowlists, and sanitized diagnostics are safer evidence."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "github-token",
+                    "github token",
+                    "Find GitHub token handling without matching generic parser or cancellation token domains.",
+                    ["audit", "security"],
+                    "False positives include docs and examples that do not load, store, log, or transmit real tokens.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: GitHub tokens can grant repository or workflow access and need storage, scope, and logging review.",
+                        "positive: token-scope validation, secret providers, and redaction boundaries are useful safe evidence."
+                    ],
+                },
+                new(
+                    "api-token",
+                    "api token",
+                    "Find API token handling without broad lexical token noise.",
+                    ["audit", "security"],
+                    "False positives include documentation or placeholder examples that do not touch runtime secret material.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: API tokens can cross process, network, or persistence boundaries if not scoped and redacted.",
+                        "positive: secret-store loading, explicit scope validation, and sanitized output paths lower the risk."
+                    ],
+                },
+                new(
+                    "access-token",
+                    "access token",
+                    "Find access-token contexts that may need expiration, refresh, storage, or logging review.",
+                    ["audit", "security"],
+                    "False positives include auth protocol docs and redacted example payloads.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: access tokens usually have expiry and scope semantics that can be mishandled in caches or logs.",
+                        "positive: expiry-aware caches, refresh policy, and redacted serializers are useful safe evidence."
+                    ],
+                },
+                new(
+                    "token-secret",
+                    "token secret",
+                    "Find token-secret contexts where credential material may be produced, stored, or redacted.",
+                    ["audit", "security"],
+                    "False positives include labels or documentation that do not reference runtime token values.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: token secret paths often need source-of-truth, retention, and redaction review.",
+                        "positive: secret providers, short-lived values, and sanitized diagnostics are safer evidence."
+                    ],
+                }
             ]),
         SourceScopedRecipe(
             "json-parse-apis",
@@ -461,7 +557,48 @@ internal static class SearchAuditRecipes
                     "Find every token mention when a broad token audit is explicitly requested.",
                     ["audit", "security"],
                     "This intentionally includes parser/tokenizer code, syntax tokens, LSP tokens, cancellation tokens, docs, and tests.",
+                    ExactSubstring: false),
+                new(
+                    "auth-token",
+                    "auth token",
+                    "Facet broad token audits to credential/auth-token material.",
+                    ["audit", "security"],
+                    "Use auth-token-audit for a source-scoped review that avoids parser, LSP, and cancellation-token domains.",
                     ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: auth-token material can cross logging, persistence, or outbound request boundaries.",
+                        "positive: redaction helpers and secret providers are strong safe evidence."
+                    ],
+                },
+                new(
+                    "parser-token",
+                    "SyntaxToken",
+                    "Facet broad token audits to parser or syntax-token domains that are usually not credential material.",
+                    ["audit"],
+                    "This is a negative-domain facet for separating parser/tokenizer noise from credential-token review.")
+                {
+                    Severity = "info",
+                },
+                new(
+                    "cancellation-token",
+                    "CancellationToken",
+                    "Facet broad token audits to cancellation-token domains that are usually control-flow, not credentials.",
+                    ["audit"],
+                    "This is a negative-domain facet for separating cancellation plumbing from credential-token review.")
+                {
+                    Severity = "info",
+                },
+                new(
+                    "lsp-token",
+                    "SemanticToken",
+                    "Facet broad token audits to LSP semantic-token domains that are usually protocol data, not credentials.",
+                    ["audit"],
+                    "This is a negative-domain facet for separating LSP protocol token data from credential-token review.")
+                {
+                    Severity = "info",
+                }
             ])
     ];
 

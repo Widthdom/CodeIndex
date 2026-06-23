@@ -41,6 +41,7 @@ public static partial class QueryCommandRunner
     private const int MaxSearchGroupedPerFileLimit = 20;
     private const int MaxSearchNextStepLimit = 10;
     private const int MaxSearchJsonByteLimit = 16 * 1024 * 1024;
+    private const string BareTokenAuthAuditHint = "Bare `token` searches are intentionally broad. For credential/auth-token review, run `cdidx search --recipe auth-token-audit`; use `cdidx search --recipe broad-token-audit` only when parser, LSP, or cancellation token domains are intentional.";
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -869,7 +870,11 @@ public static partial class QueryCommandRunner
                     {
                         var pathHint = BuildSearchPathGlobHint(reader, options);
                         if (!options.ResultsOnly)
-                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload => AddSearchPathHint(payload, pathHint)).ToJsonString(ndjsonOptions));
+                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload =>
+                            {
+                                AddSearchPathHint(payload, pathHint);
+                                AddBareTokenSearchHint(payload, options);
+                            }).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -1395,7 +1400,7 @@ public static partial class QueryCommandRunner
         foreach (var result in results.Take(MaxSearchNextStepLimit))
         {
             var line = result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine;
-            result.NextSteps =
+            List<SearchCommandHint> nextSteps =
             [
                 new SearchCommandHint
                 {
@@ -1408,6 +1413,15 @@ public static partial class QueryCommandRunner
                     Purpose = "read a bounded source excerpt around this search hit",
                 },
             ];
+            if (IsBareTokenSearch(options))
+            {
+                nextSteps.Add(new SearchCommandHint
+                {
+                    Command = "cdidx search --recipe auth-token-audit --exclude-tests",
+                    Purpose = "narrow bare token search to credential and auth-token contexts",
+                });
+            }
+            result.NextSteps = nextSteps;
             result.NextStepsTruncated = truncated;
         }
     }
@@ -11906,6 +11920,9 @@ public static partial class QueryCommandRunner
         if (alternativeHint != null)
             CommandErrorWriter.WriteStderr($"Hint: {alternativeHint}");
 
+        if (IsBareTokenSearch(options))
+            CommandErrorWriter.WriteStderr($"Hint: {BareTokenAuthAuditHint}");
+
         var staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
         if (staleAfter.Error != null)
         {
@@ -11920,6 +11937,22 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.WriteStderr($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
     }
+
+    private static bool IsBareTokenSearch(QueryCommandOptions options)
+        => options.RecipeName == null
+           && options.NamedSearchQueries.Count == 0
+           && string.Equals(options.Query?.Trim(), "token", StringComparison.OrdinalIgnoreCase);
+
+    private static SearchQueryHint? BuildBareTokenSearchHint(QueryCommandOptions options)
+        => IsBareTokenSearch(options)
+            ? new SearchQueryHint
+            {
+                Reason = "bare_token_query_auth_noise",
+                SuggestedAction = BareTokenAuthAuditHint,
+                Flag = "--recipe",
+                McpArgument = "recipe",
+            }
+            : null;
 
     private static SearchQueryHint? BuildSearchPathGlobHint(DbReader reader, QueryCommandOptions options)
     {
@@ -11971,6 +12004,13 @@ public static partial class QueryCommandRunner
     {
         if (pathHint != null)
             payload["path_filter_hint"] = BuildSearchQueryHintJson(pathHint);
+    }
+
+    private static void AddBareTokenSearchHint(JsonObject payload, QueryCommandOptions options)
+    {
+        var hint = BuildBareTokenSearchHint(options);
+        if (hint != null)
+            payload["token_domain_hint"] = BuildSearchQueryHintJson(hint);
     }
 
     private static void WriteExactSubstringHintIfNeeded(SearchQueryHint? hint)

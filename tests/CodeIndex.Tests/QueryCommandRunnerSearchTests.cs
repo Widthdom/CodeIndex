@@ -1101,6 +1101,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "dotnet-risk-patterns");
+        var authTokenRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "auth-token-audit");
         var xmlRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1121,6 +1125,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "token-term");
+        var authBearerQuery = authTokenRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "bearer-token");
         var emptyCatchQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1164,6 +1172,11 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(boundedRegexAliasQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
         Assert.Contains("broad-token-audit", tokenQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Contains(tokenQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("auth-token material", StringComparison.Ordinal));
+        Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "github-token");
+        Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "api-token");
+        Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-secret");
+        Assert.Contains(authBearerQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bearer tokens", StringComparison.Ordinal));
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-bytes");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "thread-sleep");
@@ -1187,6 +1200,10 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-term-broad");
+        Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "auth-token");
+        Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "parser-token");
+        Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "cancellation-token");
+        Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "lsp-token");
     }
 
     [Fact]
@@ -1213,7 +1230,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
+            ["risky-code", "auth-token-audit", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1250,6 +1267,12 @@ public partial class QueryCommandRunnerTests
                 "token-term"
             ]);
         AssertRecipe(
+            "auth-token-audit",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["bearer-token", "authorization-header", "github-token", "api-token", "access-token", "token-secret"]);
+        AssertRecipe(
             "json-parse-apis",
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
@@ -1278,7 +1301,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.AllAuditScope,
             [],
             [],
-            ["token-term-broad"]);
+            ["token-term-broad", "auth-token", "parser-token", "cancellation-token", "lsp-token"]);
 
         void AssertRecipe(
             string name,
@@ -2320,6 +2343,128 @@ public partial class QueryCommandRunnerTests
             Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/options.cs");
             Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-before");
             Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-after");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AuthTokenRecipeAvoidsParserCancellationAndLspTokenNoise_Issue3923()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_auth_token");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                using System.Net.Http.Headers;
+
+                public sealed class AuthTokenFlow
+                {
+                    public void Run(HttpRequestMessage request, string githubToken)
+                    {
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", githubToken);
+                        var tokenSecret = $"token secret:{githubToken}";
+                        var apiToken = githubToken;
+                        Console.WriteLine(tokenSecret.Length + apiToken.Length);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/token-noise.cs",
+                "csharp",
+                """
+                public sealed class TokenNoise
+                {
+                    public void Run(SyntaxToken token, CancellationToken cancellationToken, SemanticToken semanticToken)
+                    {
+                        Console.WriteLine(token.RawKind + semanticToken.TokenType);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "auth-token-audit", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            var allResults = queries
+                .SelectMany(query => query.GetProperty("results").EnumerateArray())
+                .ToList();
+
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "bearer-token");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "github-token");
+            Assert.Contains(allResults, result => result.GetProperty("path").GetString() == "src/auth.cs");
+            Assert.DoesNotContain(allResults, result => result.GetProperty("path").GetString() == "src/token-noise.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_BareTokenZeroResultSuggestsAuthTokenAudit_Issue3923()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_token_zero_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public sealed class App { public void Run() { Console.WriteLine(\"ok\"); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["token", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found", stderr);
+            Assert.Contains("auth-token-audit", stderr);
+            Assert.Contains("broad-token-audit", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_BareTokenNextStepsSuggestAuthTokenAudit_Issue3923()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_token_next_steps");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/noise.cs",
+                "csharp",
+                "public sealed class Noise { public void Run(CancellationToken token) { Console.WriteLine(token.CanBeCanceled); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["token", "--db", dbPath, "--json", "--next-steps", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var result = document.RootElement;
+
+            Assert.Contains(result.GetProperty("next_steps").EnumerateArray(), step =>
+                step.GetProperty("command").GetString() == "cdidx search --recipe auth-token-audit --exclude-tests");
         }
         finally
         {
