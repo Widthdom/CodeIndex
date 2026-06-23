@@ -673,9 +673,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
             await WriteResponseBytesAsync(
-                context.Response.OutputStream,
+                context.Response,
                 payload,
                 cancellationToken,
+                "out-of-band response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "out-of-band response body");
             LogRequest(request, (int)HttpStatusCode.OK);
@@ -750,9 +751,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
             await WriteResponseBytesAsync(
-                context.Response.OutputStream,
+                context.Response,
                 payload,
                 cancellationToken,
+                "request response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "request response body");
             LogRequest(request, (int)HttpStatusCode.OK);
@@ -787,21 +789,102 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return false;
     }
 
-    private static async Task WriteResponseBytesAsync(
-        Stream stream,
+    private async Task WriteResponseBytesAsync(
+        HttpListenerResponse response,
         byte[] bytes,
         CancellationToken cancellationToken,
+        string timeoutOperation,
         string timeoutCategory)
     {
         using var writeScope = OperationTimeoutScope.Create(timeoutCategory, ResponseWriteTimeout, cancellationToken);
+        await AwaitOutputOperationAsync(
+            response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
+            writeScope,
+            cancellationToken,
+            timeoutCategory,
+            ResponseWriteTimeout,
+            () => AbortResponseBestEffort(response, timeoutOperation)).ConfigureAwait(false);
+    }
+
+    private async Task FlushResponseOutputAsync(
+        HttpListenerResponse response,
+        CancellationToken cancellationToken,
+        string timeoutOperation,
+        string timeoutCategory)
+    {
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, ResponseWriteTimeout, cancellationToken);
+        await AwaitOutputOperationAsync(
+            response.OutputStream.FlushAsync(writeScope.Token),
+            writeScope,
+            cancellationToken,
+            timeoutCategory,
+            ResponseWriteTimeout,
+            () => AbortResponseBestEffort(response, timeoutOperation)).ConfigureAwait(false);
+    }
+
+    internal static async Task WriteBytesWithTimeoutForTestsAsync(
+        Stream stream,
+        byte[] bytes,
+        TimeSpan timeout,
+        string timeoutCategory,
+        Action onTimeout)
+    {
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, timeout, CancellationToken.None);
+        await AwaitOutputOperationAsync(
+            stream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
+            writeScope,
+            CancellationToken.None,
+            timeoutCategory,
+            timeout,
+            onTimeout).ConfigureAwait(false);
+    }
+
+    internal static async Task FlushWithTimeoutForTestsAsync(
+        Stream stream,
+        TimeSpan timeout,
+        string timeoutCategory,
+        Action onTimeout)
+    {
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, timeout, CancellationToken.None);
+        await AwaitOutputOperationAsync(
+            stream.FlushAsync(writeScope.Token),
+            writeScope,
+            CancellationToken.None,
+            timeoutCategory,
+            timeout,
+            onTimeout).ConfigureAwait(false);
+    }
+
+    private static async Task AwaitOutputOperationAsync(
+        Task operationTask,
+        OperationTimeoutScope writeScope,
+        CancellationToken cancellationToken,
+        string timeoutCategory,
+        TimeSpan timeout,
+        Action onTimeout)
+    {
         try
         {
-            await stream.WriteAsync(bytes.AsMemory(), writeScope.Token).ConfigureAwait(false);
+            await operationTask.WaitAsync(writeScope.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            throw new HttpMcpTimeoutException(timeoutCategory, ResponseWriteTimeout, ex);
+            onTimeout();
+            ObserveAbandonedOutputOperation(operationTask);
+            throw new HttpMcpTimeoutException(timeoutCategory, timeout, ex);
         }
+    }
+
+    private static void ObserveAbandonedOutputOperation(Task operationTask)
+    {
+        if (operationTask.IsCompleted)
+            return;
+
+        _ = operationTask.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public async Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
@@ -925,9 +1008,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
             await WriteResponseBytesAsync(
-                context.Response.OutputStream,
+                context.Response,
                 bytes,
                 CancellationToken.None,
+                "plain-text response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "plain-text response body");
         }
@@ -955,9 +1039,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
             await WriteResponseBytesAsync(
-                context.Response.OutputStream,
+                context.Response,
                 bytes,
                 CancellationToken.None,
+                "json response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "json response body");
         }
@@ -1020,7 +1105,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
 
         var streamId = Guid.NewGuid();
-        var stream = new EventStream(context.Response, _eventStreamWriteTimeout, BeforeEventStreamWriteForTests);
+        var stream = new EventStream(
+            context.Response,
+            _eventStreamWriteTimeout,
+            BeforeEventStreamWriteForTests,
+            response => AbortResponseBestEffort(response, "sse write timeout"));
         try
         {
             context.Response.StatusCode = (int)HttpStatusCode.OK;
@@ -1034,11 +1123,16 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
             var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
             await WriteResponseBytesAsync(
-                context.Response.OutputStream,
+                context.Response,
                 prelude,
                 cancellationToken,
+                "event stream prelude timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
-            await context.Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await FlushResponseOutputAsync(
+                context.Response,
+                cancellationToken,
+                "event stream prelude flush timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
 
             await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
         }
@@ -1112,7 +1206,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private sealed class EventStream(
         HttpListenerResponse response,
         TimeSpan writeTimeout,
-        Func<CancellationToken, Task>? beforeWriteForTests) : IDisposable
+        Func<CancellationToken, Task>? beforeWriteForTests,
+        Action<HttpListenerResponse> abortResponseOnTimeout) : IDisposable
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
         private string? _diagnostic;
@@ -1167,8 +1262,20 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             {
                 if (beforeWriteForTests is not null)
                     await beforeWriteForTests(writeScope.Token).ConfigureAwait(false);
-                await Response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).ConfigureAwait(false);
-                await Response.OutputStream.FlushAsync(writeScope.Token).ConfigureAwait(false);
+                await AwaitOutputOperationAsync(
+                    Response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
+                    writeScope,
+                    cancellationToken,
+                    OperationTimeoutCategories.SseWrite,
+                    writeTimeout,
+                    () => abortResponseOnTimeout(Response)).ConfigureAwait(false);
+                await AwaitOutputOperationAsync(
+                    Response.OutputStream.FlushAsync(writeScope.Token),
+                    writeScope,
+                    cancellationToken,
+                    OperationTimeoutCategories.SseWrite,
+                    writeTimeout,
+                    () => abortResponseOnTimeout(Response)).ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
             {

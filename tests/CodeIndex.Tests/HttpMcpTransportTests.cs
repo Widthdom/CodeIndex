@@ -56,6 +56,43 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_ResponseWriteTimeout_AbortsNonCooperativeWrite_Issue3990()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: true, hangFlush: false);
+        var abortCount = 0;
+
+        var ex = await Assert.ThrowsAnyAsync<TimeoutException>(() =>
+            HttpMcpTransport.WriteBytesWithTimeoutForTestsAsync(
+                stream,
+                [1, 2, 3],
+                TimeSpan.FromMilliseconds(25),
+                OperationTimeoutCategories.HttpResponseWrite,
+                () => abortCount++));
+
+        Assert.Contains("category=http_response_write", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, abortCount);
+        Assert.Equal(1, stream.WriteCalls);
+    }
+
+    [Fact]
+    public async Task HttpTransport_SseFlushTimeout_AbortsNonCooperativeFlush_Issue3990()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: false, hangFlush: true);
+        var abortCount = 0;
+
+        var ex = await Assert.ThrowsAnyAsync<TimeoutException>(() =>
+            HttpMcpTransport.FlushWithTimeoutForTestsAsync(
+                stream,
+                TimeSpan.FromMilliseconds(25),
+                OperationTimeoutCategories.SseWrite,
+                () => abortCount++));
+
+        Assert.Contains("category=sse_write", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, abortCount);
+        Assert.Equal(1, stream.FlushCalls);
+    }
+
+    [Fact]
     public async Task HttpTransport_PostInitialize_ReturnsHandshakeResult()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
@@ -1670,6 +1707,64 @@ public class HttpMcpTransportTests : IDisposable
         {
             length = 0;
             return false;
+        }
+    }
+
+    private sealed class NonCancellableHangingStream(bool hangWrite, bool hangFlush) : Stream
+    {
+        private readonly TaskCompletionSource _writeBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _flushBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int WriteCalls { get; private set; }
+        public int FlushCalls { get; private set; }
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+            FlushCalls++;
+            if (hangFlush)
+                _flushBlocker.Task.GetAwaiter().GetResult();
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            FlushCalls++;
+            return hangFlush ? _flushBlocker.Task : Task.CompletedTask;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            WriteCalls++;
+            if (hangWrite)
+                _writeBlocker.Task.GetAwaiter().GetResult();
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            WriteCalls++;
+            return hangWrite ? new ValueTask(_writeBlocker.Task) : ValueTask.CompletedTask;
         }
     }
 }
