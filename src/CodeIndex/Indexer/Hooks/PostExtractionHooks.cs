@@ -270,7 +270,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     {
         try
         {
-            return Directory.EnumerateFiles(hooksDirectory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
+            return CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(hooksDirectory, "*.dll").GetEnumerator();
         }
         catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {

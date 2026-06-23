@@ -456,7 +456,7 @@ internal static class PostExtractionHookCallbackWorker
             startInfo.ArgumentList.Add(CommandName);
             startInfo.ArgumentList.Add(hook.AssemblyPath);
             startInfo.ArgumentList.Add(hook.TypeName);
-            AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
+            CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
             error = string.Empty;
             return true;
         }
@@ -477,7 +477,7 @@ internal static class PostExtractionHookCallbackWorker
         startInfo.ArgumentList.Add(CommandName);
         startInfo.ArgumentList.Add(hook.AssemblyPath);
         startInfo.ArgumentList.Add(hook.TypeName);
-        AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
+        CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
 
         error = string.Empty;
         return true;
@@ -647,12 +647,6 @@ internal static class PostExtractionHookCallbackWorker
 
         items.RemoveRange(limit, items.Count - limit);
         return true;
-    }
-
-    private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
-    {
-        startInfo.ArgumentList.Add(ProtocolMaxLineBytesOption);
-        startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
     }
 
     private static bool TryResolveProtocolLineLimit(

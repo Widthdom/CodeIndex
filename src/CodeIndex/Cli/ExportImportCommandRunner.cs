@@ -1320,9 +1320,12 @@ internal static class ExportImportCommandRunner
             AddReplacementBackup(sidecarBackups, fullDbPath + "-shm");
 
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(tempPath, fullDbPath, overwrite: false);
+            AtomicFileWriter.MoveFile(
+                tempPath,
+                fullDbPath,
+                overwrite: false,
+                applyDestinationMode: ApplyImportedDatabasePrivateFileMode);
             cancellationToken.ThrowIfCancellationRequested();
-            ApplyImportedDatabasePrivateFileMode(fullDbPath);
         }
         catch (OperationCanceledException)
         {
@@ -1421,7 +1424,7 @@ internal static class ExportImportCommandRunner
             return null;
 
         var backupPath = $"{path}.replace-backup-{Guid.NewGuid():N}";
-        File.Move(path, backupPath, overwrite: false);
+        AtomicFileWriter.MoveFile(path, backupPath, overwrite: false);
         return backupPath;
     }
 
@@ -1432,15 +1435,15 @@ internal static class ExportImportCommandRunner
     {
         if (dbBackupPath != null)
         {
-            File.Move(dbBackupPath, fullDbPath, overwrite: true);
+            AtomicFileWriter.MoveReplacing(dbBackupPath, fullDbPath);
         }
         else if (File.Exists(fullDbPath))
         {
-            File.Delete(fullDbPath);
+            AtomicFileWriter.DeleteFileIfExists(fullDbPath);
         }
 
         foreach (var backup in sidecarBackups)
-            File.Move(backup.BackupPath, backup.OriginalPath, overwrite: true);
+            AtomicFileWriter.MoveReplacing(backup.BackupPath, backup.OriginalPath);
     }
 
     private static void DeleteReplacementBackup(string? path, string cleanupDescription, Action<string>? deleteOverride = null)
@@ -1466,15 +1469,14 @@ internal static class ExportImportCommandRunner
     {
         try
         {
-            if (!File.Exists(path))
-                return;
-
-            if (deleteOverride != null)
-                deleteOverride(path);
-            else if (DeleteFileForTesting != null)
-                DeleteFileForTesting(path);
-            else
-                File.Delete(path);
+            _ = AtomicFileWriter.TryDeleteFile(
+                path,
+                ex =>
+                {
+                    if (!string.IsNullOrWhiteSpace(cleanupDescription))
+                        CommandErrorWriter.WriteStderr($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+                },
+                deleteOverride ?? DeleteFileForTesting);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -1487,7 +1489,7 @@ internal static class ExportImportCommandRunner
     {
         try
         {
-            if (!Directory.Exists(path) || Directory.EnumerateFileSystemEntries(path).Any())
+            if (!Directory.Exists(path) || CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(path))
                 return;
 
             Directory.Delete(path);
