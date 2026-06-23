@@ -3903,60 +3903,17 @@ internal static partial class ProgramRunner
         out string fullPath,
         out string failureReason)
     {
-        fullPath = string.Empty;
-        failureReason = string.Empty;
-        try
-        {
-            fullPath = NormalizeCleanupBoundaryPath(Path.GetFullPath(path));
-            var tempRoot = NormalizeCleanupBoundaryPath(Path.GetTempPath());
-            if (string.Equals(fullPath, tempRoot, PathCasing.ComparisonFor(tempRoot))
-                || !PathCasing.IsPathEqualOrParent(tempRoot, fullPath))
-            {
-                failureReason = "target is outside the expected cleanup root";
-                return false;
-            }
-
-            if (!Path.GetFileName(fullPath).StartsWith(UpgradeInstallerDirectoryPrefix, StringComparison.Ordinal))
-            {
-                failureReason = "target name does not match the expected upgrade temporary-directory prefix";
-                return false;
-            }
-
-            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
-            if (Directory.Exists(longPath))
-            {
-                var directoryInfo = new DirectoryInfo(fullPath);
-                directoryInfo.Refresh();
-                var attributes = directoryInfo.Attributes;
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
-                    || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
-                {
-                    failureReason = "target is a symbolic link, reparse point, or device";
-                    return false;
-                }
-            }
-            else if (File.Exists(longPath))
-            {
-                failureReason = "target is not a directory";
-                return false;
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
-        {
-            failureReason = "target path is invalid";
-            return false;
-        }
-    }
-
-    private static string NormalizeCleanupBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var options = new DirectoryCleanupBoundaryOptions(
+            UpgradeInstallerDirectoryPrefix,
+            "target is outside the expected cleanup root",
+            "target name does not match the expected upgrade temporary-directory prefix",
+            "target is a symbolic link, reparse point, or device");
+        return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+            path,
+            Path.GetTempPath(),
+            options,
+            out fullPath,
+            out failureReason);
     }
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(

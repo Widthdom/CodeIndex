@@ -209,6 +209,45 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPlugin_RejectsSymlinkAssemblyCandidate_Issue3970()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_symlink_3970");
+        lock (TestConsoleLock.Gate)
+        {
+            var target = Path.Combine(projectRoot, "target.dll");
+            var link = Path.Combine(projectRoot, "link.dll");
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                File.WriteAllText(target, "not a real dll");
+                File.CreateSymbolicLink(link, target);
+
+                ExtractorPluginRegistry.LoadPluginForTests(link);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+
+                Assert.Equal(0, status.PluginAssemblyCount);
+                Assert.Equal(1, status.SkippedFileCount);
+                var diagnostic = Assert.Single(status.Diagnostics!);
+                Assert.Equal("plugin", diagnostic.Kind);
+                Assert.Equal("error", diagnostic.Severity);
+                Assert.Equal("plugin_reparse_point", diagnostic.Category);
+                Assert.Equal("link.dll", diagnostic.Path);
+                Assert.Contains("symbolic links and reparse points", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                if (File.Exists(link))
+                    File.Delete(link);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_ReportsSanitizedAssemblyLoadCategory_3414()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_load_category");
