@@ -96,6 +96,6 @@ internal sealed class ConfiguredSymbolExtractor(
 
         ExtractorPluginRegistry.ReportPatternExtractorTimeout(pattern.SourcePath, Language, pattern.Kind);
         CommandErrorWriter.WriteStderr(
-            $"[cdidx] Pattern extractor for language '{DiagnosticSanitizer.ForMessage(Language)}' kind '{DiagnosticSanitizer.ForMessage(pattern.Kind)}' timed out after {(int)ExtractorPluginRegistry.PatternRegexTimeout.TotalMilliseconds}ms; skipped this pattern.");
+            RegexTimeoutPolicy.FormatConfiguredPatternTimeout(Language, pattern.Kind, ExtractorPluginRegistry.PatternRegexTimeout));
     }
 }

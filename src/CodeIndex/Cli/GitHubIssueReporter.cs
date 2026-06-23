@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -960,7 +961,7 @@ internal static class GitHubIssueReporter
         }
         catch (RegexMatchTimeoutException)
         {
-            return "[response body omitted after redaction timeout]";
+            return RegexTimeoutPolicy.RedactionFallback(RegexRedactionSurface.GitHubApiResponseBody);
         }
     }
 

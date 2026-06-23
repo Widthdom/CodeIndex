@@ -3898,9 +3898,9 @@ public partial class McpServer
             {
                 return CreateToolErrorResponse(
                     id,
-                    $"regular expression timed out after {QueryCommandRunner.FormatRegexMatchTimeout(ex.MatchTimeout)} while scanning indexed file contents.",
-                    category: McpErrorEnvelope.CategoryRegexTimeout,
-                    suggestion: "Simplify the pattern, narrow the scan with path/lang filters, or disable regex mode for literal text.",
+                    RegexTimeoutPolicy.FormatFindTimeout(ex),
+                    category: RegexTimeoutPolicy.RegexTimeoutCategory,
+                    suggestion: RegexTimeoutPolicy.McpFindTimeoutSuggestion,
                     retrySafe: true,
                     extraData: new JsonObject
                     {

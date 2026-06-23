@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
@@ -4997,23 +4998,18 @@ public static partial class QueryCommandRunner
 
     internal static int WriteFindRegexTimeoutError(RegexMatchTimeoutException ex, JsonSerializerOptions jsonOptions, bool json)
     {
-        var timeout = FormatRegexMatchTimeout(ex.MatchTimeout);
         return CommandErrorWriter.WriteJsonOrHuman(
             json,
             jsonOptions,
-            $"regular expression timed out after {timeout} while scanning indexed file contents.",
+            RegexTimeoutPolicy.FormatFindTimeout(ex),
             CommandExitCodes.RuntimeError,
-            hint: "Simplify the pattern, narrow the scan with --path/--lang, or omit --regex for literal text.",
+            hint: RegexTimeoutPolicy.FindTimeoutHint,
             errorCode: CommandErrorCodes.RegexMatchTimeout,
-            category: "regex_timeout");
+            category: RegexTimeoutPolicy.RegexTimeoutCategory);
     }
 
-    internal static string FormatRegexMatchTimeout(TimeSpan timeout)
-    {
-        if (timeout.TotalMilliseconds < 1000)
-            return timeout.TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture) + "ms";
-        return timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + "s";
-    }
+    internal static string FormatRegexMatchTimeout(TimeSpan timeout) =>
+        RegexTimeoutPolicy.FormatDuration(timeout);
 
     private static string? ValidateFindArgs(string[] args)
     {
