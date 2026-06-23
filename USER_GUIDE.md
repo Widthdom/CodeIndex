@@ -1012,6 +1012,11 @@ normalized repository-relative artifact URIs.
 Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
 recommended labels, query text, exact-match mode, and false-positive guidance.
+Built-in recipe queries may also include `risk_evidence`, a short set of
+positive and negative evidence facets that explain why a hit is risky or likely
+bounded/safe. Recipe run JSON repeats those facets on each matching result so
+issue-draft export and downstream triage tools can keep the reviewer guidance
+next to the evidence path.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, and
 the opt-in broad `broad-token-audit` recipe.
@@ -3591,6 +3596,11 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
 `filesystem-traversal`、`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance を表示します。
+組み込み recipe query は `risk_evidence` も出力できます。これは hit が risky なのか、
+すでに bounded / safe と見なせる可能性が高いのかを説明する positive / negative evidence
+facet の短い一覧です。recipe run の JSON は各 matching result にも同じ facet を付けるため、
+issue-draft export や下流の triage tool が evidence path の近くに reviewer guidance を
+保持できます。
 `--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
 `--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe

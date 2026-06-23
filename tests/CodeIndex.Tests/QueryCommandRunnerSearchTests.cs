@@ -1140,6 +1140,7 @@ public partial class QueryCommandRunnerTests
         Assert.True(query.GetProperty("exact_substring").GetBoolean());
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("DiagnosticRedactor", StringComparison.Ordinal));
         Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
         Assert.Equal(0, emptyCatchQuery.GetProperty("exclude_origins").GetArrayLength());
         Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
@@ -2116,7 +2117,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
             Assert.Equal("raw-diagnostic-echo", recipeQuery.GetProperty("name").GetString());
             Assert.Equal("ex.Message", query.GetProperty("query").GetString());
+            Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw exception messages", StringComparison.Ordinal));
             Assert.Equal(1, query.GetProperty("count").GetInt32());
+            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+            Assert.Contains(result.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CommandErrorWriter", StringComparison.Ordinal));
         }
         finally
         {
@@ -2454,12 +2458,15 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("severity: `medium`", body, StringComparison.Ordinal);
             Assert.Contains("confidence: `low`", body, StringComparison.Ordinal);
             Assert.Contains("False-positive guidance", body, StringComparison.Ordinal);
+            Assert.Contains("## Risk evidence", body, StringComparison.Ordinal);
+            Assert.Contains("DOM parsing can materialize", body, StringComparison.Ordinal);
             Assert.Contains("## Replay command", body, StringComparison.Ordinal);
             Assert.Contains("cdidx search --recipe risky-code/unbounded-json-parse --format issue-drafts --limit 5", body, StringComparison.Ordinal);
             Assert.Contains("--lang csharp --path src/app.cs --exclude-tests", body, StringComparison.Ordinal);
             Assert.Contains($"--open-issues {QuoteReplayShellArgForAssertion(openIssuesPath)}", body, StringComparison.Ordinal);
             Assert.DoesNotContain("public sealed class App", body, StringComparison.Ordinal);
             Assert.Equal("unbounded-json-parse", draft.GetProperty("source").GetProperty("query_name").GetString());
+            Assert.Contains(draft.GetProperty("source").GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("byte caps", StringComparison.Ordinal));
             Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
             Assert.Equal(3145, match.GetProperty("number").GetInt32());
             Assert.Equal("title_exact", match.GetProperty("reason").GetString());

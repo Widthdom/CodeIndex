@@ -53,13 +53,27 @@ internal static class SearchAuditRecipes
                     "JsonDocument.Parse",
                     "Find direct JSON parsing calls that may need input size limits or streaming alternatives.",
                     ["audit", "bug"],
-                    "False positives include tests, deliberately bounded callers, and parsing of already-small generated payloads."),
+                    "False positives include tests, deliberately bounded callers, and parsing of already-small generated payloads.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: DOM parsing can materialize an entire payload and should have an upstream byte or depth bound.",
+                        "positive: generated payloads, fixed literals, and callers with explicit byte caps are usually lower risk."
+                    ],
+                },
                 new(
                     "full-materialization",
                     "ReadToEnd",
                     "Find full stream/string materialization that may need bounded reads or incremental processing.",
                     ["audit", "performance"],
-                    "False positives include bounded in-memory test fixtures and tiny diagnostic payloads."),
+                    "False positives include bounded in-memory test fixtures and tiny diagnostic payloads.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: whole stream or string content may be buffered before size or cancellation checks.",
+                        "positive: nearby bounded reader, byte cap, line cap, or tiny trusted source can explain intentional materialization."
+                    ],
+                },
                 new(
                     "file-read-all-text",
                     "File.ReadAllText",
@@ -77,13 +91,27 @@ internal static class SearchAuditRecipes
                     "int.MaxValue",
                     "Find sentinel or unbounded limit probes that may hide huge allocation or traversal paths.",
                     ["audit", "bug"],
-                    "False positives include defensive upper-bound constants that are never passed to allocation or query limits."),
+                    "False positives include defensive upper-bound constants that are never passed to allocation or query limits.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: sentinel limits can bypass practical allocation, traversal, or query bounds.",
+                        "positive: saturation helpers, explicit cap comments, or test-only ceiling probes often make the hit non-actionable."
+                    ],
+                },
                 new(
                     "raw-diagnostic-echo",
                     "ex.Message",
                     "Find raw exception-message echoes that may need redaction before CLI, JSON, MCP, or GitHub output.",
                     ["audit", "security"],
-                    "False positives include messages that are already sanitized by the surrounding writer."),
+                    "False positives include messages that are already sanitized by the surrounding writer.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw exception messages can carry absolute paths, command lines, SQL, or secret-like values into user-visible output.",
+                        "positive: DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or a dedicated sanitizer nearby is strong safe evidence."
+                    ],
+                },
                 new(
                     "cancellation-gap",
                     "CancellationToken.None",
@@ -113,7 +141,14 @@ internal static class SearchAuditRecipes
                     "ProcessStartInfo",
                     "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
                     ["audit", "security"],
-                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion."),
+                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: launch sites need review for UseShellExecute, WorkingDirectory, Environment mutation, and ArgumentList usage.",
+                        "positive: shared safe-launch wrappers and explicit ArgumentList setup usually lower risk compared with ad hoc Process.Start calls."
+                    ],
+                },
                 new(
                     "process-start-direct",
                     "Process.Start",
@@ -143,7 +178,14 @@ internal static class SearchAuditRecipes
                     "OrdinalIgnoreCase",
                     "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
                     ["audit", "portability"],
-                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains."),
+                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: path equality and path dictionaries may need the indexed filesystem case-sensitivity signal.",
+                        "positive: protocol tokens, option names, labels, header names, or language keywords are non-path domains."
+                    ],
+                },
                 new(
                     "regex-construction",
                     "new Regex",
@@ -167,13 +209,27 @@ internal static class SearchAuditRecipes
                     "Authorization",
                     "Find authorization header or auth-boundary handling that may need redaction and egress review.",
                     ["audit", "security"],
-                    "False positives include documentation, tests, and already-redacted header-name-only handling."),
+                    "False positives include documentation, tests, and already-redacted header-name-only handling.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: HTTP Authorization header values and outbound auth boundaries need storage, redaction, and egress review.",
+                        "positive: SQL ALTER AUTHORIZATION, parser grammar, and header-name-only constants are usually structural false positives."
+                    ],
+                },
                 new(
                     "http-client-construction",
                     "new HttpClient",
                     "Find direct HTTP client construction that may need lifetime, timeout, and outbound-boundary review.",
                     ["audit", "security"],
-                    "False positives include tests, short-lived CLI probes with explicit timeouts, and shared factory wrappers."),
+                    "False positives include tests, short-lived CLI probes with explicit timeouts, and shared factory wrappers.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: ad hoc clients can miss timeout, handler lifetime, proxy, auth, or egress-boundary policy.",
+                        "positive: shared factories with explicit timeout and handler policy are lower-risk construction sites."
+                    ],
+                },
                 new(
                     "bearer-token-handling",
                     "Bearer",
@@ -814,6 +870,7 @@ internal sealed record SearchAuditRecipeQuery(
     bool ExactSubstring = true)
 {
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
+    public List<string> RiskEvidence { get; init; } = [];
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public List<string> MatchOrigins { get; init; } = [];
@@ -861,6 +918,7 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
@@ -908,6 +966,7 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
@@ -937,6 +996,7 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
@@ -990,6 +1050,7 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("result_count")] int ResultCount);
 

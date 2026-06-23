@@ -1800,6 +1800,7 @@ public static partial class QueryCommandRunner
                 $"Ad hoc search for `{options.Query}`.",
                 BuildAdHocIssueDraftLabels(options),
                 "Review the evidence paths and surrounding code before filing.",
+                [],
                 exact,
                 SearchAuditRecipes.DefaultQuerySeverity,
                 [],
@@ -1881,6 +1882,7 @@ public static partial class QueryCommandRunner
                 recipeQuery.Description,
                 recipeQuery.RecommendedLabels,
                 recipeQuery.FalsePositiveGuidance,
+                [.. recipeQuery.RiskEvidence],
                 exact,
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
@@ -1942,6 +1944,7 @@ public static partial class QueryCommandRunner
                 recipeQuery.Query,
                 recipeQuery.Description,
                 recipeQuery.Severity,
+                [.. recipeQuery.RiskEvidence],
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
                 [.. recipeQuery.MatchOrigins],
@@ -2198,6 +2201,7 @@ public static partial class QueryCommandRunner
                 queryResult.Query,
                 queryResult.Description,
                 queryResult.FalsePositiveGuidance,
+                queryResult.RiskEvidence,
                 queryResult.ExactSubstring,
                 queryResult.Count),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
@@ -2241,6 +2245,7 @@ public static partial class QueryCommandRunner
                 queryResult.Query,
                 queryResult.Description,
                 queryResult.FalsePositiveGuidance,
+                queryResult.RiskEvidence,
                 queryResult.ExactSubstring,
                 queryResult.Count),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
@@ -2317,6 +2322,13 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
+        if (queryResult.RiskEvidence.Count > 0)
+        {
+            sb.AppendLine("## Risk evidence");
+            foreach (var evidence in queryResult.RiskEvidence)
+                sb.AppendLine($"- {evidence}");
+            sb.AppendLine();
+        }
         sb.AppendLine("## Replay command");
         sb.AppendLine("```sh");
         sb.AppendLine(BuildSearchRecipeReplayCommand(recipe, options, queryResult.Name));
@@ -2525,6 +2537,7 @@ public static partial class QueryCommandRunner
             query.Description,
             query.RecommendedLabels,
             query.FalsePositiveGuidance,
+            [.. query.RiskEvidence],
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
@@ -2586,6 +2599,8 @@ public static partial class QueryCommandRunner
             compact.ResultKinds = BuildSearchResultKinds(result, compact, displayQuery);
             if (!ApplySearchResultKindFilters(compact, facetFilters))
                 continue;
+            if (recipeQuery is { RiskEvidence.Count: > 0 })
+                compact.RiskEvidence = [.. recipeQuery.RiskEvidence];
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
             {
