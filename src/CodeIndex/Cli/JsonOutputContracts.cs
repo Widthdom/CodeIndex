@@ -410,7 +410,9 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries,
-    [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps);
+    [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps,
+    [property: JsonPropertyName("indexed_file_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);
@@ -602,8 +604,19 @@ internal sealed record SymbolHotspotJsonResult(
     int Line,
     int ReferenceCount,
     double ReferenceScore,
+    double RankingScore,
+    double GenericNamePenalty,
     string? Visibility,
     string? Container);
+
+internal sealed record GroupedSymbolHotspotSiteJsonResult(
+    string Path,
+    string? Lang,
+    int Line,
+    string? Visibility,
+    string? Container,
+    [property: JsonPropertyName("logical_target_key")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LogicalTargetKey);
 
 internal sealed record GroupedSymbolHotspotJsonResult(
     string Name,
@@ -612,11 +625,15 @@ internal sealed record GroupedSymbolHotspotJsonResult(
     int Line,
     int ReferenceCount,
     double ReferenceScore,
+    double RankingScore,
+    double GenericNamePenalty,
     string? Visibility,
     string? Container,
     int DefinitionSites,
     List<string> Paths,
-    bool PathsTruncated);
+    bool PathsTruncated,
+    [property: JsonPropertyName("representative")] GroupedSymbolHotspotSiteJsonResult Representative,
+    [property: JsonPropertyName("definition_site_details")] List<GroupedSymbolHotspotSiteJsonResult> DefinitionSiteDetails);
 
 internal sealed record VersionInfoJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -680,9 +697,11 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(FreshnessHintResult))]
 [JsonSerializable(typeof(FtsQueryDiagnostics))]
 [JsonSerializable(typeof(GroupedHotspotResult))]
+[JsonSerializable(typeof(GroupedSymbolHotspotSiteJsonResult))]
 [JsonSerializable(typeof(GroupedSymbolHotspotJsonResult))]
 [JsonSerializable(typeof(ImpactAnalysisResult))]
 [JsonSerializable(typeof(ImpactCycleResult))]
+[JsonSerializable(typeof(ImpactPathNode))]
 [JsonSerializable(typeof(ImpactResult))]
 [JsonSerializable(typeof(IndexDryRunJsonResult))]
 [JsonSerializable(typeof(IndexFreshnessCheckResult))]

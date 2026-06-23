@@ -1161,6 +1161,11 @@ public partial class DbReader
         var resultIndicesByName = withPaths
             ? new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
             : null;
+        var pathNodesByName = withPaths
+            ? new Dictionary<string, ImpactPathNode>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        if (withPaths)
+            pathNodesByName![resolvedName] = ResolveImpactPathNode(resolvedName, kind: null, lang, referencePath: null, referenceLine: null);
 
         while (queue.Count > 0 && results.Count < limit && !graphStateBudgetHit && !boundaryProbeBudgetHit)
         {
@@ -1253,6 +1258,14 @@ public partial class DbReader
 
                     if (withPaths)
                     {
+                        pathNodesByName!.TryAdd(
+                            callerName,
+                            ResolveImpactPathNode(
+                                callerName,
+                                caller.CallerKind,
+                                caller.Lang ?? lang,
+                                caller.Path,
+                                caller.FirstLine));
                         if (!depthByName.ContainsKey(callerName))
                             depthByName[callerName] = depth + 1;
                         if (!resultIndicesByName!.TryGetValue(callerName, out var idxList))
@@ -1350,6 +1363,7 @@ public partial class DbReader
                 foreach (var idx in indices)
                 {
                     results[idx].Paths = paths;
+                    results[idx].PathDetails = BuildImpactPathDetails(paths, pathNodesByName!, results[idx]);
                     results[idx].PathsTruncated = more;
                 }
             }
@@ -1600,6 +1614,146 @@ public partial class DbReader
             }
         }
     }
+
+    private ImpactPathNode ResolveImpactPathNode(string name, string? kind, string? lang, string? referencePath, int? referenceLine)
+    {
+        var node = TryResolveImpactPathNodeDefinition(name, kind, lang, referencePath)
+            ?? new ImpactPathNode
+            {
+                Name = name,
+                Kind = kind,
+                Lang = lang,
+            };
+        node.ReferencePath = referencePath;
+        node.ReferenceLine = referenceLine;
+        return node;
+    }
+
+    private ImpactPathNode? TryResolveImpactPathNodeDefinition(string name, string? kind, string? lang, string? preferredPath)
+    {
+        if (!_symbolColumns.Contains("name") || !_symbolColumns.Contains("kind"))
+            return null;
+
+        using var cmd = _conn.CreateCommand();
+        var containerNameSql = GetSymbolColumnSql("container_name");
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
+        var familyKeySql = GetSymbolColumnSql("family_key");
+        var namePredicate = _foldReady && _symbolColumns.Contains("name_folded")
+            ? "s.name_folded = @nameFolded"
+            : "s.name = @name COLLATE NOCASE";
+
+        cmd.CommandText = $@"
+            SELECT f.path,
+                   f.lang,
+                   s.kind,
+                   s.name,
+                   s.line,
+                   {containerNameSql} AS container_name,
+                   {containerQualifiedNameSql} AS container_qualified_name,
+                   {familyKeySql} AS family_key,
+                   s.file_id
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE {namePredicate}
+              AND s.kind NOT IN ('import', 'namespace')
+              AND (@kind IS NULL OR s.kind = @kind)
+              AND (@lang IS NULL OR f.lang = @lang)
+            ORDER BY CASE WHEN @preferredPath IS NOT NULL AND f.path = @preferredPath THEN 0 ELSE 1 END,
+                     f.path,
+                     s.line
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@name", name);
+        if (_foldReady && _symbolColumns.Contains("name_folded"))
+            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(name) ?? name);
+        cmd.Parameters.AddWithValue("@kind", (object?)kind ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@lang", (object?)lang ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@preferredPath", (object?)preferredPath ?? DBNull.Value);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return null;
+
+        var definitionPath = reader.GetString(0);
+        var definitionLang = GetNullableString(reader, 1);
+        var definitionKind = reader.GetString(2);
+        var definitionName = reader.GetString(3);
+        var definitionLine = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4);
+        var containerName = GetNullableString(reader, 5);
+        var containerQualifiedName = GetNullableString(reader, 6);
+        var familyKey = GetNullableString(reader, 7);
+        var fileId = reader.GetInt64(8);
+
+        return new ImpactPathNode
+        {
+            Name = definitionName,
+            Kind = definitionKind,
+            Lang = definitionLang,
+            DefinitionPath = definitionPath,
+            DefinitionLine = definitionLine,
+            Container = containerName,
+            FamilyKey = familyKey,
+            LogicalTargetKey = BuildImpactPathLogicalTargetKey(definitionLang, definitionKind, familyKey, containerQualifiedName, fileId),
+        };
+    }
+
+    private static string BuildImpactPathLogicalTargetKey(string? lang, string kind, string? familyKey, string? containerQualifiedName, long fileId)
+    {
+        if (!string.IsNullOrWhiteSpace(familyKey))
+            return $"family|{lang ?? string.Empty}|{kind}|{familyKey}";
+        if (!string.IsNullOrWhiteSpace(containerQualifiedName))
+            return $"container|{fileId}|{kind}|{containerQualifiedName}";
+        return $"file|{fileId}";
+    }
+
+    private static List<List<ImpactPathNode>> BuildImpactPathDetails(
+        List<List<string>> paths,
+        IReadOnlyDictionary<string, ImpactPathNode> nodesByName,
+        ImpactResult result)
+    {
+        var details = new List<List<ImpactPathNode>>(paths.Count);
+        var resultName = result.CallerName ?? SyntheticTopLevelCallerName;
+        foreach (var path in paths)
+        {
+            var detailPath = new List<ImpactPathNode>(path.Count);
+            for (var i = 0; i < path.Count; i++)
+            {
+                var name = path[i];
+                var isResultNode = i == path.Count - 1 && string.Equals(name, resultName, StringComparison.OrdinalIgnoreCase);
+                if (!nodesByName.TryGetValue(name, out var node))
+                    node = new ImpactPathNode { Name = name };
+                detailPath.Add(isResultNode
+                    ? CloneImpactPathNodeForResult(node, result)
+                    : CloneImpactPathNode(node));
+            }
+            details.Add(detailPath);
+        }
+        return details;
+    }
+
+    private static ImpactPathNode CloneImpactPathNodeForResult(ImpactPathNode node, ImpactResult result)
+    {
+        var clone = CloneImpactPathNode(node);
+        clone.Kind ??= result.CallerKind;
+        clone.Lang ??= result.Lang;
+        clone.ReferencePath = result.Path;
+        clone.ReferenceLine = result.FirstLine;
+        return clone;
+    }
+
+    private static ImpactPathNode CloneImpactPathNode(ImpactPathNode node)
+        => new()
+        {
+            Name = node.Name,
+            Kind = node.Kind,
+            Lang = node.Lang,
+            DefinitionPath = node.DefinitionPath,
+            DefinitionLine = node.DefinitionLine,
+            Container = node.Container,
+            FamilyKey = node.FamilyKey,
+            LogicalTargetKey = node.LogicalTargetKey,
+            ReferencePath = node.ReferencePath,
+            ReferenceLine = node.ReferenceLine,
+        };
 
     /// <summary>
     /// Analyze impact for a query by combining transitive callers with symbol-resolution
