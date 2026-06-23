@@ -497,6 +497,51 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_JsonWithoutBody_OmitsDefinitionContent_Issue3913()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_json_omits_content");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = json.GetProperty("definitions").EnumerateArray().Single();
+            var bodyMode = json.GetProperty("body_mode");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.False(definition.TryGetProperty("body_content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("inspect_body_not_requested", definition.GetProperty("content_omitted_reason").GetString());
+            Assert.False(bodyMode.GetProperty("include_body").GetBoolean());
+            Assert.False(bodyMode.GetProperty("body_content_present").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_BodyOnlyJson_EmitsDefinitionBodiesOnly_Issue3056()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_only_json");
@@ -530,6 +575,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(["definitions"], selectedFields);
             Assert.Contains("return 42;", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definition.GetProperty("content_omitted_reason").GetString());
             Assert.False(json.TryGetProperty("file", out _));
             Assert.False(json.TryGetProperty("references", out _));
             Assert.False(json.TryGetProperty("callers", out _));
@@ -583,6 +631,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(7, definition.GetProperty("body_content_end_line").GetInt32());
             Assert.Equal(8, definition.GetProperty("body_content_next_start_line").GetInt32());
             Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definition.GetProperty("content_omitted_reason").GetString());
         }
         finally
         {

@@ -167,6 +167,9 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(dbPath, recoveryCommand);
             Assert.Contains("--max-line-width 0 --json", recoveryCommand);
             Assert.False(json.TryGetProperty("complexity", out _));
+            Assert.False(json.TryGetProperty("content", out _));
+            Assert.True(json.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", json.GetProperty("content_omitted_reason").GetString());
             Assert.True(CountLines(json.GetProperty("body_content").GetString()!) <= DbReader.DefinitionBodyMaxLines);
             Assert.DoesNotContain("value_23", json.GetProperty("body_content").GetString());
         }
