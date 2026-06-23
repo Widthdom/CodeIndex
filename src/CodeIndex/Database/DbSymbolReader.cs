@@ -109,6 +109,83 @@ public partial class DbReader
         "return",
         "type",
     };
+    private static readonly string[] UnusedContractPathSegments =
+    [
+        "/contracts/",
+        "/contract/",
+        "/dtos/",
+        "/dto/",
+        "/models/",
+        "/model/",
+        "/schemas/",
+        "/schema/",
+    ];
+    private static readonly string[] UnusedRecordContractSuffixes =
+    [
+        "Dto",
+        "DTO",
+        "Request",
+        "Response",
+        "Result",
+        "Results",
+        "Model",
+        "Payload",
+        "Envelope",
+    ];
+    private static readonly string[] UnusedGeneratedPathMarkers =
+    [
+        ".g.cs",
+        ".generated.",
+        "/generated/",
+        "/obj/",
+        "/bin/",
+    ];
+    private static readonly HashSet<string> UnusedExceptionMetadataNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CharactersRead",
+        "Utf8BytesRead",
+        "SizeLimit",
+        "Limit",
+        "ByteCount",
+        "BytesRead",
+        "Offset",
+        "Position",
+        "Path",
+        "FileName",
+        "LineNumber",
+        "ColumnNumber",
+        "ActualSize",
+        "MaxSize",
+        "Length",
+    };
+    private static readonly string[] UnusedConfigMemberTerms =
+    [
+        "Configuration",
+        "Config",
+        "Options",
+        "Settings",
+        "Manifest",
+        "Schema",
+        "Metadata",
+        "Limit",
+        "Max",
+        "Min",
+        "Size",
+        "Bytes",
+        "Count",
+        "Capacity",
+        "Timeout",
+        "Version",
+        "Kind",
+        "Category",
+        "Severity",
+        "Source",
+        "Target",
+        "Path",
+        "Name",
+        "Id",
+        "Key",
+    ];
     private const int UnusedAttributeContextWindow = 16;
     private const int UnusedPublicOverfetchMultiplier = 16;
     private const int UnusedPublicOverfetchMinimum = 64;
@@ -3808,11 +3885,16 @@ public partial class DbReader
     private UnusedSymbolResult CreateUnusedSymbolResult(UnusedCandidateSymbol candidate)
     {
         var kind = NormalizeUnusedSymbolKind(candidate);
-        var isReflectionOrConfigSuspect = candidate.IsReflectionOrConfigSuspect;
-        if (!isReflectionOrConfigSuspect && candidate.IsPublicOrExported)
-            isReflectionOrConfigSuspect = HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine);
+        var surfaceTags = BuildUnusedIntentionalSurfaceTags(candidate, kind);
+        if (!surfaceTags.Contains("reflection_or_config_suspect", StringComparer.Ordinal)
+            && candidate.IsPublicOrExported
+            && HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine))
+        {
+            AddUnusedSurfaceTag(surfaceTags, "reflection_or_config_suspect");
+        }
 
-        var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility);
+        var isIntentionalSurfaceSuspect = surfaceTags.Count > 0;
+        var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility);
         return new UnusedSymbolResult
         {
             Path = candidate.Path,
@@ -3830,7 +3912,7 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
-            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility),
+            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags),
         };
     }
 
@@ -3894,7 +3976,7 @@ public partial class DbReader
 
         var sql = $@"
             WITH unused_candidates AS (
-                SELECT f.path, f.lang, s.kind, s.name, s.line,
+                SELECT s.file_id, f.path, f.lang, s.kind, s.name, s.line,
                        {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                        {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
                        {GetSymbolColumnSql("signature")} AS signature,
@@ -3902,6 +3984,7 @@ public partial class DbReader
                        {GetSymbolColumnSql("return_type")} AS return_type,
                        {GetSymbolColumnSql("container_kind")} AS container_kind,
                        {GetSymbolColumnSql("container_name")} AS container_name,
+                       {GetSymbolColumnSql("container_qualified_name", GetSymbolColumnSql("container_name", "''"))} AS container_qualified_name,
                        CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
                        CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
                        {provisionalBucketOrderSql} AS provisional_bucket_order
@@ -3953,9 +4036,9 @@ public partial class DbReader
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += @"
             )
-            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                   return_type, container_kind, container_name, is_public_or_exported,
-                   is_reflection_or_config_suspect
+            SELECT file_id, path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                   return_type, container_kind, container_name, container_qualified_name,
+                   is_public_or_exported, is_reflection_or_config_suspect, provisional_bucket_order
             FROM unused_candidates
             WHERE provisional_bucket_order = @bucketOrder
             ORDER BY path, line, name
@@ -3983,38 +4066,27 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var path = reader.GetString(0);
-            var langValue = GetNullableString(reader, 1);
-            var rawKindValue = reader.GetString(2);
-            var signature = GetNullableString(reader, 7);
-            var kindValue = NormalizeUnusedSymbolKind(langValue, rawKindValue, signature);
-            var startLine = GetInt32OrFallback(reader, 5, 4);
-            var isPublicOrExported = reader.GetInt32(12) != 0;
-            var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
-            if (!isReflectionOrConfigSuspect && isPublicOrExported)
-                isReflectionOrConfigSuspect = HasReflectionAttributeContext(kindValue, path, startLine);
-
-            var visibility = GetNullableString(reader, 8);
-            var classification = ClassifyUnusedSymbol(isPublicOrExported, isReflectionOrConfigSuspect, visibility);
-            results.Add(new UnusedSymbolResult
+            var candidate = new UnusedCandidateSymbol
             {
-                Path = path,
-                Lang = langValue,
-                Kind = kindValue,
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = startLine,
-                EndLine = GetInt32OrFallback(reader, 6, 4),
-                Signature = signature,
-                Visibility = visibility,
-                ReturnType = GetNullableString(reader, 9),
-                ContainerKind = GetNullableString(reader, 10),
-                ContainerName = GetNullableString(reader, 11),
-                UnusedBucket = classification.Bucket,
-                UnusedConfidence = classification.Confidence,
-                UnusedReason = classification.Reason,
-                UnusedReasonTags = BuildUnusedReasonTags(isPublicOrExported, isReflectionOrConfigSuspect, visibility),
-            });
+                FileId = reader.GetInt64(0),
+                Path = reader.GetString(1),
+                Lang = GetNullableString(reader, 2),
+                Kind = reader.GetString(3),
+                Name = reader.GetString(4),
+                Line = reader.GetInt32(5),
+                StartLine = GetInt32OrFallback(reader, 6, 5),
+                EndLine = GetInt32OrFallback(reader, 7, 5),
+                Signature = GetNullableString(reader, 8),
+                Visibility = GetNullableString(reader, 9),
+                ReturnType = GetNullableString(reader, 10),
+                ContainerKind = GetNullableString(reader, 11),
+                ContainerName = GetNullableString(reader, 12),
+                ContainerQualifiedName = GetNullableString(reader, 13),
+                IsPublicOrExported = reader.GetInt32(14) != 0,
+                IsReflectionOrConfigSuspect = reader.GetInt32(15) != 0,
+                ProvisionalBucketOrder = reader.GetInt32(16),
+            };
+            results.Add(CreateUnusedSymbolResult(candidate));
         }
 
         return results;
@@ -4078,13 +4150,14 @@ public partial class DbReader
 
     private static IEnumerable<int> GetRelevantUnusedProvisionalBuckets(IReadOnlySet<string> targetBuckets)
     {
-        if (targetBuckets.Contains(UnusedBucketLikelyPrivate))
+        var wantsIntentionalSurface = targetBuckets.Contains(UnusedBucketReflectionOrConfig);
+        if (targetBuckets.Contains(UnusedBucketLikelyPrivate) || wantsIntentionalSurface)
             yield return 0;
-        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic))
+        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic) || wantsIntentionalSurface)
             yield return 1;
-        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || wantsIntentionalSurface)
             yield return 2;
-        if (targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+        if (wantsIntentionalSurface)
             yield return 3;
     }
 
@@ -4140,6 +4213,172 @@ public partial class DbReader
         "low" => 0,
         _ => -1,
     };
+
+    public UnusedCountResult CountUnusedSymbolsDetailed(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, string? bucketFilter = null, string? minConfidence = null)
+    {
+        if (!_hasReferencesTable)
+            return EmptyUnusedCountResult();
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+            return EmptyUnusedCountResult();
+        if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
+            return CountUnusedSymbolsDetailedWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+
+        return CountUnusedSymbolsDetailedWithSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+    }
+
+    private UnusedCountResult CountUnusedSymbolsDetailedWithSqlResolver(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        var count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var includesSql = false;
+        var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        for (var bucket = 0; bucket <= 3; bucket++)
+        {
+            var offset = 0;
+            while (true)
+            {
+                var batch = FetchUnusedCandidates(batchSize, bucket, offset, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var result in batch)
+                {
+                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+    }
+
+    private UnusedCountResult CountUnusedSymbolsDetailedWithoutSqlResolver(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        var count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var includesSql = false;
+        var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var fileContentByFileId = new Dictionary<long, string>();
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        for (var bucket = 0; bucket <= 3; bucket++)
+        {
+            var offset = 0;
+            while (true)
+            {
+                var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var candidate in batch)
+                {
+                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                        continue;
+
+                    var result = CreateUnusedSymbolResult(candidate);
+                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+    }
+
+    private static void AddUnusedCountResult(
+        UnusedSymbolResult result,
+        HashSet<string> paths,
+        Dictionary<string, int> bucketCounts,
+        Dictionary<string, int> confidenceCounts,
+        ref int count,
+        ref bool includesSql)
+    {
+        count++;
+        paths.Add(result.Path);
+        if (IsSqlLanguage(result.Lang))
+            includesSql = true;
+        IncrementUnusedCount(bucketCounts, result.UnusedBucket);
+        IncrementUnusedCount(confidenceCounts, result.UnusedConfidence);
+    }
+
+    private static void IncrementUnusedCount(Dictionary<string, int> counts, string key)
+    {
+        if (counts.TryGetValue(key, out var count))
+            counts[key] = count + 1;
+        else
+            counts[key] = 1;
+    }
+
+    private static UnusedCountResult CreateUnusedCountResult(
+        int count,
+        int fileCount,
+        bool includesSql,
+        Dictionary<string, int> bucketCounts,
+        Dictionary<string, int> confidenceCounts)
+        => new(
+            count,
+            fileCount,
+            includesSql,
+            OrderUnusedBucketCounts(bucketCounts),
+            OrderUnusedConfidenceCounts(confidenceCounts));
+
+    private static UnusedCountResult EmptyUnusedCountResult()
+        => CreateUnusedCountResult(0, 0, includesSql: false, new Dictionary<string, int>(StringComparer.Ordinal), new Dictionary<string, int>(StringComparer.Ordinal));
+
+    private static QueryCountResult ToQueryCountResult(UnusedCountResult result)
+        => new(result.Count, result.FileCount, result.IncludesSql);
+
+    private static Dictionary<string, int> OrderUnusedBucketCounts(Dictionary<string, int> counts)
+    {
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (counts.TryGetValue(bucket, out var count))
+                ordered[bucket] = count;
+        }
+
+        return ordered;
+    }
+
+    private static Dictionary<string, int> OrderUnusedConfidenceCounts(Dictionary<string, int> counts)
+    {
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var confidence in new[] { "medium", "low" })
+        {
+            if (counts.TryGetValue(confidence, out var count))
+                ordered[confidence] = count;
+        }
+
+        foreach (var pair in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!ordered.ContainsKey(pair.Key))
+                ordered[pair.Key] = pair.Value;
+        }
+
+        return ordered;
+    }
 
     public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, string? bucketFilter = null, string? minConfidence = null)
     {
@@ -4238,38 +4477,16 @@ public partial class DbReader
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountFilteredUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
 
-        var count = 0;
-        var paths = new HashSet<string>(StringComparer.Ordinal);
-        var includesSql = false;
-        const int batchSize = UnusedPublicOverfetchMaximum;
-        for (var bucket = 0; bucket <= 3; bucket++)
-        {
-            var offset = 0;
-            while (true)
-            {
-                var batch = FetchUnusedCandidates(batchSize, bucket, offset, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-                if (batch.Count == 0)
-                    break;
-
-                offset += batch.Count;
-                foreach (var result in batch)
-                {
-                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
-                        continue;
-
-                    count++;
-                    paths.Add(result.Path);
-                    if (IsSqlLanguage(result.Lang))
-                        includesSql = true;
-                }
-
-                if (batch.Count < batchSize)
-                    break;
-            }
-        }
-
-        return new QueryCountResult(count, paths.Count, includesSql);
+        return ToQueryCountResult(CountUnusedSymbolsDetailedWithSqlResolver(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            bucketFilter,
+            minConfidence));
     }
 
     private QueryCountResult CountFilteredUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
@@ -4277,40 +4494,16 @@ public partial class DbReader
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
         string? bucketFilter, string? minConfidence)
     {
-        var count = 0;
-        var paths = new HashSet<string>(StringComparer.Ordinal);
-        var fileContentByFileId = new Dictionary<long, string>();
-        const int batchSize = UnusedPublicOverfetchMaximum;
-        for (var bucket = 0; bucket <= 3; bucket++)
-        {
-            var offset = 0;
-            while (true)
-            {
-                var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
-                if (batch.Count == 0)
-                    break;
-
-                offset += batch.Count;
-                foreach (var candidate in batch)
-                {
-                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
-                        continue;
-
-                    var result = CreateUnusedSymbolResult(candidate);
-                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
-                        continue;
-
-                    count++;
-                    paths.Add(candidate.Path);
-                }
-
-                if (batch.Count < batchSize)
-                    break;
-            }
-        }
-
-        return new QueryCountResult(count, paths.Count);
+        return ToQueryCountResult(CountUnusedSymbolsDetailedWithoutSqlResolver(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            bucketFilter,
+            minConfidence));
     }
 
     private QueryCountResult CountUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
@@ -5221,14 +5414,190 @@ public partial class DbReader
         return count;
     }
 
-    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    private static List<string> BuildUnusedIntentionalSurfaceTags(UnusedCandidateSymbol candidate, string kind)
     {
-        if (isReflectionOrConfigSuspect)
+        var tags = new List<string>();
+        if (candidate.IsReflectionOrConfigSuspect)
+            AddUnusedSurfaceTag(tags, "reflection_or_config_suspect");
+        if (IsMarkdownHeadingSymbol(candidate, kind))
+            AddUnusedSurfaceTag(tags, "documentation_heading");
+        if (IsGeneratedSurface(candidate))
+            AddUnusedSurfaceTag(tags, "generated_surface");
+        if (IsSourceGeneratedJsonContext(candidate))
+        {
+            AddUnusedSurfaceTag(tags, "serialization_contract");
+            AddUnusedSurfaceTag(tags, "source_generated_json_context");
+        }
+        if (IsUnusedContractType(candidate, kind))
+            AddUnusedSurfaceTag(tags, "serialization_contract");
+        if (IsUnusedContractMember(candidate, kind))
+            AddUnusedSurfaceTag(tags, "contract_member");
+        if (IsConfigOrManifestSurface(candidate, kind))
+            AddUnusedSurfaceTag(tags, "config_or_metadata_surface");
+        if (IsTestHookName(candidate.Name))
+            AddUnusedSurfaceTag(tags, "test_hook");
+        if (IsExceptionMetadataProperty(candidate, kind))
+            AddUnusedSurfaceTag(tags, "exception_metadata");
+        if (IsConfigOrMetadataMember(candidate, kind))
+            AddUnusedSurfaceTag(tags, "config_or_metadata_member");
+        return tags;
+    }
+
+    private static void AddUnusedSurfaceTag(List<string> tags, string tag)
+    {
+        if (!tags.Contains(tag, StringComparer.Ordinal))
+            tags.Add(tag);
+    }
+
+    private static bool IsMarkdownHeadingSymbol(UnusedCandidateSymbol candidate, string kind)
+    {
+        return (string.Equals(candidate.Lang, "markdown", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate.Lang, "md", StringComparison.OrdinalIgnoreCase))
+            && (kind.Contains("heading", StringComparison.OrdinalIgnoreCase)
+                || kind.Contains("header", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsGeneratedSurface(UnusedCandidateSymbol candidate)
+        => ContainsAny(candidate.Path, UnusedGeneratedPathMarkers);
+
+    private static bool IsSourceGeneratedJsonContext(UnusedCandidateSymbol candidate)
+    {
+        return EndsWithAny(candidate.Name, ["JsonContext"])
+            || ContainsAny(candidate.Signature, ["JsonSerializerContext", "JsonSerializable", "JsonSourceGenerationOptions"]);
+    }
+
+    private static bool IsUnusedContractType(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsTypeLikeUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || IsRecordContractType(candidate)
+            || ContainsAny(candidate.Signature, ["DataContract", "Serializable", "MessagePackObject", "ProtoContract"]);
+    }
+
+    private static bool IsUnusedContractMember(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsDataMemberUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "DataMember", "XmlElement", "XmlAttribute"]);
+    }
+
+    private static bool IsConfigOrManifestSurface(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        if (!IsTypeLikeUnusedKind(kind) && !IsDataMemberUnusedKind(kind) && !IsFunctionLikeUnusedKind(kind))
+            return false;
+        if (EndsWithAny(candidate.Name, ["Options", "Settings", "Configuration", "Config", "Manifest", "Schema"])
+            || ContainsAny(candidate.Name, ["Configuration", "IOptions"])
+            || ContainsAny(candidate.Signature, ["IConfiguration", "ConfigurationSection", "IOptions", "Options<"]))
+        {
+            return true;
+        }
+
+        return IsDataMemberUnusedKind(kind)
+            && (ContainsAny(candidate.Path, ["/config/", "/configuration/", "/options/", "/settings/", "/manifest/", "/manifests/"])
+                || ContainsAny(candidate.Signature, ["IConfiguration", "ConfigurationSection", "IOptions", "Options<"]));
+    }
+
+    private static bool IsTestHookName(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name)
+            && (name.EndsWith("ForTests", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("ForTest", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("TestOnly", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsExceptionMetadataProperty(UnusedCandidateSymbol candidate, string kind)
+    {
+        return string.Equals(kind, "property", StringComparison.OrdinalIgnoreCase)
+            && UnusedExceptionMetadataNames.Contains(candidate.Name)
+            && (EndsWithAny(candidate.ContainerName, ["Exception"])
+                || ContainsAny(candidate.ContainerQualifiedName, ["Exception"])
+                || ContainsAny(candidate.Signature, ["Exception"]));
+    }
+
+    private static bool IsConfigOrMetadataMember(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsDataMemberUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        if (!ContainsAny(candidate.Name, UnusedConfigMemberTerms))
+            return false;
+
+        var hasContext = ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Path, ["/config/", "/configuration/", "/options/", "/settings/", "/manifest/", "/manifests/"])
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "DataMember", "Diagnostic", "Metadata", "IConfiguration", "IOptions", "Options<"]);
+        return hasContext;
+    }
+
+    private static bool IsTypeLikeUnusedKind(string kind)
+    {
+        return kind is "class" or "struct" or "record" or "interface" or "enum" or "type";
+    }
+
+    private static bool IsDataMemberUnusedKind(string kind)
+    {
+        return kind is "property" or "field" or "constant" or "enum_member";
+    }
+
+    private static bool IsFunctionLikeUnusedKind(string kind)
+    {
+        return kind is "function" or "method";
+    }
+
+    private static bool IsRecordContractType(UnusedCandidateSymbol candidate)
+    {
+        return ContainsCSharpRecordKeyword(candidate.Signature)
+            && EndsWithAny(candidate.Name, UnusedRecordContractSuffixes);
+    }
+
+    private static bool ContainsCSharpRecordKeyword(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var trimmed = signature.TrimStart();
+        return trimmed.StartsWith("record ", StringComparison.Ordinal)
+            || trimmed.StartsWith("record(", StringComparison.Ordinal)
+            || signature.Contains(" record ", StringComparison.Ordinal)
+            || signature.Contains(" record(", StringComparison.Ordinal);
+    }
+
+    private static bool EndsWithAny(string? value, IReadOnlyList<string> suffixes)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var suffix in suffixes)
+        {
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsAny(string? value, IReadOnlyList<string> fragments)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var fragment in fragments)
+        {
+            if (value.Contains(fragment, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isIntentionalSurfaceSuspect, string? visibility)
+    {
+        if (isIntentionalSurfaceSuspect)
         {
             return (
                 UnusedBucketReflectionOrConfig,
                 "low",
-                "public/exported symbol with config or attribute-driven reflection surface and no indexed references");
+                "symbol with attribute-driven reflection surface, serialization, config, metadata, test-hook, generated, documentation, or compatibility surface and no indexed references");
         }
 
         if (isPublicOrExported)
@@ -5253,11 +5622,16 @@ public partial class DbReader
             "non-public symbol with no indexed references");
     }
 
-    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isIntentionalSurfaceSuspect, string? visibility, IReadOnlyList<string> surfaceTags)
     {
         var tags = new List<string> { "no_indexed_references" };
-        if (isReflectionOrConfigSuspect)
+        if (isIntentionalSurfaceSuspect)
+        {
+            tags.Add("intentional_surface_suspect");
             tags.Add("reflection_or_config_suspect");
+        }
+        foreach (var surfaceTag in surfaceTags)
+            AddUnusedSurfaceTag(tags, surfaceTag);
         if (isPublicOrExported)
             tags.Add("public_or_exported");
         else if (IsPrivateLikeVisibility(visibility))
