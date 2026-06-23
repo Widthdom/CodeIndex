@@ -88,7 +88,7 @@ public static partial class QueryCommandRunner
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
-                if (!TryParseBatchLine(line, lineNumber, out var commandName, out var subArgs, out var parseExitCode))
+                if (!TryParseBatchLine(line, lineNumber, jsonOptions, out var commandName, out var subArgs, out var parseExitCode))
                 {
                     lineErrors++;
                     if (firstFailure == CommandExitCodes.Success)
@@ -170,7 +170,7 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static bool TryParseBatchLine(string line, int lineNumber, out string commandName, out string[] subArgs, out int exitCode)
+    private static bool TryParseBatchLine(string line, int lineNumber, JsonSerializerOptions jsonOptions, out string commandName, out string[] subArgs, out int exitCode)
     {
         commandName = string.Empty;
         subArgs = [];
@@ -213,7 +213,14 @@ public static partial class QueryCommandRunner
         }
         catch (JsonException)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.");
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                $"batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.",
+                CommandExitCodes.UsageError,
+                "ensure each batch input line is a JSON string array.",
+                errorCode: CommandErrorCodes.UsageError,
+                category: "invalid_batch_json");
             return false;
         }
     }
