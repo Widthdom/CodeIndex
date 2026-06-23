@@ -248,6 +248,8 @@ internal static partial class ProgramRunner
         {
             "upgrade" => RunUpgrade(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "index" => IndexCommandRunner.Run(subArgs, context.JsonOptions),
+            "recipes" => RunRecipesAlias(subArgs, context),
+            "audit" => RunAuditAlias(subArgs, context),
             "export" => ExportImportCommandRunner.RunExport(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "import" => ExportImportCommandRunner.RunImport(subArgs, context.JsonOptions, context.CancellationToken),
             "diff" => DiffCommandRunner.Run(subArgs, context.JsonOptions, context.CancellationToken),
@@ -272,6 +274,33 @@ internal static partial class ProgramRunner
                 => IndexCommandRunner.Run(originalArgs, context.JsonOptions),
             _ => ShowError(originalArgs, $"Unknown command: {commandName}")
         };
+
+    private static int RunRecipesAlias(string[] subArgs, CommandRunContext context)
+    {
+        var searchArgs = new string[subArgs.Length + 1];
+        searchArgs[0] = "--list-recipes";
+        Array.Copy(subArgs, 0, searchArgs, 1, subArgs.Length);
+        return QueryCommandRunner.RunSearch(searchArgs, context.JsonOptions, context.CancellationToken);
+    }
+
+    private static int RunAuditAlias(string[] subArgs, CommandRunContext context)
+    {
+        if (subArgs.Length == 0 || subArgs[0].StartsWith("-", StringComparison.Ordinal))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                ContainsJsonOutputFlag(subArgs),
+                context.JsonOptions,
+                "audit requires a recipe name.",
+                CommandExitCodes.UsageError,
+                "pass a recipe name after `cdidx audit`, or run `cdidx recipes` to list built-in recipes.");
+        }
+
+        var searchArgs = new string[subArgs.Length + 1];
+        searchArgs[0] = "--recipe";
+        searchArgs[1] = subArgs[0];
+        Array.Copy(subArgs, 1, searchArgs, 2, subArgs.Length - 1);
+        return QueryCommandRunner.RunSearch(searchArgs, context.JsonOptions, context.CancellationToken);
+    }
 
     internal static bool IsProjectPathArg(string arg)
     {

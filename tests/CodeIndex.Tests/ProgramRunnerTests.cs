@@ -115,6 +115,35 @@ public class ProgramRunnerTests
         Assert.False(ProgramRunner.ContainsJsonOutputFlag(["search", "--", "--json"]));
     }
 
+    [Theory]
+    [InlineData("recipes", "cdidx recipes")]
+    [InlineData("audit", "cdidx audit")]
+    public void Run_SearchAuditAliasHelp_PrintsCommandUsage_Issue3893(string command, string expectedUsage)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [command, "--help"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains(expectedUsage, stdout);
+        Assert.DoesNotContain("Build or update the index for a project", stdout);
+        Assert.Empty(stderr);
+    }
+
+    [Fact]
+    public void RunRecipesAlias_ListsRecipeJsonObject_Issue3893()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.True(document.RootElement.TryGetProperty("recipes", out _));
+        Assert.True(document.RootElement.TryGetProperty("count", out _));
+    }
+
     [Fact]
     public void RunLanguages_PrettyJson_IndentsOutput_Issue2996()
     {

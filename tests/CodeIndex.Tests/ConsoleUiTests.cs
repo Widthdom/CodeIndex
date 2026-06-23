@@ -126,6 +126,35 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintCommandUsage_SearchIncludesAuditOutputControlFlags_Issue3893()
+    {
+        using var capture = ConsoleCapture.Start(captureOut: true);
+
+        Assert.True(ConsoleUi.PrintCommandUsage("search"));
+
+        var output = capture.Out!.ToString()!;
+        foreach (var flag in new[]
+        {
+            "--unique",
+            "--count-by",
+            "--origin",
+            "--match-origin",
+            "--exclude-origin",
+            "--result-kind",
+            "--search-fields",
+            "--results-only",
+            "--first-per-file",
+            "--sample",
+            "--per-file-limit",
+            "--max-json-bytes",
+            "--next-steps",
+        })
+        {
+            Assert.Contains(flag, output);
+        }
+    }
+
+    [Fact]
     public void PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
