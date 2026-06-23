@@ -2550,6 +2550,67 @@ exit 7
     }
 
     [Fact]
+    public async Task DownloadReleaseChecksumManifestAsync_HttpFailureUsesBoundedRedactedDiagnostics_Issue3973()
+    {
+        var errorBody = """
+            {
+              "message": "denied",
+              "authorization": "Bearer secret-token-3973",
+              "details": "release asset unavailable"
+            }
+            """;
+        using var client = new HttpClient(new StaticResponseHandler(
+            new StringContent(errorBody, Encoding.UTF8, "application/json"),
+            HttpStatusCode.Forbidden))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            ProgramRunner.DownloadReleaseChecksumManifestAsync(
+                client,
+                "v1.27.0",
+                TimeSpan.FromSeconds(1),
+                CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
+        Assert.Contains("GitHub release download failed for sha256sums.txt: 403:", ex.Message);
+        Assert.Contains("[redacted]", ex.Message);
+        Assert.DoesNotContain("secret-token-3973", ex.Message);
+        Assert.True(ex.Message.Length < 700, ex.Message);
+    }
+
+    [Fact]
+    public async Task DownloadInstallerScriptAsync_UsesReleaseDownloadHeadersWithoutApiMediaType_Issue3973()
+    {
+        var handler = new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("#!/bin/sh\n")));
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx_install_header_{Guid.NewGuid():N}.sh");
+        try
+        {
+            await ProgramRunner.DownloadInstallerScriptAsync(
+                client,
+                "v1.27.0",
+                scriptPath,
+                TimeSpan.FromSeconds(1),
+                CancellationToken.None);
+
+            Assert.NotNull(handler.LastRequest);
+            Assert.Contains(handler.LastRequest!.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+            Assert.Empty(handler.LastRequest.Headers.Accept);
+            Assert.False(handler.LastRequest.Headers.Contains("X-GitHub-Api-Version"));
+        }
+        finally
+        {
+            if (File.Exists(scriptPath))
+                File.Delete(scriptPath);
+        }
+    }
+
+    [Fact]
     public async Task UpdateChecker_ReadLatestReleaseTagAsync_ParsesTagName()
     {
         using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""{"tag_name":"v1.27.0"}"""));
