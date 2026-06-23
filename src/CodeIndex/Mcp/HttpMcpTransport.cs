@@ -1038,9 +1038,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
             await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal server shutdown.
+        }
+        catch (Exception ex)
         {
             // Client disconnects are expected for long-lived SSE streams.
+            if (!stream.IsReleased)
+                RecordEventStreamDrop(EventStreamWriteFailureDrop, ex);
         }
         finally
         {
@@ -1104,6 +1110,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         private int _released;
 
         public HttpListenerResponse Response { get; } = response;
+
+        public bool IsReleased => Volatile.Read(ref _released) != 0;
 
         public async Task WriteJsonRpcEventAsync(string frame, CancellationToken cancellationToken)
         {

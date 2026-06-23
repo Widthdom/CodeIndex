@@ -197,9 +197,15 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_Healthz_ReportsEventStreamDropReasons_Issue3966()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.RecordEventStreamDrop(HttpMcpTransport.EventStreamWriteFailureDrop, new IOException("write failed"));
+        harness.SetKeepAlive(
+            TimeSpan.FromMilliseconds(1),
+            () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes + 1));
 
         using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.EventStreamDropCount > 0, "event stream drop counter");
+
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -209,7 +215,7 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal("ok", root.GetProperty("status").GetString());
         Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
         Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
-        Assert.Equal("write_failure:io_error:IOException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
+        Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
     }
 
     [Fact]
@@ -1631,9 +1637,6 @@ public class HttpMcpTransportTests : IDisposable
 
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
-
-        public void RecordEventStreamDrop(string reason, Exception exception)
-            => _transport.RecordEventStreamDrop(reason, exception);
 
         public void SetHealthJsonProvider(Func<string> provider)
             => _transport.HealthJsonProvider = provider;
