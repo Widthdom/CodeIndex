@@ -228,12 +228,8 @@ public class DbContext : IDisposable
         CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = openTarget,
-                Mode = requireWritable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
-            };
-            return new SqliteConnection(builder.ConnectionString);
+            var mode = requireWritable ? SqliteConnectionPolicyMode.ReadWrite : SqliteConnectionPolicyMode.ReadOnly;
+            return new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(openTarget, mode));
         },
         static connection => connection.Open(),
         null,
@@ -328,8 +324,8 @@ public class DbContext : IDisposable
                 : OpenReadOnly(openTarget);
 
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = "PRAGMA application_id";
-            if (Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != ApplicationId)
+            cmd.CommandText = SqliteCommandPolicy.PragmaSql("application_id");
+            if (SqliteCommandPolicy.ReadInt64Scalar(cmd, "pragma application_id") != ApplicationId)
             {
                 message = $"database is not an existing CodeIndex DB: {dbPath}";
                 return false;
@@ -337,8 +333,8 @@ public class DbContext : IDisposable
 
             if (requireSupportedUserVersion)
             {
-                cmd.CommandText = "PRAGMA user_version";
-                var userVersion = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+                cmd.CommandText = SqliteCommandPolicy.PragmaSql("user_version");
+                var userVersion = SqliteCommandPolicy.ReadInt32Scalar(cmd, "pragma user_version");
                 var unknownBits = userVersion & ~CurrentSchemaVersion;
                 if (unknownBits != 0)
                 {
@@ -400,7 +396,7 @@ public class DbContext : IDisposable
             {
                 try
                 {
-                    _connection = new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
+                    _connection = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
                     cancellationToken.ThrowIfCancellationRequested();
                     _connection.Open();
                     ApplyBusyTimeoutPragma();
@@ -431,15 +427,15 @@ public class DbContext : IDisposable
             }
         }
 
-        // Use SqliteConnectionStringBuilder to prevent connection string injection
-        // via paths containing ';' or other special characters.
-        // SqliteConnectionStringBuilderで接続文字列インジェクションを防止する。
-        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        // Route through the shared SQLite connection policy so mode/pooling/timeout
+        // assumptions stay consistent across CLI and MCP callers.
+        // mode/pooling/timeout の前提を CLI/MCP で揃えるため共有ポリシーを通す。
+        var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Default);
 
         try
         {
             _connection = OpenSqliteConnectionWithRetry(
-                () => new SqliteConnection(builder.ConnectionString),
+                () => new SqliteConnection(connectionString),
                 static connection => connection.Open(),
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
@@ -480,7 +476,7 @@ public class DbContext : IDisposable
                 try
                 {
                     _connection = OpenSqliteConnectionWithRetry(
-                        () => new SqliteConnection(builder.ConnectionString),
+                        () => new SqliteConnection(connectionString),
                         static connection => connection.Open(),
                         dbPath: dbPath,
                         cancellationToken: cancellationToken);
@@ -557,19 +553,14 @@ public class DbContext : IDisposable
         failureReason = null;
         try
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadWrite,
-            };
+            var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadWrite);
             using var connection = OpenSqliteConnectionWithRetry(
-                () => new SqliteConnection(builder.ConnectionString),
+                () => new SqliteConnection(connectionString),
                 static connection => connection.Open(),
                 maxOpenAttempts: 1,
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            using var cmd = SqliteConnectionPolicy.CreateCommand(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("wal_checkpoint", "truncate_start", dbPath);
             cmd.ExecuteNonQuery();
@@ -603,8 +594,7 @@ public class DbContext : IDisposable
         _walCheckpointAttempted = true;
         try
         {
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            using var cmd = SqliteConnectionPolicy.CreateCommand(_connection, "PRAGMA wal_checkpoint(TRUNCATE)");
             WalCheckpointTruncateExecutedForTesting?.Invoke(_connection.DataSource);
             ReportMaintenanceProgress("wal_checkpoint", "truncate_start", _connection.DataSource);
             cmd.ExecuteNonQuery();
@@ -626,7 +616,7 @@ public class DbContext : IDisposable
     }
 
     public static string ToReadOnlyUri(string dbPath)
-        => DbConnectionFactory.ToReadOnlyUri(dbPath);
+        => SqliteConnectionPolicy.ToReadOnlyUri(dbPath);
 
     private static void ApplyPrivateDatabaseFileModes(string dbPath)
     {
@@ -715,9 +705,9 @@ public class DbContext : IDisposable
 
     private void ConfigureAutoVacuumForEmptyDatabase()
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'";
-        var objectCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        var objectCount = SqliteCommandPolicy.ReadInt64Scalar(cmd, "sqlite_master object count");
         if (objectCount == 0)
             Execute("PRAGMA auto_vacuum=INCREMENTAL");
     }
@@ -851,9 +841,9 @@ public class DbContext : IDisposable
 
     private long ReadPragmaLong(string name)
     {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA {SqliteIdentifier.ValidatePragmaName(name)}";
-        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
+        cmd.CommandText = SqliteCommandPolicy.PragmaSql(name);
+        return SqliteCommandPolicy.ReadInt64Scalar(cmd, $"pragma {name}");
     }
 
     private readonly record struct VacuumMetrics(
@@ -1670,7 +1660,7 @@ public class DbContext : IDisposable
 
     public int GetUserVersion()
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         cmd.CommandText = "PRAGMA user_version";
         var result = cmd.ExecuteScalar();
         return result is long l ? (int)l : (result is int i ? i : 0);
@@ -1693,7 +1683,7 @@ public class DbContext : IDisposable
     public string? GetMetaString(string key)
     {
         if (!TableExists("codeindex_meta")) return null;
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
         cmd.Parameters.AddWithValue("@key", key);
         var raw = cmd.ExecuteScalar();
@@ -1718,7 +1708,7 @@ public class DbContext : IDisposable
 
     private bool TableExists(string name)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
         cmd.Parameters.AddWithValue("@name", name);
         return cmd.ExecuteScalar() != null;
@@ -2241,7 +2231,7 @@ public class DbContext : IDisposable
 
     private bool ReferenceLinesHasContextUniqueKey()
     {
-        using var listCmd = _connection.CreateCommand();
+        using var listCmd = SqliteConnectionPolicy.CreateCommand(_connection);
         listCmd.CommandText = "PRAGMA index_list('reference_lines')";
         using var indexReader = listCmd.ExecuteReader();
         var indexNames = new List<string>();
@@ -2254,7 +2244,7 @@ public class DbContext : IDisposable
 
         foreach (var indexName in indexNames)
         {
-            using var infoCmd = _connection.CreateCommand();
+            using var infoCmd = SqliteConnectionPolicy.CreateCommand(_connection);
             infoCmd.CommandText = $"PRAGMA index_info('{indexName.Replace("'", "''")}')";
             using var infoReader = infoCmd.ExecuteReader();
             var columns = new List<string>();
@@ -2386,7 +2376,7 @@ public class DbContext : IDisposable
     private void ValidateForeignKeysAfterMigration(string phase)
     {
         var boundedPhase = DiagnosticRedactor.BoundDiagnosticText(phase, MigrationDiagnosticTextLimit);
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = "PRAGMA foreign_key_check";
@@ -2447,11 +2437,11 @@ public class DbContext : IDisposable
 
     private string? GetTableCreateSql(string tableName)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = @table";
-        cmd.Parameters.AddWithValue("@table", tableName);
+        SqliteCommandPolicy.AddText(cmd, "@table", tableName);
         return cmd.ExecuteScalar() as string;
     }
 
@@ -2467,10 +2457,10 @@ public class DbContext : IDisposable
     private HashSet<string> LoadColumnNames(string tableName)
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2518,10 +2508,10 @@ public class DbContext : IDisposable
 
     private bool ColumnIsNotNull(string tableName, string columnName)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2553,7 +2543,7 @@ public class DbContext : IDisposable
 
     private void Execute(string sql)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
@@ -2908,10 +2898,10 @@ public class DbContext : IDisposable
 
     private bool ColumnExists(string tableName, string columnName)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2924,7 +2914,7 @@ public class DbContext : IDisposable
 
     private bool IndexExists(string name)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = @name";
@@ -2934,7 +2924,7 @@ public class DbContext : IDisposable
 
     private string ExecuteScalar(string sql)
     {
-        using var cmd = _connection.CreateCommand();
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
@@ -2946,7 +2936,7 @@ public class DbContext : IDisposable
         if (!TableExists("codeindex_meta"))
             return;
 
-        using (var delete = _connection.CreateCommand())
+        using (var delete = SqliteConnectionPolicy.CreateCommand(_connection))
         {
             if (_activeMigrationTransaction != null)
                 delete.Transaction = _activeMigrationTransaction;
@@ -2958,7 +2948,7 @@ public class DbContext : IDisposable
             delete.ExecuteNonQuery();
         }
 
-        using var stamp = _connection.CreateCommand();
+        using var stamp = SqliteConnectionPolicy.CreateCommand(_connection);
         if (_activeMigrationTransaction != null)
             stamp.Transaction = _activeMigrationTransaction;
         stamp.CommandText = @"

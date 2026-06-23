@@ -883,6 +883,8 @@ public class StatusResult
     [JsonPropertyName("wal_stale_snapshot_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WalStaleSnapshotReason { get; set; }
+    [JsonPropertyName("sqlite_connection_policy")]
+    public StatusSqliteConnectionPolicy SqliteConnectionPolicy { get; set; } = new();
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     /// <summary>
@@ -1186,6 +1188,41 @@ public class StatusResult
     [JsonPropertyName("last_failed_or_partial_index_run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusFailedOrPartialIndexRun? LastFailedOrPartialIndexRun { get; set; }
+}
+
+public sealed class StatusSqliteConnectionPolicy
+{
+    [JsonPropertyName("active_mode")]
+    public string ActiveMode { get; set; } = string.Empty;
+    [JsonPropertyName("open_mode")]
+    public string OpenMode { get; set; } = string.Empty;
+    [JsonPropertyName("pooling")]
+    public bool Pooling { get; set; } = true;
+    [JsonPropertyName("immutable_uri")]
+    public bool ImmutableUri { get; set; }
+    [JsonPropertyName("command_timeout_seconds")]
+    public int CommandTimeoutSeconds { get; set; }
+    [JsonPropertyName("long_running_commands_require_cancellation")]
+    public bool LongRunningCommandsRequireCancellation { get; set; }
+    [JsonPropertyName("read_only_fallback")]
+    public bool ReadOnlyFallback { get; set; }
+    [JsonPropertyName("wal_checkpoint_attempted")]
+    public bool WalCheckpointAttempted { get; set; }
+    [JsonPropertyName("wal_checkpoint_succeeded")]
+    public bool WalCheckpointSucceeded { get; set; }
+    [JsonPropertyName("read_only_immutable_fallback")]
+    public bool ReadOnlyImmutableFallback { get; set; }
+    [JsonPropertyName("wal_checkpoint_skipped_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalCheckpointSkippedReason { get; set; }
+    [JsonPropertyName("wal_checkpoint_failure_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalCheckpointFailureReason { get; set; }
+    [JsonPropertyName("wal_stale_snapshot_risk")]
+    public bool WalStaleSnapshotRisk { get; set; }
+    [JsonPropertyName("wal_stale_snapshot_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WalStaleSnapshotReason { get; set; }
 }
 
 public sealed class StatusProcessMetrics

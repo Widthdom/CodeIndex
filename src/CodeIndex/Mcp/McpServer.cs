@@ -1598,14 +1598,10 @@ public partial class McpServer : IDisposable
     {
         try
         {
-            var builder = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
-            {
-                DataSource = _dbPath,
-                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
-            };
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(builder.ConnectionString);
+            var connectionString = SqliteConnectionPolicy.BuildConnectionString(_dbPath, SqliteConnectionPolicyMode.ReadOnly);
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
             connection.Open();
-            using var command = connection.CreateCommand();
+            using var command = SqliteConnectionPolicy.CreateCommand(connection);
             command.CommandText = "SELECT 1;";
             _ = command.ExecuteScalar();
             _lastDbCheckAt = now;
