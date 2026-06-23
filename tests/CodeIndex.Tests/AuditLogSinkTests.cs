@@ -245,6 +245,20 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_LongTextWithDelimitedHostPortUri_DoesNotRedact_Issue3909()
+    {
+        var text = "\"http://localhost:5000\";" + new string('x', AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.True(state.Truncated);
+        Assert.StartsWith("\"http://localhost:5000\";", sanitized!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SanitizeArgValue_BudgetsPayloadBeforeClone_Issue3106()
     {
         var items = new JsonArray();

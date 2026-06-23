@@ -804,7 +804,9 @@ internal sealed class AuditLogSink : IDisposable
     }
 
     private static bool IsUriAuthorityTerminator(char character) =>
-        char.IsWhiteSpace(character) || character is '/' or '?' or '#';
+        char.IsWhiteSpace(character)
+        || character is '/' or '?' or '#'
+        || character is '"' or '\'' or '<' or '>' or ')' or ']' or '}' or ',' or ';';
 
     private static JsonValue CreateTruncatedValue() => JsonValue.Create(TruncatedValue);
 
