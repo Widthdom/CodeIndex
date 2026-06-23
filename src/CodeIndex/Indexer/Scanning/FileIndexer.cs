@@ -1039,7 +1039,7 @@ public class FileIndexer
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
         _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
-        _enumerateFiles = enumerateFiles ?? (dir => Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
+        _enumerateFiles = enumerateFiles ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
@@ -1873,7 +1873,7 @@ public class FileIndexer
         var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
         foreach (var pattern in patterns)
         {
-            foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
+            foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedDir, pattern))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return LongPath.RemoveWindowsPrefix(file);
@@ -2018,7 +2018,7 @@ public class FileIndexer
     private static IEnumerable<string> EnumerateProjectMarkerDirectories(string dir)
         => EnumerateProjectMarkerDirectoriesForTesting is { } enumerate
             ? enumerate(dir)
-            : Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir));
+            : CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir));
 
     private void AddProjectMarkerTraversalWarning(List<ScanError> errors, string directory, string exceptionType)
     {
@@ -2610,7 +2610,7 @@ public class FileIndexer
     {
         var candidateLimit = _maxDanglingFileSystemEntryScanCandidates;
         var candidateCount = 0;
-        foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
+        foreach (var enumeratedEntry in CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             candidateCount++;
@@ -2681,7 +2681,7 @@ public class FileIndexer
         int depth)
     {
         var fullyScanned = true;
-        foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
+        foreach (var enumeratedSubDir in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
@@ -3199,8 +3199,7 @@ public class FileIndexer
 
         try
         {
-            using var enumerator = Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)).GetEnumerator();
-            _ = enumerator.MoveNext();
+            _ = CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(LongPath.EnsureWindowsPrefix(dir));
             reason = string.Empty;
             return true;
         }

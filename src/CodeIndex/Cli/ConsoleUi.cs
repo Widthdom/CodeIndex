@@ -94,7 +94,7 @@ public static class ConsoleUi
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--format <text|json|count>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
         ("find", "cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
@@ -105,7 +105,7 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
-        ("doctor", "cdidx doctor"),
+        ("doctor", "cdidx doctor [--json] [--redact-paths] [--env-inventory]"),
         ("db", "cdidx db --integrity-check|schema|prune [--dry-run|--apply] [--db <path>] [--json] | cdidx db checkpoint [name<=128] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name<=128> [--db <path>] [--json] | cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
@@ -118,7 +118,7 @@ public static class ConsoleUi
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
-        ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
+        ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line; max 1,048,576 chars/line and 256 arguments"),
         ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),
@@ -381,6 +381,9 @@ public static class ConsoleUi
 
     internal static void SetProgressAnimationEnabled(bool? enabled)
         => _progressAnimationEnabledOverride = enabled;
+
+    internal static bool? GetProgressAnimationOverrideForDiagnostics()
+        => _progressAnimationEnabledOverride;
 
     internal static bool ShouldUseProgressAnimation()
     {
@@ -929,7 +932,7 @@ public static class ConsoleUi
         Console.WriteLine("  config show                Show resolved workspace config and precedence");
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
-        Console.WriteLine("  doctor                     Print a redacted environment summary for bug reports");
+        Console.WriteLine("  doctor                     Print a redacted environment summary or env-var inventory for bug reports");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  db schema                  Dump SQLite schema entries and PRAGMA user_version");
         Console.WriteLine("  db prune --dry-run|--apply Count or delete orphaned DB rows");
@@ -1065,7 +1068,7 @@ public static class ConsoleUi
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         WriteHelpLine("  --group-by <unit>          search: with --count, group rows by file or symbol; hotspots: group by symbol, file, or statement");
-        WriteHelpLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON paths are capped per group with paths_truncated");
+        WriteHelpLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON keeps capped paths plus full definition_site_details");
         WriteHelpLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
         WriteHelpLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
         WriteHelpLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
@@ -1895,6 +1898,9 @@ public static class ConsoleUi
     /// 色出力モードを設定する。Always / Never は環境変数と TTY 判定を上書きする。
     /// </summary>
     public static void SetColorMode(ColorMode mode) => _colorMode = mode;
+
+    internal static ColorMode GetColorModeForDiagnostics()
+        => _colorMode;
 
     internal static ColorMode GetColorMode() => _colorMode;
 

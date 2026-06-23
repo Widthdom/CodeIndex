@@ -60,6 +60,74 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_JsonArrayReturnsSingleArray_Issue3935()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_json_array_issue3935");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+            var row = Assert.Single(rows);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", row.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_EditorAndDiagnosticFormatsReturnLocations_Issue3935()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_editor_formats_issue3935");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+            string[] baseArgs = ["Run", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function"];
+
+            var (lspExitCode, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "lsp"], _jsonOptions));
+            using var lspDocument = ParseJsonOutput(lspStdout);
+            var lspLocation = Assert.Single(lspDocument.RootElement.EnumerateArray().ToList());
+            Assert.Equal(CommandExitCodes.Success, lspExitCode);
+            Assert.Equal(string.Empty, lspStderr);
+            Assert.Contains("/src/App.cs", lspLocation.GetProperty("uri").GetString());
+            Assert.True(lspLocation.GetProperty("range").GetProperty("start").GetProperty("line").GetInt32() >= 0);
+
+            var (qfExitCode, qfStdout, qfStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "qf"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, qfExitCode);
+            Assert.Equal(string.Empty, qfStderr);
+            Assert.Contains("src/App.cs:", qfStdout);
+            Assert.Contains("Run", qfStdout);
+
+            var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "sarif"], _jsonOptions));
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            var result = Assert.Single(sarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("results")
+                .EnumerateArray()
+                .ToList());
+            Assert.Equal(CommandExitCodes.Success, sarifExitCode);
+            Assert.Equal(string.Empty, sarifStderr);
+            Assert.Equal("2.1.0", sarifDocument.RootElement.GetProperty("version").GetString());
+            Assert.Contains("Run", result.GetProperty("message").GetProperty("text").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_JsonBodyIncludesTruncationMetadata_Issue3131()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_truncated_issue3131");
@@ -4747,8 +4815,15 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("SharedHelper", hotspot.GetProperty("name").GetString());
             Assert.Equal("function", hotspot.GetProperty("kind").GetString());
             Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32());
+            Assert.Equal(2.0, hotspot.GetProperty("reference_score").GetDouble(), precision: 6);
+            Assert.Equal(2.0, hotspot.GetProperty("ranking_score").GetDouble(), precision: 6);
+            Assert.Equal(1.0, hotspot.GetProperty("generic_name_penalty").GetDouble(), precision: 6);
             Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
+            Assert.Equal(hotspot.GetProperty("path").GetString(), hotspot.GetProperty("representative").GetProperty("path").GetString());
+            Assert.Equal(2, hotspot.GetProperty("definition_site_details").GetArrayLength());
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/FirstHelper.cs");
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/SecondHelper.cs");
         }
         finally
         {
@@ -5181,6 +5256,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(25, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(20, hotspot.GetProperty("paths").GetArrayLength());
             Assert.True(hotspot.GetProperty("paths_truncated").GetBoolean());
+            Assert.Equal(25, hotspot.GetProperty("definition_site_details").GetArrayLength());
+            Assert.Contains(hotspot.GetProperty("definition_site_details").EnumerateArray(), site => site.GetProperty("path").GetString() == "src/Helper24.cs");
         }
         finally
         {
@@ -5276,6 +5353,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/a_first.cs", hotspot.GetProperty("path").GetString());
             Assert.Equal(3, hotspot.GetProperty("line").GetInt32());
+            Assert.Equal("src/a_first.cs", hotspot.GetProperty("representative").GetProperty("path").GetString());
+            Assert.Equal(3, hotspot.GetProperty("representative").GetProperty("line").GetInt32());
         }
         finally
         {
@@ -5977,5 +6056,23 @@ public partial class QueryCommandRunnerTests
             SqliteConnection.ClearAllPools();
             try { File.Delete(dbPath); } catch { }
         }
+    }
+
+    private static string CreateSymbolsEditorFormatFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/App.cs",
+            "csharp",
+            """
+            namespace Demo;
+
+            public class App
+            {
+                public void Run() { }
+            }
+            """);
+        return dbPath;
     }
 }

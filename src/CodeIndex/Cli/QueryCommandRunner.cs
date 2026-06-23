@@ -152,6 +152,9 @@ public static partial class QueryCommandRunner
         "--max-results",
         "--top",
         "--lang",
+        "--language",
+        "--extension",
+        "--alias",
         "--kind",
         "--bucket",
         "--confidence",
@@ -364,6 +367,9 @@ public static partial class QueryCommandRunner
         OutputFormatText,
         OutputFormatJson,
         OutputFormatCount,
+        OutputFormatLsp,
+        OutputFormatQf,
+        OutputFormatSarif,
     };
     private static readonly HashSet<string> InspectOutputFormats = new(StringComparer.Ordinal)
     {
@@ -3027,6 +3033,13 @@ public static partial class QueryCommandRunner
     private static LspLocation ToLspLocation(FileIssue result)
         => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
 
+    private static LspLocation ToLspLocation(SymbolResult result)
+    {
+        var startLine = result.StartLine > 0 ? result.StartLine : result.Line;
+        var endLine = result.EndLine >= startLine ? result.EndLine : startLine;
+        return BuildLspLocation(result.Path, startLine, 1, endLine + 1, 1);
+    }
+
     private static LspLocation ToLspLocation(CallerResult result)
         => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
 
@@ -3243,6 +3256,21 @@ public static partial class QueryCommandRunner
     {
         foreach (var item in items)
             Console.WriteLine($"{item.Path}:{item.Line}:{item.Column}:{item.Message}");
+    }
+
+    private static (string Path, int Line, int Column, string Message) ToSymbolQuickfixItem(SymbolResult result)
+        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result));
+
+    private static (string Path, int Line, int Column, string Message, string RuleId) ToSymbolSarifItem(SymbolResult result)
+        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result), string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : $"symbol.{result.Kind}");
+
+    private static int GetSymbolDisplayLine(SymbolResult result)
+        => Math.Max(1, result.Line > 0 ? result.Line : result.StartLine);
+
+    private static string FormatSymbolLocationLabel(SymbolResult result)
+    {
+        var kind = string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : result.Kind;
+        return string.IsNullOrWhiteSpace(result.Name) ? kind : $"{kind} {result.Name}";
     }
 
     private static void WriteSarif(IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items, JsonSerializerOptions jsonOptions)
@@ -4273,7 +4301,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows or `--format count` for symbol totals; compact symbol rows are not currently defined."))
+        if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows, `--format count` for symbol totals, or `--format lsp|qf|sarif` for editor/diagnostic locations; compact symbol rows are not currently defined."))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
@@ -4373,6 +4401,13 @@ public static partial class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
+                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult));
+                    return ZeroResultExitCode(options);
+                }
+                if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbols found", options));
@@ -4385,14 +4420,36 @@ public static partial class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            if (options.OutputFormat == OutputFormatLsp)
+            {
+                WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                return CommandExitCodes.Success;
+            }
+            if (options.OutputFormat == OutputFormatQf)
+            {
+                WriteQuickfix(results.Select(ToSymbolQuickfixItem));
+                return CommandExitCodes.Success;
+            }
+            if (options.OutputFormat == OutputFormatSarif)
+            {
+                WriteSarif(results.Select(ToSymbolSarifItem), jsonOptions);
+                return CommandExitCodes.Success;
+            }
             if (options.Json)
             {
-                foreach (var r in results)
+                if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    if (hasExactPredicate)
-                        WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, exactSignal, jsonOptions);
-                    else
-                        Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult));
+                    Console.WriteLine(JsonSerializer.Serialize(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult));
+                }
+                else
+                {
+                    foreach (var r in results)
+                    {
+                        if (hasExactPredicate)
+                            WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, exactSignal, jsonOptions);
+                        else
+                            Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult));
+                    }
                 }
             }
             else
@@ -7668,11 +7725,15 @@ public static partial class QueryCommandRunner
                             g.Symbol.Line,
                             g.ReferenceCount,
                             g.ReferenceScore,
+                            g.RankingScore,
+                            g.GenericNamePenalty,
                             g.Symbol.Visibility,
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
                             g.Paths,
-                            g.PathsTruncated))
+                            g.PathsTruncated,
+                            BuildGroupedHotspotRepresentative(g),
+                            g.DefinitionSiteDetails.Select(ToGroupedHotspotSiteJson).ToList()))
                         .ToList();
                     var payload = new JsonObject
                     {
@@ -7947,6 +8008,8 @@ public static partial class QueryCommandRunner
                         r.Symbol.Line,
                         r.ReferenceCount,
                         r.ReferenceScore,
+                        r.RankingScore,
+                        r.GenericNamePenalty,
                         r.Symbol.Visibility,
                         r.Symbol.ContainerName))
                     .ToList();
@@ -7975,6 +8038,32 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static GroupedSymbolHotspotSiteJsonResult BuildGroupedHotspotRepresentative(GroupedHotspotResult result)
+    {
+        var representative = result.DefinitionSiteDetails.FirstOrDefault(site =>
+            string.Equals(site.Path, result.Symbol.Path, StringComparison.Ordinal)
+            && site.Line == result.Symbol.Line);
+        if (representative != null)
+            return ToGroupedHotspotSiteJson(representative);
+
+        return new GroupedSymbolHotspotSiteJsonResult(
+            result.Symbol.Path,
+            result.Symbol.Lang,
+            result.Symbol.Line,
+            result.Symbol.Visibility,
+            result.Symbol.ContainerName,
+            LogicalTargetKey: null);
+    }
+
+    private static GroupedSymbolHotspotSiteJsonResult ToGroupedHotspotSiteJson(GroupedHotspotDefinitionSite site)
+        => new(
+            site.Path,
+            site.Lang,
+            site.Line,
+            site.Visibility,
+            site.Container,
+            site.LogicalTargetKey);
 
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -8620,18 +8709,32 @@ public static partial class QueryCommandRunner
         // Sort by language name / 言語名でソート
         var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
 
-        if (options.LanguagesIndexedOnly)
+        if (options.LanguagesIndexedOnly || ShouldLoadLanguageIndexedCounts(options))
         {
             return WithDb(options, jsonOptions, reader =>
             {
-                var indexedLanguages = new HashSet<string>(reader.GetStatus().Languages.Keys, StringComparer.Ordinal);
-                return WriteLanguages(sorted.Where(kv => indexedLanguages.Contains(kv.Key)));
+                var indexedLanguageCounts = reader.GetStatus().Languages;
+                return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts), indexedLanguageCounts);
             });
         }
 
-        return WriteLanguages(sorted);
+        return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts: null), indexedLanguageCounts: null);
 
-        int WriteLanguages(IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages)
+        IEnumerable<KeyValuePair<string, LanguageSupportInfo>> SelectLanguages(
+            IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages,
+            IReadOnlyDictionary<string, long>? indexedLanguageCounts)
+        {
+            var selected = languages;
+            if (options.LanguagesIndexedOnly)
+                selected = selected.Where(kv => indexedLanguageCounts?.ContainsKey(kv.Key) == true);
+            if (HasLanguageLookup(options))
+                selected = selected.Where(kv => LanguageMatchesLookup(kv.Key, kv.Value, options));
+            return selected;
+        }
+
+        int WriteLanguages(
+            IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages,
+            IReadOnlyDictionary<string, long>? indexedLanguageCounts)
         {
             var filtered = languages
                 .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
@@ -8647,7 +8750,8 @@ public static partial class QueryCommandRunner
                     kv.Value.Symbols,
                     kv.Value.References,
                     kv.Value.Graph,
-                    kv.Value.CapabilityGaps)).ToList();
+                    kv.Value.CapabilityGaps,
+                    GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
                 Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
             }
             else
@@ -8658,23 +8762,40 @@ public static partial class QueryCommandRunner
                 // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
                 const int ExtensionColumnWidth = 36;
                 const int AliasColumnWidth = 12;
-                Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
-                Console.WriteLine(new string('-', 85));
+                var showIndexedCounts = indexedLanguageCounts != null;
+                if (showIndexedCounts)
+                {
+                    Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Indexed",-7} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                    Console.WriteLine(new string('-', 93));
+                }
+                else
+                {
+                    Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                    Console.WriteLine(new string('-', 85));
+                }
                 foreach (var (lang, info) in filtered)
                 {
                     var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
                     var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
                     var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
+                    var indexedCount = GetIndexedLanguageCount(indexedLanguageCounts, lang);
+                    var indexedCell = indexedCount?.ToString(CultureInfo.InvariantCulture) ?? "-";
                     var sym = info.Symbols ? "yes" : "-";
                     var refs = info.References ? "yes" : "-";
                     var graph = info.Graph ? "yes" : "-";
                     if (exts.Length <= ExtensionColumnWidth && aliases.Length <= AliasColumnWidth)
                     {
-                        Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {refs,-5} {graph,-7}");
+                        if (showIndexedCounts)
+                            Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {indexedCell,-7} {sym,-9} {refs,-5} {graph,-7}");
+                        else
+                            Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {refs,-5} {graph,-7}");
                     }
                     else
                     {
-                        Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {refs,-5} {graph,-7}");
+                        if (showIndexedCounts)
+                            Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {indexedCell,-7} {sym,-9} {refs,-5} {graph,-7}");
+                        else
+                            Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {refs,-5} {graph,-7}");
                         Console.WriteLine($"  Extensions: {exts}");
                         if (!string.IsNullOrWhiteSpace(aliases))
                             Console.WriteLine($"  Aliases: {aliases}");
@@ -8690,6 +8811,56 @@ public static partial class QueryCommandRunner
     }
 
     private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps);
+
+    private static bool HasLanguageLookup(QueryCommandOptions options)
+        => options.LanguageLookups.Count > 0 || options.LanguageExtensionLookups.Count > 0 || options.LanguageAliasLookups.Count > 0;
+
+    private static bool ShouldLoadLanguageIndexedCounts(QueryCommandOptions options)
+    {
+        if (!HasLanguageLookup(options))
+            return false;
+        if (options.DbPathExplicit)
+            return true;
+        if (options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath));
+    }
+
+    private static long? GetIndexedLanguageCount(IReadOnlyDictionary<string, long>? indexedLanguageCounts, string lang)
+    {
+        if (indexedLanguageCounts == null)
+            return null;
+        return indexedLanguageCounts.TryGetValue(lang, out var count) ? count : 0;
+    }
+
+    private static bool LanguageMatchesLookup(string lang, LanguageSupportInfo language, QueryCommandOptions options)
+        => options.LanguageLookups.Any(lookup => string.Equals(DbReader.NormalizeQueryLanguage(lookup), lang, StringComparison.Ordinal))
+           || options.LanguageExtensionLookups.Any(lookup => LanguageMatchesExtensionLookup(language, lookup))
+           || options.LanguageAliasLookups.Any(lookup => LanguageMatchesAliasLookup(language, lookup));
+
+    private static bool LanguageMatchesExtensionLookup(LanguageSupportInfo language, string lookup)
+    {
+        var normalized = NormalizeLanguageLookupKey(lookup);
+        return language.Extensions.Any(ext => string.Equals(NormalizeLanguageLookupKey(ext), normalized, StringComparison.Ordinal));
+    }
+
+    private static bool LanguageMatchesAliasLookup(LanguageSupportInfo language, string lookup)
+    {
+        var normalized = NormalizeLanguageLookupKey(lookup);
+        return language.Aliases.Any(alias => string.Equals(NormalizeLanguageLookupKey(alias), normalized, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeLanguageLookupKey(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value.Trim())
+        {
+            if (char.IsWhiteSpace(ch) || ch is '-' or '_' or '.')
+                continue;
+            builder.Append(char.ToLowerInvariant(ch));
+        }
+        return builder.ToString();
+    }
 
     private static bool LanguageMatchesCapability(LanguageSupportInfo language, string capability)
         => capability switch
@@ -8892,6 +9063,9 @@ public static partial class QueryCommandRunner
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
+        var languageLookups = new List<string>();
+        var languageExtensionLookups = new List<string>();
+        var languageAliasLookups = new List<string>();
         ProjectFilterRootResolution? projectFilterRootResolution = null;
 
         void AddParseError(string error)
@@ -9126,6 +9300,29 @@ public static partial class QueryCommandRunner
                     {
                         AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use graph, references, symbols, missing-graph, missing-references, missing-symbols, or search-only.");
                     }
+                    break;
+                case "--language":
+                    if (TryReadStringOptionValue(args, ref i, "--language", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var languageValue, out var languageError))
+                    {
+                        languageLookups.Add(languageValue!);
+                        lang = NormalizeLangFilterValue(languageValue);
+                    }
+                    else
+                    {
+                        AddParseError(languageError!);
+                    }
+                    break;
+                case "--extension":
+                    if (TryReadStringOptionValue(args, ref i, "--extension", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var languageExtensionValue, out var languageExtensionError))
+                        languageExtensionLookups.Add(languageExtensionValue!);
+                    else
+                        AddParseError(languageExtensionError!);
+                    break;
+                case "--alias":
+                    if (TryReadStringOptionValue(args, ref i, "--alias", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var languageAliasValue, out var languageAliasError))
+                        languageAliasLookups.Add(languageAliasValue!);
+                    else
+                        AddParseError(languageAliasError!);
                     break;
                 case "--format":
                     if (TryReadStringOptionValue(args, ref i, "--format", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var formatValue, out var formatError))
@@ -10239,6 +10436,9 @@ public static partial class QueryCommandRunner
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
+            LanguageLookups = languageLookups,
+            LanguageExtensionLookups = languageExtensionLookups,
+            LanguageAliasLookups = languageAliasLookups,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
@@ -11552,7 +11752,8 @@ public static partial class QueryCommandRunner
             if (normalizedArg == "--json"
                 && !string.Equals(arg, "--json", StringComparison.Ordinal)
                 && commandName != "search"
-                && commandName != "files")
+                && commandName != "files"
+                && commandName != "symbols")
             {
                 if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
                 {
@@ -11562,10 +11763,10 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.Write(
                     commandName == "validate"
                         ? "--json=<format> for validate only supports 'array'."
-                        : "--json=<format> is only supported by 'search', 'files', and validate's array output.",
+                        : "--json=<format> is only supported by 'search', 'files', 'symbols', and validate's array output.",
                     commandName == "validate"
                         ? "use plain `--json` or `--json=array`."
-                        : "use plain `--json` here, rerun search/files with `--json=array`, or rerun validate with `--json=array`.",
+                        : "use plain `--json` here, rerun search/files/symbols with `--json=array`, or rerun validate with `--json=array`.",
                     GetUsageLineOrThrow(commandName));
                 return true;
             }
@@ -13990,6 +14191,9 @@ public sealed class QueryCommandOptions
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
+    public List<string> LanguageLookups { get; init; } = [];
+    public List<string> LanguageExtensionLookups { get; init; } = [];
+    public List<string> LanguageAliasLookups { get; init; } = [];
     public string? ParseError { get; init; }
 }
 

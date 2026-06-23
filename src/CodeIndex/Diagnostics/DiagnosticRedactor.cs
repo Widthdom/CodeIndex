@@ -10,6 +10,13 @@ internal static class DiagnosticRedactor
 {
     internal const int DefaultDiagnosticValueCharLimit = 120;
     internal const string AngleRedacted = "<redacted>";
+    internal const string SuggestionRedactedAwsAccessKey = "[REDACTED:aws_access_key]";
+    internal const string SuggestionRedactedBearerToken = "[REDACTED:bearer_token]";
+    internal const string SuggestionRedactedCredential = "[REDACTED:credential]";
+    internal const string SuggestionRedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
+    internal const string SuggestionRedactedRegexTimeout = "[REDACTED:redaction_timeout]";
+    internal const int SuggestionRedactionFieldLengthLimit = 32768;
+    internal const string SuggestionRedactionTruncationMarker = "[REDACTED:truncated]";
     internal const int MaxReportLogJsonLineChars = 64 * 1024;
     internal const int MaxReportLogJsonDepth = 32;
 
@@ -29,9 +36,19 @@ internal static class DiagnosticRedactor
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
+    private static readonly Regex SuggestionBearerTokenPattern = new(
+        @"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
     private static readonly Regex SensitiveAssignmentPattern = new(
         @"(?<![\w.-])(?<name>--?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex SuggestionNamedSecretPattern = new(
+        @"(?i)(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]*(?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key|credential)[\p{L}\p{N}_-]*)=(?<value>[^&\s]+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeout);
 
     private static readonly Regex SensitiveSeparatedArgumentPattern = new(
@@ -39,8 +56,18 @@ internal static class DiagnosticRedactor
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
+    private static readonly Regex AwsAccessKeyPattern = new(
+        @"\bAKIA[0-9A-Z]{16}\b",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
     private static readonly Regex GitHubTokenPattern = new(
         @"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\b",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex HighEntropyTokenPattern = new(
+        @"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b",
         RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -200,6 +227,53 @@ internal static class DiagnosticRedactor
         return redacted;
     }
 
+    internal static string RedactSuggestionText(string text, out IReadOnlyCollection<string> redactedTypes)
+    {
+        var types = new SortedSet<string>(StringComparer.Ordinal);
+        var truncated = false;
+        if (text.Length > SuggestionRedactionFieldLengthLimit)
+        {
+            text = text[..SuggestionRedactionFieldLengthLimit];
+            truncated = true;
+            types.Add("truncated");
+        }
+
+        try
+        {
+            var redacted = AwsAccessKeyPattern.Replace(text, _ =>
+            {
+                types.Add("aws_access_key");
+                return SuggestionRedactedAwsAccessKey;
+            });
+            redacted = SuggestionBearerTokenPattern.Replace(redacted, _ =>
+            {
+                types.Add("bearer_token");
+                return SuggestionRedactedBearerToken;
+            });
+            redacted = SuggestionNamedSecretPattern.Replace(redacted, match =>
+            {
+                types.Add("credential");
+                return $"{match.Groups[1].Value}{match.Groups["name"].Value}={SuggestionRedactedCredential}";
+            });
+            redacted = HighEntropyTokenPattern.Replace(redacted, match =>
+            {
+                if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
+                    return match.Value;
+                types.Add("high_entropy_token");
+                return SuggestionRedactedHighEntropyToken;
+            });
+
+            redactedTypes = types;
+            return truncated ? redacted + SuggestionRedactionTruncationMarker : redacted;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            types.Add("redaction_timeout");
+            redactedTypes = types;
+            return SuggestionRedactedRegexTimeout;
+        }
+    }
+
     internal static string BoundDiagnosticText(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
     {
         if (maxChars < 0)
@@ -218,7 +292,7 @@ internal static class DiagnosticRedactor
             : flattened[..maxChars] + marker;
     }
 
-    private static bool IsSensitiveName(string? name) =>
+    internal static bool IsSensitiveName(string? name) =>
         !string.IsNullOrWhiteSpace(name)
         && (name.Contains("token", StringComparison.OrdinalIgnoreCase)
             || name.Contains("password", StringComparison.OrdinalIgnoreCase)

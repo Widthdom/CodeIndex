@@ -15,6 +15,10 @@ public partial class DbReader
     internal const int DefinitionBodyMaxRequestedLines = 1_000;
     internal const int DefinitionBodyMaxBytes = 16 * 1024;
 
+    private const double GenericHotspotNamePenalty = 0.35;
+    private const string GenericHotspotNamePenaltySqlLiteral = "0.35";
+    private const string GenericHotspotNamesSql = "('add','append','build','call','combine','convert','create','execute','get','getstring','getvalue','getvalues','handle','invoke','load','parse','process','read','resolve','run','set','start','stop','tolist','tostring','tryparse','update','write')";
+
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
@@ -824,7 +828,10 @@ public partial class DbReader
             : string.Empty;
         var referenceCountSql = includeRankSignals ? "COALESCE(symbol_rank.reference_count, 0)" : "CAST(0 AS INTEGER)";
         var hotspotScoreSql = includeRankSignals ? "COALESCE(symbol_rank.hotspot_score, 0.0)" : "CAST(0.0 AS REAL)";
-        var complexityScoreSql = $@"(({sizeLinesSql}) + ({referenceCountSql} * 4.0) + ({hotspotScoreSql} * 2.0) + CASE
+        var genericNamePenaltySql = includeRankSignals ? GetGenericHotspotNamePenaltySql("s.name") : "1.0";
+        var rankingReferenceCountSql = includeRankSignals ? $"(({referenceCountSql}) * ({genericNamePenaltySql}))" : referenceCountSql;
+        var rankingHotspotScoreSql = includeRankSignals ? $"(({hotspotScoreSql}) * ({genericNamePenaltySql}))" : hotspotScoreSql;
+        var complexityScoreSql = $@"(({sizeLinesSql}) + ({rankingReferenceCountSql} * 4.0) + ({rankingHotspotScoreSql} * 2.0) + CASE
                        WHEN {visibilitySql} IN ('public', 'pub', 'open', 'export') THEN 8.0
                        WHEN {visibilitySql} IN ('protected', 'internal', 'protected internal') THEN 4.0
                        ELSE 0.0
@@ -910,7 +917,7 @@ public partial class DbReader
             "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
             "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
             "ELSE 5 END";
-        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
+        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
         sql += " LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -1007,6 +1014,9 @@ public partial class DbReader
         }
         return results;
     }
+
+    private static string GetGenericHotspotNamePenaltySql(string nameSql)
+        => $"CASE WHEN lower({nameSql}) IN {GenericHotspotNamesSql} THEN {GenericHotspotNamePenaltySqlLiteral} ELSE 1.0 END";
 
     private string BuildSymbolSortOrderBy(
         SymbolSortMode sortMode,
@@ -2373,14 +2383,18 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return [];
         var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("gr.name");
         var sql = query.Sql + @"
             SELECT gr.name, rc.ref_count, rc.ref_score,
+                   (rc.ref_score * (" + genericNamePenaltySql + @")) AS ranking_score,
+                   (" + genericNamePenaltySql + @") AS generic_name_penalty,
                    gr.kind, gr.path, gr.lang, gr.line,
                    gr.visibility, gr.container_name
             FROM grouped_rows gr
             JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
             WHERE rc.ref_count > 0
-            ORDER BY rc.ref_score DESC,
+            ORDER BY ranking_score DESC,
+                     rc.ref_score DESC,
                      rc.ref_count DESC,
                      gr.path COLLATE BINARY ASC,
                      gr.line ASC,
@@ -2402,15 +2416,17 @@ public partial class DbReader
                 Symbol = new SymbolResult
                 {
                     Name = reader.GetString(0),
-                    Kind = reader.GetString(3),
-                    Path = reader.GetString(4),
-                    Lang = GetNullableString(reader, 5),
-                    Line = reader.GetInt32(6),
-                    Visibility = GetNullableString(reader, 7),
-                    ContainerName = GetNullableString(reader, 8),
+                    Kind = reader.GetString(5),
+                    Path = reader.GetString(6),
+                    Lang = GetNullableString(reader, 7),
+                    Line = reader.GetInt32(8),
+                    Visibility = GetNullableString(reader, 9),
+                    ContainerName = GetNullableString(reader, 10),
                 },
                 ReferenceCount = reader.GetInt32(1),
                 ReferenceScore = reader.GetDouble(2),
+                RankingScore = reader.GetDouble(3),
+                GenericNamePenalty = reader.GetDouble(4),
             });
         }
         return results;
@@ -3163,8 +3179,12 @@ public partial class DbReader
         if (!_hasReferencesTable) return [];
 
         var query = BuildGroupedSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("g.name");
         var sql = query.Sql + @"
-            SELECT g.name, g.kind, g.ref_count, g.ref_score, g.definition_sites,
+            SELECT g.name, g.kind, g.ref_count, g.ref_score,
+                   (g.ref_score * (" + genericNamePenaltySql + @")) AS ranking_score,
+                   (" + genericNamePenaltySql + @") AS generic_name_penalty,
+                   g.definition_sites,
                    rep.path, rep.lang, rep.line, rep.visibility, rep.container_name,
                    (
                        SELECT GROUP_CONCAT(path, char(10))
@@ -3182,7 +3202,7 @@ public partial class DbReader
               ON rep.name = g.name
              AND rep.kind = g.kind
              AND rep.rep_rank = 1
-            ORDER BY g.ref_score DESC, g.ref_count DESC, g.name, g.kind
+            ORDER BY ranking_score DESC, g.ref_score DESC, g.ref_count DESC, g.name, g.kind
             LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
@@ -3194,7 +3214,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var paths = GetNullableString(reader, 10)?
+            var paths = GetNullableString(reader, 12)?
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList() ?? [];
             var pathsTruncated = paths.Count > GroupedHotspotPathSampleLimit;
@@ -3206,22 +3226,84 @@ public partial class DbReader
                 {
                     Name = reader.GetString(0),
                     Kind = reader.GetString(1),
-                    Path = reader.GetString(5),
-                    Lang = GetNullableString(reader, 6),
-                    Line = reader.GetInt32(7),
-                    Visibility = GetNullableString(reader, 8),
-                    ContainerName = GetNullableString(reader, 9),
+                    Path = reader.GetString(7),
+                    Lang = GetNullableString(reader, 8),
+                    Line = reader.GetInt32(9),
+                    Visibility = GetNullableString(reader, 10),
+                    ContainerName = GetNullableString(reader, 11),
                 },
                 ReferenceCount = reader.GetInt32(2),
                 ReferenceScore = reader.GetDouble(3),
-                DefinitionSites = reader.GetInt32(4),
+                RankingScore = reader.GetDouble(4),
+                GenericNamePenalty = reader.GetDouble(5),
+                DefinitionSites = reader.GetInt32(6),
                 Paths = paths,
                 PathsTruncated = pathsTruncated,
             });
         }
 
+        PopulateGroupedHotspotDefinitionSiteDetails(results, query, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
         return results;
     }
+
+    private void PopulateGroupedHotspotDefinitionSiteDetails(
+        List<GroupedHotspotResult> results,
+        SymbolHotspotRowsQuery query,
+        string? kind,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        IReadOnlyList<string>? visibilityFilters,
+        IReadOnlyList<string>? excludeVisibilityFilters)
+    {
+        if (results.Count == 0)
+            return;
+
+        var groupPredicates = new List<string>(results.Count);
+        for (var i = 0; i < results.Count; i++)
+            groupPredicates.Add($"(hs.name = @detailName{i} AND hs.kind = @detailKind{i})");
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = query.Sql + $@"
+            SELECT hs.name,
+                   hs.kind,
+                   hs.path,
+                   hs.lang,
+                   hs.line,
+                   hs.visibility,
+                   hs.container_name,
+                   hs.logical_target_key
+            FROM ranked_sites hs
+            WHERE {string.Join(" OR ", groupPredicates)}
+            ORDER BY hs.name, hs.kind, hs.path, hs.line, COALESCE(hs.container_name, ''), COALESCE(hs.visibility, '')";
+        AddSymbolHotspotParameters(cmd, query, limit: null, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        for (var i = 0; i < results.Count; i++)
+        {
+            cmd.Parameters.AddWithValue($"@detailName{i}", results[i].Symbol.Name);
+            cmd.Parameters.AddWithValue($"@detailKind{i}", results[i].Symbol.Kind);
+        }
+
+        var byGroup = results.ToDictionary(result => GetGroupedHotspotKey(result.Symbol.Name, result.Symbol.Kind), result => result, StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var key = GetGroupedHotspotKey(reader.GetString(0), reader.GetString(1));
+            if (!byGroup.TryGetValue(key, out var group))
+                continue;
+            group.DefinitionSiteDetails.Add(new GroupedHotspotDefinitionSite
+            {
+                Path = reader.GetString(2),
+                Lang = GetNullableString(reader, 3),
+                Line = reader.GetInt32(4),
+                Visibility = GetNullableString(reader, 5),
+                Container = GetNullableString(reader, 6),
+                LogicalTargetKey = GetNullableString(reader, 7),
+            });
+        }
+    }
+
+    private static string GetGroupedHotspotKey(string name, string kind)
+        => name + "\0" + kind;
 
     /// <summary>
     /// Find symbols that have no matching references in the reference table (potential dead code).

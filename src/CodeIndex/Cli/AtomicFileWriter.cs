@@ -74,7 +74,6 @@ internal static class AtomicFileWriter
 
         var tempPath = BuildTempPath(path);
         var ioTempPath = LongPath.EnsureWindowsPrefix(tempPath);
-        var ioTargetPath = LongPath.EnsureWindowsPrefix(path);
         var moved = false;
 
         try
@@ -86,14 +85,13 @@ internal static class AtomicFileWriter
                 stream.Flush(flushToDisk: true);
             }
 
-            File.Move(ioTempPath, ioTargetPath, overwrite: true);
+            MoveReplacing(tempPath, path);
             moved = true;
-            FlushParentDirectoryAfterReplace(path);
         }
         catch
         {
             if (!moved)
-                TryDelete(ioTempPath);
+                TryDeleteFile(ioTempPath);
             throw;
         }
     }
@@ -117,7 +115,85 @@ internal static class AtomicFileWriter
     private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
         => profile == WriteProfile.Sensitive ? DataDirectorySecurity.ApplyPrivateFileMode : null;
 
+    internal static void MoveReplacing(string sourcePath, string destinationPath)
+    {
+        MoveFileCore(sourcePath, destinationPath, overwrite: true, applyDestinationMode: null);
+        FlushParentDirectoryAfterReplace(destinationPath);
+    }
+
+    internal static void MoveFile(
+        string sourcePath,
+        string destinationPath,
+        bool overwrite,
+        Action<string>? applyDestinationMode = null)
+        => MoveFileCore(sourcePath, destinationPath, overwrite, applyDestinationMode);
+
+    internal static void PublishDirectory(string tempDirectoryPath, string destinationDirectoryPath)
+    {
+        Directory.Move(
+            LongPath.EnsureWindowsPrefix(tempDirectoryPath),
+            LongPath.EnsureWindowsPrefix(destinationDirectoryPath));
+        FlushParentDirectoryAfterDirectoryPublish(destinationDirectoryPath);
+    }
+
+    internal static void DeleteFileIfExists(string path)
+    {
+        var ioPath = LongPath.EnsureWindowsPrefix(path);
+        if (File.Exists(ioPath))
+            File.Delete(ioPath);
+    }
+
+    internal static bool TryDeleteFile(
+        string path,
+        Action<Exception>? onCleanupFailure = null,
+        Action<string>? deleteOverride = null)
+    {
+        try
+        {
+            var ioPath = LongPath.EnsureWindowsPrefix(path);
+            if (!File.Exists(ioPath))
+                return false;
+
+            if (deleteOverride != null)
+                deleteOverride(path);
+            else
+                File.Delete(ioPath);
+
+            return true;
+        }
+        catch (Exception ex) when (IsRecoverableFileMutationException(ex))
+        {
+            ReportCleanupFailure(onCleanupFailure, ex);
+            return false;
+        }
+    }
+
+    private static void MoveFileCore(
+        string sourcePath,
+        string destinationPath,
+        bool overwrite,
+        Action<string>? applyDestinationMode)
+    {
+        File.Move(
+            LongPath.EnsureWindowsPrefix(sourcePath),
+            LongPath.EnsureWindowsPrefix(destinationPath),
+            overwrite);
+        applyDestinationMode?.Invoke(destinationPath);
+    }
+
     internal static void FlushParentDirectoryAfterReplace(string path)
+        => FlushParentDirectory(
+            path,
+            "Atomic replace completed",
+            "the target file was already replaced");
+
+    private static void FlushParentDirectoryAfterDirectoryPublish(string path)
+        => FlushParentDirectory(
+            path,
+            "Directory publish completed",
+            "the destination directory was already published");
+
+    private static void FlushParentDirectory(string path, string completedMessage, string completedStateMessage)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (string.IsNullOrEmpty(directory))
@@ -131,7 +207,7 @@ internal static class AtomicFileWriter
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                throw BuildDirectoryFlushException(path, ex);
+                throw BuildDirectoryFlushException(path, completedMessage, completedStateMessage, ex);
             }
             return;
         }
@@ -141,12 +217,12 @@ internal static class AtomicFileWriter
 
         var fd = UnixOpen(directory, flags: 0);
         if (fd < 0)
-            throw BuildDirectoryFlushException(path, Marshal.GetLastPInvokeError());
+            throw BuildDirectoryFlushException(path, completedMessage, completedStateMessage, Marshal.GetLastPInvokeError());
 
         try
         {
             if (UnixFsync(fd) != 0)
-                throw BuildDirectoryFlushException(path, Marshal.GetLastPInvokeError());
+                throw BuildDirectoryFlushException(path, completedMessage, completedStateMessage, Marshal.GetLastPInvokeError());
         }
         finally
         {
@@ -154,11 +230,26 @@ internal static class AtomicFileWriter
         }
     }
 
-    private static IOException BuildDirectoryFlushException(string path, int errno)
-        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}; the target file was already replaced, but the parent directory could not be flushed to disk (errno {errno}).");
+    private static IOException BuildDirectoryFlushException(
+        string path,
+        string completedMessage,
+        string completedStateMessage,
+        int errno)
+        => new($"{completedMessage} for {ConsoleUi.FormatBoundedValue(path)}; {completedStateMessage}, but the parent directory could not be flushed to disk (errno {errno}).");
 
-    private static IOException BuildDirectoryFlushException(string path, Exception inner)
-        => new($"Atomic replace completed for {ConsoleUi.FormatBoundedValue(path)}; the target file was already replaced, but the parent directory could not be flushed to disk ({CommandErrorWriter.FormatSanitizedException(inner)}).", inner);
+    private static IOException BuildDirectoryFlushException(
+        string path,
+        string completedMessage,
+        string completedStateMessage,
+        Exception inner)
+        => new($"{completedMessage} for {ConsoleUi.FormatBoundedValue(path)}; {completedStateMessage}, but the parent directory could not be flushed to disk ({CommandErrorWriter.FormatSanitizedException(inner)}).", inner);
+
+    private static bool IsRecoverableFileMutationException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     internal static string BuildTempPathForTesting(string path) => BuildTempPath(path);
 
@@ -181,14 +272,18 @@ internal static class AtomicFileWriter
             : Path.Combine(directory, tempFileName);
     }
 
-    private static void TryDelete(string path)
+    private static void ReportCleanupFailure(Action<Exception>? failureSink, Exception exception)
     {
+        if (failureSink is null)
+            return;
+
         try
         {
-            File.Delete(path);
+            failureSink(exception);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch
         {
+            // Cleanup diagnostics must not mask the original file mutation result.
         }
     }
 

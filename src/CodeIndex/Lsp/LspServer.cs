@@ -1869,19 +1869,10 @@ internal sealed class LspServer : IDisposable
     }
 
     internal static string PathToUri(string path, string? projectRoot = null)
-    {
-        var fullPath = Path.IsPathRooted(path)
-            ? Path.GetFullPath(path)
-            : Path.GetFullPath(path, projectRoot ?? Environment.CurrentDirectory);
-        return new Uri(fullPath).AbsoluteUri;
-    }
+        => CodeIndex.FileUriPolicy.PathToFileUri(path, projectRoot);
 
     internal static string UriToPath(string uri)
-    {
-        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || !parsed.IsFile)
-            throw new ArgumentException("textDocument.uri must be an absolute file URI.");
-        return parsed.LocalPath;
-    }
+        => CodeIndex.FileUriPolicy.AbsoluteFileUriToPath(uri);
 
     private void CaptureInitializeWorkspaceFolders(JsonElement root)
     {

@@ -910,6 +910,104 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_DemotesGenericNamesInRankingDiagnostics()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generic_hotspot_rank.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 30,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Combine",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                BodyStartLine = 1,
+                BodyEndLine = 1,
+                Signature = "public void Combine()",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "ProcessInvoiceWorkflow",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 12,
+                BodyStartLine = 4,
+                BodyEndLine = 12,
+                Signature = "public void ProcessInvoiceWorkflow()",
+            },
+        ]);
+
+        var references = new List<ReferenceRecord>();
+        for (var i = 0; i < 8; i++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Combine",
+                ReferenceKind = "call",
+                Line = 15 + i,
+                Column = 9,
+                Context = "Combine();",
+            });
+        }
+        for (var i = 0; i < 3; i++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "ProcessInvoiceWorkflow",
+                ReferenceKind = "call",
+                Line = 24 + i,
+                Column = 9,
+                Context = "ProcessInvoiceWorkflow();",
+            });
+        }
+        _writer.InsertReferences(references);
+
+        var hotspots = _reader.GetSymbolHotspots(limit: 2, kind: "function", lang: "csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("ProcessInvoiceWorkflow", hotspots[0].Symbol.Name);
+        Assert.Equal(3, hotspots[0].ReferenceCount);
+        Assert.Equal(3.0, hotspots[0].RankingScore, precision: 6);
+        var combine = Assert.Single(hotspots, item => item.Symbol.Name == "Combine");
+        Assert.Equal(8, combine.ReferenceCount);
+        Assert.Equal(8.0, combine.ReferenceScore, precision: 6);
+        Assert.Equal(0.35, combine.GenericNamePenalty, precision: 6);
+        Assert.Equal(2.8, combine.RankingScore, precision: 6);
+
+        var grouped = _reader.GetGroupedSymbolHotspots(limit: 2, kind: "function", lang: "csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false);
+        Assert.Equal("ProcessInvoiceWorkflow", grouped[0].Symbol.Name);
+        var groupedCombine = Assert.Single(grouped, item => item.Symbol.Name == "Combine");
+        Assert.Equal(0.35, groupedCombine.GenericNamePenalty, precision: 6);
+        Assert.Equal(2.8, groupedCombine.RankingScore, precision: 6);
+
+        var complexity = _reader.SearchSymbols(
+            queries: null,
+            limit: 2,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["generic_hotspot_rank"],
+            excludePathPatterns: null,
+            excludeTests: false,
+            sortMode: SymbolSortMode.Complexity);
+
+        Assert.Equal("ProcessInvoiceWorkflow", complexity[0].Name);
+        Assert.Equal("Combine", complexity[1].Name);
+        Assert.True(complexity[0].ComplexityScore > complexity[1].ComplexityScore);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_BreaksEqualCountsByPathLineNameKind()
     {
         var betaFileId = _writer.UpsertFile(new FileRecord
@@ -12301,11 +12399,36 @@ public class DbReaderTests : IDisposable
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(new[] { "Foo->B->A", "Foo->C->A" }, pathSet);
+        Assert.NotNull(aResult.PathDetails);
+        var detailPathSet = aResult.PathDetails!
+            .Select(p => string.Join("->", p.Select(node => $"{node.Name}@{node.DefinitionPath}")))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "Foo@src/impact_paths_diamond.cs->B@src/impact_paths_diamond.cs->A@src/impact_paths_diamond.cs",
+                "Foo@src/impact_paths_diamond.cs->C@src/impact_paths_diamond.cs->A@src/impact_paths_diamond.cs",
+            },
+            detailPathSet);
+        var firstDetailPath = aResult.PathDetails![0];
+        Assert.All(firstDetailPath, node =>
+        {
+            Assert.Equal("csharp", node.Lang);
+            Assert.Equal("function", node.Kind);
+            Assert.Equal("src/impact_paths_diamond.cs", node.DefinitionPath);
+            Assert.True(node.DefinitionLine > 0);
+            Assert.Matches("^(family|container|file)\\|", node.LogicalTargetKey);
+        });
+        Assert.Equal("src/impact_paths_diamond.cs", firstDetailPath[^1].ReferencePath);
+        Assert.True(firstDetailPath[^1].ReferenceLine > 0);
 
         // Direct callers (B, C) keep a single trivial path that ends at themselves.
         var bResult = resultsWithPaths.Single(r => r.CallerName == "B");
         Assert.NotNull(bResult.Paths);
         Assert.Equal(new[] { "Foo->B" }, bResult.Paths!.Select(p => string.Join("->", p)).ToArray());
+        Assert.NotNull(bResult.PathDetails);
+        Assert.Equal("src/impact_paths_diamond.cs", bResult.PathDetails![0][^1].DefinitionPath);
         var cResult = resultsWithPaths.Single(r => r.CallerName == "C");
         Assert.NotNull(cResult.Paths);
         Assert.Equal(new[] { "Foo->C" }, cResult.Paths!.Select(p => string.Join("->", p)).ToArray());

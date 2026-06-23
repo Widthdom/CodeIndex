@@ -240,9 +240,22 @@ public class GroupedHotspotResult
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
     public double ReferenceScore { get; set; }
+    public double RankingScore { get; set; }
+    public double GenericNamePenalty { get; set; } = 1.0;
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
     public bool PathsTruncated { get; set; }
+    public List<GroupedHotspotDefinitionSite> DefinitionSiteDetails { get; set; } = [];
+}
+
+public class GroupedHotspotDefinitionSite
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int Line { get; set; }
+    public string? Visibility { get; set; }
+    public string? Container { get; set; }
+    public string? LogicalTargetKey { get; set; }
 }
 
 public class SymbolHotspotResult
@@ -250,6 +263,8 @@ public class SymbolHotspotResult
     public SymbolResult Symbol { get; set; } = new();
     public int ReferenceCount { get; set; }
     public double ReferenceScore { get; set; }
+    public double RankingScore { get; set; }
+    public double GenericNamePenalty { get; set; } = 1.0;
 }
 
 public class FileHotspotResult
@@ -644,6 +659,12 @@ public class ImpactResult
     // の順で並ぶ。impact --with-paths のときのみ populate される。
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<List<string>>? Paths { get; set; }
+    // Structured counterpart to Paths. Each hop carries definition-site and family
+    // metadata so same-name or partial symbols are distinguishable without parsing names.
+    // Paths の構造化版。各 hop に definition-site と family metadata を付け、
+    // 同名 symbol や partial symbol を名前だけで判別しなくて済むようにする。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<List<ImpactPathNode>>? PathDetails { get; set; }
     // True when the caller has more distinct shortest paths than the per-row cap kept here.
     // 同一 caller に対して保持上限を超える別経路が存在する場合に true。
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -668,6 +689,20 @@ public class ImpactResult
     public List<string>? BodyContentTruncationReasons { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExcerptRecoveryHint? BodyContentRecovery { get; set; }
+}
+
+public class ImpactPathNode
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Kind { get; set; }
+    public string? Lang { get; set; }
+    public string? DefinitionPath { get; set; }
+    public int? DefinitionLine { get; set; }
+    public string? Container { get; set; }
+    public string? FamilyKey { get; set; }
+    public string? LogicalTargetKey { get; set; }
+    public string? ReferencePath { get; set; }
+    public int? ReferenceLine { get; set; }
 }
 
 public static class ImpactResultKinds

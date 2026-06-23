@@ -195,7 +195,7 @@ internal static class PrivateLogFile
     {
         try
         {
-            SafeDelete(SlotPath(path, retainedFileCount - 1), onCleanupFailure);
+            AtomicFileWriter.TryDeleteFile(SlotPath(path, retainedFileCount - 1), onCleanupFailure);
 
             for (var slot = retainedFileCount - 2; slot >= 1; slot--)
             {
@@ -203,14 +203,14 @@ internal static class PrivateLogFile
                 var next = SlotPath(path, slot + 1);
                 if (!File.Exists(LongPath.EnsureWindowsPrefix(current)))
                     continue;
-                MoveReplacing(current, next);
+                AtomicFileWriter.MoveReplacing(current, next);
                 afterMove?.Invoke(next);
             }
 
             if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
             {
                 var first = SlotPath(path, 1);
-                MoveReplacing(path, first);
+                AtomicFileWriter.MoveReplacing(path, first);
                 afterMove?.Invoke(first);
             }
 
@@ -225,26 +225,6 @@ internal static class PrivateLogFile
 
     private static string SlotPath(string path, int slot)
         => slot <= 0 ? path : path + "." + slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-    private static void MoveReplacing(string sourcePath, string destinationPath)
-    {
-        File.Move(LongPath.EnsureWindowsPrefix(sourcePath), LongPath.EnsureWindowsPrefix(destinationPath), overwrite: true);
-        AtomicFileWriter.FlushParentDirectoryAfterReplace(destinationPath);
-    }
-
-    private static void SafeDelete(string path, Action<Exception>? onCleanupFailure = null)
-    {
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-        catch (Exception ex)
-        {
-            ReportFailure(onCleanupFailure, ex);
-            // Ignore: rotation is best-effort.
-        }
-    }
 
     private static void ReportFailure(Action<Exception>? failureSink, Exception exception)
     {

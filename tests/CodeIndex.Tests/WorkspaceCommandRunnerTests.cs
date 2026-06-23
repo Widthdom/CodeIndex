@@ -477,6 +477,212 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void ConfigShowJson_IncludesMissingMetadataAndEffectiveDefaults_Issue3905()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_missing_metadata");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_missing_metadata_home");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                ActiveWorkspace.EnvironmentVariable,
+                "XDG_CONFIG_HOME",
+                CdidxConfigFile.DisableEnvVar,
+                QueryCommandRunner.DefaultLimitEnvironmentVariable,
+                QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+                "CDIDX_GITHUB_TOKEN");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, null);
+            Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", null);
+            Environment.CurrentDirectory = root;
+            var currentRoot = Environment.CurrentDirectory;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.False(payload.TryGetProperty("config_path", out _));
+            Assert.Equal("not_found", payload.GetProperty("config_file").GetProperty("status").GetString());
+            Assert.Equal("not_found", payload.GetProperty("config_file").GetProperty("reason").GetString());
+            Assert.Contains(
+                payload.GetProperty("config_file").GetProperty("supported_files").EnumerateArray(),
+                item => item.GetString() == CdidxConfigFile.ProjectConfigRelativePath);
+            Assert.Contains(
+                payload.GetProperty("searched_paths").EnumerateArray(),
+                item => item.GetString() == Path.Combine(currentRoot, CdidxConfigFile.ProjectConfigRelativePath));
+            Assert.Equal("not_found", payload.GetProperty("active_workspace_status").GetProperty("status").GetString());
+            Assert.Equal("not_found", payload.GetProperty("workspace_manifest").GetProperty("status").GetString());
+            Assert.Contains(
+                payload.GetProperty("workspace_manifest").GetProperty("searched_paths").EnumerateArray(),
+                item => item.GetString() == Path.Combine(currentRoot, WorkspaceManifestLoader.FileName));
+
+            var defaultLimit = payload.GetProperty("effective_config").GetProperty(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+            Assert.Equal("default", defaultLimit.GetProperty("source").GetString());
+            Assert.Equal("20", defaultLimit.GetProperty("value").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ConfigShowJson_IncludesSourcesAndRedactsSecrets_Issue3927()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_sources");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_sources_home");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            File.WriteAllText(Path.Combine(root, CdidxConfigFile.FileName), """
+                {
+                  "search": {
+                    "limit": 37
+                  }
+                }
+                """);
+            using var env = EnvironmentVariableScope.Capture(
+                ActiveWorkspace.EnvironmentVariable,
+                "XDG_CONFIG_HOME",
+                CdidxConfigFile.DisableEnvVar,
+                QueryCommandRunner.DefaultLimitEnvironmentVariable,
+                QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+                "CDIDX_GITHUB_TOKEN");
+            const string secret = "ghp_123456789012345678901234567890123456";
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, null);
+            Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "5");
+            Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", secret);
+            Environment.CurrentDirectory = root;
+            var currentRoot = Environment.CurrentDirectory;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["config", "show", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.DoesNotContain(secret, stdout);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.Equal("loaded", payload.GetProperty("config_file").GetProperty("status").GetString());
+            Assert.Equal(Path.Combine(currentRoot, CdidxConfigFile.FileName), payload.GetProperty("config_file").GetProperty("path").GetString());
+
+            var effective = payload.GetProperty("effective_config");
+            var limit = effective.GetProperty(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+            Assert.Equal("config_file", limit.GetProperty("source").GetString());
+            Assert.Equal("37", limit.GetProperty("value").GetString());
+            var snippetLines = effective.GetProperty(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable);
+            Assert.Equal("environment", snippetLines.GetProperty("source").GetString());
+            Assert.Equal("5", snippetLines.GetProperty("value").GetString());
+            var githubToken = effective.GetProperty("CDIDX_GITHUB_TOKEN");
+            Assert.Equal("environment", githubToken.GetProperty("source").GetString());
+            Assert.True(githubToken.GetProperty("sensitive").GetBoolean());
+            Assert.Equal("<redacted>", githubToken.GetProperty("value").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ConfigShowJson_InvalidConfigReportsInvalidStatus_Issue3927()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_invalid");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_invalid_home");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            File.WriteAllText(Path.Combine(root, CdidxConfigFile.FileName), "{ invalid json");
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME", CdidxConfigFile.DisableEnvVar);
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, null);
+            Environment.CurrentDirectory = root;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["config", "show", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var configFile = document.RootElement.GetProperty("config_file");
+            Assert.Equal("invalid", configFile.GetProperty("status").GetString());
+            Assert.Contains("Invalid JSON", configFile.GetProperty("error").GetString(), StringComparison.Ordinal);
+
+            var (prettyExitCode, prettyStdout, prettyStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["--pretty", "config", "show", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, prettyExitCode);
+            Assert.Empty(prettyStderr);
+            using var prettyDocument = JsonDocument.Parse(prettyStdout);
+            Assert.Equal("invalid", prettyDocument.RootElement.GetProperty("config_file").GetProperty("status").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ConfigShowJsonUnsupportedMode_ReturnsStructuredJsonError_Issue3927()
+    {
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["--json=array"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var payload = document.RootElement;
+        Assert.Equal("error", payload.GetProperty("status").GetString());
+        Assert.Contains("--json=<format>", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkspaceStatusJsonNoManifest_IncludesDiscoveryMetadata_Issue3905()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_status_no_manifest");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var currentRoot = Environment.CurrentDirectory;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["status", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.False(payload.TryGetProperty("manifest", out _));
+            Assert.Empty(payload.GetProperty("members").EnumerateArray());
+            var manifestStatus = payload.GetProperty("manifest_status");
+            Assert.Equal("not_found", manifestStatus.GetProperty("status").GetString());
+            Assert.Equal("not_found", manifestStatus.GetProperty("reason").GetString());
+            Assert.Contains(
+                manifestStatus.GetProperty("supported_files").EnumerateArray(),
+                item => item.GetString() == WorkspaceManifestLoader.FileName);
+            Assert.Contains(
+                manifestStatus.GetProperty("searched_paths").EnumerateArray(),
+                item => item.GetString() == Path.Combine(currentRoot, WorkspaceManifestLoader.FileName));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void ActiveWorkspace_AffectsQueryResolutionButNotIndexResolution()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_project");

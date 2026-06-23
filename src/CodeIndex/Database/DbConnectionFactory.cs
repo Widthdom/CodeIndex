@@ -95,7 +95,7 @@ internal static class DbConnectionFactory
             return AppendReadOnlyQuery(dbPath);
         }
 
-        var fileUri = new Uri(Path.GetFullPath(dbPath)).AbsoluteUri;
+        var fileUri = CodeIndex.FileUriPolicy.PathToFileUri(dbPath);
         return $"{fileUri}?immutable=1&mode=ro";
     }
 
@@ -122,14 +122,19 @@ internal static class DbConnectionFactory
                 return false;
             }
 
-            var uri = new Uri(trimmed);
-            if (!uri.IsFile)
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) || !uri.IsFile)
             {
                 failureReason = FileUriNotLocalFileReason;
                 return false;
             }
 
-            localPath = uri.LocalPath;
+            if (!CodeIndex.FileUriPolicy.TryNormalizeFileUriPath(trimmed, out var normalizedPath, out _))
+            {
+                failureReason = FileUriPathParseFailedReason;
+                return false;
+            }
+
+            localPath = normalizedPath;
             return true;
         }
         catch (UriFormatException)
@@ -194,7 +199,7 @@ internal static class DbConnectionFactory
             // kept explicit so cdidx's intent is visible in logs / traces.
             // builder は DataSource を quote して URI 解釈を壊すため直接組む。
             // Uri.AbsoluteUri が全ての危険文字を %-エンコードするので raw 連結でも injection 安全。
-            var fileUri = new Uri(Path.GetFullPath(dbPath)).AbsoluteUri; // e.g. file:///abs/path.db
+            var fileUri = CodeIndex.FileUriPolicy.PathToFileUri(dbPath); // e.g. file:///abs/path.db
             var rawConnStr = $"Data Source={fileUri}?immutable=1;Mode=ReadOnly";
             var conn = new SqliteConnection(rawConnStr);
             conn.Open();
