@@ -2663,8 +2663,6 @@ public partial class QueryCommandRunnerTests
     [InlineData("validate", "--exact")]
     [InlineData("validate", "--count")]
     [InlineData("validate", "--lang", "javascript")]
-    [InlineData("validate", "--exclude-path", "src/")]
-    [InlineData("validate", "--exclude-tests")]
     public void QueryEntrypoints_UnsupportedOptionsReturnUsageError(string command, string flag, string? value = null)
     {
         var args = value == null

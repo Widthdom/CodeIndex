@@ -1872,6 +1872,8 @@ public partial class DbReader : IDisposable
     public List<Models.FileIssue> GetIssues(
         string? kind = null,
         IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
         int? limit = null,
         string? severity = null)
     {
@@ -1888,14 +1890,7 @@ public partial class DbReader : IDisposable
             sql += " AND i.kind = @kind";
         if (severity != null)
             sql += " AND " + severityColumn + " = @severity";
-        if (pathPatterns is { Count: > 0 })
-        {
-            // OR multiple path filters / 複数パスフィルタを OR で結合
-            var ors = new List<string>(pathPatterns.Count);
-            for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
-            sql += " AND (" + string.Join(" OR ", ors) + ")";
-        }
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " ORDER BY f.path, i.line";
         if (limit.HasValue)
             sql += " LIMIT @limit";
@@ -1905,11 +1900,7 @@ public partial class DbReader : IDisposable
             cmd.Parameters.AddWithValue("@kind", kind);
         if (severity != null)
             cmd.Parameters.AddWithValue("@severity", severity);
-        if (pathPatterns is { Count: > 0 })
-        {
-            for (int i = 0; i < pathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
-        }
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (limit.HasValue)
             cmd.Parameters.AddWithValue("@limit", limit.Value);
 

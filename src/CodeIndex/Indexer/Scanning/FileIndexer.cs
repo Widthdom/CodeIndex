@@ -4188,7 +4188,7 @@ public class FileIndexer
     private static void AddRawByteContentIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
     {
         // BOM marker / BOMマーカー
-        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF && !ShouldSuppressUtf8BomIssue(relativePath))
         {
             issues.Add(new FileIssue
             {
@@ -4213,6 +4213,9 @@ public class FileIndexer
 
         AddLineEndingIssues(issues, relativePath, rawBytes);
     }
+
+    private static bool ShouldSuppressUtf8BomIssue(string relativePath)
+        => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
 
     private static void AddLineEndingIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
     {

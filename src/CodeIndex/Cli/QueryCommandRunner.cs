@@ -8579,7 +8579,13 @@ public static partial class QueryCommandRunner
             var issueLimit = HasOption(cmdArgs, "--limit") || HasOption(cmdArgs, "--top")
                 ? options.Limit
                 : (int?)null;
-            var issues = reader.GetIssues(options.Kind, options.PathPatterns, issueLimit, options.Severity);
+            var issues = reader.GetIssues(
+                options.Kind,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                issueLimit,
+                options.Severity);
             var issuesAvailable = reader._hasIssuesTable;
             if (issues.Count == 0)
             {

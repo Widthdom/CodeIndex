@@ -5025,7 +5025,11 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var issues = reader.GetIssues(kind, pathPatterns, countOnly ? null : FetchLimitForEnvelope(limit), severity);
+            var issues = reader.GetIssues(
+                kind,
+                pathPatterns,
+                limit: countOnly ? null : FetchLimitForEnvelope(limit),
+                severity: severity);
             var truncated = !countOnly && TrimToRequestedLimit(issues, limit);
             var pathFilterArray = new JsonArray();
             if (pathPatterns is not null)

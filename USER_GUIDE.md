@@ -452,6 +452,7 @@ conflicting instructions.
 cdidx validate
 cdidx validate --kind replacement_char --path src/
 cdidx validate --kind replacement_char --severity warning --path src/
+cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
 ```
@@ -466,6 +467,11 @@ or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
 Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
+Use `--exclude-tests` and repeatable `--exclude-path` to keep validation output
+focused on production paths when fixtures or generated samples dominate the
+issue list.
+UTF-8 BOM markers in Visual Studio `.sln` files are treated as expected solution
+file noise and are not reported by default.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
 default `{ "count": ..., "issues": [...] }` object.
 LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
@@ -1411,8 +1417,8 @@ same source location.
 | `--audit-scope <source\|all>` | `search --recipe <name>` | Choose recipe path scope. `source` is the default and suppresses tests, docs, changelog text, and recipe definitions using recipe metadata; `all` intentionally searches every indexed path unless other filters exclude it. JSON recipe output reports the effective scope, path filters, and exclusions. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
 | `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, supported formats, filter support, and limit semantics. |
-| `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
-| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
+| `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
+| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Exclude likely test files and prefer production code |
 | `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
 | `--exclude-strings` | `search` | Exclude matches whose only retained origin is a string literal, regex literal, or CLI help text |
 | `--exclude-fixtures` | `search` | Exclude matches whose only retained facet is a test fixture string |
@@ -1424,7 +1430,7 @@ same source location.
 | `--search-fields <fields>` / `--results-only` | `search` | Project compact JSON fields and emit result-only NDJSON for shell pipelines |
 | `--first-per-file` / `--sample <n>` / `--max-json-bytes <n>` | `search` | Bound broad audit output by file, deterministic sample size, or NDJSON byte budget |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
-| `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
+| `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | Search snippet length or graph `--body` excerpt length (default: 8, max: 20) |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
@@ -3022,6 +3028,7 @@ render できます。
 cdidx validate
 cdidx validate --kind replacement_char --path src/
 cdidx validate --kind replacement_char --severity warning --path src/
+cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
 ```
@@ -3035,7 +3042,11 @@ placeholder、Dockerfile の JSON-form instruction payload の parse / truncatio
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
 エンコーディング破損の可能性を agent が区別できます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
-可能性がある finding に集中できます。pipeline が既定の `{ "count": ..., "issues": [...] }`
+可能性がある finding に集中できます。fixture や generated sample が issue list を
+支配する場合は、`--exclude-tests` と繰り返し指定できる `--exclude-path` で
+本番コード側の path に validation output を絞れます。Visual Studio の `.sln`
+file に含まれる UTF-8 BOM marker は solution file の既知ノイズとして扱われ、
+既定では報告されません。pipeline が既定の `{ "count": ..., "issues": [...] }`
 object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
 実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
@@ -3990,8 +4001,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--audit-scope <source\|all>` | `search --recipe <name>` | recipe の path scope を選ぶ。既定の `source` は recipe metadata により tests、docs、changelog text、recipe 定義を抑制する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。Recipe の JSON 出力には有効な scope、path filter、exclusion が含まれる。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
 | `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、対応 format、filter support、limit semantics 付きで一覧表示する。 |
-| `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
-| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
+| `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
+| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | テストらしいパスを除外し、本番コードを優先 |
 | `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
 | `--exclude-strings` | `search` | 保持される一致 origin が文字列リテラル、正規表現リテラル、CLI ヘルプ文言だけの検索結果を除外する |
 | `--exclude-fixtures` | `search` | 保持される facet がテスト fixture 文字列だけの検索結果を除外する |
@@ -4003,7 +4014,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--search-fields <fields>` / `--results-only` | `search` | compact JSON field を projection し、shell pipeline 向けの result-only NDJSON を出力する |
 | `--first-per-file` / `--sample <n>` / `--max-json-bytes <n>` | `search` | file 単位、決定的 sample 数、NDJSON byte budget で広い audit 出力を制限する |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
-| `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
+| `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | 長い検索結果行をクランプするときの焦点選択。`quality`（デフォルト）は全文一致や強いトークンを優先し、`proximity` は近接した複数トークンを優先し、`leftmost` は従来の最左一致を使う。 |
 | `--max-line-width <n>` | `search`, `references`, `callers`, `callees`, `find`, `excerpt`, `impact`, `inspect` | 極端に長い1行のスニペット・参照文脈・抜粋を、関連箇所の周辺だけに切り詰める（`0` でクランプ解除、デフォルト: 512、最大: 4096） |
