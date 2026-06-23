@@ -1483,6 +1483,7 @@ internal sealed record SearchRecipeCompactResultJsonResult(
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("lang")] string? Lang,
     [property: JsonPropertyName("visibility")] string? Visibility,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("chunk_start_line")] int ChunkStartLine,
     [property: JsonPropertyName("chunk_end_line")] int ChunkEndLine,
     [property: JsonPropertyName("match_lines")] List<int> MatchLines,

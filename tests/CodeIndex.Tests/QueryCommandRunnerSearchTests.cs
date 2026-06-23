@@ -2759,6 +2759,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, firstQuery.GetProperty("result_limit").GetInt32());
             Assert.Equal(1, firstQuery.GetProperty("minimum_omitted_result_count").GetInt32());
             Assert.Equal(1, firstQuery.GetProperty("top_files")[0].GetProperty("count").GetInt32());
+            Assert.Contains(firstResult.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CommandErrorWriter", StringComparison.Ordinal));
             Assert.True(firstResult.TryGetProperty("match_lines", out _));
             Assert.False(firstResult.TryGetProperty("snippet", out _));
             Assert.False(string.IsNullOrWhiteSpace(nextCursor));

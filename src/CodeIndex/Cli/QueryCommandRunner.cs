@@ -1979,6 +1979,7 @@ public static partial class QueryCommandRunner
                     row.Result.Path,
                     row.Result.Lang,
                     row.Result.Visibility,
+                    [.. recipeQuery.RiskEvidence],
                     row.Result.StartLine,
                     row.Result.EndLine,
                     row.Compact.MatchLines,
