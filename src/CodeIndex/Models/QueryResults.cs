@@ -56,6 +56,13 @@ public readonly record struct SearchCursor(double Score, long ChunkId, int Offse
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public readonly record struct UnusedCountResult(
+    int Count,
+    int FileCount,
+    bool IncludesSql,
+    IReadOnlyDictionary<string, int> BucketCounts,
+    IReadOnlyDictionary<string, int> ConfidenceCounts);
+
 public readonly record struct SearchFileCountResult(string Path, int Count);
 
 public readonly record struct FindScanSummary(
