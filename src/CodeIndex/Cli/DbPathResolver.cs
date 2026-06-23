@@ -248,7 +248,7 @@ public static class DbPathResolver
             if (!SqliteFileUri.TryGetPathBeforeQuery(dbPath, out var trimmed, out var boundsError))
                 throw boundsError ?? new FormatException("Invalid SQLite file URI.");
 
-            if (!PathUriNormalizer.TryNormalizeFileUriPath(trimmed, out var normalizedUriPath, out var uriPathError))
+            if (!CodeIndex.FileUriPolicy.TryNormalizeFileUriPath(trimmed, out var normalizedUriPath, out var uriPathError))
                 throw new FormatException(uriPathError ?? "Invalid SQLite file URI path.");
             normalizedDbPath = normalizedUriPath;
             return true;

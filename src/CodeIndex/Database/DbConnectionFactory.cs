@@ -111,14 +111,19 @@ internal static class DbConnectionFactory
                 return false;
             }
 
-            var uri = new Uri(trimmed);
-            if (!uri.IsFile)
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) || !uri.IsFile)
             {
                 failureReason = FileUriNotLocalFileReason;
                 return false;
             }
 
-            localPath = uri.LocalPath;
+            if (!CodeIndex.FileUriPolicy.TryNormalizeFileUriPath(trimmed, out var normalizedPath, out _))
+            {
+                failureReason = FileUriPathParseFailedReason;
+                return false;
+            }
+
+            localPath = normalizedPath;
             return true;
         }
         catch (UriFormatException)

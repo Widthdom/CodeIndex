@@ -30,25 +30,8 @@ internal static class GlobalToolLog
     internal const string ExceptionChainTruncationMarker = "...<exception_chain_truncated>";
     private const string RedactedValue = "<redacted>";
     private const int PrivateLogDiagnosticEmitLimit = 16;
-    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
-    private static readonly Regex SensitiveAssignmentPattern = new(
-        @"^(?<name>--?[^=\s]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[^=\s]*)=(?<value>.+)$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
-        RedactionRegexTimeout);
-    private static readonly Regex UriUserInfoPattern = new(
-        @"(?<scheme>[a-z][a-z0-9+\-.]*://)(?<user>[^:@/\s]+):(?<password>[^@/\s]+)@",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
-        RedactionRegexTimeout);
-    private static readonly Regex LongHexPattern = new(
-        @"\b[0-9a-f]{32,}\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
-        RedactionRegexTimeout);
-    private static readonly Regex LongBase64Pattern = new(
-        @"\b[A-Za-z0-9+/]{40,}={0,2}\b",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled,
-        RedactionRegexTimeout);
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
         => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
@@ -543,18 +526,7 @@ internal static class GlobalToolLog
         if (!arg.StartsWith('-') || arg.Contains('=', StringComparison.Ordinal))
             return false;
 
-        return arg.Contains("token", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("password", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("passwd", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("pwd", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("secret", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("auth", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("apikey", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("api-key", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("api_key", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("access-key", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("access_key", StringComparison.OrdinalIgnoreCase)
-            || arg.Contains("credential", StringComparison.OrdinalIgnoreCase);
+        return DiagnosticRedactor.IsSensitiveName(arg);
     }
 
     private static string RedactSensitiveText(string value)
@@ -568,16 +540,7 @@ internal static class GlobalToolLog
 
         try
         {
-            if (value.Contains('=', StringComparison.Ordinal))
-            {
-                var assignment = SensitiveAssignmentPattern.Match(value);
-                if (assignment.Success)
-                    return $"{assignment.Groups["name"].Value}={RedactedValue}";
-            }
-
-            value = UriUserInfoPattern.Replace(value, match => $"{match.Groups["scheme"].Value}{match.Groups["user"].Value}:{RedactedValue}@");
-            value = LongHexPattern.Replace(value, RedactedValue);
-            value = LongBase64Pattern.Replace(value, RedactedValue);
+            value = DiagnosticRedactor.RedactSensitiveText(value, RedactedValue);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -586,8 +549,18 @@ internal static class GlobalToolLog
 
         if (truncated && LooksLikeTruncatedUriUserInfo(value))
             return RedactedValue;
+        if (truncated && IsFullyRedactedSensitiveAssignment(value))
+            return value;
 
         return truncated ? value + RedactionTruncationMarker : value;
+    }
+
+    private static bool IsFullyRedactedSensitiveAssignment(string value)
+    {
+        var separator = value.IndexOf('=');
+        return separator > 0
+            && value[(separator + 1)..].Equals(RedactedValue, StringComparison.Ordinal)
+            && DiagnosticRedactor.IsSensitiveName(value[..separator]);
     }
 
     private static bool LooksLikeTruncatedUriUserInfo(string value)

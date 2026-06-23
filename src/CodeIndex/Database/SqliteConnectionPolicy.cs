@@ -58,7 +58,7 @@ internal static class SqliteConnectionPolicy
             return AppendRequiredQueryFlags(EscapeConnectionStringSeparators(dbPath));
         }
 
-        var fileUri = new Uri(Path.GetFullPath(dbPath)).AbsoluteUri;
+        var fileUri = CodeIndex.FileUriPolicy.PathToFileUri(dbPath);
         return AppendRequiredQueryFlags(EscapeConnectionStringSeparators(fileUri));
     }
 

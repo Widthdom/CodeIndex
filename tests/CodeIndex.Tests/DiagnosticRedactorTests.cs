@@ -6,6 +6,36 @@ namespace CodeIndex.Tests;
 public class DiagnosticRedactorTests
 {
     [Fact]
+    public void RedactSuggestionText_UsesSharedTypedPolicy_Issue3933()
+    {
+        var awsKey = "AKIA" + new string('A', 16);
+        var bearer = "Bearer " + new string('b', 20);
+        var highEntropy = "Abcdefghijklmnopqrstuvwxyz123456";
+        var text = $"key={awsKey} {bearer} api_key=secret {highEntropy}";
+
+        var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var redactedTypes);
+
+        Assert.Contains(DiagnosticRedactor.SuggestionRedactedAwsAccessKey, redacted);
+        Assert.Contains(DiagnosticRedactor.SuggestionRedactedBearerToken, redacted);
+        Assert.Contains("api_key=" + DiagnosticRedactor.SuggestionRedactedCredential, redacted);
+        Assert.Contains(DiagnosticRedactor.SuggestionRedactedHighEntropyToken, redacted);
+        Assert.DoesNotContain(awsKey, redacted);
+        Assert.DoesNotContain("secret", redacted);
+        Assert.Equal(
+            ["aws_access_key", "bearer_token", "credential", "high_entropy_token"],
+            redactedTypes.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void IsSensitiveName_CoversSharedCredentialNames_Issue3933()
+    {
+        Assert.True(DiagnosticRedactor.IsSensitiveName("--github-token"));
+        Assert.True(DiagnosticRedactor.IsSensitiveName("CDIDX_ACCESS_KEY"));
+        Assert.True(DiagnosticRedactor.IsSensitiveName("serviceCredential"));
+        Assert.False(DiagnosticRedactor.IsSensitiveName("--workspace"));
+    }
+
+    [Fact]
     public void RedactReportLogLine_JsonLineRedactsStrings_Issue3724()
     {
         var token = "ghp_" + new string('a', 24);
