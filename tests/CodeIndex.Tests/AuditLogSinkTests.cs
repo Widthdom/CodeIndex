@@ -232,6 +232,19 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_BareHostPortUri_DoesNotRedact_Issue3909()
+    {
+        const string text = "http://localhost:5000";
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.Equal(text, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
     public void SanitizeArgValue_BudgetsPayloadBeforeClone_Issue3106()
     {
         var items = new JsonArray();

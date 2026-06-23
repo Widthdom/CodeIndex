@@ -742,12 +742,11 @@ internal sealed class AuditLogSink : IDisposable
 
     private static bool ContainsSecretValue(string text)
     {
-        var scanText = text.Length <= MaxSecretValueScanChars
-            ? text
-            : text[..MaxSecretValueScanChars];
+        var scanTruncated = text.Length > MaxSecretValueScanChars;
+        var scanText = scanTruncated ? text[..MaxSecretValueScanChars] : text;
         return RegexTimeoutPolicy.IsRedactionMatchOrFallback(
             () => SecretValuePattern.IsMatch(scanText)
-                  || ContainsDisplayedUriUserInfoPrefix(scanText));
+                  || (scanTruncated && ContainsDisplayedUriUserInfoPrefix(scanText)));
     }
 
     private static bool ContainsDisplayedUriUserInfoPrefix(string scanText)
