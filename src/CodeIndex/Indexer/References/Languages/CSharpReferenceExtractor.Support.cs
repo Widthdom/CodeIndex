@@ -9,7 +9,6 @@ public static partial class ReferenceExtractor
 {
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
-    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     internal sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
     internal sealed record CSharpUsingNamespaceRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     internal sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
@@ -226,35 +225,6 @@ public static partial class ReferenceExtractor
 
         imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
         return imports;
-    }
-
-    private static List<CSharpNamespaceScope> BuildCSharpNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols, int totalLineCount)
-    {
-        var scopes = new List<CSharpNamespaceScope>();
-        if (language != "csharp")
-            return scopes;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "namespace" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
-            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
-            if (!string.IsNullOrWhiteSpace(symbol.Signature)
-                && symbol.Signature.TrimEnd().EndsWith(';'))
-            {
-                endLine = Math.Max(endLine, totalLineCount);
-            }
-
-            if (startLine <= 0 || endLine < startLine)
-                continue;
-
-            var qualifiedName = TryNormalizeCSharpQualifiedName(symbol.Name) ?? string.Empty;
-            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
-        }
-
-        return scopes;
     }
 
     private static Dictionary<string, HashSet<string>> BuildCSharpTopLevelTypeNamespacesByName(string language, IReadOnlyList<SymbolRecord> symbols)

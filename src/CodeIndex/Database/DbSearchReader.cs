@@ -656,22 +656,6 @@ public partial class DbReader
             .ToList();
     }
 
-    private List<SearchResult> FilterBySearchGuards(
-        List<SearchResult> results,
-        SearchPrimaryMatchContext primaryMatchContext,
-        IReadOnlyList<SearchGuardFilter> guardFilters,
-        int guardWindow,
-        SearchGuardScope guardScope)
-    {
-        guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
-        var filtered = new List<SearchResult>(results.Count);
-        var lineWindowCache = new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>();
-        foreach (var result in results)
-            filtered.AddRange(FilterSearchResultByGuards(result, primaryMatchContext, guardFilters, guardWindow, guardScope, lineWindowCache));
-
-        return filtered;
-    }
-
     private List<SearchResult> FilterSearchResultByGuards(
         SearchResult result,
         SearchPrimaryMatchContext primaryMatchContext,

@@ -284,9 +284,6 @@ public partial class DbReader
     private static void EnsureVisibilityFilterParameterBudget(IReadOnlyCollection<string>? visibilityFilters, IReadOnlyCollection<string>? excludeVisibilityFilters)
         => SqliteDynamicSql.EnsureParameterBudget((visibilityFilters?.Count ?? 0) + (excludeVisibilityFilters?.Count ?? 0), "visibility filters");
 
-    private static bool HasVisibilityFilters(IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
-        => visibilityFilters is { Count: > 0 } || excludeVisibilityFilters is { Count: > 0 };
-
     private static List<string> ExpandVisibilityFilterValues(IReadOnlyList<string> filters)
     {
         var expanded = new List<string>();
@@ -3933,12 +3930,213 @@ public partial class DbReader
 
         if ((kind is "function" or "property")
             && !CSharpPropertyAccessorSignatureRegex.IsMatch(trimmed)
+            && !LooksLikeCSharpCallableSignature(trimmed)
             && CSharpFieldLikeSignatureRegex.IsMatch(trimmed))
         {
             return "field";
         }
 
         return kind;
+    }
+
+    private static bool LooksLikeCSharpCallableSignature(string signature)
+    {
+        var declarationEnd = FindCSharpDeclarationBoundary(signature);
+        var declaration = (declarationEnd >= 0 ? signature[..declarationEnd] : signature).TrimEnd();
+        for (var i = 0; i < declaration.Length; i++)
+        {
+            if (declaration[i] != '(')
+                continue;
+
+            var close = FindMatchingCSharpSignatureParen(declaration, i);
+            if (close < 0)
+                return false;
+
+            var next = SkipCSharpSignatureWhitespace(declaration, close + 1);
+            if (next >= declaration.Length || StartsWithCSharpWhereConstraint(declaration, next))
+                return true;
+
+            i = close;
+        }
+
+        return false;
+    }
+
+    private static int FindCSharpDeclarationBoundary(string signature)
+    {
+        var parenDepth = 0;
+        for (var i = 0; i < signature.Length; i++)
+        {
+            if (TrySkipCSharpSignatureLiteral(signature, ref i))
+                continue;
+
+            var ch = signature[i];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+
+            if (parenDepth == 0 && (ch == '{' || ch == ';' || ch == '='))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingCSharpSignatureParen(string text, int openIndex)
+    {
+        var depth = 0;
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            if (TrySkipCSharpSignatureLiteral(text, ref i))
+                continue;
+
+            if (text[i] == '(')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != ')')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool TrySkipCSharpSignatureLiteral(string text, ref int index)
+    {
+        if (text[index] == '\'' && TrySkipCSharpCharacterLiteral(text, ref index))
+            return true;
+
+        if (text[index] == '@' && index + 1 < text.Length && text[index + 1] == '"')
+        {
+            index++;
+            return TrySkipCSharpVerbatimStringLiteral(text, ref index);
+        }
+
+        if (text[index] != '"')
+            return false;
+
+        var quoteRunLength = CountCSharpQuoteRun(text, index);
+        if (quoteRunLength >= 3)
+            return TrySkipCSharpRawStringLiteral(text, ref index, quoteRunLength);
+
+        return TrySkipCSharpRegularStringLiteral(text, ref index);
+    }
+
+    private static int CountCSharpQuoteRun(string text, int start)
+    {
+        var index = start;
+        while (index < text.Length && text[index] == '"')
+            index++;
+        return index - start;
+    }
+
+    private static bool TrySkipCSharpCharacterLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '\'')
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpRegularStringLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '"')
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpVerbatimStringLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            index = i;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpRawStringLiteral(string text, ref int index, int quoteRunLength)
+    {
+        for (var i = index + quoteRunLength; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+
+            if (CountCSharpQuoteRun(text, i) < quoteRunLength)
+                continue;
+
+            index = i + quoteRunLength - 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int SkipCSharpSignatureWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static bool StartsWithCSharpWhereConstraint(string text, int index)
+    {
+        const string whereKeyword = "where";
+        if (!text.AsSpan(index).StartsWith(whereKeyword, StringComparison.Ordinal))
+            return false;
+
+        var end = index + whereKeyword.Length;
+        return end >= text.Length || char.IsWhiteSpace(text[end]);
     }
 
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
@@ -5400,18 +5598,6 @@ public partial class DbReader
     private static bool LooksLikeAttributeBoundaryLine(string line)
     {
         return line.IndexOf('[') >= 0 || line.IndexOf(']') >= 0;
-    }
-
-    private static int CountChar(string text, char value)
-    {
-        var count = 0;
-        foreach (var ch in text)
-        {
-            if (ch == value)
-                count++;
-        }
-
-        return count;
     }
 
     private static List<string> BuildUnusedIntentionalSurfaceTags(UnusedCandidateSymbol candidate, string kind)
