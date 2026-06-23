@@ -480,6 +480,91 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_Json_PrintsStableSchemaAndRedactsSecrets_Issue3925()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN", "CDIDX_VISIBLE_PATH");
+        const string secret = "ghp_123456789012345678901234567890123456";
+        const string visiblePath = "/tmp/cdidx-visible-path-3925";
+        env.Set("CDIDX_GITHUB_TOKEN", secret);
+        env.Set("CDIDX_VISIBLE_PATH", visiblePath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.DoesNotContain(secret, stdout);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("1.10.0", root.GetProperty("version").GetString());
+        Assert.True(root.GetProperty("terminal").TryGetProperty("stdout_tty", out _));
+        Assert.True(root.GetProperty("paths").TryGetProperty("db", out _));
+        Assert.False(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.True(root.GetProperty("redaction").GetProperty("secrets_redacted").GetBoolean());
+
+        var envByName = root.GetProperty("cdidx_env")
+            .EnumerateArray()
+            .ToDictionary(
+                element => element.GetProperty("name").GetString()!,
+                element => element,
+                StringComparer.Ordinal);
+        Assert.Equal("<redacted>", envByName["CDIDX_GITHUB_TOKEN"].GetProperty("value").GetString());
+        Assert.True(envByName["CDIDX_GITHUB_TOKEN"].GetProperty("sensitive").GetBoolean());
+        Assert.Equal(visiblePath, envByName["CDIDX_VISIBLE_PATH"].GetProperty("value").GetString());
+        Assert.False(envByName["CDIDX_VISIBLE_PATH"].GetProperty("sensitive").GetBoolean());
+
+        var inventoryNames = root.GetProperty("environment_inventory")
+            .EnumerateArray()
+            .Select(element => element.GetProperty("name").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", inventoryNames);
+        Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, inventoryNames);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonRedactPaths_RedactsPathBearingDiagnostics_Issue3925()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_VISIBLE_PATH");
+        const string visiblePath = "/tmp/cdidx-visible-path-3925";
+        env.Set("CDIDX_VISIBLE_PATH", visiblePath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json", "--redact-paths"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.DoesNotContain(visiblePath, stdout);
+        Assert.DoesNotContain(Environment.CurrentDirectory, stdout);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.Contains("[redacted]", root.GetProperty("cwd").GetString(), StringComparison.Ordinal);
+
+        var visibleEnv = root.GetProperty("cdidx_env")
+            .EnumerateArray()
+            .Single(element => element.GetProperty("name").GetString() == "CDIDX_VISIBLE_PATH");
+        Assert.Contains("[redacted]", visibleEnv.GetProperty("value").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonUnsupportedMode_ReturnsStructuredJsonError_Issue3925()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json=array"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Contains("--json=<format>", root.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_QueryTraceStderr_BoundsPathArraysAndValues_Issue3123()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-bounds");

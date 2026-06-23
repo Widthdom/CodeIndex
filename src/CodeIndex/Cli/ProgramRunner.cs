@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Lsp;
@@ -410,16 +411,48 @@ internal static partial class ProgramRunner
         }
     }
 
-    private static int RunDoctor(string[] args, string appVersion)
+    private static int RunDoctor(string[] args, string appVersion, JsonSerializerOptions jsonOptions)
     {
-        if (args.Length == 1 && args[0] == "--env-inventory")
+        var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        var json = false;
+        var redactPaths = false;
+        var envInventory = false;
+        foreach (var arg in args)
+        {
+            switch (arg)
+            {
+                case "--json":
+                    json = true;
+                    break;
+                case "--redact-paths":
+                    redactPaths = true;
+                    break;
+                case "--env-inventory":
+                    envInventory = true;
+                    break;
+                default:
+                    return CommandErrorWriter.WriteJsonOrHuman(
+                        wantsJson,
+                        jsonOptions,
+                        arg.StartsWith("--json=", StringComparison.Ordinal)
+                            ? "doctor supports --json only; --json=<format> is not supported."
+                            : $"Unknown doctor argument: {arg}",
+                        CommandExitCodes.InvalidArgument,
+                        "use `cdidx doctor [--json] [--redact-paths] [--env-inventory]`.");
+            }
+        }
+
+        if (json)
+        {
+            WriteDoctorJson(appVersion, jsonOptions, redactPaths);
+            return CommandExitCodes.Success;
+        }
+
+        if (envInventory)
         {
             WriteEnvironmentInventory();
             return CommandExitCodes.Success;
         }
-
-        if (args.Length > 0)
-            return CommandErrorWriter.Write($"Unknown doctor argument: {args[0]}", CommandExitCodes.InvalidArgument, "use `cdidx doctor [--env-inventory]`.");
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
         Console.WriteLine("cdidx doctor");
@@ -458,6 +491,46 @@ internal static partial class ProgramRunner
         return CommandExitCodes.Success;
     }
 
+    private static void WriteDoctorJson(string appVersion, JsonSerializerOptions jsonOptions, bool redactPaths)
+    {
+        var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
+        var build = ConsoleUi.LoadBuildMetadata();
+        var payload = new DoctorJsonResult(
+            ApiVersion: "1",
+            Version: appVersion,
+            Commit: build.Commit,
+            Rid: RuntimeInformation.RuntimeIdentifier,
+            Os: RuntimeInformation.OSDescription,
+            Kernel: Environment.OSVersion.VersionString,
+            Dotnet: RuntimeInformation.FrameworkDescription,
+            Process: RedactDoctorPath(Environment.ProcessPath ?? "<unknown>", redactPaths),
+            BaseDir: RedactDoctorPath(AppContext.BaseDirectory, redactPaths),
+            Cwd: RedactDoctorPath(Environment.CurrentDirectory, redactPaths),
+            Terminal: new DoctorTerminalJsonResult(
+                StdoutTty: !Console.IsOutputRedirected,
+                StderrTty: !Console.IsErrorRedirected,
+                Columns: FormatDoctorJsonEnvironmentValue("COLUMNS", redactPaths),
+                NoColor: FormatDoctorJsonEnvironmentValue("NO_COLOR", redactPaths),
+                Term: FormatDoctorJsonEnvironmentValue("TERM", redactPaths),
+                Locale: CultureInfo.CurrentCulture.Name,
+                UiLocale: CultureInfo.CurrentUICulture.Name),
+            Paths: new DoctorPathsJsonResult(
+                Db: RedactDoctorPath(dbResolution.DbPath, redactPaths),
+                DataDir: RedactDoctorPath(dbResolution.DataDir ?? "<explicit-db>", redactPaths),
+                DataSource: dbResolution.DataDirSource ?? "explicit-db",
+                LogDir: RedactDoctorPath(GlobalToolLog.ResolveLogDirectoryForStatus(), redactPaths)),
+            Config: new DoctorConfigJsonResult(
+                DotCdidxrcJson: File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not_found",
+                DisableConfigFile: FormatDoctorJsonEnvironmentValue(CdidxConfigFile.DisableEnvVar, redactPaths)),
+            CdidxEnv: EnumerateCdidxEnvironmentJson(redactPaths).ToArray(),
+            EnvironmentInventory: EnvironmentVariableInventory.Items,
+            Redaction: new DoctorRedactionJsonResult(
+                PathsRedacted: redactPaths,
+                SecretsRedacted: true));
+
+        Console.WriteLine(JsonSerializer.Serialize(payload, CliJsonSerializerContextFactory.Create(jsonOptions).DoctorJsonResult));
+    }
+
     private static void WriteEnvironmentInventory()
     {
         Console.WriteLine("environment_inventory:");
@@ -477,6 +550,35 @@ internal static partial class ProgramRunner
             Console.WriteLine(ConsoleUi.FormatSummaryLine("description", item.Description, indent: "    "));
         }
     }
+
+    private static IEnumerable<DoctorEnvironmentVariableJsonResult> EnumerateCdidxEnvironmentJson(bool redactPaths)
+    {
+        var rows = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+            .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
+            .OrderBy(e => e.Key, StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var sensitive = IsSensitiveEnvironmentName(row.Key);
+            var value = sensitive
+                ? "<redacted>"
+                : string.IsNullOrEmpty(row.Value)
+                    ? "<empty>"
+                    : RedactDoctorPath(row.Value, redactPaths);
+            var bounded = ConsoleUi.BoundDisplayText(value);
+            yield return new DoctorEnvironmentVariableJsonResult(row.Key, bounded.Text, sensitive, bounded.Truncated, bounded.OriginalLength);
+        }
+    }
+
+    private static string FormatDoctorJsonEnvironmentValue(string name, bool redactPaths)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return value == null ? "<unset>" : ConsoleUi.FormatBoundedValue(RedactDoctorPath(value, redactPaths));
+    }
+
+    private static string RedactDoctorPath(string value, bool redactPaths)
+        => redactPaths ? DiagnosticRedactor.RedactSensitiveText(value, "[redacted]", redactPaths: true) : value;
 
     private static IEnumerable<(string Key, string Value)> EnumerateCdidxEnvironment()
     {

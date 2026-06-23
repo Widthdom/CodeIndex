@@ -129,7 +129,7 @@ internal static partial class ProgramRunner
     {
         if (args[0] == "doctor")
         {
-            exitCode = RunDoctor(args[1..], context.AppVersion);
+            exitCode = RunDoctor(args[1..], context.AppVersion, context.JsonOptions);
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command=doctor");
             EmitCommandMetric("doctor", args, context.StartTimestamp, context.Stopwatch, exitCode);
             return true;

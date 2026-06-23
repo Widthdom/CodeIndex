@@ -39,6 +39,54 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("path")] string? Path = null,
     [property: JsonPropertyName("category")] string? Category = null);
 
+internal sealed record DoctorJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("commit")] string Commit,
+    [property: JsonPropertyName("rid")] string Rid,
+    [property: JsonPropertyName("os")] string Os,
+    [property: JsonPropertyName("kernel")] string Kernel,
+    [property: JsonPropertyName("dotnet")] string Dotnet,
+    [property: JsonPropertyName("process")] string Process,
+    [property: JsonPropertyName("base_dir")] string BaseDir,
+    [property: JsonPropertyName("cwd")] string Cwd,
+    [property: JsonPropertyName("terminal")] DoctorTerminalJsonResult Terminal,
+    [property: JsonPropertyName("paths")] DoctorPathsJsonResult Paths,
+    [property: JsonPropertyName("config")] DoctorConfigJsonResult Config,
+    [property: JsonPropertyName("cdidx_env")] IReadOnlyList<DoctorEnvironmentVariableJsonResult> CdidxEnv,
+    [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem> EnvironmentInventory,
+    [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction);
+
+internal sealed record DoctorTerminalJsonResult(
+    [property: JsonPropertyName("stdout_tty")] bool StdoutTty,
+    [property: JsonPropertyName("stderr_tty")] bool StderrTty,
+    [property: JsonPropertyName("columns")] string Columns,
+    [property: JsonPropertyName("no_color")] string NoColor,
+    [property: JsonPropertyName("term")] string Term,
+    [property: JsonPropertyName("locale")] string Locale,
+    [property: JsonPropertyName("ui_locale")] string UiLocale);
+
+internal sealed record DoctorPathsJsonResult(
+    [property: JsonPropertyName("db")] string Db,
+    [property: JsonPropertyName("data_dir")] string DataDir,
+    [property: JsonPropertyName("data_source")] string DataSource,
+    [property: JsonPropertyName("log_dir")] string LogDir);
+
+internal sealed record DoctorConfigJsonResult(
+    [property: JsonPropertyName("dot_cdidxrc_json")] string DotCdidxrcJson,
+    [property: JsonPropertyName("disable_config_file")] string DisableConfigFile);
+
+internal sealed record DoctorEnvironmentVariableJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("sensitive")] bool Sensitive,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("original_length")] int OriginalLength);
+
+internal sealed record DoctorRedactionJsonResult(
+    [property: JsonPropertyName("paths_redacted")] bool PathsRedacted,
+    [property: JsonPropertyName("secrets_redacted")] bool SecretsRedacted);
+
 internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("current_version")] string CurrentVersion,
     [property: JsonPropertyName("latest_version")] string? LatestVersion,
@@ -680,6 +728,14 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(MacProfileDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryStatus))]
+[JsonSerializable(typeof(DoctorConfigJsonResult))]
+[JsonSerializable(typeof(DoctorEnvironmentVariableJsonResult))]
+[JsonSerializable(typeof(DoctorJsonResult))]
+[JsonSerializable(typeof(DoctorPathsJsonResult))]
+[JsonSerializable(typeof(DoctorRedactionJsonResult))]
+[JsonSerializable(typeof(DoctorTerminalJsonResult))]
+[JsonSerializable(typeof(EnvironmentVariableInventoryItem))]
+[JsonSerializable(typeof(EnvironmentVariableInventoryLocation))]
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
