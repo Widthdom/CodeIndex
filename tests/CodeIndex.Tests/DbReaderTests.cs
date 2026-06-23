@@ -12301,11 +12301,36 @@ public class DbReaderTests : IDisposable
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(new[] { "Foo->B->A", "Foo->C->A" }, pathSet);
+        Assert.NotNull(aResult.PathDetails);
+        var detailPathSet = aResult.PathDetails!
+            .Select(p => string.Join("->", p.Select(node => $"{node.Name}@{node.DefinitionPath}")))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "Foo@src/impact_paths_diamond.cs->B@src/impact_paths_diamond.cs->A@src/impact_paths_diamond.cs",
+                "Foo@src/impact_paths_diamond.cs->C@src/impact_paths_diamond.cs->A@src/impact_paths_diamond.cs",
+            },
+            detailPathSet);
+        var firstDetailPath = aResult.PathDetails![0];
+        Assert.All(firstDetailPath, node =>
+        {
+            Assert.Equal("csharp", node.Lang);
+            Assert.Equal("function", node.Kind);
+            Assert.Equal("src/impact_paths_diamond.cs", node.DefinitionPath);
+            Assert.True(node.DefinitionLine > 0);
+            Assert.Matches("^(family|container|file)\\|", node.LogicalTargetKey);
+        });
+        Assert.Equal("src/impact_paths_diamond.cs", firstDetailPath[^1].ReferencePath);
+        Assert.True(firstDetailPath[^1].ReferenceLine > 0);
 
         // Direct callers (B, C) keep a single trivial path that ends at themselves.
         var bResult = resultsWithPaths.Single(r => r.CallerName == "B");
         Assert.NotNull(bResult.Paths);
         Assert.Equal(new[] { "Foo->B" }, bResult.Paths!.Select(p => string.Join("->", p)).ToArray());
+        Assert.NotNull(bResult.PathDetails);
+        Assert.Equal("src/impact_paths_diamond.cs", bResult.PathDetails![0][^1].DefinitionPath);
         var cResult = resultsWithPaths.Single(r => r.CallerName == "C");
         Assert.NotNull(cResult.Paths);
         Assert.Equal(new[] { "Foo->C" }, cResult.Paths!.Select(p => string.Join("->", p)).ToArray());

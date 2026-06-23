@@ -599,6 +599,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(GroupedSymbolHotspotJsonResult))]
 [JsonSerializable(typeof(ImpactAnalysisResult))]
 [JsonSerializable(typeof(ImpactCycleResult))]
+[JsonSerializable(typeof(ImpactPathNode))]
 [JsonSerializable(typeof(ImpactResult))]
 [JsonSerializable(typeof(IndexDryRunJsonResult))]
 [JsonSerializable(typeof(IndexFreshnessCheckResult))]
