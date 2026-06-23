@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Versioning;
-using System.Text;
 
 namespace CodeIndex.Indexer;
 
@@ -9,17 +8,7 @@ internal static class IsolatedWorkerProcessLauncher
 {
     internal static ProcessStartInfo CreateStartInfo()
     {
-        var startInfo = new ProcessStartInfo
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            CreateNoWindow = true,
-        };
+        var startInfo = CodeIndex.ProcessLaunchPolicy.CreateUtf8RedirectedWorkerStartInfo();
         ApplyEnvironmentAllowlist(startInfo);
         return startInfo;
     }

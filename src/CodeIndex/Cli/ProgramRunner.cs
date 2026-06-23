@@ -3318,14 +3318,10 @@ internal static partial class ProgramRunner
     internal static ProcessStartInfo CreateInstallerProcessStartInfo(string scriptPath, string releaseTag, string installDir)
     {
         var fullScriptPath = Path.GetFullPath(scriptPath);
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ResolveTrustedBashPath(),
-            UseShellExecute = false,
-            WorkingDirectory = Path.GetDirectoryName(fullScriptPath) ?? string.Empty,
-        };
-        startInfo.ArgumentList.Add(fullScriptPath);
-        startInfo.ArgumentList.Add(releaseTag);
+        var startInfo = CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
+            fileName: ResolveTrustedBashPath(),
+            workingDirectory: Path.GetDirectoryName(fullScriptPath) ?? string.Empty);
+        CodeIndex.ProcessLaunchPolicy.AddArguments(startInfo, fullScriptPath, releaseTag);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
     }
