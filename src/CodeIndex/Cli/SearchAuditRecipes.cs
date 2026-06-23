@@ -397,6 +397,221 @@ internal static class SearchAuditRecipes
                 }
             ]),
         SourceScopedRecipe(
+            "dogfood-risk-patterns",
+            "Focused audit searches for recurring risk patterns found while dogfooding cdidx.",
+            [
+                new(
+                    "exception-message-classifier",
+                    ".Message.Contains",
+                    "Find exception-message substring classifiers that may be brittle across runtimes, locales, and providers.",
+                    ["audit", "bug"],
+                    "False positives include test assertions and code that classifies already-normalized diagnostic codes.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: substring checks on exception messages can break across runtimes, localization, or provider versions.",
+                        "positive: typed exception properties, error codes, or normalized diagnostic classifiers are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "static-regex-api",
+                    "Regex.",
+                    "Find direct/static Regex API usage that may bypass BoundedRegex timeout policy.",
+                    ["audit", "performance", "security"],
+                    "False positives include BoundedRegex internals and tests that intentionally exercise raw Regex behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: static Regex APIs can run without explicit timeout or shared bounded-regex policy.",
+                        "positive: BoundedRegex wrappers, precompiled generated regex, or explicit timeout overloads are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "relaxed-json-encoder",
+                    "UnsafeRelaxedJsonEscaping",
+                    "Find relaxed JSON encoder usage that may need HTML/script embedding and downstream consumer review.",
+                    ["audit", "security"],
+                    "False positives include payloads that are never embedded in HTML, script, logs, or browser-visible contexts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: relaxed escaping can expose JSON to HTML/script or log-injection contexts if reused outside trusted boundaries.",
+                        "positive: machine-only payloads with explicit content-type and no HTML/script embedding are lower risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "temp-file-name",
+                    "GetTempFileName",
+                    "Find deterministic or pre-created temporary file names that may need race, retention, and overwrite review.",
+                    ["audit", "security"],
+                    "False positives include isolated test fixtures and immediately-opened handles with exclusive access.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: deterministic or pre-created temp names can create race, retention, or stale-file overwrite hazards.",
+                        "positive: random names opened atomically with exclusive access and cleanup policy are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "overwrite-file-move",
+                    "File.Move",
+                    "Find file moves that may overwrite or replace outputs without atomicity and destination policy review.",
+                    ["audit", "bug"],
+                    "False positives include test-only moves and callers that validate destination ownership, overwrite intent, and rollback behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: overwrite moves can clobber user data or leave partial state without atomic replacement and rollback policy.",
+                        "positive: explicit destination validation, backup/rollback, and same-volume atomic replace are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "suppressed-cleanup-diagnostics",
+                    "catch (Exception",
+                    "Find broad cleanup catches that may suppress diagnostics during best-effort cleanup.",
+                    ["audit", "bug"],
+                    "False positives include cleanup paths that intentionally log, aggregate, or surface suppressed failures.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: best-effort cleanup can hide root-cause failures when broad catches suppress diagnostics.",
+                        "positive: logging, aggregation, retry policy, or explicit non-critical cleanup comments reduce filing priority."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "wall-clock-deadline",
+                    "DateTime.UtcNow",
+                    "Find wall-clock time used in deadline or duration logic that may need monotonic time review.",
+                    ["audit", "bug"],
+                    "False positives include timestamps used only for display, logging, serialization, or durable metadata.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: wall-clock time can move backward or jump across clock adjustments, breaking deadlines and durations.",
+                        "positive: TimeProvider, Stopwatch, or monotonic clock helpers are safer evidence for elapsed-time logic."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "local-wall-clock-deadline",
+                    "DateTime.Now",
+                    "Find local wall-clock time used in deadline or duration logic that may need timezone and monotonicity review.",
+                    ["audit", "bug"],
+                    "False positives include display-only timestamps and UI formatting paths.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: local wall-clock time includes timezone and daylight-saving shifts in addition to clock jumps.",
+                        "positive: display-only formatting or TimeProvider-backed elapsed-time logic is lower risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "max-value-sentinel",
+                    "MaxValue",
+                    "Find sentinel maximum limits that may hide unbounded allocation, traversal, or query behavior.",
+                    ["audit", "bug"],
+                    "False positives include pure constants, saturation helpers, and tests that do not feed allocation or traversal limits.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: MaxValue sentinels can bypass practical bounds for allocation, traversal, timeout, or query limits.",
+                        "positive: explicit clamping, saturation helper names, or test-only probes are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "recipe-output-contract",
+                    "SearchRecipe",
+                    "Find search recipe output contract paths that may need schema, compact output, and issue-draft compatibility review.",
+                    ["audit"],
+                    "False positives include recipe metadata definitions and tests that intentionally assert contract behavior.")
+                {
+                    Severity = "low",
+                    RiskEvidence =
+                    [
+                        "risk: recipe contract changes can break JSON, compact, issue-draft, or downstream automation consumers.",
+                        "positive: source-generated JSON contracts and focused snapshot tests are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "raw-sql-command-text",
+                    "CommandText",
+                    "Find raw SQL command construction that may need parameterization and identifier interpolation review.",
+                    ["audit", "security"],
+                    "False positives include constant SQL text with parameterized values and trusted migration scripts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw SQL command text can interpolate identifiers, table names, or values without parameterization.",
+                        "positive: parameters for values and allowlisted identifier helpers are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "pragma-command",
+                    "PRAGMA",
+                    "Find SQLite PRAGMA usage that may need helper, transaction, and identifier policy review.",
+                    ["audit", "security"],
+                    "False positives include read-only PRAGMA probes with constant names and bounded diagnostics.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: PRAGMA helpers can bypass normal parameterization and alter connection or database-wide behavior.",
+                        "positive: constant PRAGMA names, allowlisted values, and isolated connection setup are safer evidence."
+                    ],
+                },
+                new(
+                    "environment-variable-parser",
+                    "GetEnvironmentVariable",
+                    "Find environment-variable option parsing that may silently fall back instead of warning on invalid values.",
+                    ["audit", "bug"],
+                    "False positives include required variables that fail closed and callers that report parse diagnostics.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: silent fallback can hide misspelled or invalid environment options in automation.",
+                        "positive: explicit warnings, parse diagnostics, or fail-closed behavior are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "plugin-activator",
+                    "Activator.CreateInstance",
+                    "Find plugin constructor paths that may need constructor side-effect and lifecycle review.",
+                    ["audit", "bug"],
+                    "False positives include trusted test fixtures and tightly controlled type allowlists.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: reflective construction can run plugin constructors with unexpected side effects or missing lifecycle hooks.",
+                        "positive: allowlisted types, explicit constructor contracts, and disposal/lifecycle handling are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "assembly-load-context",
+                    "AssemblyLoadContext",
+                    "Find plugin assembly load contexts that may need unloadability, retention, and dependency isolation review.",
+                    ["audit", "bug"],
+                    "False positives include tests that intentionally exercise load-context retention behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: retained AssemblyLoadContext references can prevent plugin unload or cross-plugin dependency isolation.",
+                        "positive: collectible contexts, weak-reference unload checks, and explicit disposal are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                }
+            ]),
+        SourceScopedRecipe(
             "json-parse-apis",
             "Audit JSON parse and deserialize API families that may need payload bounds, streaming, or serializer-option review.",
             [

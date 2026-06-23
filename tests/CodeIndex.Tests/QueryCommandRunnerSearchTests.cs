@@ -1105,6 +1105,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "auth-token-audit");
+        var dogfoodRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "dogfood-risk-patterns");
         var xmlRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1129,6 +1133,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "bearer-token");
+        var dogfoodRegexQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "static-regex-api");
+        var dogfoodSqlQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "raw-sql-command-text");
         var emptyCatchQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1177,6 +1189,10 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "api-token");
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-secret");
         Assert.Contains(authBearerQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bearer tokens", StringComparison.Ordinal));
+        Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "exception-message-classifier");
+        Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "plugin-activator");
+        Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("static Regex APIs", StringComparison.Ordinal));
+        Assert.Contains(dogfoodSqlQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("identifier", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-bytes");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "thread-sleep");
@@ -1230,7 +1246,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "auth-token-audit", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
+            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1272,6 +1288,28 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["bearer-token", "authorization-header", "github-token", "api-token", "access-token", "token-secret"]);
+        AssertRecipe(
+            "dogfood-risk-patterns",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "exception-message-classifier",
+                "static-regex-api",
+                "relaxed-json-encoder",
+                "temp-file-name",
+                "overwrite-file-move",
+                "suppressed-cleanup-diagnostics",
+                "wall-clock-deadline",
+                "local-wall-clock-deadline",
+                "max-value-sentinel",
+                "recipe-output-contract",
+                "raw-sql-command-text",
+                "pragma-command",
+                "environment-variable-parser",
+                "plugin-activator",
+                "assembly-load-context"
+            ]);
         AssertRecipe(
             "json-parse-apis",
             SearchAuditRecipes.DefaultAuditScope,
@@ -2465,6 +2503,73 @@ public partial class QueryCommandRunnerTests
 
             Assert.Contains(result.GetProperty("next_steps").EnumerateArray(), step =>
                 step.GetProperty("command").GetString() == "cdidx search --recipe auth-token-audit --exclude-tests");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_DogfoodRiskRecipeCoversRecurringPatterns_Issue3967()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_dogfood_risk_recipe");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/dogfood.cs",
+                "csharp",
+                """
+                using System.Runtime.Loader;
+                using System.Text.Encodings.Web;
+                using System.Text.RegularExpressions;
+
+                public sealed class DogfoodRisks
+                {
+                    public void Run(Exception ex, DbCommand command, Type pluginType)
+                    {
+                        if (ex.Message.Contains("locked", StringComparison.OrdinalIgnoreCase))
+                            Console.WriteLine("classified");
+                        Regex.IsMatch("payload", "p.*");
+                        _ = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                        var stamp = DateTime.UtcNow;
+                        var local = DateTime.Now;
+                        var limit = int.MaxValue;
+                        command.CommandText = "PRAGMA table_info(user_input)";
+                        var plugin = Activator.CreateInstance(pluginType);
+                        var context = AssemblyLoadContext.GetLoadContext(pluginType.Assembly);
+                        Console.WriteLine($"{stamp}{local}{limit}{plugin}{context}");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe",
+                    "dogfood-risk-patterns",
+                    "--include-query",
+                    "exception-message-classifier,static-regex-api,relaxed-json-encoder,wall-clock-deadline,local-wall-clock-deadline,max-value-sentinel,raw-sql-command-text,pragma-command,plugin-activator,assembly-load-context",
+                    "--db",
+                    dbPath,
+                    "--json",
+                    "--limit",
+                    "10"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            Assert.All(queries, query => Assert.Equal(1, query.GetProperty("count").GetInt32()));
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "exception-message-classifier");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "static-regex-api");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "relaxed-json-encoder");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "plugin-activator");
+            Assert.All(queries, query => Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.StartsWith("risk:", StringComparison.Ordinal)));
         }
         finally
         {
