@@ -654,6 +654,36 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointInjectedClockControlsNameAndManifest_Issue3963()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_clock_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, 789, TimeSpan.Zero);
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+            DbCommandRunner.UtcNowForTesting = () => fixedTime;
+
+            var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            Assert.Equal("20260623040506789", json.GetProperty("name").GetString());
+            var checkpointPath = json.GetProperty("checkpoint_path").GetString();
+            Assert.NotNull(checkpointPath);
+            var manifest = File.ReadAllText(Path.Combine(checkpointPath, "manifest.txt"));
+            Assert.Contains($"created_at_utc={fixedTime:O}", manifest, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbCommandRunner.UtcNowForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");
