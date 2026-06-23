@@ -644,12 +644,12 @@ public static partial class QueryCommandRunner
         }
         if (options.ListRecipes)
         {
-            if (options.Query != null || options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
+            if (options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
-                    "--list-recipes cannot be combined with a query, --recipe, --named-query, or extra positional arguments.",
+                    "--list-recipes cannot be combined with --recipe, --named-query, or extra positional arguments.",
                     GetUsageLineOrThrow("search"),
-                    "Run `cdidx search --list-recipes` to list built-in audit recipes.");
+                    "Run `cdidx search --list-recipes --query <text>` to filter built-in audit recipes by recipe, query, label, severity, path, or search text.");
                 return CommandExitCodes.UsageError;
             }
             if (options.OutputFormat is not OutputFormatText and not OutputFormatJson)
@@ -1577,7 +1577,8 @@ public static partial class QueryCommandRunner
     private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         var recipes = SearchAuditRecipes.All
-            .Select(recipe => ToSearchRecipeListItem(recipe))
+            .Select(recipe => ToFilteredSearchRecipeListItem(recipe, options.Query))
+            .OfType<SearchRecipeListItemJsonResult>()
             .ToList();
         if (options.Json)
         {
@@ -1613,6 +1614,20 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
+    private static SearchRecipeListItemJsonResult? ToFilteredSearchRecipeListItem(SearchAuditRecipe recipe, string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+            return ToSearchRecipeListItem(recipe);
+
+        var recipeMatches = SearchRecipeMatchesFilter(recipe, filter);
+        var queries = recipe.Queries
+            .Where(query => recipeMatches || SearchRecipeQueryMatchesFilter(recipe, query, filter))
+            .ToList();
+        return recipeMatches || queries.Count > 0
+            ? ToSearchRecipeListItem(recipe, queries)
+            : null;
+    }
+
     private static bool TryResolveSearchRecipeSelection(
         QueryCommandOptions options,
         out SearchRecipeSelection selection,
@@ -1644,7 +1659,11 @@ public static partial class QueryCommandRunner
         if (!SearchAuditRecipes.TryGet(recipeName, out var recipe))
         {
             var available = string.Join(", ", SearchAuditRecipes.All.Select(r => r.Name));
-            error = $"unknown search recipe '{recipeName}'. Available recipes: {available}.";
+            var suggestions = BuildRecipeSelectorSuggestions(recipeSelector);
+            var suggestionText = suggestions.Count > 0
+                ? $" Did you mean: {string.Join(", ", suggestions)}?"
+                : string.Empty;
+            error = $"unknown search recipe '{recipeName}'. Available recipes: {available}.{suggestionText}";
             return false;
         }
 
@@ -1657,7 +1676,11 @@ public static partial class QueryCommandRunner
         }
         if (directQueryName != null && !queryByName.ContainsKey(directQueryName))
         {
-            error = $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.";
+            var suggestions = BuildRecipeSelectorSuggestions(directQueryName);
+            var suggestionText = suggestions.Count > 0
+                ? $" Suggestions across all recipes: {string.Join(", ", suggestions)}."
+                : string.Empty;
+            error = $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.{suggestionText}";
             return false;
         }
 
@@ -1717,6 +1740,122 @@ public static partial class QueryCommandRunner
 
         error = null;
         return true;
+    }
+
+    private static List<string> BuildRecipeSelectorSuggestions(string rawSelector)
+    {
+        var tokens = NormalizeDiscoveryTokens(rawSelector);
+        if (tokens.Count == 0)
+            return [];
+
+        return SearchAuditRecipes.All
+            .SelectMany(recipe => recipe.Queries.Select(query => new
+            {
+                Selector = $"{recipe.Name}/{query.Name}",
+                Score = ScoreRecipeSelectorSuggestion(tokens, recipe, query),
+            }))
+            .Where(item => item.Score > 0)
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Selector, StringComparer.Ordinal)
+            .Take(3)
+            .Select(item => item.Selector)
+            .ToList();
+    }
+
+    private static int ScoreRecipeSelectorSuggestion(IReadOnlyList<string> tokens, SearchAuditRecipe recipe, SearchAuditRecipeQuery query)
+    {
+        var haystack = NormalizeDiscoveryText(string.Join(' ', BuildRecipeQuerySearchFields(recipe, query)));
+        var score = 0;
+        foreach (var token in tokens)
+        {
+            if (haystack.Contains(token, StringComparison.Ordinal))
+                score += token == "sql" && haystack.Contains("sqlite", StringComparison.Ordinal) ? 80 : 25;
+        }
+
+        var normalizedSelector = NormalizeDiscoveryText($"{recipe.Name} {query.Name}");
+        var normalizedRaw = string.Join(' ', tokens);
+        if (normalizedSelector.Contains(normalizedRaw, StringComparison.Ordinal))
+            score += 100;
+        return score;
+    }
+
+    private static bool SearchRecipeMatchesFilter(SearchAuditRecipe recipe, string filter)
+        => DiscoveryFilterMatches(filter,
+            recipe.Name,
+            recipe.Description,
+            recipe.DefaultScope,
+            string.Join(' ', recipe.RecommendedLabels),
+            string.Join(' ', recipe.DefaultPathPatterns),
+            string.Join(' ', recipe.DefaultExcludePaths));
+
+    private static bool SearchRecipeQueryMatchesFilter(SearchAuditRecipe recipe, SearchAuditRecipeQuery query, string filter)
+        => DiscoveryFilterMatches(filter, BuildRecipeQuerySearchFields(recipe, query));
+
+    private static IEnumerable<string> BuildRecipeQuerySearchFields(SearchAuditRecipe? recipe, SearchAuditRecipeQuery query)
+    {
+        if (recipe != null)
+        {
+            yield return recipe.Name;
+            yield return recipe.Description;
+            yield return recipe.DefaultScope;
+        }
+
+        yield return query.Name;
+        yield return query.Query;
+        yield return query.Description;
+        yield return query.FalsePositiveGuidance;
+        yield return query.Severity;
+        foreach (var label in query.RecommendedLabels)
+            yield return label;
+        foreach (var path in query.PathPatterns)
+            yield return path;
+        foreach (var path in query.ExcludePaths)
+            yield return path;
+        foreach (var origin in query.MatchOrigins)
+            yield return origin;
+        foreach (var origin in query.ExcludeOrigins)
+            yield return origin;
+        foreach (var kind in query.ResultKinds)
+            yield return kind;
+    }
+
+    private static bool DiscoveryFilterMatches(string filter, params string[] fields)
+        => DiscoveryFilterMatches(filter, (IEnumerable<string>)fields);
+
+    private static bool DiscoveryFilterMatches(string filter, IEnumerable<string> fields)
+    {
+        var tokens = NormalizeDiscoveryTokens(filter);
+        if (tokens.Count == 0)
+            return true;
+        var haystack = NormalizeDiscoveryText(string.Join(' ', fields));
+        return tokens.All(token => haystack.Contains(token, StringComparison.Ordinal));
+    }
+
+    private static List<string> NormalizeDiscoveryTokens(string value)
+        => NormalizeDiscoveryText(value)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static string NormalizeDiscoveryText(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        var previousWasSpace = true;
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+                previousWasSpace = false;
+            }
+            else if (!previousWasSpace)
+            {
+                builder.Append(' ');
+                previousWasSpace = true;
+            }
+        }
+
+        return builder.ToString().Trim();
     }
 
     private sealed record SearchRecipeSelection(

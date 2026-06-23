@@ -162,7 +162,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
     private static readonly string[] InspectFieldCommands = ["inspect"];
-    private static readonly string[] InspectSourceExcerptCommands = ["inspect"];
+    private static readonly string[] InspectSourceExcerptCommands = ["inspect", "excerpt"];
 
     private static readonly string[] MaxLineWidthCommands =
     [
@@ -349,8 +349,8 @@ internal static class CliFlagSchema
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
             new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
-            new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect: include one source line as source_excerpt", Commands = Set(InspectSourceExcerptCommands) },
-            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Inspect: source_excerpt context lines before and after", Commands = Set(InspectSourceExcerptCommands) },
+            new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect/excerpt: include one source line as source_excerpt or excerpt window", Commands = Set(InspectSourceExcerptCommands) },
+            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Inspect/excerpt: context lines before and after", Commands = Set(InspectSourceExcerptCommands) },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },

@@ -1037,6 +1037,8 @@ Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
 recommended labels, query text, exact-match mode, false-positive guidance,
 guard filters, risk evidence, and query-specific audit taxonomy metadata.
+Add `--query <filter>` to narrow discovery by recipe/query names, query text,
+labels, severity, path metadata, or descriptions.
 Built-in recipe queries may also include `risk_evidence`, a short set of
 positive and negative evidence facets that explain why a hit is risky or likely
 bounded/safe. Recipe run JSON repeats those facets on each matching result so
@@ -1266,6 +1268,7 @@ For large files, `outline --json` supports `--kind <kind[,kind]>`, `--limit` / `
 ```bash
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
 ```
 
 ### Find a substring inside a known file
@@ -1432,8 +1435,8 @@ same source location.
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
-| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect` | Add a bounded `source_excerpt` to inspect output. Use `--path <file> --line <line>` without a symbol query for a file/line excerpt. |
-| `--context <n>` / `--before <n>` / `--after <n>` | `inspect` | Add symmetric or one-sided context lines to the `source_excerpt` window. |
+| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect`, `excerpt` | Add a bounded `source_excerpt` to inspect output, or use `--line` as an `excerpt` shorthand for `--start <line> --end <line>`. Use `inspect --path <file> --line <line>` without a symbol query for a file/line excerpt. |
+| `--context <n>` / `--before <n>` / `--after <n>` | `inspect`, `excerpt` | Add symmetric or one-sided context lines to the `source_excerpt` or `excerpt` window. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -3677,6 +3680,8 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 `broad-token-audit` があります。`--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
+`--query <filter>` を追加すると、recipe/query 名、query text、label、severity、path metadata、
+説明で discovery を絞り込めます。
 組み込み recipe query は `risk_evidence` も出力できます。これは hit が risky なのか、
 すでに bounded / safe と見なせる可能性が高いのかを説明する positive / negative evidence
 facet の短い一覧です。recipe run の JSON は各 matching result にも同じ facet を付けるため、
@@ -3897,6 +3902,7 @@ cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 
 ```bash
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
 ```
 
 ### 既知ファイル内の部分文字列を探す
@@ -4064,8 +4070,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
-| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect` | inspect 出力に範囲を絞った `source_excerpt` を追加する。symbol query なしで `--path <file> --line <line>` を渡すと file/line 抜粋だけを返せる。 |
-| `--context <n>` / `--before <n>` / `--after <n>` | `inspect` | `source_excerpt` の前後または片側 context 行を追加する。 |
+| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect`, `excerpt` | inspect 出力に範囲を絞った `source_excerpt` を追加する。`excerpt` では `--start <line> --end <line>` の shorthand として `--line` を使える。symbol query なしで `inspect --path <file> --line <line>` を渡すと file/line 抜粋だけを返せる。 |
+| `--context <n>` / `--before <n>` / `--after <n>` | `inspect`, `excerpt` | `source_excerpt` または `excerpt` window の前後または片側 context 行を追加する。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
