@@ -14531,7 +14531,7 @@ public class DbReaderTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/contracts/output_models.cs",
+            Path = "src/output_models.cs",
             Lang = "csharp",
             Size = 200,
             Lines = 40,
@@ -14547,7 +14547,7 @@ public class DbReaderTests : IDisposable
                 Line = 3,
                 StartLine = 3,
                 EndLine = 3,
-                Signature = "public sealed record SearchResponseDto(string Path)",
+                Signature = "record SearchResponseDto(string Path)",
                 Visibility = "public",
             },
             new SymbolRecord

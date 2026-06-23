@@ -116,6 +116,18 @@ public partial class DbReader
         "/schemas/",
         "/schema/",
     ];
+    private static readonly string[] UnusedRecordContractSuffixes =
+    [
+        "Dto",
+        "DTO",
+        "Request",
+        "Response",
+        "Result",
+        "Results",
+        "Model",
+        "Payload",
+        "Envelope",
+    ];
     private static readonly string[] UnusedGeneratedPathMarkers =
     [
         ".g.cs",
@@ -5377,6 +5389,7 @@ public partial class DbReader
         if (!IsTypeLikeUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
             return false;
         return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || IsRecordContractType(candidate)
             || ContainsAny(candidate.Signature, ["DataContract", "Serializable", "MessagePackObject", "ProtoContract"]);
     }
 
@@ -5449,6 +5462,24 @@ public partial class DbReader
     private static bool IsFunctionLikeUnusedKind(string kind)
     {
         return kind is "function" or "method";
+    }
+
+    private static bool IsRecordContractType(UnusedCandidateSymbol candidate)
+    {
+        return ContainsCSharpRecordKeyword(candidate.Signature)
+            && EndsWithAny(candidate.Name, UnusedRecordContractSuffixes);
+    }
+
+    private static bool ContainsCSharpRecordKeyword(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var trimmed = signature.TrimStart();
+        return trimmed.StartsWith("record ", StringComparison.Ordinal)
+            || trimmed.StartsWith("record(", StringComparison.Ordinal)
+            || signature.Contains(" record ", StringComparison.Ordinal)
+            || signature.Contains(" record(", StringComparison.Ordinal);
     }
 
     private static bool EndsWithAny(string? value, IReadOnlyList<string> suffixes)
