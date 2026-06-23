@@ -856,6 +856,22 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ListJsonEmptyReturnsArray_Issue3896()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal(0, doc.RootElement.GetArrayLength());
+    }
+
+    [Fact]
     public void Suggestions_ListUsesSharedDataDirResolutionWhenDbIsOmitted()
     {
         using var fixture = SuggestionFixture.Create();
@@ -891,6 +907,20 @@ public class ProgramCliTests
         Assert.Equal(0, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
         Assert.False(doc.RootElement.TryGetProperty("last_submit_attempt", out _));
         Assert.False(doc.RootElement.TryGetProperty("last_submit_error", out _));
+    }
+
+    [Fact]
+    public void Suggestions_ShowJsonMissingIdReturnsStructuredError_Issue3896()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "show", "missing", "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal("error", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Suggestion not found: missing", doc.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]

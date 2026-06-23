@@ -4091,6 +4091,8 @@ public class FileIndexer
             Message = utf16BigEndian
                 ? "UTF-16 BE BOM detected (decoded as UTF-16)"
                 : "UTF-16 LE BOM detected (decoded as UTF-16)",
+            Origin = FileIssue.OriginByteOrderMark,
+            Severity = FileIssue.SeverityWarning,
         });
     }
 
@@ -4196,6 +4198,8 @@ public class FileIndexer
                 Kind = "bom",
                 Line = 1,
                 Message = "UTF-8 BOM marker detected",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
             });
         }
 

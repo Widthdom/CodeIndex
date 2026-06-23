@@ -5605,6 +5605,64 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_AllScopeJsonArrayEmitsSingleArray_Issue3896()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_json_array_3896");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/todo.txt",
+                "text",
+                "TODO: keep this visible\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["TODO", "--db", dbPath, "--all", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(JsonValueKind.Array, root.ValueKind);
+            var result = Assert.Single(root.EnumerateArray());
+            Assert.Equal("src/todo.txt", result.GetProperty("path").GetString());
+            Assert.Equal(1, result.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_RegexJsonErrorIsStructured_Issue3896()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_regex_json_3896");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/text.txt", "text", "needle\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["[", "--db", dbPath, "--all", "--regex", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("invalid regular expression", document.RootElement.GetProperty("message").GetString());
+            Assert.Equal("invalid_regex", document.RootElement.GetProperty("category").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_AllScopeCountJsonIncludesScanSummary_Issue3560()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_count_json_3560");

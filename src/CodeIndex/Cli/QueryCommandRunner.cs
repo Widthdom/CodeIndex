@@ -4909,7 +4909,7 @@ public static partial class QueryCommandRunner
                 {
                     return ex is RegexMatchTimeoutException timeout
                         ? WriteFindRegexTimeoutError(timeout, jsonOptions, options.Json)
-                        : WriteFindInvalidRegexError(ex);
+                        : WriteFindInvalidRegexError(ex, jsonOptions, options.Json);
                 }
                 if (counts.Count == 0)
                 {
@@ -4961,7 +4961,7 @@ public static partial class QueryCommandRunner
             }
             catch (ArgumentException ex) when (options.Regex)
             {
-                return WriteFindInvalidRegexError(ex);
+                return WriteFindInvalidRegexError(ex, jsonOptions, options.Json);
             }
             catch (RegexMatchTimeoutException ex) when (options.Regex)
             {
@@ -4973,6 +4973,13 @@ public static partial class QueryCommandRunner
                 var candidateFileCount = findResults.Scan.CandidateFiles;
                 if (options.Json)
                 {
+                    if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        CommandOutputWriter.WriteJson(
+                            new List<FileFindResult>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult);
+                        return ZeroResultExitCode(options);
+                    }
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
                         return ZeroResultExitCode(options);
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
@@ -5029,6 +5036,13 @@ public static partial class QueryCommandRunner
                     WriteSarif(results.Select(r => (r.Path, r.Line, r.Column, $"find match: {options.Query}", "find")), jsonOptions);
                     return CommandExitCodes.Success;
                 }
+                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    CommandOutputWriter.WriteJson(
+                        results,
+                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                     Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileFindResult));
             }
@@ -5048,11 +5062,15 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static int WriteFindInvalidRegexError(Exception ex)
-    {
-        CommandErrorWriter.WriteStderr($"Error: invalid regular expression: {ex.Message}");
-        return CommandExitCodes.UsageError;
-    }
+    private static int WriteFindInvalidRegexError(Exception ex, JsonSerializerOptions jsonOptions, bool json)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            $"invalid regular expression: {ex.Message}",
+            CommandExitCodes.UsageError,
+            "fix the pattern passed with --regex, or omit --regex to run a literal text search.",
+            errorCode: CommandErrorCodes.UsageError,
+            category: "invalid_regex");
 
     internal static int WriteFindRegexTimeoutError(RegexMatchTimeoutException ex, JsonSerializerOptions jsonOptions, bool json)
     {
@@ -6296,7 +6314,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("status", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("status")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "status"))
+        if (TryWriteParseError(options, "status", jsonOptions))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
@@ -6329,7 +6347,7 @@ public static partial class QueryCommandRunner
         if (options.StatusExplainField != null)
         {
             if (options.Json)
-                return WriteStatusReadinessExplanationJson(options.StatusExplainField);
+                return WriteStatusReadinessExplanationJson(options.StatusExplainField, jsonOptions);
             return WriteStatusReadinessExplanation(options.StatusExplainField);
         }
 
@@ -8831,17 +8849,19 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("validate", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("validate")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "validate"))
+        if (TryWriteParseError(options, "validate", jsonOptions))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("validate", options))
             return CommandExitCodes.UsageError;
         if (options.Severity != null && !AllValidValidateSeverities.Contains(options.Severity, StringComparer.Ordinal))
         {
-            CommandErrorWriter.Write(
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
                 $"unsupported validate severity '{options.Severity}'.",
+                CommandExitCodes.UsageError,
                 "use one of: info, warning, error.",
                 "cdidx validate [--severity <info|warning|error>]");
-            return CommandExitCodes.UsageError;
         }
 
         return WithDb(options, jsonOptions, reader =>
@@ -8851,6 +8871,11 @@ public static partial class QueryCommandRunner
                 : (int?)null;
             var issues = reader.GetIssues(options.Kind, options.PathPatterns, issueLimit, options.Severity);
             var issuesAvailable = reader._hasIssuesTable;
+            if (options.CountOnly || options.OutputFormat == OutputFormatCount)
+            {
+                WriteFormattedCount(issues.Count, jsonOptions);
+                return CommandExitCodes.Success;
+            }
             if (issues.Count == 0)
             {
                 if (options.Json)
@@ -8941,7 +8966,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("languages", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("languages")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "languages"))
+        if (TryWriteParseError(options, "languages", jsonOptions))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("languages", options))
             return CommandExitCodes.UsageError;
@@ -11920,26 +11945,55 @@ public static partial class QueryCommandRunner
     }
 
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName)
+        => TryWriteParseError(options, commandName, jsonOptions: null);
+
+    private static bool TryWriteParseError(QueryCommandOptions options, string commandName, JsonSerializerOptions? jsonOptions)
     {
         var dbPathError = BuildExplicitDbPathParseError(options);
         if (options.ParseError == null && dbPathError == null)
             return false;
 
         var primaryError = options.ParseError ?? dbPathError!;
-        CommandErrorWriter.Write(
-            StripErrorPrefix(primaryError),
-            primaryError == dbPathError && options.ParseError == null
-                ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
-                : "fix the invalid or missing option value, then rerun with the command shape below.",
-            GetUsageLineOrThrow(commandName),
-            ExtractErrorCode(primaryError));
+        var primaryHint = primaryError == dbPathError && options.ParseError == null
+            ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
+            : "fix the invalid or missing option value, then rerun with the command shape below.";
+        WriteParseError(primaryError, primaryHint, commandName, options, jsonOptions);
         if (options.ParseError != null && dbPathError != null)
-            CommandErrorWriter.Write(
-                StripErrorPrefix(dbPathError),
+            WriteParseError(
+                dbPathError,
                 "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
-                GetUsageLineOrThrow(commandName),
-                ExtractErrorCode(dbPathError));
+                commandName,
+                options,
+                jsonOptions);
         return true;
+    }
+
+    private static void WriteParseError(
+        string error,
+        string hint,
+        string commandName,
+        QueryCommandOptions options,
+        JsonSerializerOptions? jsonOptions)
+    {
+        if (options.Json && jsonOptions != null)
+        {
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                StripErrorPrefix(error),
+                CommandExitCodes.UsageError,
+                hint,
+                GetUsageLineOrThrow(commandName),
+                ExtractErrorCode(error),
+                category: "usage");
+            return;
+        }
+
+        CommandErrorWriter.Write(
+            StripErrorPrefix(error),
+            hint,
+            GetUsageLineOrThrow(commandName),
+            ExtractErrorCode(error));
     }
 
     private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
@@ -13007,15 +13061,18 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int WriteStatusReadinessExplanationJson(string fieldName)
+    private static int WriteStatusReadinessExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
     {
         var field = FindStatusReadinessField(fieldName);
         if (field == null)
-        {
-            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
-            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
-            return CommandExitCodes.UsageError;
-        }
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                $"unknown status readiness field `{fieldName}`.",
+                CommandExitCodes.UsageError,
+                $"use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.",
+                errorCode: CommandErrorCodes.UsageError,
+                category: "usage");
 
         var knownFields = new JsonArray();
         foreach (var knownField in StatusReadinessFields)
@@ -13031,7 +13088,7 @@ public static partial class QueryCommandRunner
             ["remediation"] = field.Remediation,
             ["known_fields"] = knownFields,
         };
-        Console.WriteLine(payload.ToJsonString());
+        CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
         return CommandExitCodes.Success;
     }
 

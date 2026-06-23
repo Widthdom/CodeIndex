@@ -31,19 +31,17 @@ internal static class SuggestionsCommandRunner
         var options = Parse(args[1..]);
         if (options.Error != null)
         {
-            CommandErrorWriter.WriteStderr(options.Error);
-            CommandErrorWriter.WriteStderr(Usage);
-            return CommandExitCodes.UsageError;
+            return WriteUsageError(StripErrorPrefix(options.Error), options.Json, jsonOptions);
         }
         if ((options.DuplicateConfidenceSpecified || options.DuplicateThresholdSpecified)
             && (verb != "export" || options.ExportFormat != "issue-drafts"))
-            return WriteUsageError("--duplicate-confidence and --duplicate-threshold can only be used with `suggestions export --format issue-drafts`.");
+            return WriteUsageError("--duplicate-confidence and --duplicate-threshold can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
-            return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.");
+            return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
-            return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.");
+            return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
         if (verb == "show" && options.HasPagination)
-            return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.");
+            return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
 
         var store = CreateStore(options.DbPath);
         var records = ApplyFilters(store.LoadAll(), options)
@@ -59,7 +57,7 @@ internal static class SuggestionsCommandRunner
             "list" => RunList(outputRecords, options, jsonOptions),
             "show" => RunShow(records, options, jsonOptions),
             "export" => RunExport(outputRecords, options, jsonOptions, cancellationToken),
-            _ => WriteUsageError($"Unknown suggestions subcommand: {verb}")
+            _ => WriteUsageError($"Unknown suggestions subcommand: {verb}", options.Json, jsonOptions)
         };
     }
 
@@ -67,11 +65,17 @@ internal static class SuggestionsCommandRunner
     {
         if (options.Json)
         {
+            if (records.Count == 0)
+            {
+                CommandOutputWriter.WriteRawJson("[]");
+                return CommandExitCodes.Success;
+            }
+
             foreach (var item in records.Select(ToListItem))
             {
-                Console.WriteLine(JsonSerializer.Serialize(
+                CommandOutputWriter.WriteJson(
                     item,
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionListItemJsonResult));
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionListItemJsonResult);
             }
             return CommandExitCodes.Success;
         }
@@ -96,20 +100,22 @@ internal static class SuggestionsCommandRunner
     private static int RunShow(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
     {
         if (string.IsNullOrWhiteSpace(options.Id))
-            return WriteUsageError("suggestions show requires an id.");
+            return WriteUsageError("suggestions show requires an id.", options.Json, jsonOptions);
 
         var record = ResolveById(records, options.Id);
         if (record == null)
-        {
-            CommandErrorWriter.WriteStderr($"Suggestion not found: {options.Id}");
-            return CommandExitCodes.NotFound;
-        }
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                $"Suggestion not found: {options.Id}",
+                CommandExitCodes.NotFound,
+                "run `cdidx suggestions list --json` to inspect available suggestion ids.");
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
+            CommandOutputWriter.WriteJson(
                 ToDetail(record),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionDetailJsonResult));
+                CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionDetailJsonResult);
             return CommandExitCodes.Success;
         }
 
@@ -169,9 +175,9 @@ internal static class SuggestionsCommandRunner
             JsonOutputContract.ApiVersion,
             records.Count,
             records.Select(ToExportDetail).ToList());
-        Console.WriteLine(JsonSerializer.Serialize(
+        CommandOutputWriter.WriteJson(
             payload,
-            CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionExportJsonResult));
+            CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionExportJsonResult);
         return CommandExitCodes.Success;
     }
 
@@ -188,7 +194,7 @@ internal static class SuggestionsCommandRunner
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
-            return WriteUsageError(preflightResult.Error!);
+            return WriteUsageError(preflightResult.Error!, options.Json, jsonOptions);
         var preflight = preflightResult.Preflight;
 
         var drafts = records.Select(record => ToIssueDraft(record, preflight, options)).ToList();
@@ -202,9 +208,9 @@ internal static class SuggestionsCommandRunner
                 options.DuplicateConfidence,
                 options.DuplicateThreshold),
             drafts);
-        Console.WriteLine(JsonSerializer.Serialize(
+        CommandOutputWriter.WriteJson(
             payload,
-            CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionIssueDraftExportJsonResult));
+            CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionIssueDraftExportJsonResult);
         return CommandExitCodes.Success;
     }
 
@@ -616,6 +622,20 @@ internal static class SuggestionsCommandRunner
         CommandErrorWriter.WriteStderr(Usage);
         return CommandExitCodes.UsageError;
     }
+
+    private static int WriteUsageError(string message, bool json, JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            message,
+            CommandExitCodes.UsageError,
+            CommandErrorWriter.DefaultHint,
+            Usage);
+
+    private static string StripErrorPrefix(string message)
+        => message.StartsWith("Error: ", StringComparison.Ordinal)
+            ? message["Error: ".Length..]
+            : message;
 
     private static Options Parse(string[] args)
     {
