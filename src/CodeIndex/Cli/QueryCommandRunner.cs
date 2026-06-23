@@ -8032,29 +8032,29 @@ public static partial class QueryCommandRunner
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests));
             if (options.CountOnly)
             {
-                var countSummary = reader.CountUnusedSymbols(
-                    options.Kind,
-                    options.Lang,
-                    unusedScope.PathPatterns,
-                    unusedScope.ExcludePaths,
-                    unusedScope.ExcludeTests,
-                    visibilityFilters: unusedScope.VisibilityFilters,
-                    excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
-                    bucketFilter: options.UnusedBucket,
-                    minConfidence: options.MinUnusedConfidence);
-                var effectiveSqlGraphSignal = countSummary.Count == 0
-                    ? zeroResultSqlGraphSignal
-                    : NarrowSqlGraphContractSignal(
-                        baseSqlGraphSignal,
-                        countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                 if (options.Json)
                 {
+                    var countSummary = reader.CountUnusedSymbolsDetailed(
+                        options.Kind,
+                        options.Lang,
+                        unusedScope.PathPatterns,
+                        unusedScope.ExcludePaths,
+                        unusedScope.ExcludeTests,
+                        visibilityFilters: unusedScope.VisibilityFilters,
+                        excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
+                        bucketFilter: options.UnusedBucket,
+                        minConfidence: options.MinUnusedConfidence);
+                    var effectiveSqlGraphSignal = countSummary.Count == 0
+                        ? zeroResultSqlGraphSignal
+                        : NarrowSqlGraphContractSignal(
+                            baseSqlGraphSignal,
+                            countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                     var payload = new JsonObject
                     {
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
-                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
-                        ["summary"] = BuildUnusedSummaryJson(Array.Empty<UnusedSymbolResult>(), jsonOptions),
+                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.BucketCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+                        ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions),
                         ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
@@ -8072,6 +8072,21 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
+                    var countSummary = reader.CountUnusedSymbols(
+                        options.Kind,
+                        options.Lang,
+                        unusedScope.PathPatterns,
+                        unusedScope.ExcludePaths,
+                        unusedScope.ExcludeTests,
+                        visibilityFilters: unusedScope.VisibilityFilters,
+                        excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
+                        bucketFilter: options.UnusedBucket,
+                        minConfidence: options.MinUnusedConfidence);
+                    var effectiveSqlGraphSignal = countSummary.Count == 0
+                        ? zeroResultSqlGraphSignal
+                        : NarrowSqlGraphContractSignal(
+                            baseSqlGraphSignal,
+                            countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                     Console.WriteLine($"{countSummary.Count}");
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
@@ -8262,6 +8277,19 @@ public static partial class QueryCommandRunner
             ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
         };
     }
+
+    internal static JsonObject BuildUnusedCountSummaryJson(UnusedCountResult result, JsonSerializerOptions jsonOptions)
+    {
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        return new JsonObject
+        {
+            ["by_bucket"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.BucketCounts), context.DictionaryStringInt32),
+            ["by_confidence"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ConfidenceCounts), context.DictionaryStringInt32),
+        };
+    }
+
+    private static Dictionary<string, int> ToUnusedCountDictionary(IReadOnlyDictionary<string, int> counts)
+        => counts.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
 
     private static int GetUnusedFetchLimit(int pageLimit, int pageOffset)
     {

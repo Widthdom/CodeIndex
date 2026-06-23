@@ -478,6 +478,7 @@ not indexed, and their checksum stays tied to the pointer identity until you run
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
+cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
@@ -489,14 +490,18 @@ and `bucket_taxonomy` for the `likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
 `reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
 symbols under those bucket keys. Use `--bucket <name>` to return only one
-bucket, and `--min-confidence <medium|low>` to omit lower-confidence classes.
-JSON output includes `query_context` so applied bucket and confidence filters
-are visible to downstream audit tooling. Use `--compact` for audit summaries
-that keep counts, confidence buckets, taxonomy, and filter context without
-returning the full `symbols` array; add `--by-bucket` only when grouped symbol
-arrays are explicitly needed.
-Public APIs, framework entrypoints, generated hooks, reflection, and
-configuration-based usage can be false positives. C#
+bucket, and `--min-confidence <medium|low>` or its `--confidence` alias to omit
+lower-confidence classes. Use `--actionable` to preset the query to private,
+medium-confidence cleanup candidates while excluding tests. JSON output includes
+`query_context` so applied bucket and confidence filters are visible to
+downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
+`summary.by_bucket` / `summary.by_confidence`, matching the full JSON summary.
+Use `--compact` for audit summaries that keep counts, confidence buckets,
+taxonomy, and filter context without returning the full `symbols` array; add
+`--by-bucket` only when grouped symbol arrays are explicitly needed.
+Public APIs, framework entrypoints, DTOs, serialization contracts, generated
+hooks, test-only hooks, Markdown headings, reflection, and configuration-based
+usage can be false positives and are routed into lower-confidence buckets. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
@@ -3040,6 +3045,7 @@ object ではなく bare issue array を期待する場合は `--json=array` を
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
+cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
@@ -3051,8 +3057,17 @@ cdidx unused --json --by-bucket
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
 `--by-bucket` は返却された symbols も bucket key ごとに grouped します。
 `--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
-より低い confidence class を除外できます。JSON 出力には `query_context` も含まれるため、audit tooling は適用された bucket と confidence filter を直接確認できます。count、confidence bucket、taxonomy、filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
-になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
+より低い confidence class を除外できます。`--confidence` はその alias です。
+`--actionable` は private かつ medium confidence の削除候補に絞り、tests を除外する
+preset です。JSON 出力には `query_context` も含まれるため、audit tooling は適用された
+bucket と confidence filter を直接確認できます。count-only JSON には
+`returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
+full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
+filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に
+必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、DTO、
+serialization contract、generated hook、test-only hook、Markdown heading、reflection、
+config 経由の使用は false positive になりうるため、低 confidence bucket に寄せられます。
+C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
 
