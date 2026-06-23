@@ -1828,6 +1828,7 @@ public partial class QueryCommandRunnerTests
                     public void Run(Exception ex)
                     {
                         Console.WriteLine(ex.Message);
+                        logger.LogWarning(ex.Message);
                     }
                 }
                 """);
@@ -1844,9 +1845,20 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/comments.cs",
+                "csharp",
+                """
+                public sealed class Comments
+                {
+                    // ex.Message should not be counted when the caller asks for code origins.
+                    private const string Diagnostic = "ex.Message";
+                }
+                """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count"],
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--origin", "code"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);

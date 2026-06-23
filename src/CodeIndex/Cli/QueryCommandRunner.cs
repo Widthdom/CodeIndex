@@ -2267,85 +2267,43 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
-            var requiredPathPatterns = GetSearchRecipeRequiredPathPatterns(options, recipeQuery);
-            var topFiles = new List<SearchRecipeTopFileJsonResult>();
-            QueryCountResult count;
-            if (requiredPathPatterns is { Count: > 0 })
-            {
-                var results = reader.Search(
-                    recipeQuery.Query,
-                    int.MaxValue,
-                    options.Lang,
-                    false,
-                    queryScope.PathPatterns,
-                    queryScope.ExcludePaths,
-                    queryScope.ExcludeTests,
-                    !options.NoDedup,
-                    options.Since,
-                    exact,
-                    false,
-                    !options.NoVisibilityRank,
-                    cursor: options.SearchCursor,
-                    guardFilters: options.GuardFilters,
-                    guardWindow: options.GuardWindow,
-                    guardScope: options.GuardScope,
-                    requiredPathPatterns: requiredPathPatterns);
-                var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-                count = new QueryCountResult(rows.Count, rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
-                foreach (var path in rows.Select(row => row.Result.Path))
-                    paths.Add(path);
-                topFiles = BuildSearchRecipeTopFiles(rows);
-            }
-            else
-            {
-                count = reader.CountSearchResults(
-                    recipeQuery.Query,
-                    options.Lang,
-                    false,
-                    queryScope.PathPatterns,
-                    queryScope.ExcludePaths,
-                    queryScope.ExcludeTests,
-                    !options.NoDedup,
-                    options.Since,
-                    exact,
-                    false,
-                    !options.NoVisibilityRank,
-                    options.GuardFilters,
-                    options.GuardWindow,
-                    options.GuardScope);
-                var fileCounts = reader.CountSearchResultsByFile(
-                    recipeQuery.Query,
-                    options.Lang,
-                    false,
-                    queryScope.PathPatterns,
-                    queryScope.ExcludePaths,
-                    queryScope.ExcludeTests,
-                    !options.NoDedup,
-                    options.Since,
-                    exact,
-                    false,
-                    !options.NoVisibilityRank,
-                    options.GuardFilters,
-                    options.GuardWindow,
-                    options.GuardScope);
-                foreach (var file in fileCounts)
-                    paths.Add(file.Path);
-                topFiles = BuildSearchRecipeTopFiles(fileCounts);
-            }
+            var results = reader.Search(
+                recipeQuery.Query,
+                int.MaxValue,
+                options.Lang,
+                false,
+                queryScope.PathPatterns,
+                queryScope.ExcludePaths,
+                queryScope.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                exact,
+                false,
+                !options.NoVisibilityRank,
+                cursor: options.SearchCursor,
+                guardFilters: options.GuardFilters,
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope,
+                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            var count = rows.Count;
+            var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+            foreach (var path in rows.Select(row => row.Result.Path))
+                paths.Add(path);
 
-            total += count.Count;
+            total += count;
             queryCounts.Add(new SearchRecipeCountQueryJsonResult(
                 recipeQuery.Name,
                 recipeQuery.Query,
                 recipeQuery.Description,
                 recipeQuery.Severity,
-                count.Count,
-                count.Count,
+                count,
+                count,
                 0,
-                count.Count,
-                count.FileCount,
+                count,
+                fileCountForQuery,
                 false,
-                topFiles));
+                BuildSearchRecipeTopFiles(rows)));
         }
 
         fileCount = paths.Count;
