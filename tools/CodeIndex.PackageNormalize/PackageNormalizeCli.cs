@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -295,6 +296,8 @@ public static class PackageCorePropertiesNormalizer
 {
     public const string CanonicalCorePropertiesPath = "package/services/metadata/core-properties/core-properties.psmdcp";
 
+    private const string LegacyTempSuffix = ".normalize-tmp";
+    private const string TempSuffixPrefix = ".normalize-tmp.";
     private const int SafeExternalAttributes = 0;
     private const int DosAttributeMask = 0xFF;
     private const int DosArchiveAttribute = 0x20;
@@ -308,6 +311,8 @@ public static class PackageCorePropertiesNormalizer
     private const int UnixSocketFileType = 0xC000;
 
     private static readonly DateTimeOffset StableZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    internal static Action<string>? FlushParentDirectoryForTesting { get; set; }
 
     public static void NormalizePackage(string packagePath)
     {
@@ -335,13 +340,13 @@ public static class PackageCorePropertiesNormalizer
         limits.Validate();
 
         var fullPath = Path.GetFullPath(packagePath);
-        var tempPath = fullPath + ".normalize-tmp";
+        var legacyTempPath = fullPath + LegacyTempSuffix;
+        var tempPath = BuildTemporaryPackagePath(fullPath);
         var completed = false;
 
         try
         {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
+            TryDeleteStaleLegacyTempFile(legacyTempPath, warnings);
 
             using (var sourceStream = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false))
@@ -349,41 +354,47 @@ public static class PackageCorePropertiesNormalizer
                 var originalCorePropertiesPath = ValidateSourceArchive(sourceArchive, packagePath, limits);
                 ValidateEntryNamesBeforeRewrite(sourceArchive, originalCorePropertiesPath);
 
-                using var destinationStream = File.Open(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-                using var destinationArchive = new ZipArchive(destinationStream, ZipArchiveMode.Create, leaveOpen: false);
-                var readBudget = new PackageNormalizeReadBudget(limits);
-                var usedNames = new HashSet<string>(StringComparer.Ordinal);
-
-                foreach (var sourceEntry in sourceArchive.Entries)
+                using (var destinationStream = File.Open(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
                 {
-                    var destinationName = sourceEntry.FullName == originalCorePropertiesPath
-                        ? CanonicalCorePropertiesPath
-                        : sourceEntry.FullName;
-
-                    if (!usedNames.Add(destinationName))
-                        throw new InvalidOperationException($"Duplicate ZIP entry after normalization: {PackageNormalizeDiagnostics.FormatEntryName(destinationName)}");
-
-                    var destinationEntry = destinationArchive.CreateEntry(destinationName, CompressionLevel.Optimal);
-                    destinationEntry.LastWriteTime = StableZipTimestamp;
-                    destinationEntry.ExternalAttributes = SafeExternalAttributes;
-
-                    using var rawSourceEntryStream = sourceEntry.Open();
-                    using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
-                    using var destinationEntryStream = destinationEntry.Open();
-
-                    if (NeedsXmlReferenceRewrite(sourceEntry.FullName))
+                    using (var destinationArchive = new ZipArchive(destinationStream, ZipArchiveMode.Create, leaveOpen: true))
                     {
-                        using var writer = new StreamWriter(destinationEntryStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: false);
-                        writer.Write(RewriteCorePropertiesReferences(ReadXmlEntryText(sourceEntry, sourceEntryStream, limits), originalCorePropertiesPath));
+                        var readBudget = new PackageNormalizeReadBudget(limits);
+                        var usedNames = new HashSet<string>(StringComparer.Ordinal);
+
+                        foreach (var sourceEntry in sourceArchive.Entries)
+                        {
+                            var destinationName = sourceEntry.FullName == originalCorePropertiesPath
+                                ? CanonicalCorePropertiesPath
+                                : sourceEntry.FullName;
+
+                            if (!usedNames.Add(destinationName))
+                                throw new InvalidOperationException($"Duplicate ZIP entry after normalization: {PackageNormalizeDiagnostics.FormatEntryName(destinationName)}");
+
+                            var destinationEntry = destinationArchive.CreateEntry(destinationName, CompressionLevel.Optimal);
+                            destinationEntry.LastWriteTime = StableZipTimestamp;
+                            destinationEntry.ExternalAttributes = SafeExternalAttributes;
+
+                            using var rawSourceEntryStream = sourceEntry.Open();
+                            using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
+                            using var destinationEntryStream = destinationEntry.Open();
+
+                            if (NeedsXmlReferenceRewrite(sourceEntry.FullName))
+                            {
+                                using var writer = new StreamWriter(destinationEntryStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: false);
+                                writer.Write(RewriteCorePropertiesReferences(ReadXmlEntryText(sourceEntry, sourceEntryStream, limits), originalCorePropertiesPath));
+                            }
+                            else
+                            {
+                                CopyEntry(sourceEntryStream, destinationEntryStream);
+                            }
+                        }
                     }
-                    else
-                    {
-                        CopyEntry(sourceEntryStream, destinationEntryStream);
-                    }
+
+                    destinationStream.Flush(flushToDisk: true);
                 }
             }
 
-            File.Move(tempPath, fullPath, overwrite: true);
+            MoveReplacingPackage(tempPath, fullPath);
             completed = true;
         }
         finally
@@ -391,6 +402,11 @@ public static class PackageCorePropertiesNormalizer
             if (!completed)
                 TryDeleteFile(tempPath, warnings, deleteFile);
         }
+    }
+
+    private static string BuildTemporaryPackagePath(string fullPath)
+    {
+        return fullPath + TempSuffixPrefix + Guid.NewGuid().ToString("N");
     }
 
     internal static PackageNormalizeInspection InspectPackage(string packagePath)
@@ -610,6 +626,85 @@ public static class PackageCorePropertiesNormalizer
         }
     }
 
+    private static void TryDeleteStaleLegacyTempFile(string path, IList<string>? warnings)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+
+            using var _ = new FileStream(
+                path,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.ReadWrite,
+                    Share = FileShare.None,
+                    Options = FileOptions.DeleteOnClose,
+                });
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warnings?.Add(PackageNormalizeDiagnostics.FormatCleanupWarning(path, ex));
+        }
+    }
+
+    private static void MoveReplacingPackage(string tempPath, string fullPath)
+    {
+        File.Move(tempPath, fullPath, overwrite: true);
+        FlushParentDirectoryAfterReplace(fullPath);
+    }
+
+    private static void FlushParentDirectoryAfterReplace(string path)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (string.IsNullOrEmpty(directory))
+            return;
+
+        if (FlushParentDirectoryForTesting != null)
+        {
+            try
+            {
+                FlushParentDirectoryForTesting(directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw BuildDirectoryFlushException(path, ex);
+            }
+
+            return;
+        }
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var fd = UnixOpen(directory, flags: 0);
+        if (fd < 0)
+            throw BuildDirectoryFlushException(path, Marshal.GetLastPInvokeError());
+
+        try
+        {
+            if (UnixFsync(fd) != 0)
+                throw BuildDirectoryFlushException(path, Marshal.GetLastPInvokeError());
+        }
+        finally
+        {
+            _ = UnixClose(fd);
+        }
+    }
+
+    private static IOException BuildDirectoryFlushException(string path, int errno)
+        => new($"Package replace completed for {PackageNormalizeDiagnostics.FormatPath(path)}; the target file was already replaced, but the parent directory could not be flushed to disk (errno {errno}).");
+
+    private static IOException BuildDirectoryFlushException(string path, Exception inner)
+        => new($"Package replace completed for {PackageNormalizeDiagnostics.FormatPath(path)}; the target file was already replaced, but the parent directory could not be flushed to disk ({inner.GetType().Name}).", inner);
+
     private sealed class PackageNormalizeReadBudget
     {
         private readonly PackageNormalizeLimits _limits;
@@ -758,6 +853,15 @@ public static class PackageCorePropertiesNormalizer
             .Replace(originalCorePropertiesPath, canonical, StringComparison.Ordinal)
             .Replace("/" + originalCorePropertiesPath, "/" + canonical, StringComparison.Ordinal);
     }
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int UnixOpen(string path, int flags);
+
+    [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    private static extern int UnixFsync(int fd);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static extern int UnixClose(int fd);
 }
 
 internal readonly record struct PackageNormalizeInspection(

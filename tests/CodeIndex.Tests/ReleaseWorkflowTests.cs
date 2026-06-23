@@ -396,6 +396,60 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "legacy-temp.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "stale temp");
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            Assert.False(File.Exists(legacyTempPath));
+            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "flush-failure.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = _ => throw new IOException("fsync failed at /private/path");
+
+            var exception = Assert.Throws<IOException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+
+            Assert.Contains("Package replace completed", exception.Message);
+            Assert.Contains("parent directory could not be flushed to disk", exception.Message);
+            Assert.Contains("flush-failure.nupkg", exception.Message);
+            Assert.DoesNotContain(projectRoot, exception.Message);
+            Assert.DoesNotContain("/private/path", exception.Message);
+            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
