@@ -689,9 +689,9 @@ internal static class ExportImportCommandRunner
                 AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
                 var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
                 dbEntry.LastWriteTime = DeterministicZipTimestamp;
-                using var source = File.OpenRead(snapshotPath);
+                using var source = BoundedFile.OpenReadTrustedArchiveSource(snapshotPath);
                 using var target = dbEntry.Open();
-                CopyToWithLimit(source, target, long.MaxValue, DatabaseEntryName, cancellationToken);
+                CopyToExactLength(source, target, source.Length, DatabaseEntryName, cancellationToken);
             });
     }
 
@@ -716,7 +716,7 @@ internal static class ExportImportCommandRunner
     private static string ComputeSha256(string path, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var stream = File.OpenRead(path);
+        using var stream = BoundedFile.OpenReadForHash(path);
         return Sha256StreamHasher.ComputeHex(stream, cancellationToken);
     }
 
@@ -1203,6 +1203,38 @@ internal static class ExportImportCommandRunner
         long maxBytes,
         CancellationToken cancellationToken = default)
         => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
+
+    internal static long CopyToExactLength(
+        Stream source,
+        Stream target,
+        long expectedBytes,
+        string entryName,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectedBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedBytes), expectedBytes, "Expected byte length must be non-negative.");
+
+        var buffer = new byte[ImportCopyBufferSize];
+        long totalBytes = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var bytesRead = source.Read(buffer, 0, buffer.Length);
+            if (bytesRead == 0)
+                break;
+
+            if (totalBytes > expectedBytes - bytesRead)
+                throw new InvalidDataException($"archive {entryName} source grew beyond the expected snapshot length of {ConsoleUi.FormatBytes(expectedBytes)}.");
+
+            target.Write(buffer, 0, bytesRead);
+            totalBytes += bytesRead;
+        }
+
+        if (totalBytes != expectedBytes)
+            throw new EndOfStreamException($"archive {entryName} source ended after {ConsoleUi.FormatBytes(totalBytes)}; expected {ConsoleUi.FormatBytes(expectedBytes)}.");
+
+        return totalBytes;
+    }
 
     internal static long CopyToWithLimit(
         Stream source,

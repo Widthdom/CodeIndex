@@ -324,6 +324,51 @@ internal static class SearchAuditRecipes
                     ["audit", "performance", "security"],
                     "Review option combinations against cancellation, budget, long-path, and permission behavior.")
             ]),
+        SourceScopedRecipe(
+            "bounded-read-evidence",
+            "Positive audit searches for max-byte file-read helpers, explicit file-open policy, and bounded downstream accumulators.",
+            [
+                new(
+                    "bounded-file-open-helper",
+                    "BoundedFile.OpenRead",
+                    "Find reads routed through the shared file-open helper so audits can see the explicit share mode, long-path normalization, and bounded read category.",
+                    ["audit", "performance"],
+                    "Expected positive evidence includes length-checked text reads, fixed-prefix probes, log tails, hash streams, and trusted archive sources that enforce their byte limits at the caller.",
+                    ExactSubstring: false)
+                {
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "bounded-memory-accumulator",
+                    "MemoryStream",
+                    "Find MemoryStream accumulators that are downstream of a max-byte helper and should be treated as positive evidence instead of an unbounded materialization by default.",
+                    ["audit", "performance"],
+                    "Expected positive evidence is limited to BoundedHttpContentReader, BoundedJsonUtf8Stream, BoundedLineReader.TryReadUtf8File, FileContentLoader.ReadStreamBytesAfterGrowth, DataDirectorySecurity, and SuggestionStore.ReadFilteredSnapshotAsync.",
+                    ExactSubstring: false)
+                {
+                    PathPatterns =
+                    [
+                        "src/CodeIndex/BoundedLineReader.cs",
+                        "src/CodeIndex/Cli/BoundedHttpContentReader.cs",
+                        "src/CodeIndex/Mcp/BoundedJsonUtf8Stream.cs",
+                        "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs",
+                        "src/CodeIndex/Cli/DataDirectorySecurity.cs",
+                        "src/CodeIndex/Cli/SuggestionStore.cs",
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "bounded-full-byte-read-helper",
+                    "ReadRawBytesWithSizeLimit",
+                    "Find whole-file byte reads that are intentionally routed through the indexer's max-file-size helper.",
+                    ["audit", "performance"],
+                    "Expected positive evidence is FileContentLoader.ReadRawBytesWithSizeLimit and direct callers that preserve the helper's max-byte and grow-after-length-check contract.",
+                    ExactSubstring: false)
+                {
+                    PathPatterns = ["src/CodeIndex/Indexer/Scanning/FileContentLoader.cs"],
+                    MatchOrigins = ["code"],
+                }
+            ]),
         AllScopedRecipe(
             "broad-token-audit",
             "Opt-in broad token search for audits that intentionally need lexical, parser, LSP, cancellation, and auth-token coverage.",

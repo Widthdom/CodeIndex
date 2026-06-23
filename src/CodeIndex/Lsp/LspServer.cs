@@ -1441,7 +1441,7 @@ internal sealed class LspServer : IDisposable
         failureReason = null;
         try
         {
-            using var stream = File.OpenRead(path);
+            using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
             if (stream.Length > MaxPositionDocumentBytes)
             {
                 failureReason = FailurePositionFileTooLarge;

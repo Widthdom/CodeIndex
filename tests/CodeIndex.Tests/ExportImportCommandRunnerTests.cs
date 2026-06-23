@@ -1133,6 +1133,32 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void CopyToExactLength_ThrowsBeforeWritingPastCapturedLength_Issue3994()
+    {
+        using var source = new MemoryStream([1, 2, 3, 4]);
+        using var target = new MemoryStream();
+
+        var ex = Assert.Throws<InvalidDataException>(() =>
+            ExportImportCommandRunner.CopyToExactLength(source, target, expectedBytes: 3, "codeindex.db"));
+
+        Assert.Contains("source grew beyond the expected snapshot length", ex.Message);
+        Assert.Equal(0, target.Length);
+    }
+
+    [Fact]
+    public void CopyToExactLength_ThrowsWhenSourceEndsBeforeCapturedLength_Issue3994()
+    {
+        using var source = new MemoryStream([1, 2, 3, 4]);
+        using var target = new MemoryStream();
+
+        var ex = Assert.Throws<EndOfStreamException>(() =>
+            ExportImportCommandRunner.CopyToExactLength(source, target, expectedBytes: 5, "codeindex.db"));
+
+        Assert.Contains("source ended after", ex.Message);
+        Assert.Equal([1, 2, 3, 4], target.ToArray());
+    }
+
+    [Fact]
     public void Sha256StreamHasher_CancellationDuringRead_ThrowsOperationCanceled_Issue3797()
     {
         using var cancellation = new CancellationTokenSource();

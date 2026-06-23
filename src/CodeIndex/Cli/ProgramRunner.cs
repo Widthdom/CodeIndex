@@ -329,7 +329,7 @@ internal static partial class ProgramRunner
 
         try
         {
-            using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(path));
+            using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
             if (stream.Length > TestExtractorMaxInputBytes)
             {
                 exitCode = WriteTestExtractorTooLargeError(displayRole, stream.Length);
@@ -4068,7 +4068,7 @@ internal static partial class ProgramRunner
         if (!IsSha256Hex(expectedSha256Hex))
             throw new InvalidDataException($"Release checksum for {assetName} is not a valid SHA-256 digest.");
 
-        using var stream = File.OpenRead(path);
+        using var stream = BoundedFile.OpenReadForHash(path);
         var actual = Sha256StreamHasher.ComputeHex(stream, cancellationToken);
         if (!string.Equals(actual, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(

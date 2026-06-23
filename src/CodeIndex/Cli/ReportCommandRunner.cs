@@ -674,7 +674,7 @@ public static class ReportCommandRunner
         if (maxLines <= 0)
             return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: false, LineCharsTruncated: false);
 
-        using var stream = File.OpenRead(path);
+        using var stream = BoundedFile.OpenReadForTail(path);
         var startOffset = Math.Max(0, stream.Length - MaxLogFileTailBytes);
         stream.Seek(startOffset, SeekOrigin.Begin);
         using var reader = new StreamReader(
