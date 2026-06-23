@@ -38,17 +38,10 @@ public static partial class SymbolExtractor
     private static List<SymbolRecord> ExtractAppManifestSymbols(long fileId, string content, string[] lines)
     {
         var symbols = new List<SymbolRecord>();
-        var settings = new XmlReaderSettings
-        {
-            DtdProcessing = DtdProcessing.Ignore,
-            IgnoreComments = true,
-            IgnoreProcessingInstructions = true,
-            XmlResolver = null,
-        };
 
         try
         {
-            using var reader = XmlReader.Create(new StringReader(content), settings);
+            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings(DtdProcessing.Ignore));
             while (reader.Read())
             {
                 if (reader.NodeType != XmlNodeType.Element)
