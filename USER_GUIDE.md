@@ -1017,8 +1017,9 @@ origin category, and source line.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
-return a validation error. Narrow with more specific query text, `--lang`,
-`--path`, `--exclude-tests`, or a smaller MCP cursor offset.
+return a validation error with the guard budget, sampled candidate files and
+languages, and count/count-by fallback hints. Narrow with more specific query
+text, `--lang`, `--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow` / `guardScope`.
@@ -3653,7 +3654,9 @@ before / after を評価します。JSON の検索結果には
 scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
-query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
+このエラーには guard budget、sampled candidate files / languages、`--count` / `--count-by`
+fallback hint が含まれます。query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、
+MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 

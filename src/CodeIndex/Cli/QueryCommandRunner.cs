@@ -12363,7 +12363,12 @@ public static partial class QueryCommandRunner
         catch (SearchGuardCandidateLimitException ex)
         {
             CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
+            if (ex.CandidatePreviewPaths.Count > 0)
+                CommandErrorWriter.WriteStderr($"Candidate files sampled before refusal: {string.Join(", ", ex.CandidatePreviewPaths)}.");
+            if (ex.CandidatePreviewLanguages.Count > 0)
+                CommandErrorWriter.WriteStderr($"Candidate languages sampled before refusal: {string.Join(", ", ex.CandidatePreviewLanguages)}.");
             CommandErrorWriter.WriteStderr("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
+            CommandErrorWriter.WriteStderr("Hint: use `--count`, `--count-by path`, or `--format count` without guard filters to size the broad query before adding require/reject guards.");
             return CommandExitCodes.UsageError;
         }
         catch (SearchQueryLimitException ex)
