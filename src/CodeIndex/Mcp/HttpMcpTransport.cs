@@ -53,6 +53,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
     internal const string RequestQueueLimitRejection = "request_queue_limit";
     internal const string EventStreamLimitRejection = "event_stream_limit";
+    internal const string EventStreamWriteFailureDrop = "write_failure";
+    internal const string AuthDenialMissing = "missing";
+    internal const string AuthDenialAmbiguous = "ambiguous";
+    internal const string AuthDenialWrongScheme = "wrong-scheme";
+    internal const string AuthDenialMalformedToken = "malformed-token";
+    internal const string AuthDenialOversizedToken = "oversized-token";
+    internal const string AuthDenialWrongToken = "wrong-token";
     internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running on a loopback listener without bearer authentication; local processes can connect.";
     private const string BearerPrefix = "Bearer ";
     private const string DefaultStartingHealthJson = """{"status":"starting","db_open":false}""";
@@ -98,8 +105,18 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private long _concurrentHandlerLimitRejectionCount;
     private long _requestQueueLimitRejectionCount;
     private long _eventStreamLimitRejectionCount;
+    private long _eventStreamDropCount;
+    private long _eventStreamWriteFailureDropCount;
+    private long _authDenialMissingCount;
+    private long _authDenialAmbiguousCount;
+    private long _authDenialWrongSchemeCount;
+    private long _authDenialMalformedTokenCount;
+    private long _authDenialOversizedTokenCount;
+    private long _authDenialWrongTokenCount;
     private string? _lastResponseAbortCleanupFailure;
     private string? _lastResponseCloseCleanupFailure;
+    private string? _lastEventStreamDropReason;
+    private string? _lastAuthDenialReason;
     private string? _lastRequestLogDropReason;
     private bool _disposed;
 
@@ -259,6 +276,29 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal long EventStreamLimitRejectionCount => Interlocked.Read(ref _eventStreamLimitRejectionCount);
 
+    internal long EventStreamDropCount => Interlocked.Read(ref _eventStreamDropCount);
+
+    internal long EventStreamWriteFailureDropCount => Interlocked.Read(ref _eventStreamWriteFailureDropCount);
+
+    internal long AuthDenialCount => AuthDenialMissingCount
+        + AuthDenialAmbiguousCount
+        + AuthDenialWrongSchemeCount
+        + AuthDenialMalformedTokenCount
+        + AuthDenialOversizedTokenCount
+        + AuthDenialWrongTokenCount;
+
+    internal long AuthDenialMissingCount => Interlocked.Read(ref _authDenialMissingCount);
+
+    internal long AuthDenialAmbiguousCount => Interlocked.Read(ref _authDenialAmbiguousCount);
+
+    internal long AuthDenialWrongSchemeCount => Interlocked.Read(ref _authDenialWrongSchemeCount);
+
+    internal long AuthDenialMalformedTokenCount => Interlocked.Read(ref _authDenialMalformedTokenCount);
+
+    internal long AuthDenialOversizedTokenCount => Interlocked.Read(ref _authDenialOversizedTokenCount);
+
+    internal long AuthDenialWrongTokenCount => Interlocked.Read(ref _authDenialWrongTokenCount);
+
     internal bool ResponseCleanupDegraded => ResponseAbortCleanupFailureCount > 0 || ResponseCloseCleanupFailureCount > 0;
 
     internal bool RequestLogDegraded => RequestLogDroppedCount > 0;
@@ -268,6 +308,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal string? LastResponseAbortCleanupFailure => Volatile.Read(ref _lastResponseAbortCleanupFailure);
 
     internal string? LastResponseCloseCleanupFailure => Volatile.Read(ref _lastResponseCloseCleanupFailure);
+
+    internal string? LastEventStreamDropReason => Volatile.Read(ref _lastEventStreamDropReason);
+
+    internal string? LastAuthDenialReason => Volatile.Read(ref _lastAuthDenialReason);
 
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
@@ -776,8 +820,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             await stream.WriteJsonRpcEventAsync(frame, writeCts.Token).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            RemoveEventStream(id, stream);
+        }
+        catch (Exception ex)
+        {
+            RecordEventStreamDrop(EventStreamWriteFailureDrop, ex);
             RemoveEventStream(id, stream);
         }
     }
@@ -795,24 +844,40 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         // `authorization: bearer ...` are valid and must be accepted.
         // RFC 6750 §2.1 で auth-scheme は case-insensitive と規定されているため、
         // `bearer ...` のような小文字スキームも受理する。
+        string authFailure;
         if (!TryReadSingleAuthorizationHeader(context.Request.Headers, out var header, out var headerFailure))
         {
-            request.AuthOutcome = FormatAuthFailureOutcome(headerFailure);
-        }
-        else if (TryExtractBearerToken(header, out var provided))
-        {
-            if (provided is not null && HashEqualsConfiguredToken(provided))
-            {
-                request.AuthOutcome = "ok";
-                return true;
-            }
-
-            request.AuthOutcome = FormatAuthFailureOutcome("wrong-token");
+            authFailure = headerFailure;
         }
         else
         {
-            request.AuthOutcome = FormatAuthFailureOutcome("wrong-scheme");
+            switch (ExtractBearerToken(header, out var provided))
+            {
+                case BearerTokenReadResult.Success:
+                    if (HashEqualsConfiguredToken(provided!))
+                    {
+                        request.AuthOutcome = "ok";
+                        return true;
+                    }
+
+                    authFailure = AuthDenialWrongToken;
+                    break;
+                case BearerTokenReadResult.WrongScheme:
+                    authFailure = AuthDenialWrongScheme;
+                    break;
+                case BearerTokenReadResult.MalformedToken:
+                    authFailure = AuthDenialMalformedToken;
+                    break;
+                case BearerTokenReadResult.OversizedToken:
+                    authFailure = AuthDenialOversizedToken;
+                    break;
+                default:
+                    throw new InvalidOperationException("Unhandled bearer token read result.");
+            }
         }
+
+        RecordAuthDenial(authFailure);
+        request.AuthOutcome = FormatAuthFailureOutcome(authFailure);
 
         // RFC 7235 §4.1: 401 responses SHOULD carry a WWW-Authenticate challenge so
         // generic HTTP clients (and humans poking at the listener) know which scheme
@@ -828,19 +893,27 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private static string FormatAuthFailureOutcome(string detailedOutcome)
         => McpServer.IsUnsafeDebugEnabled() ? detailedOutcome : "unauthorized";
 
+    private enum BearerTokenReadResult
+    {
+        Success,
+        WrongScheme,
+        MalformedToken,
+        OversizedToken,
+    }
+
     private static bool TryReadSingleAuthorizationHeader(NameValueCollection headers, out string header, out string failure)
     {
         header = string.Empty;
         var values = headers.GetValues("Authorization");
         if (values is null || values.Length == 0 || values.All(string.IsNullOrEmpty))
         {
-            failure = "missing";
+            failure = AuthDenialMissing;
             return false;
         }
 
         if (values.Length != 1 || values[0].IndexOf(',', StringComparison.Ordinal) >= 0)
         {
-            failure = "ambiguous";
+            failure = AuthDenialAmbiguous;
             return false;
         }
 
@@ -849,18 +922,21 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return true;
     }
 
-    private static bool TryExtractBearerToken(string header, out string? token)
+    private static BearerTokenReadResult ExtractBearerToken(string header, out string? token)
     {
         token = null;
         if (header.Length < BearerPrefix.Length || !header.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            return false;
+            return BearerTokenReadResult.WrongScheme;
 
         var candidate = header.AsSpan(BearerPrefix.Length);
+        if (McpAuthenticationLimits.IsTokenOversized(candidate))
+            return BearerTokenReadResult.OversizedToken;
+
         if (!McpAuthenticationLimits.IsTokenShapeValid(candidate))
-            return true;
+            return BearerTokenReadResult.MalformedToken;
 
         token = candidate.ToString();
-        return true;
+        return BearerTokenReadResult.Success;
     }
 
     private async Task RespondAsync(HttpListenerContext context, int statusCode, string body)
@@ -1159,6 +1235,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
+    internal void RecordEventStreamDrop(string reason, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        switch (reason)
+        {
+            case EventStreamWriteFailureDrop:
+                Interlocked.Increment(ref _eventStreamDropCount);
+                Interlocked.Increment(ref _eventStreamWriteFailureDropCount);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(reason), reason, $"Expected {EventStreamWriteFailureDrop}.");
+        }
+
+        var category = DiagnosticRedactor.ClassifyException(exception);
+        Volatile.Write(ref _lastEventStreamDropReason, $"{reason}:{category}:{exception.GetType().Name}");
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -1222,6 +1316,35 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             Interlocked.Increment(ref _requestQueueLimitRejectionCount);
         else if (string.Equals(reason, EventStreamLimitRejection, StringComparison.Ordinal))
             Interlocked.Increment(ref _eventStreamLimitRejectionCount);
+    }
+
+    private void RecordAuthDenial(string reason)
+    {
+        switch (reason)
+        {
+            case AuthDenialMissing:
+                Interlocked.Increment(ref _authDenialMissingCount);
+                break;
+            case AuthDenialAmbiguous:
+                Interlocked.Increment(ref _authDenialAmbiguousCount);
+                break;
+            case AuthDenialWrongScheme:
+                Interlocked.Increment(ref _authDenialWrongSchemeCount);
+                break;
+            case AuthDenialMalformedToken:
+                Interlocked.Increment(ref _authDenialMalformedTokenCount);
+                break;
+            case AuthDenialOversizedToken:
+                Interlocked.Increment(ref _authDenialOversizedTokenCount);
+                break;
+            case AuthDenialWrongToken:
+                Interlocked.Increment(ref _authDenialWrongTokenCount);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown auth denial reason.");
+        }
+
+        Volatile.Write(ref _lastAuthDenialReason, reason);
     }
 
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
