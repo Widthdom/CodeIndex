@@ -185,6 +185,38 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_LongNonSecretString_TruncatesWithoutRedaction_Issue3909()
+    {
+        var text = new string('x', 100_000);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.True(state.Truncated);
+        Assert.Contains("string_length_limit", state.TruncationReasons);
+        Assert.Equal(
+            new string('x', AuditLogSink.MaxArgValueStringChars) + "...",
+            sanitized!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_SecretNearDisplayBoundary_RedactsWholeValue_Issue3909()
+    {
+        var padding = new string('x', AuditLogSink.MaxArgValueStringChars - 3);
+        var text = padding + "token=" + new string('s', 64);
+        Assert.True(text.IndexOf("token=", StringComparison.Ordinal) < AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
     public void SanitizeArgValue_BudgetsPayloadBeforeClone_Issue3106()
     {
         var items = new JsonArray();

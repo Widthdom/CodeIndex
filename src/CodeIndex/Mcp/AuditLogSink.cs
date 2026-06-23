@@ -39,6 +39,7 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxArgValueArrayItems = 64;
     internal const int MaxArgValueTotalNodes = 512;
     internal const int MaxArgValueStringChars = 512;
+    internal const int MaxSecretValueScanChars = MaxArgValueStringChars + 256;
     internal const int MaxArgValuesSerializedBytes = 16 * 1024;
     internal const int MaxAuditArgumentCount = 64;
     internal const int MaxAuditArgumentKeyChars = McpBoundedText.MaxDiagnosticDisplayChars;
@@ -50,7 +51,8 @@ internal sealed class AuditLogSink : IDisposable
 
     private static readonly Regex SecretValuePattern = new(
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        RegexTimeoutPolicy.RedactionRegexTimeout);
     private static readonly JsonDocumentOptions ArgValueScalarJsonDocumentOptions = new()
     {
         MaxDepth = MaxArgValueDepth + 1,
@@ -709,7 +711,7 @@ internal sealed class AuditLogSink : IDisposable
     {
         if (value.TryGetValue<string>(out var text))
         {
-            if (SecretValuePattern.IsMatch(text))
+            if (ContainsSecretValue(text))
             {
                 state.MarkRedacted();
                 state.TryReserveSerializedBytes(EstimateStringJsonBytes(RedactedValue));
@@ -736,6 +738,14 @@ internal sealed class AuditLogSink : IDisposable
             state.AddTruncationReason("scalar_serialization_failed");
             return CreateTruncatedValue();
         }
+    }
+
+    private static bool ContainsSecretValue(string text)
+    {
+        var scanText = text.Length <= MaxSecretValueScanChars
+            ? text
+            : text[..MaxSecretValueScanChars];
+        return RegexTimeoutPolicy.IsRedactionMatchOrFallback(() => SecretValuePattern.IsMatch(scanText));
     }
 
     private static JsonValue CreateTruncatedValue() => JsonValue.Create(TruncatedValue);
