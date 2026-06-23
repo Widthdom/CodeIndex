@@ -5580,6 +5580,35 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_FormatLspCoversFullMatchSpan_Issue3930()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_lsp_span_3930");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/todo.txt", "text", "alpha TODO beta\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["TODO", "--db", dbPath, "--path", "src/todo.txt", "--format", "lsp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = Assert.Single(document.RootElement.EnumerateArray());
+            var range = location.GetProperty("range");
+            Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
+            Assert.Equal(6, range.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(0, range.GetProperty("end").GetProperty("line").GetInt32());
+            Assert.Equal(10, range.GetProperty("end").GetProperty("character").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_AllScopeRegexCountJsonIncludesScanSummary_Issue3560()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_regex_count_3560");

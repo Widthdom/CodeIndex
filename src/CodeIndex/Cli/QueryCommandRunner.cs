@@ -3028,7 +3028,7 @@ public static partial class QueryCommandRunner
         => BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
 
     private static LspLocation ToLspLocation(FileFindResult result)
-        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + 1);
+        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + Math.Max(1, result.Length));
 
     private static LspLocation ToLspLocation(FileIssue result)
         => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
