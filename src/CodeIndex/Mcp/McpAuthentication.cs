@@ -103,6 +103,9 @@ internal static class McpAuthenticationLimits
         }
     }
 
+    internal static void HashTokenUtf8ForTests(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination) =>
+        HashTokenUtf8(token, utf8Buffer, destination);
+
     private static void HashTokenUtf8(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination)
     {
         var bytesWritten = Encoding.UTF8.GetBytes(token, utf8Buffer);

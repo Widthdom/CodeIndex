@@ -2807,6 +2807,19 @@ public sealed class Caller
     }
 
     [Fact]
+    public void McpAuthenticationLimits_HashTokenUtf8ForTests_ClearsUsedTokenBytes_Issue3989()
+    {
+        var buffer = Enumerable.Repeat((byte)0xA5, 16).ToArray();
+        var destination = new byte[McpAuthenticationLimits.Sha256HashBytes];
+
+        McpAuthenticationLimits.HashTokenUtf8ForTests("token", buffer, destination);
+
+        Assert.Equal(McpAuthenticationLimits.HashTokenToArray("token"), destination);
+        Assert.Equal(new byte[] { 0, 0, 0, 0, 0 }, buffer[..5]);
+        Assert.All(buffer[5..], value => Assert.Equal(0xA5, value));
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
