@@ -639,7 +639,7 @@ public static class PackageCorePropertiesNormalizer
                 new FileStreamOptions
                 {
                     Mode = FileMode.Open,
-                    Access = FileAccess.ReadWrite,
+                    Access = FileAccess.Read,
                     Share = FileShare.None,
                     Options = FileOptions.DeleteOnClose,
                 });

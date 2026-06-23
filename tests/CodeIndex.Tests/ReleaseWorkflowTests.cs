@@ -461,6 +461,35 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_RemovesReadOnlyLegacyTempFileOnUnixBeforeRewrite()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesReadOnlyLegacyTempFileOnUnixBeforeRewrite));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "readonly-legacy.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "read-only stale temp");
+            File.SetUnixFileMode(legacyTempPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            Assert.False(File.Exists(legacyTempPath));
+            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsParentDirectoryFlushFailureAfterReplace));
