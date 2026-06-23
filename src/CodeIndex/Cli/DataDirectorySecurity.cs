@@ -107,7 +107,7 @@ internal static class DataDirectorySecurity
             return;
 
         var root = ResolveSensitiveTempFallbackRootDirectory();
-        if (!FileSystemBoundary.IsSameOrDescendant(root, path))
+        if (!IsSameOrDescendantDirectory(root, path))
             return;
 
         RejectUnsafeDirectoryTarget(root);
@@ -129,6 +129,18 @@ internal static class DataDirectorySecurity
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
+        }
+    }
+
+    private static bool IsSameOrDescendantDirectory(string parent, string child)
+    {
+        try
+        {
+            return FileSystemBoundary.IsSameOrDescendant(parent, child);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException or CodeIndexException)
+        {
+            return false;
         }
     }
 
