@@ -751,8 +751,7 @@ public static class DiffCommandRunner
     {
         using var command = connection.CreateCommand();
         command.CommandText = sql;
-        var value = command.ExecuteScalar();
-        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+        return SqliteCommandPolicy.ReadInt64Scalar(command, "diff database header value");
     }
 
     private static DiffDbHeader ReadHeader(string dbPath)
@@ -772,20 +771,20 @@ public static class DiffCommandRunner
         using (var exists = connection.CreateCommand())
         {
             exists.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $table";
-            exists.Parameters.AddWithValue("$table", table);
+            SqliteCommandPolicy.AddText(exists, "$table", table);
             if (exists.ExecuteScalar() is null)
                 return 0;
         }
 
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM {SqliteIdentifier.Quote(table)}";
-        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        command.CommandText = SqliteCommandPolicy.CountRowsSql(table);
+        return SqliteCommandPolicy.ReadInt64Scalar(command, $"diff table row count {table}");
     }
 
     private static bool ColumnExists(SqliteConnection connection, string table, string column)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(table)})";
+        command.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(table);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

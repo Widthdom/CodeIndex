@@ -271,8 +271,9 @@ public static class ReportCommandRunner
             try
             {
                 using var countCmd = connection.CreateCommand();
-                countCmd.CommandText = $"SELECT COUNT(*) FROM (SELECT 1 FROM {SqliteIdentifier.Quote(name)} LIMIT {MaxSchemaRowCountScanRows + 1})";
-                var cappedCount = Convert.ToInt64(countCmd.ExecuteScalar());
+                countCmd.CommandText = SqliteCommandPolicy.CountRowsWithLimitSql(name, "$limit");
+                SqliteCommandPolicy.AddLimit(countCmd, "$limit", MaxSchemaRowCountScanRows + 1);
+                var cappedCount = SqliteCommandPolicy.ReadInt64Scalar(countCmd, $"report schema row count {name}");
                 rowCountTruncated = cappedCount > MaxSchemaRowCountScanRows;
                 rowCount = rowCountTruncated ? MaxSchemaRowCountScanRows : cappedCount;
             }
@@ -626,8 +627,8 @@ public static class ReportCommandRunner
     {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM files WHERE lang = $lang";
-        cmd.Parameters.AddWithValue("$lang", lang);
-        return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        SqliteCommandPolicy.AddText(cmd, "$lang", lang);
+        return SqliteCommandPolicy.ReadInt64Scalar(cmd, $"report language file count {lang}");
     }
 
     private static string? GetMeta(Dictionary<string, string?> meta, string key)

@@ -763,8 +763,8 @@ public static class DbCommandRunner
             ORDER BY type, name
             LIMIT @entry_limit";
         AddSchemaFilterParameters(cmd, options);
-        cmd.Parameters.Add("@sql_limit", SqliteType.Integer).Value = options.SchemaSqlTextLimit + 1;
-        cmd.Parameters.Add("@entry_limit", SqliteType.Integer).Value = options.SchemaEntryLimit + 1;
+        SqliteCommandPolicy.AddLimit(cmd, "@sql_limit", options.SchemaSqlTextLimit + 1);
+        SqliteCommandPolicy.AddLimit(cmd, "@entry_limit", options.SchemaEntryLimit + 1);
         ReportMaintenanceProgress("schema", "read_entries", dbPath);
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
@@ -824,7 +824,7 @@ public static class DbCommandRunner
         {
             var type = reader.GetString(0);
             if (counts.ContainsKey(type))
-                counts[type] = Convert.ToInt32(reader.GetInt64(1), System.Globalization.CultureInfo.InvariantCulture);
+                counts[type] = SqliteCommandPolicy.ToInt32Scalar(reader.GetInt64(1), "schema object type count");
         }
 
         return counts;
@@ -845,9 +845,9 @@ public static class DbCommandRunner
     private static void AddSchemaFilterParameters(SqliteCommand cmd, DbCommandOptions options)
     {
         if (options.SchemaType is not null)
-            cmd.Parameters.Add("@schema_type", SqliteType.Text).Value = options.SchemaType;
+            SqliteCommandPolicy.AddText(cmd, "@schema_type", options.SchemaType);
         if (options.SchemaName is not null)
-            cmd.Parameters.Add("@schema_name", SqliteType.Text).Value = options.SchemaName;
+            SqliteCommandPolicy.AddText(cmd, "@schema_name", options.SchemaName);
     }
 
     private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows, CancellationToken cancellationToken)
@@ -971,7 +971,7 @@ public static class DbCommandRunner
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = sql;
-        var result = Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        var result = SqliteCommandPolicy.ReadInt32Scalar(cmd, "db maintenance row count");
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }

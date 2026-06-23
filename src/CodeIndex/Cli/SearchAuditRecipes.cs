@@ -242,6 +242,18 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include test-only SQL snippets and values whose inferred SQLite type is intentionally unconstrained."),
                 new(
+                    "sqlite-quoted-identifier",
+                    "SqliteIdentifier.Quote",
+                    "Find dynamic SQLite command construction that uses shared identifier quoting so audits can separate identifier interpolation from value interpolation.",
+                    ["audit", "security"],
+                    "Expected safe hits quote table, column, index, or pragma identifiers; still verify user values are parameterized."),
+                new(
+                    "sqlite-typed-parameter",
+                    "SqliteCommandPolicy.Add",
+                    "Find SQLite command paths using the shared typed parameter helpers instead of AddWithValue inference.",
+                    ["audit", "bug"],
+                    "False positives include helper declarations; callers should prefer AddText/AddInt64/AddLimit/AddOffset wrappers for concrete value types."),
+                new(
                     "regex-construction",
                     "new Regex",
                     "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",

@@ -328,8 +328,8 @@ public class DbContext : IDisposable
                 : OpenReadOnly(openTarget);
 
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = "PRAGMA application_id";
-            if (Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != ApplicationId)
+            cmd.CommandText = SqliteCommandPolicy.PragmaSql("application_id");
+            if (SqliteCommandPolicy.ReadInt64Scalar(cmd, "pragma application_id") != ApplicationId)
             {
                 message = $"database is not an existing CodeIndex DB: {dbPath}";
                 return false;
@@ -337,8 +337,8 @@ public class DbContext : IDisposable
 
             if (requireSupportedUserVersion)
             {
-                cmd.CommandText = "PRAGMA user_version";
-                var userVersion = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+                cmd.CommandText = SqliteCommandPolicy.PragmaSql("user_version");
+                var userVersion = SqliteCommandPolicy.ReadInt32Scalar(cmd, "pragma user_version");
                 var unknownBits = userVersion & ~CurrentSchemaVersion;
                 if (unknownBits != 0)
                 {
@@ -717,7 +717,7 @@ public class DbContext : IDisposable
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'";
-        var objectCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        var objectCount = SqliteCommandPolicy.ReadInt64Scalar(cmd, "sqlite_master object count");
         if (objectCount == 0)
             Execute("PRAGMA auto_vacuum=INCREMENTAL");
     }
@@ -852,8 +852,8 @@ public class DbContext : IDisposable
     private long ReadPragmaLong(string name)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA {SqliteIdentifier.ValidatePragmaName(name)}";
-        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        cmd.CommandText = SqliteCommandPolicy.PragmaSql(name);
+        return SqliteCommandPolicy.ReadInt64Scalar(cmd, $"pragma {name}");
     }
 
     private readonly record struct VacuumMetrics(
@@ -2451,7 +2451,7 @@ public class DbContext : IDisposable
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = @table";
-        cmd.Parameters.AddWithValue("@table", tableName);
+        SqliteCommandPolicy.AddText(cmd, "@table", tableName);
         return cmd.ExecuteScalar() as string;
     }
 
@@ -2470,7 +2470,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2521,7 +2521,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2911,7 +2911,7 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
-        cmd.CommandText = $"PRAGMA table_info({SqliteIdentifier.Quote(tableName)})";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
