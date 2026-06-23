@@ -412,6 +412,46 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCommonQualifiedMemberCalls_DoNotOvermatchLocalFunctions_Issue3894()
+    {
+        const string content = """
+            using System;
+            using System.IO;
+            using System.Text.Json;
+
+            public class WorkerProcessCleanupDiagnostics
+            {
+                private string Combine(string left, string right) => left + right;
+
+                public void TryKill(JsonElement element, string value)
+                {
+                    Combine("a", "b");
+                    thisCombine();
+                    var path = Path.Combine("a", "b");
+                    var max = Math.Max(1, 2);
+                    var joined = string.Join(",", new[] { "a", "b" });
+                    var text = element.GetString();
+                    value.Replace("a", "b");
+                    this.Combine("c", "d");
+                }
+
+                private static void thisCombine() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var combineCalls = references
+            .Where(reference => reference.SymbolName == "Combine" && reference.ReferenceKind == "call")
+            .ToList();
+
+        Assert.Equal(2, combineCalls.Count);
+        Assert.All(combineCalls, reference => Assert.Equal("TryKill", reference.ContainerName));
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "Max" or "Join" or "GetString" or "Replace");
+    }
+
+    [Fact]
     public void Extract_CsharpMethodGroups_TrackDelegateHandoffs()
     {
         // issue #239: method groups and callback handoffs should survive without a trailing `(`.

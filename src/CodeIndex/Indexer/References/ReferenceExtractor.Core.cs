@@ -2031,6 +2031,11 @@ public static partial class ReferenceExtractor
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
+                if (language == "csharp"
+                    && CSharpReferenceExtractor.ShouldSuppressQualifiedCommonMemberCall(preparedLine, normalizedName, callIndex))
+                {
+                    return false;
+                }
                 if (IsIgnoredCallName(language, name))
                 {
                     if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
