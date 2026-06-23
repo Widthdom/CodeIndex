@@ -430,7 +430,7 @@ public class ReleaseWorkflowTests
             CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
             PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = _ => throw new IOException("fsync failed at /private/path");
 
-            var exception = Assert.Throws<IOException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            var exception = Assert.Throws<PackageNormalizeReplaceCompletedException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
 
             Assert.Contains("Package replace completed", exception.Message);
             Assert.Contains("parent directory could not be flushed to disk", exception.Message);
@@ -441,6 +441,36 @@ public class ReleaseWorkflowTests
 
             using var archive = ZipFile.OpenRead(packagePath);
             Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_JsonPreservesParentDirectoryFlushFailureAfterReplace()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonPreservesParentDirectoryFlushFailureAfterReplace));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "flush-failure-json.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            PackageCorePropertiesNormalizer.FlushParentDirectoryForTesting = _ => throw new IOException("fsync failed at /private/path");
+
+            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", packagePath]);
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var error = doc.RootElement.GetProperty("packages").EnumerateArray().Single().GetProperty("error").GetString();
+            Assert.Contains("Package replace completed", error);
+            Assert.Contains("target file was already replaced", error);
+            Assert.Contains("flush-failure-json.nupkg", error);
+            Assert.DoesNotContain("Could not read or rewrite package", error);
+            Assert.DoesNotContain(projectRoot, error);
+            Assert.DoesNotContain("/private/path", error);
         }
         finally
         {

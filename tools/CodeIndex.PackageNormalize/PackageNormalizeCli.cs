@@ -220,6 +220,7 @@ internal static class PackageNormalizeDiagnostics
         return exception switch
         {
             InvalidDataException => $"Package {FormatPath(packagePath)} is not a readable ZIP archive.",
+            PackageNormalizeReplaceCompletedException => FormatMessage(exception.Message),
             IOException => $"Could not read or rewrite package {FormatPath(packagePath)}.",
             UnauthorizedAccessException => $"Could not access package {FormatPath(packagePath)}.",
             ArgumentException => FormatMessage(exception.Message),
@@ -700,10 +701,10 @@ public static class PackageCorePropertiesNormalizer
     }
 
     private static IOException BuildDirectoryFlushException(string path, int errno)
-        => new($"Package replace completed for {PackageNormalizeDiagnostics.FormatPath(path)}; the target file was already replaced, but the parent directory could not be flushed to disk (errno {errno}).");
+        => new PackageNormalizeReplaceCompletedException($"Package replace completed for {PackageNormalizeDiagnostics.FormatPath(path)}; the target file was already replaced, but the parent directory could not be flushed to disk (errno {errno}).");
 
     private static IOException BuildDirectoryFlushException(string path, Exception inner)
-        => new($"Package replace completed for {PackageNormalizeDiagnostics.FormatPath(path)}; the target file was already replaced, but the parent directory could not be flushed to disk ({inner.GetType().Name}).", inner);
+        => new PackageNormalizeReplaceCompletedException($"Package replace completed for {PackageNormalizeDiagnostics.FormatPath(path)}; the target file was already replaced, but the parent directory could not be flushed to disk ({inner.GetType().Name}).", inner);
 
     private sealed class PackageNormalizeReadBudget
     {
@@ -868,6 +869,19 @@ internal readonly record struct PackageNormalizeInspection(
     string PackagePath,
     bool NeedsNormalization,
     string OriginalCorePropertiesPath);
+
+internal sealed class PackageNormalizeReplaceCompletedException : IOException
+{
+    internal PackageNormalizeReplaceCompletedException(string message)
+        : base(message)
+    {
+    }
+
+    internal PackageNormalizeReplaceCompletedException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
 
 internal sealed class PackageNormalizeSummary
 {
