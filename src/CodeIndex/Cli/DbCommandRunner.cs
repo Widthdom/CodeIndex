@@ -236,11 +236,12 @@ public static class DbCommandRunner
                         schema.Truncated,
                         schema.EntriesTruncated,
                         schema.SqlTruncated,
-                        SchemaEntryLimit,
-                        SchemaSqlTextLimit,
+                        options.SchemaEntryLimit,
+                        options.SchemaSqlTextLimit,
                         options.SchemaSummaryOnly,
                         options.SchemaType,
-                        options.SchemaName),
+                        options.SchemaName,
+                        options.SchemaIncludeInternal),
                     jsonContext.DbSchemaJsonResult));
             }
             else
@@ -248,14 +249,15 @@ public static class DbCommandRunner
                 Console.WriteLine("Database schema");
                 Console.WriteLine($"  database    : {fullPath}");
                 Console.WriteLine($"  user_version: {schema.UserVersion}");
-                if (options.SchemaType is not null || options.SchemaName is not null || options.SchemaSummaryOnly)
+                if (options.SchemaType is not null || options.SchemaName is not null || options.SchemaSummaryOnly || !options.SchemaIncludeInternal)
                 {
                     Console.WriteLine($"  type filter : {options.SchemaType ?? "(any)"}");
                     Console.WriteLine($"  name filter : {options.SchemaName ?? "(any)"}");
                     Console.WriteLine($"  summary only: {(options.SchemaSummaryOnly ? "yes" : "no")}");
+                    Console.WriteLine($"  internal    : {(options.SchemaIncludeInternal ? "included" : "excluded")}");
                 }
                 if (schema.Truncated)
-                    Console.WriteLine($"  truncated   : yes (entry limit {SchemaEntryLimit:N0}, SQL text limit {SchemaSqlTextLimit:N0} chars)");
+                    Console.WriteLine($"  truncated   : yes (entry limit {options.SchemaEntryLimit:N0}, SQL text limit {options.SchemaSqlTextLimit:N0} chars)");
                 if (options.SchemaSummaryOnly)
                 {
                     Console.WriteLine("  objects     : " + string.Join(", ", schema.ObjectTypeCounts.Select(kv => $"{kv.Key}={kv.Value:N0}")));
@@ -382,6 +384,42 @@ public static class DbCommandRunner
 
         try
         {
+            if (options.CheckpointDryRun)
+            {
+                var preview = PreviewCheckpoint(fullDbPath, options.Name ?? MakeTimestampCheckpointName());
+                if (options.Json)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(
+                        new DbCheckpointJsonResult(
+                            "dry_run",
+                            fullDbPath,
+                            preview.Name,
+                            preview.CheckpointPath,
+                            preview.Files,
+                            preview.FilesTruncated,
+                            CheckpointFileInspectLimit,
+                            preview.Diagnostics,
+                            DryRun: true,
+                            Bytes: preview.Bytes),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
+                }
+                else
+                {
+                    Console.WriteLine("Database checkpoint dry run.");
+                    Console.WriteLine($"  database  : {fullDbPath}");
+                    Console.WriteLine($"  name      : {preview.Name}");
+                    Console.WriteLine($"  checkpoint: {preview.CheckpointPath}");
+                    Console.WriteLine($"  side effect: none (run without --dry-run to copy DB/WAL/SHM files)");
+                    Console.WriteLine($"  files     : {ConsoleUi.Counted(preview.Files.Count, "file")}{(preview.FilesTruncated ? " (truncated)" : string.Empty)}");
+                    Console.WriteLine($"  bytes     : {preview.Bytes:N0}");
+                }
+
+                foreach (var diagnostic in preview.Diagnostics)
+                    CommandErrorWriter.WriteStderr($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
+
+                return CommandExitCodes.Success;
+            }
+
             var result = CreateCheckpoint(fullDbPath, options.Name ?? MakeTimestampCheckpointName());
             if (options.Json)
             {
@@ -394,7 +432,8 @@ public static class DbCommandRunner
                         result.Files,
                         result.FilesTruncated,
                         CheckpointFileInspectLimit,
-                        result.Diagnostics),
+                        result.Diagnostics,
+                        Bytes: result.Bytes),
                     CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
             }
             else
@@ -404,6 +443,7 @@ public static class DbCommandRunner
                 Console.WriteLine($"  name      : {result.Name}");
                 Console.WriteLine($"  checkpoint: {result.CheckpointPath}");
                 Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}{(result.FilesTruncated ? " (truncated)" : string.Empty)}");
+                Console.WriteLine($"  bytes     : {result.Bytes:N0}");
             }
 
             foreach (var diagnostic in result.Diagnostics)
@@ -723,8 +763,8 @@ public static class DbCommandRunner
             ORDER BY type, name
             LIMIT @entry_limit";
         AddSchemaFilterParameters(cmd, options);
-        cmd.Parameters.Add("@sql_limit", SqliteType.Integer).Value = SchemaSqlTextLimit + 1;
-        cmd.Parameters.Add("@entry_limit", SqliteType.Integer).Value = SchemaEntryLimit + 1;
+        cmd.Parameters.Add("@sql_limit", SqliteType.Integer).Value = options.SchemaSqlTextLimit + 1;
+        cmd.Parameters.Add("@entry_limit", SqliteType.Integer).Value = options.SchemaEntryLimit + 1;
         ReportMaintenanceProgress("schema", "read_entries", dbPath);
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
@@ -734,14 +774,14 @@ public static class DbCommandRunner
         while (reader.Read())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (entries.Count >= SchemaEntryLimit)
+            if (entries.Count >= options.SchemaEntryLimit)
             {
                 entriesTruncated = true;
                 break;
             }
 
             var rawSql = reader.IsDBNull(3) ? null : reader.GetString(3);
-            var boundedSql = rawSql is null ? (Text: (string?)null, Truncated: false) : TruncateDiagnosticText(rawSql, SchemaSqlTextLimit);
+            var boundedSql = rawSql is null ? (Text: (string?)null, Truncated: false) : TruncateDiagnosticText(rawSql, options.SchemaSqlTextLimit);
             sqlTruncated |= boundedSql.Truncated;
             entries.Add(new DbSchemaEntryJsonResult(
                 reader.GetString(0),
@@ -797,6 +837,8 @@ public static class DbCommandRunner
             clauses.Add("type = @schema_type");
         if (options.SchemaName is not null)
             clauses.Add("name = @schema_name");
+        if (!options.SchemaIncludeInternal)
+            clauses.Add("name NOT LIKE 'sqlite!_%' ESCAPE '!'");
         return string.Join(" AND ", clauses);
     }
 
@@ -1067,7 +1109,57 @@ public static class DbCommandRunner
 
         var diagnostics = new List<DbDiagnosticJsonResult>();
         var files = EnumerateCheckpointFileNames(checkpointPath, diagnostics);
-        return new DbCheckpointOperationResult(name, checkpointPath, files.Items, files.Truncated, diagnostics);
+        var bytes = files.Truncated
+            ? (Bytes: 0L, Truncated: true)
+            : SumCheckpointBytes(checkpointPath, diagnostics);
+        return new DbCheckpointOperationResult(name, checkpointPath, files.Items, files.Truncated || bytes.Truncated, diagnostics, bytes.Bytes);
+    }
+
+    private static DbCheckpointOperationResult PreviewCheckpoint(string fullDbPath, string name)
+    {
+        ValidateCheckpointName(name);
+        var checkpointPath = GetCheckpointPath(fullDbPath, name);
+        var diagnostics = new List<DbDiagnosticJsonResult>();
+        if (Directory.Exists(LongPath.EnsureWindowsPrefix(checkpointPath)))
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "checkpoint_already_exists",
+                "A checkpoint with this name already exists; running without --dry-run would fail.",
+                ConsoleUi.FormatBoundedValue(checkpointPath)));
+        }
+
+        var files = ReadCheckpointSourceFiles(fullDbPath, diagnostics);
+        return new DbCheckpointOperationResult(name, checkpointPath, files.Files, files.Truncated, diagnostics, files.Bytes);
+    }
+
+    private static (List<string> Files, long Bytes, bool Truncated) ReadCheckpointSourceFiles(
+        string fullDbPath,
+        List<DbDiagnosticJsonResult> diagnostics)
+    {
+        var files = new List<string>();
+        long bytes = 0;
+        foreach (var source in new[] { fullDbPath, fullDbPath + "-wal", fullDbPath + "-shm" })
+        {
+            try
+            {
+                if (!TryGetRegularExistingFile(source, out var normalizedSource))
+                    continue;
+
+                files.Add(Path.GetFileName(source) ?? source);
+                bytes += new FileInfo(normalizedSource).Length;
+            }
+            catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+            {
+                diagnostics.Add(CreateCheckpointDiagnostic(
+                    "checkpoint_source_file_stat_failed",
+                    $"Unable to inspect checkpoint source file ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                    source));
+                return (files, bytes, Truncated: true);
+            }
+        }
+
+        files.Sort(StringComparer.Ordinal);
+        return (files, bytes, Truncated: false);
     }
 
     private static DbCheckpointListReadResult ListCheckpoints(string fullDbPath)
@@ -1657,6 +1749,10 @@ public static class DbCommandRunner
         var restoreBackupsPrune = false;
         var restoreBackupsKeep = DefaultRestoreBackupKeepCount;
         var schemaSummaryOnly = false;
+        var schemaEntryLimit = SchemaEntryLimit;
+        var schemaSqlTextLimit = SchemaSqlTextLimit;
+        bool? schemaIncludeInternal = null;
+        var schemaSpecificOptionSeen = false;
         string? parsedSchemaType = null;
         string? parsedSchemaName = null;
         string? name = null;
@@ -1685,6 +1781,7 @@ public static class DbCommandRunner
                     schema = true;
                     break;
                 case "--type" when i + 1 < args.Length:
+                    schemaSpecificOptionSeen = true;
                     var schemaType = args[++i].Trim().ToLowerInvariant();
                     if (!SchemaObjectTypes.Contains(schemaType, StringComparer.Ordinal))
                         parseError = "--type must be one of table, index, trigger, or view";
@@ -1695,13 +1792,53 @@ public static class DbCommandRunner
                     parseError = "--type requires a value";
                     break;
                 case "--name" when i + 1 < args.Length:
+                    schemaSpecificOptionSeen = true;
                     parsedSchemaName = args[++i];
                     break;
                 case "--name":
                     parseError = "--name requires a value";
                     break;
                 case "--summary-only":
+                    schemaSpecificOptionSeen = true;
                     schemaSummaryOnly = true;
+                    break;
+                case "--limit" when i + 1 < args.Length:
+                    schemaSpecificOptionSeen = true;
+                    if (!int.TryParse(args[++i], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out schemaEntryLimit)
+                        || schemaEntryLimit < 0
+                        || schemaEntryLimit > SchemaEntryLimit)
+                    {
+                        parseError = $"--limit must be an integer from 0 to {SchemaEntryLimit}";
+                    }
+                    break;
+                case "--limit":
+                    parseError = "--limit requires a value";
+                    break;
+                case "--max-sql-chars" when i + 1 < args.Length:
+                    schemaSpecificOptionSeen = true;
+                    if (!int.TryParse(args[++i], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out schemaSqlTextLimit)
+                        || schemaSqlTextLimit < 0
+                        || schemaSqlTextLimit > SchemaSqlTextLimit)
+                    {
+                        parseError = $"--max-sql-chars must be an integer from 0 to {SchemaSqlTextLimit}";
+                    }
+                    break;
+                case "--max-sql-chars":
+                    parseError = "--max-sql-chars requires a value";
+                    break;
+                case "--include-internal":
+                    schemaSpecificOptionSeen = true;
+                    if (schemaIncludeInternal == false)
+                        parseError = "--include-internal and --exclude-internal cannot be combined";
+                    else
+                        schemaIncludeInternal = true;
+                    break;
+                case "--exclude-internal":
+                    schemaSpecificOptionSeen = true;
+                    if (schemaIncludeInternal == true)
+                        parseError = "--include-internal and --exclude-internal cannot be combined";
+                    else
+                        schemaIncludeInternal = false;
                     break;
                 case "prune":
                     prune = true;
@@ -1780,8 +1917,12 @@ public static class DbCommandRunner
 
         if (parseError is null && restoreBackups && (pruneDryRun || pruneApply))
             parseError = "--dry-run and --apply are not supported with `cdidx db restore-backups`; use `--prune --keep <n>` to delete retained backups.";
-        if (parseError is null && !schema && (parsedSchemaType is not null || parsedSchemaName is not null || schemaSummaryOnly))
-            parseError = "--type, --name, and --summary-only are only valid with `cdidx db schema`.";
+        if (parseError is null && !schema && schemaSpecificOptionSeen)
+            parseError = "--type, --name, --summary-only, --limit, --max-sql-chars, --include-internal, and --exclude-internal are only valid with `cdidx db schema`.";
+        if (parseError is null && pruneDryRun && !prune && !checkpoint)
+            parseError = "--dry-run is only valid with `cdidx db prune --dry-run` or `cdidx db checkpoint --dry-run`.";
+        if (parseError is null && pruneApply && !prune)
+            parseError = "--apply is only valid with `cdidx db prune --apply`.";
 
         return new DbCommandOptions
         {
@@ -1800,8 +1941,12 @@ public static class DbCommandRunner
             RestoreBackupsPrune = restoreBackupsPrune,
             RestoreBackupsKeep = restoreBackupsKeep,
             SchemaSummaryOnly = schemaSummaryOnly,
+            SchemaEntryLimit = schemaEntryLimit,
+            SchemaSqlTextLimit = schemaSqlTextLimit,
+            SchemaIncludeInternal = schemaIncludeInternal ?? true,
             SchemaType = parsedSchemaType,
             SchemaName = parsedSchemaName,
+            CheckpointDryRun = checkpoint && pruneDryRun,
             Name = name,
             ParseError = parseError,
         };
@@ -1846,13 +1991,17 @@ internal sealed class DbCommandOptions
     public bool RestoreBackupsPrune { get; init; }
     public int RestoreBackupsKeep { get; init; } = DbCommandRunner.DefaultRestoreBackupKeepCount;
     public bool SchemaSummaryOnly { get; init; }
+    public int SchemaEntryLimit { get; init; } = DbCommandRunner.SchemaEntryLimit;
+    public int SchemaSqlTextLimit { get; init; } = DbCommandRunner.SchemaSqlTextLimit;
+    public bool SchemaIncludeInternal { get; init; } = true;
     public string? SchemaType { get; init; }
     public string? SchemaName { get; init; }
+    public bool CheckpointDryRun { get; init; }
     public string? Name { get; init; }
     public string? ParseError { get; init; }
 }
 
-internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated, List<DbDiagnosticJsonResult> Diagnostics);
+internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated, List<DbDiagnosticJsonResult> Diagnostics, long Bytes);
 
 internal sealed record DbCheckpointListReadResult(List<DbCheckpointListEntryJsonResult> Entries, bool Truncated, List<DbDiagnosticJsonResult> Diagnostics);
 

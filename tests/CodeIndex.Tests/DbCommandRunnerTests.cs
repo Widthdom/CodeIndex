@@ -119,6 +119,36 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_CheckpointDryRunSetsPreviewFlag_Issue3937()
+    {
+        var options = DbCommandRunner.ParseArgs(["checkpoint", "before-upgrade", "--dry-run"]);
+
+        Assert.True(options.Checkpoint);
+        Assert.True(options.CheckpointDryRun);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_SchemaSizeControlsSetLimits_Issue3937()
+    {
+        var options = DbCommandRunner.ParseArgs(["schema", "--limit", "3", "--max-sql-chars", "40", "--exclude-internal"]);
+
+        Assert.True(options.Schema);
+        Assert.Equal(3, options.SchemaEntryLimit);
+        Assert.Equal(40, options.SchemaSqlTextLimit);
+        Assert.False(options.SchemaIncludeInternal);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_ApplyRequiresPrune_Issue3937()
+    {
+        var options = DbCommandRunner.ParseArgs(["checkpoint", "--apply"]);
+
+        Assert.Contains("only valid", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_RestoreRequiresName()
     {
         var options = DbCommandRunner.ParseArgs(["restore"]);
@@ -644,6 +674,38 @@ public class DbCommandRunnerTests
             Assert.Contains("Restored", restoreOut);
             Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
             Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointDryRun_JsonPreviewsFilesWithoutCreatingCheckpoint_Issue3937()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_dry_run_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+            File.WriteAllText(dbPath + "-wal", "wal");
+            File.WriteAllText(dbPath + "-shm", "shm!");
+
+            var (exitCode, json) = RunAndCaptureJson(["checkpoint", "preview", "--dry-run", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(9, json.GetProperty("bytes").GetInt64());
+            Assert.False(Directory.Exists(dbPath + ".checkpoints"));
+            var files = json.GetProperty("files").EnumerateArray().Select(file => file.GetString()).ToArray();
+            Assert.Contains("codeindex.db", files);
+            Assert.Contains("codeindex.db-wal", files);
+            Assert.Contains("codeindex.db-shm", files);
         }
         finally
         {
@@ -1631,6 +1693,61 @@ public class DbCommandRunnerTests
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
         }
+    }
+
+    [Fact]
+    public void Run_Schema_JsonHonorsSizeControlsAndInternalFilter_Issue3937()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_controls_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+            }.ConnectionString))
+            {
+                connection.Open();
+                Execute(connection, "CREATE TABLE visible_table(id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT, extra TEXT)");
+                Execute(connection, "CREATE TABLE z_second(id INTEGER PRIMARY KEY, value TEXT)");
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json", "--type", "table", "--limit", "1", "--max-sql-chars", "12", "--exclude-internal"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("include_internal").GetBoolean());
+            Assert.Equal(1, json.GetProperty("entry_limit").GetInt32());
+            Assert.Equal(12, json.GetProperty("sql_text_limit").GetInt32());
+            Assert.True(json.GetProperty("entries_truncated").GetBoolean());
+            Assert.True(json.GetProperty("sql_truncated").GetBoolean());
+            Assert.Equal(2, json.GetProperty("object_type_counts").GetProperty("table").GetInt32());
+            Assert.Equal(1, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
+            var entry = Assert.Single(json.GetProperty("entries").EnumerateArray());
+            Assert.NotEqual("sqlite_sequence", entry.GetProperty("name").GetString());
+            Assert.EndsWith(" [truncated]", entry.GetProperty("sql").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void DbHelp_IncludesSafetyNotesForMaintenanceSubcommands_Issue3937()
+    {
+        var (_, stdout, _) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("db");
+            return 0;
+        });
+
+        Assert.Contains("checkpoint --dry-run", stdout);
+        Assert.Contains("schema defaults to the full sqlite_master dump", stdout);
+        Assert.Contains("restore replaces the DB", stdout);
+        Assert.Contains("prune --dry-run only counts", stdout);
     }
 
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args, CancellationToken cancellationToken = default)

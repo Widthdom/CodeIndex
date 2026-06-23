@@ -106,7 +106,13 @@ public static class ConsoleUi
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
         ("doctor", "cdidx doctor"),
-        ("db", "cdidx db integrity|--integrity-check|schema|prune [--dry-run|--apply] [--type <table|index|trigger|view>] [--name <object>] [--summary-only] [--db <path>] [--json] | cdidx db checkpoint [name<=128] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name<=128> [--db <path>] [--json] | cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
+        ("db", "cdidx db integrity|--integrity-check [--db <path>] [--json]"),
+        ("db", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),
+        ("db", "cdidx db prune --dry-run|--apply [--db <path>] [--json]"),
+        ("db", "cdidx db checkpoint [name<=128] [--dry-run] [--db <path>] [--json]"),
+        ("db", "cdidx db checkpoints --list [--db <path>] [--json]"),
+        ("db", "cdidx db restore <name<=128> [--db <path>] [--json]"),
+        ("db", "cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
@@ -132,6 +138,10 @@ public static class ConsoleUi
     [
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("completions", "--json is not supported; output is a shell script for the selected shell."),
+        ("db", "schema defaults to the full sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for bounded diagnostics."),
+        ("db", "checkpoint --dry-run reports the DB/WAL/SHM files and byte count without creating the checkpoint directory."),
+        ("db", "checkpoint creates a filesystem snapshot next to the DB; restore replaces the DB and keeps a pre-restore backup directory."),
+        ("db", "prune --dry-run only counts orphan rows; prune --apply deletes them and may run WAL checkpoint maintenance."),
     ];
 
     public static string FormatSummaryLine(string label, object? value, int labelWidth = SummaryLabelWidth, string indent = "")
