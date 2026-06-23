@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -248,18 +248,7 @@ internal static class MetricsSink
     private static byte[] SerializeEventBytes(MetricsEvent evt, int maxStringChars)
     {
         using var buffer = new MemoryStream();
-        using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
-        {
-            Indented = false,
-            // The default strict encoder escapes characters the JSON spec does not
-            // strictly require to be literal (e.g. the `+` in ISO-8601 timezone
-            // offsets becomes a unicode escape). Use the relaxed encoder so the
-            // JSONL stays human-readable in tail / grep workflows; the file is
-            // local-only.
-            // strict encoder は ISO-8601 timestamp の `+` 等まで unicode escape
-            // するため、ローカル前提の JSONL が tail / grep で読みづらくなる。relaxed encoder で人間可読のまま残す。
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        }))
+        using (var jw = new Utf8JsonWriter(buffer, LocalJsonlJsonWriterOptions.Create()))
         {
             jw.WriteStartObject();
             jw.WriteString("timestamp", evt.Timestamp.ToString("O", CultureInfo.InvariantCulture));

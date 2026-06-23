@@ -412,6 +412,14 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 
 `cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `install.sh`, verifies the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the installer for the latest release.
 
+Upgrade installer and git subprocesses scrub the inherited process environment
+before launch. They forward only the shared subprocess allowlist needed for
+PATH/home/temp/proxy/certificate behavior plus tool-specific knobs such as
+`CDIDX_INSTALL_DIR`, installer verification variables, and selected `GIT_*`
+controls. `CDIDX_TEST_*` variables are not a public runtime contract; they are
+forwarded only to isolated worker processes so repository tests can exercise
+worker-only hooks without exposing the rest of the host environment.
+
 `cdidx upgrade --json` has a stdout contract suitable for automation. Check-only
 and no-update results use the update-check fields
 (`current_version`, `latest_version`, `update_available`, `from_cache`,
@@ -1075,7 +1083,7 @@ Runtime diagnostic subcontracts:
 | `hotspot_family_degraded_reason` stable codes | `hotspot_family_support_not_indexed`, `hotspot_family_metadata_stale`, `hotspot_family_disabled_at_index_time`, `partial_family_key_population`, and `hotspot_family_marker_fingerprint_incomplete`. |
 | `partial_family_key_population` | Some indexed symbols still lack family keys and need a rebuild/restamp. |
 | `hotspot_family_marker_fingerprint_incomplete` | Marker fingerprint traversal hit safety caps during the last index run; narrow or ignore generated/vendor marker trees before rebuilding. |
-| `extractors` | Reports runtime extractor plugin and pattern-config health, including loaded plugin assembly and pattern counts, symbol/reference extractor counts, skipped file counts, and a bounded diagnostic list for incompatible or malformed files. Diagnostic paths and messages are sanitized before output. |
+| `extractors` | Reports runtime extractor plugin and pattern-config health, including loaded plugin assembly and pattern counts, symbol/reference extractor counts, retained plugin assembly load context counts, skipped file counts, and a bounded diagnostic list for incompatible or malformed files. Diagnostic paths and messages are sanitized before output. |
 | `hooks[]` / `hook_diagnostics[]` | Includes metadata-only hook candidates and `callback_budget_ms`, mirroring the post-extraction callback budget enforced by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). `hook_diagnostics[]` reports sanitized discovery diagnostics such as candidate-limit truncation and `CDIDX_HOOKS_DIR` override acceptance or rejection without loading hook assemblies. Index runs still load hooks and discard timed-out callback mutations because hooks run on a scratch copy before their results are applied. |
 | `trust_overrides[]` | Reports accepted extension trust-boundary environment overrides, including `kind`, `environment_variable`, sanitized `value`, optional sanitized `path`, and `message`. Current entries cover accepted workspace plugin discovery via `CDIDX_TRUST_WORKSPACE_PLUGINS` and accepted hook directory overrides via `CDIDX_HOOKS_DIR`. |
 
@@ -1210,11 +1218,11 @@ The shared GitHub HTTP client uses an explicit 10-second submission timeout by d
 
 ### Heuristic source code guard (not a security boundary)
 
-The description, context, and optional tool invocation context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, backtick or tilde fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. Rejections return a bounded `source_code_rejection` object with the rejected field name and stable `reason_code`; they do not echo the rejected text. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
+The description, context, and optional tool invocation context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, backtick or tilde fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. Rejections return a bounded `source_code_rejection` object with the rejected field name, stable primary `reason_code`, and `reason_code_counts` diagnostics for the heuristics that matched; they do not echo the rejected text. It is **not a security boundary** or data-loss-prevention boundary — a determined agent could bypass it, and encoded or obfuscated code-like text can be a false negative. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
 
 ### SourceCodeDetector design
 
-`SourceCodeDetector` uses six independent heuristics to reject text that looks like pasted source code. Each heuristic is implemented as a clearly named private method with detailed comments explaining what it detects and why, and maps to a stable reason code such as `statement-ending`, `indented-code-lines`, `block-structure`, `repeated-imports`, `function-definition`, or `fenced-code-block`. The class is designed for readability: anyone reviewing the open-source code can verify the detection logic and confirm that no source code passes through.
+`SourceCodeDetector` uses six independent heuristics to reject text that looks like pasted source code. Each heuristic is implemented as a clearly named private method with detailed comments explaining what it detects and why, and maps to a stable reason code such as `statement-ending`, `indented-code-lines`, `block-structure`, `repeated-imports`, `function-definition`, or `fenced-code-block`. Detection evaluates every heuristic so diagnostics can report matched reason-code counts while preserving the first matched reason as the primary `reason_code`. The class is designed for readability: anyone reviewing the open-source code can verify the detection logic and understand the false-negative tradeoff.
 
 The detector intentionally allows short inline code examples (e.g. `` `const foo = () => {}` ``) and only rejects multi-line code blocks. False negatives (missing some code) are acceptable; false positives (rejecting valid descriptions) are not.
 
@@ -2138,6 +2146,17 @@ bootstrap prompt, the smoke tests, and this section exist so that any
 regression in the user-facing install flow is caught by the next person
 who opens a cloud session, not by a real user after release.
 
+## Regex timeout and redaction fallback policy
+
+Regex timeout behavior is centralized in `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/RegexTimeoutPolicy.cs`). Keep category strings, user-facing timeout messages, and redaction fallbacks there before adding a new timeout path.
+
+Contract guarantees:
+
+- **Indexing and configured extractor patterns.** Indexing diagnostics use `regex_timeout`; configured pattern diagnostics use `pattern_regex_timeout`. Indexing skips the affected file or pattern so the run can finish and reports bounded diagnostics instead of leaking the pathological pattern input.
+- **Query/find and MCP find.** CLI human/JSON errors and MCP error envelopes use `regex_timeout` with the same timeout duration text. The recovery hint is surface-specific only where CLI flags and MCP tool arguments differ.
+- **Redaction surfaces fail closed.** `DiagnosticRedactor`, `GlobalToolLog`, and MCP audit argument values replace the affected value with the configured redaction placeholder. `DiagnosticSanitizer` omits the whole message with `[message omitted after sanitization timeout]`. `SuggestionStore` records `redaction_timeout` and persists `[REDACTED:redaction_timeout]`. GitHub API response bodies are replaced with `[response body omitted after redaction timeout]`.
+- **Bounded extraction helpers.** `BoundedRegex` keeps extraction best-effort by returning empty matches/`false` or the original input depending on the operation, and records captured timeout diagnostics when a capture scope is active.
+
 ## MCP audit log emission
 
 `AuditLogSink` (`src/CodeIndex/Mcp/AuditLogSink.cs`) is the opt-in per-MCP-server JSONL audit (#1562). It is owned by `ProgramRunner.RunMcp` and threaded into `McpServer` through an internal constructor overload; no other dispatch site participates. Each `tools/call` produces exactly one record — including malformed requests (`tool="(missing)"`) and unknown tools (`error_code=-32602`) — so a misbehaving client cannot hide its activity by varying the request shape.
@@ -2709,6 +2728,13 @@ endpoint を確認します。`cdidx upgrade --check-only` はこの check を�
 `cdidx upgrade` は signed release installer の薄い wrapper で、`install.sh` を download し、
 現在の binary directory が writable か確認し、`CDIDX_INSTALL_DIR` をその directory に向けて
 latest release の installer を実行します。
+
+Upgrade installer と git subprocess は、起動前に継承環境を scrub します。
+forward するのは、PATH / home / temp / proxy / certificate 挙動に必要な共有 subprocess
+allowlist と、`CDIDX_INSTALL_DIR`、installer verification variables、選択された `GIT_*`
+controls のような tool-specific knob だけです。`CDIDX_TEST_*` variables は public runtime
+contract ではありません。repository tests が worker-only hook を検証できるよう、isolated worker
+process にだけ forward します。
 
 `cdidx upgrade --json` は automation 向けの stdout contract を持ちます。check-only と
 no-update の結果は update-check fields (`current_version`, `latest_version`,
@@ -3518,11 +3544,11 @@ upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 �
 
 ### ヒューリスティックなソースコードガード（セキュリティ境界ではない）
 
-description、context、および任意の tool invocation context フィールドは、保存およびオプションの GitHub 送信前に `SourceCodeDetector` を通過する。このヒューリスティックは一般的なコードコピペパターン（複数行ブロック、バッククォートまたはチルダのフェンスドコード、import の連打、関数定義）を拒否するが、ギャップの説明として有用な短いインラインコード例は意図的に許容する。拒否時は、拒否対象フィールド名と安定した `reason_code` を持つ上限付きの `source_code_rejection` object を返し、拒否された本文は反映しない。これは**セキュリティ境界ではない** — 意図的に回避しようとするエージェントは回避できる。このガードはコードの誤混入を防ぐベストエフォートのフィルタであり、コード的テキストが一切送信されないことの保証ではない。
+description、context、および任意の tool invocation context フィールドは、保存およびオプションの GitHub 送信前に `SourceCodeDetector` を通過する。このヒューリスティックは一般的なコードコピペパターン（複数行ブロック、バッククォートまたはチルダのフェンスドコード、import の連打、関数定義）を拒否するが、ギャップの説明として有用な短いインラインコード例は意図的に許容する。拒否時は、拒否対象フィールド名、安定した主理由の `reason_code`、およびマッチしたヒューリスティックの `reason_code_counts` 診断を持つ上限付きの `source_code_rejection` object を返し、拒否された本文は反映しない。これは**セキュリティ境界でもデータ漏えい防止境界でもない** — 意図的に回避しようとするエージェントは回避でき、エンコードまたは難読化されたコード風テキストは偽陰性になり得る。このガードはコードの誤混入を防ぐベストエフォートのフィルタであり、コード的テキストが一切送信されないことの保証ではない。
 
 ### SourceCodeDetector の設計
 
-`SourceCodeDetector` は6つの独立したヒューリスティックを使って、コピペされたソースコードに見えるテキストを拒否する。各ヒューリスティックは明確な名前の private メソッドとして実装され、何を検出し、なぜそれがソースコードの兆候なのかを詳細なコメントで説明している。また、`statement-ending`、`indented-code-lines`、`block-structure`、`repeated-imports`、`function-definition`、`fenced-code-block` のような安定した理由コードに対応する。可読性を重視して設計されており、オープンソースのコードをレビューする誰もが検出ロジックを検証し、ソースコードが通過しないことを確認できる。
+`SourceCodeDetector` は6つの独立したヒューリスティックを使って、コピペされたソースコードに見えるテキストを拒否する。各ヒューリスティックは明確な名前の private メソッドとして実装され、何を検出し、なぜそれがソースコードの兆候なのかを詳細なコメントで説明している。また、`statement-ending`、`indented-code-lines`、`block-structure`、`repeated-imports`、`function-definition`、`fenced-code-block` のような安定した理由コードに対応する。検出時はすべてのヒューリスティックを評価するため、最初にマッチした理由を主 `reason_code` として維持しながら、マッチした理由コードの件数を診断として返せる。可読性を重視して設計されており、オープンソースのコードをレビューする誰もが検出ロジックと偽陰性のトレードオフを理解できる。
 
 短いインラインコード例（例: `` `const foo = () => {}` ``）は意図的に許容し、複数行のコードブロックのみを拒否する。偽陰性（一部のコードの見逃し）は許容する。偽陽性（有効な説明の拒否）は許容しない。
 
@@ -3562,7 +3588,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **信用判断のための鮮度メタデータ** — `status` はワークスペース全体の鮮度と git 状態を返す。`map` は `indexed_at` / `latest_modified` を絞り込み結果の鮮度として維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返す。`inspect` も同じワークスペース鮮度と git フィールドを返すため、シンボル中心の AI フローで `status` を別途呼ばずに済む。さらに `status` は `sql_graph_contract_ready` / `sql_graph_contract_degraded_reason`、`hotspot_family_ready` / `hotspot_family_degraded_reason` に加えて、forward-compatibility 監査 (`index_writer_version`、`index_newer_than_reader`、`index_newer_than_reader_reason`、詳細は「リーダー側の forward-compatibility 監査」を参照)、および fold-only remediation 用の `fold_ready_reason`、`degraded_reason`、`recommended_action`、`alternative_action` も返すため、AI クライアントは SQL graph/dependency/impact、duplicate-name hotspot family、Unicode `--exact` のどれが authoritative か、また DB が現在の binary より新しい `cdidx` で書かれていないかを最初に判断できる。現行の全体 scan 後は `unknown_extension_file_count` も返すため、未知拡張子で index 対象外になった件数を `status` から確認できる。これらの fold-only remediation field は、明示的な read-only `file:///...?...` DB URI から導出された場合でも、失敗する read-only URI をそのままコマンドへ埋め込まず、writable な filesystem path に正規化して返す。さらに `impact` / MCP `impact_analysis` に加えて、`inspect` / MCP `analyze_symbol`、`references` / `callers` / `callees`、`deps` / `unused` / `hotspots` 系も、SQL ベースの graph/dependency read が実際に結果へ関与したときだけ `sql_graph_contract_ready` / `sql_graph_contract_degraded_reason` を反映するため、stale な SQL 行が authoritative なヒットや 0 件応答に見えてしまうのを防ぎつつ、mixed-language index 内の純粋な非SQL結果を誤って degraded 扱いしない。`files` はファイルごとの checksum・modified・indexed timestamp を返す。古いDBに対する file 列の移行は可能なら自動で行い、その場移行できない場合でも読み取り経路がクラッシュしないようにする。CLI と MCP の 0 件 JSON レスポンスは `indexed_file_count`、`indexed_at`、`freshness_available` を含む。`freshness_available=true` で `indexed_at:null` なら空インデックス、`freshness_available=false` なら legacy/read-only DB で鮮度 timestamp を取得できず、理由は `freshness_degraded_reason` に入る。**HEAD 起点の stale 検知**: `cdidx index` の full scan が成功するたびに、現時点の `git HEAD` を `codeindex_meta` に stamp し、後続実行で workspace HEAD と比較できるようにする。`--rebuild` 指定なしに両者が異なる場合、CLI は `cdidx index <projectPath> --rebuild` を勧める `head_changed` 警告を表示し、`index --json` に `head_changed` / `prior_indexed_head_commit` / `current_head_commit` / `head_change_notice` を出力する。`status --check` も同じ比較を `workspace_check.head_changed` として公開し、差分時には `indexed_head_commit` / `workspace_head_commit` も併記するため、鮮度 gate ですでに `status --check` を通している AI クライアントは `git switch <branch>` 後の既定の incremental scan を別クエリなしで拒否できる。`--commits` / `--files` の部分更新は意図的に記録 HEAD を維持し、次の full scan が worktree を再インデックスするまで stale 通知が継続する。非 Git workspace と HEAD を記録していない legacy DB は比較自体をスキップし、false-positive な警告を出さない。
 `unknown_extension_files` は `unknown_extension_file_path_limit` 件と decoded-character budget の両方で上限付けされた未知拡張子 path sample で、`unknown_extension_files_truncated` は件数上限または decoded-character budget により未出力の path が残ったことを示します。`unknown_extension_file_path_limit` は item 上限であり、常にその件数まで返す保証ではありません。
 
-`extractors` は extractor plugin と pattern config の runtime health で、読み込み済み plugin assembly / pattern 件数、symbol/reference extractor 件数、skip されたファイル数、上限付き diagnostics list を返します。
+`extractors` は extractor plugin と pattern config の runtime health で、読み込み済み plugin assembly / pattern 件数、symbol/reference extractor 件数、保持中の plugin assembly load context 件数、skip されたファイル数、上限付き diagnostics list を返します。
 
 `hooks[]` は `callback_budget_ms` を含み、`CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定値: 5000 ms）で強制される post-extraction callback 予算を反映します。hook は結果反映前の scratch copy 上で実行されるため、timeout した callback の変更は破棄されます。
 
@@ -4039,6 +4065,17 @@ flowchart TD
 ### なぜこれが重要か
 
 Cloud セッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは、SDK を持つ開発者には可視化されない — ローカルで再ビルドすれば済んでしまうためである。bootstrap プロンプト、スモークテスト、および本セクションを整備しているのは、ユーザー向けインストールフローにおけるリグレッションが、リリース後の実ユーザーではなく、次に Cloud セッションを開いた者によって検出されるようにすることを意図している。
+
+## Regex timeout と redaction fallback policy
+
+Regex timeout の挙動は `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/RegexTimeoutPolicy.cs`) に集約する。新しい timeout 経路を追加する前に、カテゴリ文字列、ユーザー向け timeout メッセージ、redaction fallback をこの policy に置くこと。
+
+契約:
+
+- **indexing と configured extractor pattern。** indexing 診断は `regex_timeout`、configured pattern 診断は `pattern_regex_timeout` を使う。実行を完了できるよう、影響を受けたファイルまたは pattern を skip し、病的な pattern 入力を漏らさず bounded diagnostics を報告する。
+- **query/find と MCP find。** CLI の human/JSON エラーと MCP error envelope は、同じ timeout duration 表記で `regex_timeout` を使う。CLI flag と MCP tool argument が異なる箇所だけ、復旧 hint を surface 別にする。
+- **redaction surface は fail closed。** `DiagnosticRedactor`、`GlobalToolLog`、MCP audit の argument value は、対象値を設定済み redaction placeholder へ置換する。`DiagnosticSanitizer` は `[message omitted after sanitization timeout]` でメッセージ全体を省略する。`SuggestionStore` は `redaction_timeout` を記録し `[REDACTED:redaction_timeout]` を永続化する。GitHub API response body は `[response body omitted after redaction timeout]` に置換する。
+- **bounded extraction helper。** `BoundedRegex` は extraction を best-effort に保つため、operation に応じて empty matches / `false` / 元入力を返し、capture scope が有効な場合は timeout diagnostics を記録する。
 
 ## MCP 監査ログの出力
 

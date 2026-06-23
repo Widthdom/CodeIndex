@@ -519,19 +519,19 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (pathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < pathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
+                SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
         }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
+                SqliteCommandPolicy.Add(cmd, $"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
         }
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@symbolSampleLimit", DependencySymbolSampleLimit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
         using var reader = cmd.ExecuteTrackedReader();

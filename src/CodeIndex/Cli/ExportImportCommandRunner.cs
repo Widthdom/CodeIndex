@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -19,7 +20,9 @@ internal static class ExportImportCommandRunner
     internal const long MaxImportDatabaseCompressionRatio = 1000;
     private const int ImportCopyBufferSize = 81920;
     private const int ManifestUnknownExtensionFileLimit = DbContext.UnknownExtensionFilePathSampleLimit;
-    private const int ManifestUnknownExtensionPathCharLimit = 4096;
+    private const int ManifestUnknownExtensionJsonDepth = 4;
+    internal const int ManifestUnknownExtensionDecodedItemLimit = ManifestUnknownExtensionFileLimit;
+    internal const int ManifestUnknownExtensionPathCharLimit = 4096;
     private const int ManifestUnknownExtensionFilesTotalCharLimit = 32 * 1024;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
@@ -283,7 +286,7 @@ internal static class ExportImportCommandRunner
                 DeleteSqliteSidecars(tempPath, "import temporary database sidecar");
             }
             if (tempDirectory != null)
-                TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory");
+                TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory", Path.GetTempPath(), "codeindex-import-");
         }
     }
 
@@ -390,7 +393,7 @@ internal static class ExportImportCommandRunner
                 DeleteSqliteSidecars(snapshotPath, "export temporary database sidecar");
             }
             if (snapshotDirectory != null)
-                TryDeleteDirectoryIfEmpty(snapshotDirectory, "export temporary directory");
+                TryDeleteDirectoryIfEmpty(snapshotDirectory, "export temporary directory", Path.GetTempPath(), "codeindex-export-");
         }
     }
 
@@ -604,13 +607,13 @@ internal static class ExportImportCommandRunner
     private static void AddCtagsFilterParameters(SqliteCommand cmd, CtagsExportOptions filters)
     {
         if (!string.IsNullOrWhiteSpace(filters.Lang))
-            cmd.Parameters.AddWithValue("@lang", filters.Lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", filters.Lang);
 
         for (var i = 0; i < filters.PathPatterns.Count; i++)
-            cmd.Parameters.AddWithValue($"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
+            SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
 
         for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
-            cmd.Parameters.AddWithValue($"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
+            SqliteCommandPolicy.Add(cmd, $"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
     }
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal)
@@ -689,9 +692,9 @@ internal static class ExportImportCommandRunner
                 AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
                 var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
                 dbEntry.LastWriteTime = DeterministicZipTimestamp;
-                using var source = File.OpenRead(snapshotPath);
+                using var source = BoundedFile.OpenReadTrustedArchiveSource(snapshotPath);
                 using var target = dbEntry.Open();
-                CopyToWithLimit(source, target, long.MaxValue, DatabaseEntryName, cancellationToken);
+                CopyToExactLength(source, target, source.Length, DatabaseEntryName, cancellationToken);
             });
     }
 
@@ -716,7 +719,7 @@ internal static class ExportImportCommandRunner
     private static string ComputeSha256(string path, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var stream = File.OpenRead(path);
+        using var stream = BoundedFile.OpenReadForHash(path);
         return Sha256StreamHasher.ComputeHex(stream, cancellationToken);
     }
 
@@ -1080,7 +1083,7 @@ internal static class ExportImportCommandRunner
     {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
-        cmd.Parameters.AddWithValue("@key", key);
+        SqliteCommandPolicy.Add(cmd, "@key", key);
         return cmd.ExecuteScalar() as string;
     }
 
@@ -1111,27 +1114,71 @@ internal static class ExportImportCommandRunner
     private static UnknownExtensionFileSample ReadUnknownExtensionFileSample(SqliteConnection connection)
     {
         var json = ReadMetaString(connection, DbContext.UnknownExtensionFilePathsMetaKey);
-        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxImportManifestBytes)
+        if (string.IsNullOrWhiteSpace(json) || Encoding.UTF8.GetByteCount(json) > MaxImportManifestBytes)
             return new(null, null, null, null);
 
         try
         {
-            var files = JsonSerializer.Deserialize<string[]>(json);
-            if (files == null)
+            var jsonBytes = Encoding.UTF8.GetBytes(json);
+            var reader = new Utf8JsonReader(
+                jsonBytes,
+                new JsonReaderOptions { MaxDepth = ManifestUnknownExtensionJsonDepth });
+            if (!reader.Read())
+                return new(null, null, null, null);
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                if (reader.Read())
+                    return new(null, null, null, null);
+
+                return new(null, 0, ManifestUnknownExtensionFileLimit, false);
+            }
+            if (reader.TokenType != JsonTokenType.StartArray)
+                return new(null, null, null, null);
+
+            var sample = new List<string>(ManifestUnknownExtensionFileLimit);
+            var decodedItems = 0;
+            var truncated = false;
+            var completed = false;
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray)
+                {
+                    completed = true;
+                    break;
+                }
+                if (reader.TokenType != JsonTokenType.String)
+                    return new(null, null, null, null);
+
+                decodedItems++;
+                if (decodedItems > ManifestUnknownExtensionDecodedItemLimit)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                var path = reader.GetString();
+                if (string.IsNullOrWhiteSpace(path))
+                    continue;
+
+                if (sample.Count >= ManifestUnknownExtensionFileLimit)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                sample.Add(path.Length <= ManifestUnknownExtensionPathCharLimit
+                    ? path
+                    : path[..ManifestUnknownExtensionPathCharLimit]);
+            }
+
+            if (!completed && !truncated)
+                return new(null, null, null, null);
+            if (completed && reader.Read())
+                return new(null, null, null, null);
+            if (sample.Count == 0)
                 return new(null, 0, ManifestUnknownExtensionFileLimit, false);
 
-            var validFiles = files
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .ToArray();
-            if (validFiles.Length == 0)
-                return new(null, 0, ManifestUnknownExtensionFileLimit, false);
-
-            var sample = validFiles
-                .Take(ManifestUnknownExtensionFileLimit)
-                .Select(path => path.Length <= ManifestUnknownExtensionPathCharLimit ? path : path[..ManifestUnknownExtensionPathCharLimit])
-                .ToArray();
-
-            return new(sample, sample.Length, ManifestUnknownExtensionFileLimit, validFiles.Length > sample.Length);
+            return new(sample.ToArray(), sample.Count, ManifestUnknownExtensionFileLimit, truncated);
         }
         catch (JsonException)
         {
@@ -1204,6 +1251,38 @@ internal static class ExportImportCommandRunner
         CancellationToken cancellationToken = default)
         => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken);
 
+    internal static long CopyToExactLength(
+        Stream source,
+        Stream target,
+        long expectedBytes,
+        string entryName,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectedBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedBytes), expectedBytes, "Expected byte length must be non-negative.");
+
+        var buffer = new byte[ImportCopyBufferSize];
+        long totalBytes = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var bytesRead = source.Read(buffer, 0, buffer.Length);
+            if (bytesRead == 0)
+                break;
+
+            if (totalBytes > expectedBytes - bytesRead)
+                throw new InvalidDataException($"archive {entryName} source grew beyond the expected snapshot length of {ConsoleUi.FormatBytes(expectedBytes)}.");
+
+            target.Write(buffer, 0, bytesRead);
+            totalBytes += bytesRead;
+        }
+
+        if (totalBytes != expectedBytes)
+            throw new EndOfStreamException($"archive {entryName} source ended after {ConsoleUi.FormatBytes(totalBytes)}; expected {ConsoleUi.FormatBytes(expectedBytes)}.");
+
+        return totalBytes;
+    }
+
     internal static long CopyToWithLimit(
         Stream source,
         Stream target,
@@ -1211,9 +1290,6 @@ internal static class ExportImportCommandRunner
         CancellationToken cancellationToken,
         IProgress<long>? progress = null)
         => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken, progress);
-
-    private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName)
-        => CopyToWithLimit(source, target, maxBytes, entryName, CancellationToken.None);
 
     private static long CopyToWithLimit(
         Stream source,
@@ -1253,7 +1329,7 @@ internal static class ExportImportCommandRunner
             INSERT INTO codeindex_meta(key, value)
             VALUES ('indexed_project_root', @projectRoot)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        cmd.Parameters.AddWithValue("@projectRoot", Path.GetFullPath(projectRoot));
+        SqliteCommandPolicy.Add(cmd, "@projectRoot", Path.GetFullPath(projectRoot));
         cmd.ExecuteNonQuery();
     }
 
@@ -1480,14 +1556,30 @@ internal static class ExportImportCommandRunner
         }
     }
 
-    private static void TryDeleteDirectoryIfEmpty(string path, string? cleanupDescription = null)
+    private static void TryDeleteDirectoryIfEmpty(
+        string path,
+        string? cleanupDescription,
+        string safeRoot,
+        string expectedNamePrefix)
     {
         try
         {
-            if (!Directory.Exists(path) || CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(path))
+            var options = new DirectoryCleanupBoundaryOptions(
+                expectedNamePrefix,
+                "target is outside the expected cleanup root",
+                "target name does not match the expected temporary-directory prefix",
+                "target is not a regular temporary directory");
+            if (!FileSystemBoundary.TryValidateDirectoryCleanupTarget(path, safeRoot, options, out var fullPath, out var validationFailure))
+            {
+                if (!string.IsNullOrWhiteSpace(cleanupDescription))
+                    CommandErrorWriter.WriteStderr($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                return;
+            }
+
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)) || CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(fullPath))
                 return;
 
-            Directory.Delete(path);
+            Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -1519,7 +1611,7 @@ internal static class ExportImportCommandRunner
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
-            cmd.Parameters.AddWithValue("@key", DbContext.WorkspacePathCaseSensitiveMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@key", DbContext.WorkspacePathCaseSensitiveMetaKey);
             var raw = cmd.ExecuteScalar();
             return raw is string value && bool.TryParse(value, out pathCaseSensitive);
         }

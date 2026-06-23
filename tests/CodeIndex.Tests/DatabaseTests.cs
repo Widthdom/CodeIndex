@@ -52,6 +52,18 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void SleepBeforeRetry_CancellationDuringDefaultWaitStopsPromptly_Issue3952()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var stopwatch = Stopwatch.StartNew();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            DbConnectionFactory.SleepBeforeRetry(5_000, sleep: null, cts.Token));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Retry wait took {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
     public void Search_ExactSymbolBoostPrefersChunkContainingSymbol_Issue1977()
     {
         var fileId = InsertSearchFile(

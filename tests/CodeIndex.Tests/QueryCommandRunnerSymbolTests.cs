@@ -1456,6 +1456,17 @@ public partial class QueryCommandRunnerTests
                     private static readonly string Token = "value";
                     private int Count;
                     private string Name { get; } = "demo";
+                    private static bool AddLimitMetadata<T>(List<T> results, int limit, int offset = 0, bool includePagination = false)
+                    {
+                        return includePagination && limit >= offset;
+                    }
+
+                    private static string WithDefaultParameter(string value = "(")
+                    {
+                        return value;
+                    }
+
+                    private static int ExpressionBodiedMember(int value) => value + 1;
                 }
                 """);
             using (var db = new DbContext(dbPath))
@@ -1478,6 +1489,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("field", symbols["Token"].GetProperty("kind").GetString());
             Assert.Equal("field", symbols["Count"].GetProperty("kind").GetString());
             Assert.Equal("property", symbols["Name"].GetProperty("kind").GetString());
+            Assert.Equal("function", symbols["AddLimitMetadata"].GetProperty("kind").GetString());
+            Assert.Equal("function", symbols["WithDefaultParameter"].GetProperty("kind").GetString());
+            Assert.Equal("function", symbols["ExpressionBodiedMember"].GetProperty("kind").GetString());
         }
         finally
         {

@@ -8,6 +8,7 @@ public class FileIssue
 {
     public const string OriginSourceLiteral = "source_literal";
     public const string OriginDecodeReplacement = "decode_replacement";
+    public const string OriginByteOrderMark = "byte_order_mark";
     public const string SeverityInfo = "info";
     public const string SeverityWarning = "warning";
 

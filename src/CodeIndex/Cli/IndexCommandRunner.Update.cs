@@ -309,7 +309,7 @@ public static partial class IndexCommandRunner
         {
             DemoteReadinessOnce();
 
-            using var purgeTxn = writer.BeginTransaction();
+            using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unsupported references");
             purgedRefs = writer.PurgeUnsupportedReferences(supportedGraphLanguages);
             if (purgedRefs > 0)
                 purgeTxn.Commit();
@@ -348,7 +348,7 @@ public static partial class IndexCommandRunner
                         }
 
                         DemoteReadinessOnce();
-                        using var deleteTxn = writer.BeginTransaction();
+                        using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing target");
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
@@ -394,7 +394,7 @@ public static partial class IndexCommandRunner
                         }
 
                         DemoteReadinessOnce();
-                        using var deleteTxn = writer.BeginTransaction();
+                        using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete skipped path");
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
@@ -438,7 +438,7 @@ public static partial class IndexCommandRunner
                         if (writer.HasFileAtPath(dbPath))
                         {
                             DemoteReadinessOnce();
-                            using var deleteTxn = writer.BeginTransaction();
+                            using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing during probe");
                             if (writer.DeleteFileByPath(dbPath))
                             {
                                 WriteProjectRootOnce();
@@ -476,7 +476,7 @@ public static partial class IndexCommandRunner
                     {
                         if (!writer.HasFileAtPath(dbPath))
                         {
-                            using var purgeTxn = writer.BeginTransaction();
+                            using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unsupported renamed target");
                             var purged = projectRootWritten
                                 ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, dbPath)
                                 : 0;
@@ -508,7 +508,7 @@ public static partial class IndexCommandRunner
                         }
 
                         DemoteReadinessOnce();
-                        using var deleteTxn = writer.BeginTransaction();
+                        using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete unsupported target");
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
@@ -640,7 +640,7 @@ public static partial class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
-                        using var purgeTxn = writer.BeginTransaction();
+                        using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unchanged stale paths");
                         var purged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum)
                             + (projectRootWritten
                                 ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path)
@@ -668,7 +668,7 @@ public static partial class IndexCommandRunner
                     DemoteReadinessOnce();
                     writer.MarkBatchInProgress();
                     fileBatchMarked = true;
-                    using var txn = writer.BeginTransaction();
+                    using var txn = writer.BeginTransaction(cancellationToken, "update file");
                     writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     if (projectRootWritten)
                         writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
@@ -679,9 +679,9 @@ public static partial class IndexCommandRunner
                     var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
-                        writer.InsertChunks(chunks);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertChunks(chunks, cancellationToken);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         var generatedIssues = AppendIssueIfMissing(
                             FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
@@ -717,8 +717,8 @@ public static partial class IndexCommandRunner
                         IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
@@ -738,8 +738,8 @@ public static partial class IndexCommandRunner
                         IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
@@ -749,9 +749,9 @@ public static partial class IndexCommandRunner
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
-                    writer.InsertChunks(chunks);
+                    writer.InsertChunks(chunks, cancellationToken);
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
-                    writer.InsertSymbols(symbols);
+                    writer.InsertSymbols(symbols, cancellationToken);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "references");
                     List<ReferenceRecord> references;
                     FileIssue? referenceRegexTimeoutIssue;
@@ -778,7 +778,7 @@ public static partial class IndexCommandRunner
                         referenceCapIssue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references);
+                    writer.InsertReferences(references, cancellationToken);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
@@ -822,16 +822,16 @@ public static partial class IndexCommandRunner
 
                         DemoteReadinessOnce();
                         writer.MarkBatchInProgress();
-                        using var txn = writer.BeginTransaction();
+                        using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
-                        writer.InsertChunks([]);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertChunks([], cancellationToken);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
                         writer.ClearBatchInProgress();
                         txn.Commit();
@@ -848,16 +848,16 @@ public static partial class IndexCommandRunner
 
                         DemoteReadinessOnce();
                         writer.MarkBatchInProgress();
-                        using var txn = writer.BeginTransaction();
+                        using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
-                        writer.InsertChunks([]);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertChunks([], cancellationToken);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         writer.InsertIssues(fileId,
                         [
                             new FileIssue
@@ -894,7 +894,7 @@ public static partial class IndexCommandRunner
                         if (writer.HasFileAtPath(dbPath))
                         {
                             DemoteReadinessOnce();
-                            using var deleteTxn = writer.BeginTransaction();
+                            using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing during write");
                             if (writer.DeleteFileByPath(dbPath))
                             {
                                 WriteProjectRootOnce();
@@ -974,7 +974,7 @@ public static partial class IndexCommandRunner
         if (readinessDemoted && errors == 0)
         {
             writer.MarkBatchInProgress();
-            using var readinessTxn = writer.BeginTransaction();
+            using var readinessTxn = writer.BeginTransaction(cancellationToken, "update readiness restamp");
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
             // no Fold) must keep Graph+Issues after a successful partial update, even though
@@ -1029,7 +1029,7 @@ public static partial class IndexCommandRunner
             // boundary. If the process dies after SetMeta but before commit, SQLite rolls back
             // the version stamp along with any maintenance rows, so readers never see a partial
             // family_key/container_qualified_name state as authoritative (#1488).
-            using (var hotspotFamilyTxn = writer.BeginTransaction())
+            using (var hotspotFamilyTxn = writer.BeginTransaction(cancellationToken, "update hotspot-family restamp"))
             {
                 writer.RebuildTypeScriptAugmentationReferences(projectRoot);
                 RestampHotspotFamilyTrustForUpdate(

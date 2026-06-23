@@ -43,6 +43,64 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_EditorAndDelimitedFormatsUsePrimaryMatchSpan_Issue3931()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_primary_match_span_3931");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App\n{\n    void Run()\n    {\n        var value = Needle;\n    }\n}\n");
+
+            var (lspExitCode, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--format", "lsp", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, lspExitCode);
+            Assert.Equal(string.Empty, lspStderr);
+            using (var document = ParseJsonOutput(lspStdout))
+            {
+                var location = Assert.Single(document.RootElement.EnumerateArray());
+                var range = location.GetProperty("range");
+                Assert.Equal(4, range.GetProperty("start").GetProperty("line").GetInt32());
+                Assert.Equal(20, range.GetProperty("start").GetProperty("character").GetInt32());
+                Assert.Equal(4, range.GetProperty("end").GetProperty("line").GetInt32());
+                Assert.Equal(26, range.GetProperty("end").GetProperty("character").GetInt32());
+            }
+
+            var (qfExitCode, qfStdout, qfStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--format", "qf", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, qfExitCode);
+            Assert.Equal(string.Empty, qfStderr);
+            Assert.Equal("src/app.cs:5:21:search match: Needle", qfStdout.Trim());
+
+            var (csvExitCode, csvStdout, csvStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Needle", "--db", dbPath, "--format", "csv", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, csvExitCode);
+            Assert.Equal(string.Empty, csvStderr);
+            var csvLines = csvStdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.TrimEnd('\r'))
+                .ToArray();
+            Assert.Equal(2, csvLines.Length);
+            var fields = csvLines[1].Split(',');
+            Assert.Equal("src/app.cs", fields[0]);
+            Assert.Equal("5", fields[1]);
+            Assert.Equal("21", fields[2]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonIncludesMatchOrigins_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_match_origins");
@@ -1109,6 +1167,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "filesystem-traversal");
+        var boundedReadRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "bounded-read-evidence");
         var broadTokenRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1130,7 +1192,7 @@ public partial class QueryCommandRunnerTests
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "broad-exception-catch");
 
-        Assert.True(root.GetProperty("count").GetInt32() >= 6);
+        Assert.True(root.GetProperty("count").GetInt32() >= 7);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
         Assert.Equal("source", recipe.GetProperty("default_scope").GetString());
         Assert.Contains(recipe.GetProperty("default_path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
@@ -1168,6 +1230,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
+        Assert.Contains(boundedReadRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "bounded-memory-accumulator");
         Assert.Equal("all", broadTokenRecipe.GetProperty("default_scope").GetString());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
@@ -1198,7 +1261,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit"],
+            ["risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1256,6 +1319,12 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["enumerate-files", "enumerate-directories", "enumerate-file-system-entries", "enumeration-options"]);
+        AssertRecipe(
+            "bounded-read-evidence",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["bounded-file-open-helper", "bounded-memory-accumulator", "bounded-full-byte-read-helper"]);
         AssertRecipe(
             "broad-token-audit",
             SearchAuditRecipes.AllAuditScope,
@@ -1918,6 +1987,78 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(queryText, query.GetProperty("query").GetString());
             Assert.Equal(1, query.GetProperty("count").GetInt32());
             Assert.Equal("src/audit.cs", query.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+    }
+
+    [Fact]
+    public void RunSearch_BoundedReadEvidenceRecipeFindsBoundedHelpers_Issue3994()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_bounded_read_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/BoundedFile.cs",
+                "csharp",
+                """
+                internal static class BoundedFile
+                {
+                    internal static Stream OpenReadForHash(string path)
+                        => BoundedFile.OpenRead(path, FileShare.Read);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/BoundedLineReader.cs",
+                "csharp",
+                """
+                internal static class BoundedLineReader
+                {
+                    internal static void TryReadUtf8File(Stream stream, int maxBytes)
+                    {
+                        using var accumulator = new MemoryStream(Math.Min(maxBytes, 8192));
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs",
+                "csharp",
+                """
+                internal sealed class FileContentLoader
+                {
+                    private byte[] ReadRawBytesWithSizeLimit(string path) => [];
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "bounded-read-evidence", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            AssertRecipeQueryHit(root, "bounded-file-open-helper", "BoundedFile.OpenRead", "src/CodeIndex/BoundedFile.cs");
+            AssertRecipeQueryHit(root, "bounded-memory-accumulator", "MemoryStream", "src/CodeIndex/BoundedLineReader.cs");
+            AssertRecipeQueryHit(root, "bounded-full-byte-read-helper", "ReadRawBytesWithSizeLimit", "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertRecipeQueryHit(JsonElement root, string queryName, string queryText, string path)
+        {
+            var query = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == queryName);
+
+            Assert.Equal(queryText, query.GetProperty("query").GetString());
+            Assert.Equal(1, query.GetProperty("count").GetInt32());
+            Assert.Equal(path, query.GetProperty("results")[0].GetProperty("path").GetString());
         }
     }
 
@@ -5605,6 +5746,64 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_AllScopeJsonArrayEmitsSingleArray_Issue3896()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_json_array_3896");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/todo.txt",
+                "text",
+                "TODO: keep this visible\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["TODO", "--db", dbPath, "--all", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(JsonValueKind.Array, root.ValueKind);
+            var result = Assert.Single(root.EnumerateArray());
+            Assert.Equal("src/todo.txt", result.GetProperty("path").GetString());
+            Assert.Equal(1, result.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_RegexJsonErrorIsStructured_Issue3896()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_regex_json_3896");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/text.txt", "text", "needle\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["[", "--db", dbPath, "--all", "--regex", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("invalid regular expression", document.RootElement.GetProperty("message").GetString());
+            Assert.Equal("invalid_regex", document.RootElement.GetProperty("category").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_AllScopeCountJsonIncludesScanSummary_Issue3560()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_count_json_3560");
@@ -5669,6 +5868,35 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Contains("scanned 1/1 candidate files, 2 lines", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_FormatLspCoversFullMatchSpan_Issue3930()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_lsp_span_3930");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/todo.txt", "text", "alpha TODO beta\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["TODO", "--db", dbPath, "--path", "src/todo.txt", "--format", "lsp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = Assert.Single(document.RootElement.EnumerateArray());
+            var range = location.GetProperty("range");
+            Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
+            Assert.Equal(6, range.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(0, range.GetProperty("end").GetProperty("line").GetInt32());
+            Assert.Equal(10, range.GetProperty("end").GetProperty("character").GetInt32());
         }
         finally
         {

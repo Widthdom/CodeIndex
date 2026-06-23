@@ -95,6 +95,34 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_ExplainUnknownJsonReturnsStructuredError_Issue3896()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--json", "--explain", "invalid"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unknown status readiness field `invalid`.", document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void RunLanguages_InvalidCapabilityJsonReturnsStructuredError_Issue3896()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(
+            ["--capability", "invalid", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("unsupported --capability value 'invalid'", document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void ParseArgs_AllowsZeroMaxLineWidth()
     {
         var options = QueryCommandRunner.ParseArgs(["RunSearch", "--max-line-width", "0"], jsonDefault: false, allowNamedQuery: true);
@@ -966,10 +994,12 @@ public partial class QueryCommandRunnerTests
                 () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("invalid_batch_json: JsonException", stderr, StringComparison.Ordinal);
-            Assert.DoesNotContain(secret, stderr, StringComparison.Ordinal);
-            Assert.DoesNotContain("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("not valid JSON", stdout, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -1070,8 +1100,10 @@ public partial class QueryCommandRunnerTests
                 () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("invalid_batch_json: JsonException", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString());
         }
         finally
         {

@@ -92,13 +92,7 @@ internal static class BoundedLineReader
         try
         {
             using var stream = openFile?.Invoke(path)
-                ?? new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete,
-                    bufferSize: 8192,
-                    useAsync: false);
+                ?? BoundedFile.OpenReadForLengthCheckedText(path);
 
             if (stream.CanSeek && stream.Length > maxBytes)
             {

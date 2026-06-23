@@ -39,6 +39,22 @@ public sealed class GitHubHttpCancellationTests : IDisposable
     }
 
     [Fact]
+    public void GitHubHttpClientFactory_CreateReleaseDownloadClient_UsesSharedPolicyWithoutApiHeaders_Issue3973()
+    {
+        env.Set(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, "true");
+
+        using var handler = GitHubHttpClientFactory.CreateDefaultHttpClientHandler();
+        using var client = GitHubHttpClientFactory.CreateReleaseDownloadHttpClient(
+            GitHubHttpClientFactory.MaxRequestTimeout + TimeSpan.FromSeconds(1));
+
+        Assert.Same(CredentialCache.DefaultCredentials, handler.DefaultProxyCredentials);
+        Assert.Equal(GitHubHttpClientFactory.MaxRequestTimeout, client.Timeout);
+        Assert.Contains(client.DefaultRequestHeaders.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Empty(client.DefaultRequestHeaders.Accept);
+        Assert.False(client.DefaultRequestHeaders.Contains("X-GitHub-Api-Version"));
+    }
+
+    [Fact]
     public async Task UpdateChecker_FetchLatestReleaseTagAsync_RequestTimeoutCancelsPendingSend_Issue3684()
     {
         var handler = new BlockingHttpMessageHandler();

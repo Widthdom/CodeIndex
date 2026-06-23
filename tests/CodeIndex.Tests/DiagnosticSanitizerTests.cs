@@ -35,6 +35,7 @@ public class DiagnosticSanitizerTests
             "load failed at /tmp/codeindex/plugins/bad.dll",
             _ => throw timeout);
 
+        Assert.Equal(RegexTimeoutPolicy.DiagnosticSanitizerTimeoutFallback, sanitized);
         Assert.Equal(DiagnosticSanitizer.RegexTimeoutFallbackMessage, sanitized);
     }
 }

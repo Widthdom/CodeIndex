@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -39,6 +38,7 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxArgValueArrayItems = 64;
     internal const int MaxArgValueTotalNodes = 512;
     internal const int MaxArgValueStringChars = 512;
+    internal const int MaxSecretValueScanChars = MaxArgValueStringChars + 256;
     internal const int MaxArgValuesSerializedBytes = 16 * 1024;
     internal const int MaxAuditArgumentCount = 64;
     internal const int MaxAuditArgumentKeyChars = McpBoundedText.MaxDiagnosticDisplayChars;
@@ -50,7 +50,8 @@ internal sealed class AuditLogSink : IDisposable
 
     private static readonly Regex SecretValuePattern = new(
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        RegexTimeoutPolicy.RedactionRegexTimeout);
     private static readonly JsonDocumentOptions ArgValueScalarJsonDocumentOptions = new()
     {
         MaxDepth = MaxArgValueDepth + 1,
@@ -331,7 +332,13 @@ internal sealed class AuditLogSink : IDisposable
     }
 
     internal bool WaitForIdle(TimeSpan timeout)
-        => Interlocked.Read(ref _pendingRecordCount) <= 0 || _idleEvent.Wait(timeout);
+        => WaitForIdle(timeout, CancellationToken.None);
+
+    internal bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Interlocked.Read(ref _pendingRecordCount) <= 0 || _idleEvent.Wait(timeout, cancellationToken);
+    }
 
     private static int ResolveQueueCapacity(int? queueCapacity)
     {
@@ -417,13 +424,7 @@ internal sealed class AuditLogSink : IDisposable
             bytes => new AuditEventByteLimitExceededException(bytes));
         try
         {
-            using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
-            {
-                Indented = false,
-                // Mirror MetricsSink: local-only JSONL stays human readable in tail/grep.
-                // 出力は local 限定なので tail/grep で読める relaxed encoder を使う。
-                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-            }))
+            using (var jw = new Utf8JsonWriter(buffer, LocalJsonlJsonWriterOptions.Create()))
             {
                 WriteEventCore(jw, evt, includeValues);
             }
@@ -714,7 +715,7 @@ internal sealed class AuditLogSink : IDisposable
     {
         if (value.TryGetValue<string>(out var text))
         {
-            if (SecretValuePattern.IsMatch(text))
+            if (ContainsSecretValue(text))
             {
                 state.MarkRedacted();
                 state.TryReserveSerializedBytes(EstimateStringJsonBytes(RedactedValue));
@@ -741,6 +742,115 @@ internal sealed class AuditLogSink : IDisposable
             state.AddTruncationReason("scalar_serialization_failed");
             return CreateTruncatedValue();
         }
+    }
+
+    private static bool ContainsSecretValue(string text)
+    {
+        var scanTruncated = text.Length > MaxSecretValueScanChars;
+        var scanText = scanTruncated ? text[..MaxSecretValueScanChars] : text;
+        return RegexTimeoutPolicy.IsRedactionMatchOrFallback(
+            () => SecretValuePattern.IsMatch(scanText)
+                  || (scanTruncated && ContainsDisplayedUriUserInfoPrefix(scanText)));
+    }
+
+    private static bool ContainsDisplayedUriUserInfoPrefix(string scanText)
+    {
+        var visibleLength = Math.Min(scanText.Length, MaxArgValueStringChars);
+        var searchStart = 0;
+        while (searchStart < visibleLength)
+        {
+            var separator = scanText.IndexOf(
+                "://",
+                searchStart,
+                visibleLength - searchStart,
+                StringComparison.Ordinal);
+            if (separator < 0)
+                return false;
+
+            var authorityStart = separator + "://".Length;
+            for (var index = authorityStart; index < visibleLength; index++)
+            {
+                var character = scanText[index];
+                if (IsUriAuthorityTerminator(character) || IsUriBoundaryDelimiter(character) || character == '@')
+                    break;
+                if (character == ':' && index > authorityStart)
+                {
+                    if (HasDisplayedUriUserInfoPasswordPrefix(scanText, authorityStart, index, visibleLength))
+                        return true;
+                    break;
+                }
+            }
+
+            searchStart = authorityStart;
+        }
+
+        return false;
+    }
+
+    private static bool HasDisplayedUriUserInfoPasswordPrefix(
+        string scanText,
+        int authorityStart,
+        int userInfoSeparator,
+        int visibleLength)
+    {
+        var passwordStart = userInfoSeparator + 1;
+        if (passwordStart >= visibleLength)
+            return false;
+
+        var sawDisplayedPassword = false;
+        for (var index = passwordStart; index < scanText.Length; index++)
+        {
+            var character = scanText[index];
+            if (character == '@')
+                return sawDisplayedPassword;
+            if (IsUriAuthorityTerminator(character))
+                return false;
+            if (IsUriBoundaryDelimiter(character))
+            {
+                if (LooksLikeDelimitedHostPort(scanText, authorityStart, userInfoSeparator, passwordStart, index))
+                    return false;
+                return sawDisplayedPassword || index == passwordStart;
+            }
+            if (index < visibleLength)
+                sawDisplayedPassword = true;
+        }
+
+        return sawDisplayedPassword;
+    }
+
+    private static bool IsUriAuthorityTerminator(char character) =>
+        char.IsWhiteSpace(character) || character is '/' or '?' or '#';
+
+    private static bool IsUriBoundaryDelimiter(char character) =>
+        character is '"' or '\'' or '<' or '>' or ')' or ']' or '}' or ',' or ';';
+
+    private static bool LooksLikeDelimitedHostPort(
+        string scanText,
+        int authorityStart,
+        int portSeparator,
+        int portStart,
+        int delimiterIndex)
+    {
+        if (!LooksLikeLocalOrQualifiedHost(scanText.AsSpan(authorityStart, portSeparator - authorityStart)))
+            return false;
+        if (delimiterIndex <= portStart)
+            return false;
+        for (var index = portStart; index < delimiterIndex; index++)
+        {
+            if (!char.IsAsciiDigit(scanText[index]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool LooksLikeLocalOrQualifiedHost(ReadOnlySpan<char> host)
+    {
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (host.Length >= 3 && host[0] == '[' && host[^1] == ']')
+            return true;
+        return host.Contains('.');
     }
 
     private static JsonValue CreateTruncatedValue() => JsonValue.Create(TruncatedValue);

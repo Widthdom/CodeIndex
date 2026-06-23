@@ -528,7 +528,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
     {
-        var request = BeginRequest(context);
+        var request = BeginRequest(context, cancellationToken);
 
         if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
             return;
@@ -827,13 +827,14 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         byte[] bytes,
         TimeSpan timeout,
         string timeoutCategory,
-        Action onTimeout)
+        Action onTimeout,
+        CancellationToken cancellationToken = default)
     {
-        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, timeout, CancellationToken.None);
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, timeout, cancellationToken);
         await AwaitOutputOperationAsync(
             stream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
             writeScope,
-            CancellationToken.None,
+            cancellationToken,
             timeoutCategory,
             timeout,
             onTimeout).ConfigureAwait(false);
@@ -1003,6 +1004,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
+            var cancellationToken = request?.CancellationToken ?? CancellationToken.None;
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "text/plain; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
@@ -1010,7 +1012,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             await WriteResponseBytesAsync(
                 context.Response,
                 bytes,
-                CancellationToken.None,
+                cancellationToken,
                 "plain-text response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "plain-text response body");
@@ -1034,6 +1036,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
+            var cancellationToken = request?.CancellationToken ?? CancellationToken.None;
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
@@ -1041,7 +1044,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             await WriteResponseBytesAsync(
                 context.Response,
                 bytes,
-                CancellationToken.None,
+                cancellationToken,
                 "json response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "json response body");
@@ -1466,7 +1469,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         string? RejectionReason,
         string? Diagnostic);
 
-    private PendingRequest BeginRequest(HttpListenerContext context)
+    private PendingRequest BeginRequest(HttpListenerContext context, CancellationToken cancellationToken = default)
     {
         var remotePeer = context.Request.RemoteEndPoint is { } endpoint
             ? endpoint.ToString()
@@ -1476,7 +1479,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             Guid.NewGuid().ToString("N"),
             LimitRequestLogField(remotePeer) ?? "<unknown>",
             LimitRequestLogField(context.Request.HttpMethod) ?? string.Empty,
-            LimitRequestLogField(context.Request.Url?.AbsolutePath ?? "/") ?? "/");
+            LimitRequestLogField(context.Request.Url?.AbsolutePath ?? "/") ?? "/",
+            cancellationToken);
     }
 
     internal static string? LimitRequestLogField(string? value)
@@ -1584,16 +1588,19 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         private readonly long _startedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
 
-        internal PendingRequest(HttpListenerContext context, string correlationId, string remotePeer, string method, string path)
+        internal PendingRequest(HttpListenerContext context, string correlationId, string remotePeer, string method, string path, CancellationToken cancellationToken)
         {
             Context = context;
             CorrelationId = correlationId;
             RemotePeer = remotePeer;
             Method = method;
             Path = path;
+            CancellationToken = cancellationToken;
         }
 
         internal HttpListenerContext Context { get; }
+
+        internal CancellationToken CancellationToken { get; }
 
         internal string CorrelationId { get; }
 

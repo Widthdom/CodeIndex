@@ -14,7 +14,20 @@ internal static class GitHubHttpClientFactory
 
     internal static HttpClient CreateDefaultHttpClient(TimeSpan timeout)
     {
-        var effectiveTimeout = NormalizeRequestTimeout(timeout);
+        var client = CreateHttpClient(timeout);
+        ApplyDefaultHeaders(client.DefaultRequestHeaders);
+        return client;
+    }
+
+    internal static HttpClient CreateReleaseDownloadHttpClient(TimeSpan timeout)
+    {
+        var client = CreateHttpClient(timeout);
+        ApplyReleaseDownloadHeaders(client.DefaultRequestHeaders);
+        return client;
+    }
+
+    internal static HttpClientHandler CreateDefaultHttpClientHandler()
+    {
         var handler = new HttpClientHandler
         {
             UseProxy = true,
@@ -23,11 +36,15 @@ internal static class GitHubHttpClientFactory
         if (ShouldUseDefaultProxyCredentials())
             handler.DefaultProxyCredentials = CredentialCache.DefaultCredentials;
 
-        var client = new HttpClient(handler)
+        return handler;
+    }
+
+    private static HttpClient CreateHttpClient(TimeSpan timeout)
+    {
+        var client = new HttpClient(CreateDefaultHttpClientHandler())
         {
-            Timeout = effectiveTimeout,
+            Timeout = NormalizeRequestTimeout(timeout),
         };
-        ApplyDefaultHeaders(client.DefaultRequestHeaders);
         return client;
     }
 
@@ -57,8 +74,7 @@ internal static class GitHubHttpClientFactory
 
     internal static void ApplyDefaultHeaders(HttpRequestHeaders headers)
     {
-        if (headers.UserAgent.Count == 0)
-            headers.UserAgent.Add(new ProductInfoHeaderValue(new ProductHeaderValue("cdidx")));
+        ApplyReleaseDownloadHeaders(headers);
 
         var hasGitHubAccept = false;
         foreach (var accept in headers.Accept)
@@ -75,6 +91,34 @@ internal static class GitHubHttpClientFactory
 
         if (!headers.Contains(GitHubApiVersionHeader))
             headers.Add(GitHubApiVersionHeader, GitHubApiVersion);
+    }
+
+    internal static void ApplyReleaseDownloadHeaders(HttpRequestHeaders headers)
+    {
+        if (headers.UserAgent.Count == 0)
+            headers.UserAgent.Add(new ProductInfoHeaderValue(new ProductHeaderValue("cdidx")));
+    }
+
+    internal static async Task EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
+        HttpResponseMessage response,
+        string operation,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var errorBody = string.Empty;
+        if (response.Content != null)
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            errorBody = await GitHubIssueReporter.ReadBoundedApiErrorBodyAsync(stream, cancellationToken).ConfigureAwait(false);
+        }
+
+        var detail = GitHubIssueReporter.BuildApiErrorDetail((int)response.StatusCode, errorBody);
+        throw new HttpRequestException(
+            $"GitHub release download failed for {operation}: {detail}",
+            null,
+            response.StatusCode);
     }
 
     internal static bool ShouldUseDefaultProxyCredentials()
