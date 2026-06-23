@@ -116,7 +116,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] KindCommands =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "inspect", "unused", "hotspots", "validate",
+        "definition", "goto", "references", "callers", "callees", "symbols", "inspect", "outline", "unused", "hotspots", "validate",
     ];
     private static readonly string[] SeverityCommands = ["validate"];
     private static readonly string[] VisibilityCommands =
@@ -128,7 +128,7 @@ internal static class CliFlagSchema
     private static readonly string[] SymbolSortCommands = ["symbols"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
-    private static readonly string[] CursorCommands = ["search", "unused"];
+    private static readonly string[] CursorCommands = ["search", "outline", "unused"];
     private static readonly string[] AllResultCommands = ["goto", "find"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
@@ -297,7 +297,7 @@ internal static class CliFlagSchema
             new() { Name = "--duplicate-threshold", ValuePlaceholder = "<score>", Description = "Issue-drafts: explicit duplicate-preflight minimum score from 0 to 1", Commands = Set("search", "suggestions") },
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", Commands = Set("search") },
             new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", Commands = Set("search") },
-            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe or unused pagination cursor returned as next_cursor", Commands = Set(CursorCommands) },
+            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe, outline, or unused pagination cursor returned as next_cursor", Commands = Set(CursorCommands) },
             new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },
@@ -325,6 +325,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: drop matches from selected origins; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--result-kind", ValuePlaceholder = "<call_site|declaration|identifier|comment|string_literal>", Description = "Search: keep only projected result kinds; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet>", Description = "Search: project JSON/NDJSON result fields for audit pipelines", Commands = Set("search") },
+            new() { Name = "--outline-fields", ValuePlaceholder = "<kind,name,path,line,signature,...>", Description = "Outline JSON: project symbol fields for audit pipelines", Commands = Set("outline") },
             new() { Name = "--results-only", Description = "Search: emit result-only NDJSON without stream done records", Commands = Set("search") },
             new() { Name = "--first-per-file", Description = "Search: keep the first returned match for each file", Commands = Set("search") },
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
