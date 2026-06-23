@@ -103,6 +103,31 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void PingHealth_UsesInjectedTimeProvider_Issue3963()
+    {
+        var clock = new ManualTimeProvider(ManualTimeProvider.FixtureUtcNow);
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            auditLog: null,
+            maxConcurrency: 1,
+            timeProvider: clock);
+        var requestAt = ManualTimeProvider.FixtureUtcNow.AddSeconds(7);
+        clock.SetUtcNow(requestAt);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"ping"}""")!;
+
+        var response = server.HandleMessage(request);
+
+        var result = response!["result"]!.AsObject();
+        Assert.Equal(7, result["uptime_s"]!.GetValue<long>());
+        Assert.Equal(requestAt.ToString("O", CultureInfo.InvariantCulture), result["last_request_at"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void RunConcurrentFrameLoop_DoesNotUseSpinWaitPolling_Issue3509()
     {
         var method = typeof(McpServer).GetMethod("RunConcurrentFrameLoopAsync", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -300,7 +325,9 @@ public class McpServerTests : IDisposable
         {
             var error = document.RootElement.GetProperty("error");
             Assert.Equal("Request timed out", error.GetProperty("message").GetString());
-            Assert.True(error.GetProperty("data").GetProperty("isolated_action_draining").GetBoolean());
+            var data = error.GetProperty("data");
+            Assert.Equal(OperationTimeoutCategories.McpRequest, data.GetProperty("timeout_category").GetString());
+            Assert.True(data.GetProperty("isolated_action_draining").GetBoolean());
         }
         var draining = server.BuildRequestTimeoutDiagnosticsStatus();
         Assert.Equal(1, draining["isolated_action_draining_count"]!.GetValue<long>());
@@ -2807,6 +2834,19 @@ public sealed class Caller
     }
 
     [Fact]
+    public void McpAuthenticationLimits_HashTokenUtf8ForTests_ClearsUsedTokenBytes_Issue3989()
+    {
+        var buffer = Enumerable.Repeat((byte)0xA5, 16).ToArray();
+        var destination = new byte[McpAuthenticationLimits.Sha256HashBytes];
+
+        McpAuthenticationLimits.HashTokenUtf8ForTests("token", buffer, destination);
+
+        Assert.Equal(McpAuthenticationLimits.HashTokenToArray("token"), destination);
+        Assert.Equal(new byte[] { 0, 0, 0, 0, 0 }, buffer[..5]);
+        Assert.All(buffer[5..], value => Assert.Equal(0xA5, value));
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
@@ -4335,10 +4375,17 @@ public sealed class Caller
     private sealed class ThrowingWriteTransport : IMcpTransport
     {
         private readonly Queue<string?> _frames;
+        private readonly Exception _exception;
 
         public ThrowingWriteTransport(string name, params string?[] frames)
+            : this(name, new IOException("pipe closed"), frames)
+        {
+        }
+
+        public ThrowingWriteTransport(string name, Exception exception, params string?[] frames)
         {
             Name = name;
+            _exception = exception;
             _frames = new Queue<string?>(frames);
             _frames.Enqueue(null);
         }
@@ -4356,7 +4403,7 @@ public sealed class Caller
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
             WriteCount++;
-            throw new IOException("pipe closed");
+            throw _exception;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -4368,6 +4415,20 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         var transport = new ThrowingWriteTransport(
             "throwing-sequential",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_TransportTimeoutWriteFailure_DoesNotThrow_Issue3990()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "throwing-timeout",
+            new TimeoutException("HTTP MCP operation timed out; category=http_response_write; timeout_ms=15000."),
             """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
 
         await server.RunAsync(transport, CancellationToken.None);
@@ -13451,8 +13512,8 @@ public sealed class Caller
         Assert.Equal(9, structured["count"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["likely_unused_private"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
-        Assert.Equal(6, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
-        Assert.Equal(1, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
+        Assert.Equal(3, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
+        Assert.Equal(4, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
         Assert.Equal(1, structured["summary"]!["by_bucket"]!["likely_unused_private"]!.GetValue<int>());
         Assert.Equal(8, structured["summary"]!["by_confidence"]!["low"]!.GetValue<int>());
         Assert.Equal("low", structured["bucket_taxonomy"]!["reflection_or_config_suspect"]!["confidence"]!.GetValue<string>());
@@ -13465,9 +13526,9 @@ public sealed class Caller
         Assert.Equal("ConnectionString", symbols[3]!["name"]!.GetValue<string>());
         Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("ApplyConfiguration", symbols[7]!["name"]!.GetValue<string>());
-        Assert.Equal("public_or_exported_no_refs", symbols[7]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[7]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
-        Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
 
         var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
@@ -15445,6 +15506,11 @@ public sealed class Caller
         var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
         Assert.Equal("description", rejection["field"]!.GetValue<string>());
         Assert.Equal(SourceCodeDetector.ReasonStatementEnding, rejection["reason_code"]!.GetValue<string>());
+        var reasonCounts = rejection["reason_code_counts"]!.AsObject();
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonStatementEnding]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonIndentedCodeLines]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonBlockStructure]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonFunctionDefinition]!.GetValue<int>());
     }
 
     [Fact]
@@ -15472,6 +15538,8 @@ public sealed class Caller
         var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
         Assert.Equal("description", rejection["field"]!.GetValue<string>());
         Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, rejection["reason_code"]!.GetValue<string>());
+        var reasonCounts = rejection["reason_code_counts"]!.AsObject();
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonFencedCodeBlock]!.GetValue<int>());
         Assert.DoesNotContain(leakedToken, response.ToJsonString());
     }
 
@@ -15625,6 +15693,7 @@ public sealed class Caller
             Assert.Equal(-32603, error["code"]!.GetValue<int>());
             Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
             Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+            Assert.Equal(OperationTimeoutCategories.McpRequest, error["data"]!["timeout_category"]!.GetValue<string>());
             Assert.True(error["data"]!["elapsed_ms"]!.GetValue<long>() >= 1);
             Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
             Assert.Equal("internal_error", error["data"]!["category"]!.GetValue<string>());

@@ -1,0 +1,37 @@
+using CodeIndex.Diagnostics;
+
+namespace CodeIndex.Tests;
+
+public sealed class OperationTimeoutScopeTests
+{
+    [Fact]
+    public async Task Token_RecordsTimeoutCancellation_Issue3998()
+    {
+        using var scope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.McpRequest,
+            TimeSpan.FromMilliseconds(10),
+            CancellationToken.None);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await Task.Delay(TimeSpan.FromSeconds(5), scope.Token));
+
+        Assert.True(scope.IsTimeoutCancellationRequested);
+        Assert.Equal(OperationTimeoutCategories.McpRequest, scope.Category);
+    }
+
+    [Fact]
+    public async Task Token_DistinguishesCallerCancellation_Issue3998()
+    {
+        using var cts = new CancellationTokenSource();
+        using var scope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.McpRequest,
+            TimeSpan.FromSeconds(30),
+            cts.Token);
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await Task.Delay(TimeSpan.FromSeconds(5), scope.Token));
+
+        Assert.False(scope.IsTimeoutCancellationRequested);
+    }
+}

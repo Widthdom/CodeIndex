@@ -9,46 +9,8 @@ internal static class IsolatedWorkerProcessLauncher
     internal static ProcessStartInfo CreateStartInfo()
     {
         var startInfo = CodeIndex.ProcessLaunchPolicy.CreateUtf8RedirectedWorkerStartInfo();
-        ApplyEnvironmentAllowlist(startInfo);
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyIsolatedWorkerEnvironment(startInfo);
         return startInfo;
-    }
-
-    private static readonly string[] EnvironmentAllowlist =
-    [
-        "PATH",
-        "DOTNET_ROOT",
-        "DOTNET_ROOT_X64",
-        "DOTNET_ROOT_X86",
-        "DOTNET_ROOT_ARM64",
-        "DOTNET_BUNDLE_EXTRACT_BASE_DIR",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "SystemRoot",
-        "WINDIR",
-    ];
-
-    private static void ApplyEnvironmentAllowlist(ProcessStartInfo startInfo)
-    {
-        startInfo.Environment.Clear();
-        foreach (var name in EnvironmentAllowlist)
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (!string.IsNullOrEmpty(value))
-                startInfo.Environment[name] = value;
-        }
-
-        foreach (System.Collections.DictionaryEntry item in Environment.GetEnvironmentVariables())
-        {
-            if (item.Key is not string name
-                || item.Value is not string value
-                || !name.StartsWith("CDIDX_TEST_", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            startInfo.Environment[name] = value;
-        }
     }
 
     internal static bool ShouldStartCurrentExecutable(

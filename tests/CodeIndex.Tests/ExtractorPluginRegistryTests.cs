@@ -209,6 +209,45 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPlugin_RejectsSymlinkAssemblyCandidate_Issue3970()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_symlink_3970");
+        lock (TestConsoleLock.Gate)
+        {
+            var target = Path.Combine(projectRoot, "target.dll");
+            var link = Path.Combine(projectRoot, "link.dll");
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                File.WriteAllText(target, "not a real dll");
+                File.CreateSymbolicLink(link, target);
+
+                ExtractorPluginRegistry.LoadPluginForTests(link);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+
+                Assert.Equal(0, status.PluginAssemblyCount);
+                Assert.Equal(1, status.SkippedFileCount);
+                var diagnostic = Assert.Single(status.Diagnostics!);
+                Assert.Equal("plugin", diagnostic.Kind);
+                Assert.Equal("error", diagnostic.Severity);
+                Assert.Equal("plugin_reparse_point", diagnostic.Category);
+                Assert.Equal("link.dll", diagnostic.Path);
+                Assert.Contains("symbolic links and reparse points", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                if (File.Exists(link))
+                    File.Delete(link);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_ReportsSanitizedAssemblyLoadCategory_3414()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_load_category");
@@ -284,6 +323,83 @@ public class ExtractorPluginRegistryTests
                 Assert.True(loadContext.IsCollectible);
                 Assert.NotSame(AssemblyLoadContext.Default, loadContext);
                 Assert.Same(loadContext, AssemblyLoadContext.GetLoadContext(extractor.GetType().Assembly));
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_DualRoleExtractorType_IsConstructedOnce_Issue3971()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("dualroleplugindsl", out var symbolExtractor));
+                Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor("dualroleplugindsl", out var referenceExtractor));
+                Assert.Same(symbolExtractor, referenceExtractor);
+                var constructorCount = Assert.IsType<int>(
+                    symbolExtractor.GetType()
+                        .GetProperty(nameof(DualRolePluginExtractor.ConstructorCount), BindingFlags.Public | BindingFlags.Static)!
+                        .GetValue(null));
+                Assert.Equal(1, constructorCount);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void ResetForTests_UnloadsRetainedPluginAssemblyContexts_Issue3971()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+
+                ExtractorPluginRegistry.ResetForTests();
+
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+                Assert.Empty(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_RepeatedDiscoveryRetainsSingleContext_Issue3971()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var pluginPath = Assembly.GetExecutingAssembly().Location;
+
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, status.PluginAssemblyCount);
+                Assert.Equal(1, status.RetainedLoadContextCount);
+                Assert.Single(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
             }
             finally
             {
@@ -647,5 +763,25 @@ public sealed class ThrowingPluginSymbolExtractor : ISymbolExtractor
     public IReadOnlyCollection<string> FileExtensions => [".throwingplugin"];
 
     public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        => [];
+}
+
+public sealed class DualRolePluginExtractor : ISymbolExtractor, IReferenceExtractor
+{
+    public DualRolePluginExtractor()
+    {
+        ConstructorCount++;
+    }
+
+    public static int ConstructorCount { get; private set; }
+
+    public string Language => "dualroleplugindsl";
+
+    public IReadOnlyCollection<string> FileExtensions => [".dualroleplugin"];
+
+    IReadOnlyList<SymbolRecord> ISymbolExtractor.Extract(long fileId, string source, ExtractionContext context)
+        => [];
+
+    IReadOnlyList<ReferenceRecord> IReferenceExtractor.Extract(long fileId, string source, ExtractionContext context)
         => [];
 }

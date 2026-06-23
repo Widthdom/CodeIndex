@@ -282,16 +282,16 @@ public class ProgramCliTests
     }
 
     [Fact]
-    public void Completions_OptionLikeShellTokenReturnsUsageError()
+    public void Completions_JsonFlagReturnsStructuredUnsupportedError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "--json"]);
 
         Assert.Equal(1, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json is not supported for completions", stderr);
-        Assert.Contains("powershell", stderr);
-        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
-        Assert.DoesNotContain("Unknown shell", stderr);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("--json is not supported for completions.", document.RootElement.GetProperty("message").GetString());
+        Assert.Contains("powershell", document.RootElement.GetProperty("hint").GetString());
     }
 
     [Theory]
@@ -705,6 +705,7 @@ public class ProgramCliTests
             {
                 ["CDIDX_DATA_DIR"] = Path.Combine(Path.GetTempPath(), "cdidx-doctor-data"),
                 ["CDIDX_GITHUB_TOKEN"] = "secret-token-value",
+                [GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable] = "true",
                 ["CDIDX_PRIVATE_KEY"] = "private-key-value",
             });
 
@@ -715,12 +716,18 @@ public class ProgramCliTests
         Assert.Contains("rid", stdout);
         Assert.Contains("terminal:", stdout);
         Assert.Contains("paths:", stdout);
+        Assert.Contains("github:", stdout);
+        Assert.Contains("proxy_default_credentials", stdout);
+        Assert.Contains("enabled", stdout);
+        Assert.Contains("max_request_timeout_s", stdout);
         Assert.Contains("cdidx_env:", stdout);
         Assert.Contains("CDIDX_DATA_DIR", stdout);
         Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, stdout);
         Assert.Contains("CDIDX_PRIVATE_KEY", stdout);
         Assert.Contains("<redacted>", stdout);
         Assert.DoesNotContain("secret-token-value", stdout);
+        Assert.DoesNotContain("= true", stdout);
         Assert.DoesNotContain("private-key-value", stdout);
     }
 
@@ -758,7 +765,6 @@ public class ProgramCliTests
 
     [Theory]
     [InlineData("completions")]
-    [InlineData("completions", "--json")]
     [InlineData("completions", "bash", "extra")]
     public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
     {
@@ -768,8 +774,23 @@ public class ProgramCliTests
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("Usage: cdidx completions <shell>", stderr);
         Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
-        if (args is ["completions", "--json"])
-            Assert.Contains("--json is not supported for completions", stderr);
+    }
+
+    [Theory]
+    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json")]
+    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json=array")]
+    [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "--json")]
+    [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "zsh", "--json")]
+    [InlineData(CommandExitCodes.InvalidArgument, "config show supports --json only; --json=<format> is not supported.", "config", "show", "--json=array")]
+    public void UtilityCommands_JsonFlagsReturnStructuredUnsupportedErrors(int expectedExitCode, string expectedMessage, params string[] args)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(args);
+
+        Assert.Equal(expectedExitCode, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(expectedMessage, document.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -852,6 +873,22 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ListJsonEmptyReturnsArray_Issue3896()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal(0, doc.RootElement.GetArrayLength());
+    }
+
+    [Fact]
     public void Suggestions_ListUsesSharedDataDirResolutionWhenDbIsOmitted()
     {
         using var fixture = SuggestionFixture.Create();
@@ -887,6 +924,20 @@ public class ProgramCliTests
         Assert.Equal(0, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
         Assert.False(doc.RootElement.TryGetProperty("last_submit_attempt", out _));
         Assert.False(doc.RootElement.TryGetProperty("last_submit_error", out _));
+    }
+
+    [Fact]
+    public void Suggestions_ShowJsonMissingIdReturnsStructuredError_Issue3896()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "show", "missing", "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal("error", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Suggestion not found: missing", doc.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]

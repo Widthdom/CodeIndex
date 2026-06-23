@@ -53,6 +53,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
     internal const string RequestQueueLimitRejection = "request_queue_limit";
     internal const string EventStreamLimitRejection = "event_stream_limit";
+    internal const string TimeoutDiagnosticPrefix = "timeout:";
     internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running on a loopback listener without bearer authentication; local processes can connect.";
     private const string BearerPrefix = "Bearer ";
     private const string DefaultStartingHealthJson = """{"status":"starting","db_open":false}""";
@@ -78,6 +79,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly int _maxQueuedRequests;
     private readonly int _maxConcurrentHandlers;
     private readonly int _maxEventStreams;
+    private readonly TimeSpan _eventStreamWriteTimeout;
     private readonly Task _acceptLoop;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
@@ -123,7 +125,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         int? maxQueuedRequests = null,
         int? maxConcurrentHandlers = null,
         int? maxEventStreams = null,
-        int? requestLogQueueCapacity = null)
+        int? requestLogQueueCapacity = null,
+        TimeSpan? eventStreamWriteTimeout = null)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(
             maxRequestBodyBytes,
@@ -160,11 +163,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             DefaultMaxEventStreams,
             MaxConfiguredEventStreams,
             "HTTP MCP event stream limit");
+        _eventStreamWriteTimeout = eventStreamWriteTimeout ?? EventStreamWriteTimeout;
         _requestLogQueueCapacity = ResolveRequestLogQueueCapacity(requestLogQueueCapacity);
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
             SingleReader = true,
             SingleWriter = false,
+            // Queue slots are acquired before TryWrite. FullMode.Wait is a defensive
+            // channel contract; a full queue is rejected via request_queue_limit rather
+            // than blocking an HTTP handler indefinitely.
+            // TryWrite 前に queue slot を取得する。FullMode.Wait は防御的な channel 契約で、
+            // 満杯時は HTTP handler を無期限 block せず request_queue_limit で拒否する。
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
@@ -190,6 +199,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             {
                 SingleReader = true,
                 SingleWriter = false,
+                // Request logging is best-effort. Producers use TryWrite and increment
+                // http_request_log_queue_full_drop_count when this bounded channel is full.
+                // request log は best-effort。producer は TryWrite を使い、満杯時は
+                // http_request_log_queue_full_drop_count を増やして drop する。
                 FullMode = BoundedChannelFullMode.Wait,
                 AllowSynchronousContinuations = false,
             });
@@ -202,6 +215,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             "accept loop",
             _acceptCts.Token);
     }
+
+    internal Func<CancellationToken, Task>? BeforeEventStreamWriteForTests { get; set; }
 
     public string Name => "http";
 
@@ -507,13 +522,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         MarkRejected(request, ConcurrentHandlerLimitRejection);
         context.Response.AddHeader("Retry-After", "1");
         context.Response.AddHeader(RejectionReasonHeader, ConcurrentHandlerLimitRejection);
-        await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP concurrent handler limit is full.\n").ConfigureAwait(false);
+        await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP concurrent handler limit is full.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.TooManyRequests);
     }
 
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
     {
-        var request = BeginRequest(context);
+        var request = BeginRequest(context, cancellationToken);
 
         if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
             return;
@@ -523,13 +538,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
             {
                 context.Response.AddHeader("Allow", "GET");
-                await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP health endpoint only accepts GET.\n").ConfigureAwait(false);
+                await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP health endpoint only accepts GET.\n").ConfigureAwait(false);
                 LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
                 return;
             }
 
             var healthJson = ResolveHealthJson(HealthJsonProvider);
-            await RespondJsonAsync(context, (int)HttpStatusCode.OK, healthJson).ConfigureAwait(false);
+            await RespondJsonAsync(request, (int)HttpStatusCode.OK, healthJson).ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.OK);
             return;
         }
@@ -539,7 +554,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
             {
                 context.Response.AddHeader("Allow", "GET");
-                await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP event stream only accepts GET.\n").ConfigureAwait(false);
+                await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP event stream only accepts GET.\n").ConfigureAwait(false);
                 LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
                 return;
             }
@@ -551,7 +566,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
         {
             context.Response.AddHeader("Allow", "POST");
-            await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
+            await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
             return;
         }
@@ -578,7 +593,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             MarkRejected(request, RequestQueueLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
             context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
-            await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
+            await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
         }
     }
@@ -589,7 +604,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (context.Request.ContentLength64 > _maxRequestBodyBytes)
         {
             request.Diagnostic = "request_body_limit_exceeded";
-            await RespondAsync(context, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
+            await RespondAsync(request, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
             return null;
         }
@@ -607,7 +622,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             if (buffer.Length + read > _maxRequestBodyBytes)
             {
                 request.Diagnostic = "request_body_limit_exceeded";
-                await RespondAsync(context, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
+                await RespondAsync(request, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
                 LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
                 return null;
             }
@@ -657,9 +672,21 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
-            await WriteResponseBytesAsync(context.Response.OutputStream, payload, cancellationToken).ConfigureAwait(false);
+            await WriteResponseBytesAsync(
+                context.Response,
+                payload,
+                cancellationToken,
+                "out-of-band response body timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "out-of-band response body");
             LogRequest(request, (int)HttpStatusCode.OK);
+            return true;
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "out-of-band response timeout");
+            LogRequest(request, (int)HttpStatusCode.InternalServerError);
             return true;
         }
         catch
@@ -723,9 +750,21 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
-            await WriteResponseBytesAsync(context.Response.OutputStream, payload, cancellationToken).ConfigureAwait(false);
+            await WriteResponseBytesAsync(
+                context.Response,
+                payload,
+                cancellationToken,
+                "request response body timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "request response body");
             LogRequest(request, (int)HttpStatusCode.OK);
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "request response timeout");
+            LogRequest(request, (int)HttpStatusCode.InternalServerError);
+            throw;
         }
         catch
         {
@@ -743,18 +782,110 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         request.Diagnostic = "response_body_limit_exceeded";
         await RespondAsync(
-            request.Context,
+            request,
             (int)HttpStatusCode.InternalServerError,
             $"MCP HTTP response body exceeds the configured {_maxResponseBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.InternalServerError);
         return false;
     }
 
-    private static async Task WriteResponseBytesAsync(Stream stream, byte[] bytes, CancellationToken cancellationToken)
+    private async Task WriteResponseBytesAsync(
+        HttpListenerResponse response,
+        byte[] bytes,
+        CancellationToken cancellationToken,
+        string timeoutOperation,
+        string timeoutCategory)
     {
-        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        writeCts.CancelAfter(ResponseWriteTimeout);
-        await stream.WriteAsync(bytes.AsMemory(), writeCts.Token).ConfigureAwait(false);
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, ResponseWriteTimeout, cancellationToken);
+        await AwaitOutputOperationAsync(
+            response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
+            writeScope,
+            cancellationToken,
+            timeoutCategory,
+            ResponseWriteTimeout,
+            () => AbortResponseBestEffort(response, timeoutOperation)).ConfigureAwait(false);
+    }
+
+    private async Task FlushResponseOutputAsync(
+        HttpListenerResponse response,
+        CancellationToken cancellationToken,
+        string timeoutOperation,
+        string timeoutCategory)
+    {
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, ResponseWriteTimeout, cancellationToken);
+        await AwaitOutputOperationAsync(
+            response.OutputStream.FlushAsync(writeScope.Token),
+            writeScope,
+            cancellationToken,
+            timeoutCategory,
+            ResponseWriteTimeout,
+            () => AbortResponseBestEffort(response, timeoutOperation)).ConfigureAwait(false);
+    }
+
+    internal static async Task WriteBytesWithTimeoutForTestsAsync(
+        Stream stream,
+        byte[] bytes,
+        TimeSpan timeout,
+        string timeoutCategory,
+        Action onTimeout,
+        CancellationToken cancellationToken = default)
+    {
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, timeout, cancellationToken);
+        await AwaitOutputOperationAsync(
+            stream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
+            writeScope,
+            cancellationToken,
+            timeoutCategory,
+            timeout,
+            onTimeout).ConfigureAwait(false);
+    }
+
+    internal static async Task FlushWithTimeoutForTestsAsync(
+        Stream stream,
+        TimeSpan timeout,
+        string timeoutCategory,
+        Action onTimeout)
+    {
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, timeout, CancellationToken.None);
+        await AwaitOutputOperationAsync(
+            stream.FlushAsync(writeScope.Token),
+            writeScope,
+            CancellationToken.None,
+            timeoutCategory,
+            timeout,
+            onTimeout).ConfigureAwait(false);
+    }
+
+    private static async Task AwaitOutputOperationAsync(
+        Task operationTask,
+        OperationTimeoutScope writeScope,
+        CancellationToken cancellationToken,
+        string timeoutCategory,
+        TimeSpan timeout,
+        Action onTimeout)
+    {
+        try
+        {
+            await operationTask.WaitAsync(writeScope.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            onTimeout();
+            ObserveAbandonedOutputOperation(operationTask);
+            throw new HttpMcpTimeoutException(timeoutCategory, timeout, ex);
+        }
+    }
+
+    private static void ObserveAbandonedOutputOperation(Task operationTask)
+    {
+        if (operationTask.IsCompleted)
+            return;
+
+        _ = operationTask.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public async Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
@@ -770,11 +901,14 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private async Task WriteOutOfBandFrameToStreamAsync(Guid id, EventStream stream, string frame, CancellationToken cancellationToken)
     {
-        using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        writeCts.CancelAfter(EventStreamWriteTimeout);
         try
         {
-            await stream.WriteJsonRpcEventAsync(frame, writeCts.Token).ConfigureAwait(false);
+            await stream.WriteJsonRpcEventAsync(frame, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            stream.RecordDiagnostic(FormatTimeoutDiagnostic(ex.Category));
+            RemoveEventStream(id, stream);
         }
         catch
         {
@@ -820,7 +954,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         // RFC 7235 §4.1 に従い 401 には WWW-Authenticate を付け、汎用 HTTP クライアントや
         // 手動デバッグ時に必要なスキームを示す。
         context.Response.AddHeader("WWW-Authenticate", "Bearer realm=\"cdidx-mcp\"");
-        await RespondAsync(context, (int)HttpStatusCode.Unauthorized, "Missing or invalid bearer token.\n").ConfigureAwait(false);
+        await RespondAsync(request, (int)HttpStatusCode.Unauthorized, "Missing or invalid bearer token.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.Unauthorized);
         return false;
     }
@@ -863,16 +997,31 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return true;
     }
 
-    private async Task RespondAsync(HttpListenerContext context, int statusCode, string body)
+    private Task RespondAsync(PendingRequest request, int statusCode, string body)
+        => RespondAsync(request.Context, statusCode, body, request);
+
+    private async Task RespondAsync(HttpListenerContext context, int statusCode, string body, PendingRequest? request = null)
     {
         try
         {
+            var cancellationToken = request?.CancellationToken ?? CancellationToken.None;
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "text/plain; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
-            await WriteResponseBytesAsync(context.Response.OutputStream, bytes, CancellationToken.None).ConfigureAwait(false);
+            await WriteResponseBytesAsync(
+                context.Response,
+                bytes,
+                cancellationToken,
+                "plain-text response body timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "plain-text response body");
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            if (request is not null)
+                request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "plain-text response timeout");
         }
         catch
         {
@@ -880,16 +1029,31 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
-    private async Task RespondJsonAsync(HttpListenerContext context, int statusCode, string body)
+    private Task RespondJsonAsync(PendingRequest request, int statusCode, string body)
+        => RespondJsonAsync(request.Context, statusCode, body, request);
+
+    private async Task RespondJsonAsync(HttpListenerContext context, int statusCode, string body, PendingRequest? request = null)
     {
         try
         {
+            var cancellationToken = request?.CancellationToken ?? CancellationToken.None;
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
-            await WriteResponseBytesAsync(context.Response.OutputStream, bytes, CancellationToken.None).ConfigureAwait(false);
+            await WriteResponseBytesAsync(
+                context.Response,
+                bytes,
+                cancellationToken,
+                "json response body timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "json response body");
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            if (request is not null)
+                request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "json response timeout");
         }
         catch
         {
@@ -938,13 +1102,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             MarkRejected(request, EventStreamLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
             context.Response.AddHeader(RejectionReasonHeader, EventStreamLimitRejection);
-            await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
+            await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.TooManyRequests);
             return;
         }
 
         var streamId = Guid.NewGuid();
-        var stream = new EventStream(context.Response);
+        var stream = new EventStream(
+            context.Response,
+            _eventStreamWriteTimeout,
+            BeforeEventStreamWriteForTests,
+            response => AbortResponseBestEffort(response, "sse write timeout"));
         try
         {
             context.Response.StatusCode = (int)HttpStatusCode.OK;
@@ -957,10 +1125,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             _eventStreams[streamId] = stream;
 
             var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
-            await WriteResponseBytesAsync(context.Response.OutputStream, prelude, cancellationToken).ConfigureAwait(false);
-            await context.Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await WriteResponseBytesAsync(
+                context.Response,
+                prelude,
+                cancellationToken,
+                "event stream prelude timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
+            await FlushResponseOutputAsync(
+                context.Response,
+                cancellationToken,
+                "event stream prelude flush timeout",
+                OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
 
             await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpMcpTimeoutException ex)
+        {
+            request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
+            AbortResponseBestEffort(context.Response, "event stream timeout");
         }
         catch
         {
@@ -969,6 +1151,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         finally
         {
             RemoveEventStream(streamId, stream);
+            request.Diagnostic ??= stream.Diagnostic;
             LogRequest(request, (int)HttpStatusCode.OK);
             CloseResponseBestEffort(context.Response, "event stream response cleanup");
         }
@@ -980,6 +1163,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (stream.TryReleaseSlot())
             Interlocked.Decrement(ref _eventStreamCount);
         AbortResponseBestEffort(stream.Response, "event stream response cleanup");
+        stream.Dispose();
     }
 
     private async Task RunKeepAliveLoopAsync(EventStream stream, CancellationToken cancellationToken)
@@ -1022,12 +1206,22 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
-    private sealed class EventStream(HttpListenerResponse response)
+    private sealed class EventStream(
+        HttpListenerResponse response,
+        TimeSpan writeTimeout,
+        Func<CancellationToken, Task>? beforeWriteForTests,
+        Action<HttpListenerResponse> abortResponseOnTimeout) : IDisposable
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private string? _diagnostic;
         private int _released;
 
         public HttpListenerResponse Response { get; } = response;
+
+        public string? Diagnostic => Volatile.Read(ref _diagnostic);
+
+        public void RecordDiagnostic(string diagnostic)
+            => Volatile.Write(ref _diagnostic, diagnostic);
 
         public async Task WriteJsonRpcEventAsync(string frame, CancellationToken cancellationToken)
         {
@@ -1054,19 +1248,49 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         private async Task WriteSseBytesAsync(byte[] bytes, CancellationToken cancellationToken)
         {
-            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            writeCts.CancelAfter(EventStreamWriteTimeout);
-            await _writeGate.WaitAsync(writeCts.Token).ConfigureAwait(false);
+            using var writeScope = OperationTimeoutScope.Create(
+                OperationTimeoutCategories.SseWrite,
+                writeTimeout,
+                cancellationToken);
             try
             {
-                await Response.OutputStream.WriteAsync(bytes.AsMemory(), writeCts.Token).ConfigureAwait(false);
-                await Response.OutputStream.FlushAsync(writeCts.Token).ConfigureAwait(false);
+                await _writeGate.WaitAsync(writeScope.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
+            }
+
+            try
+            {
+                if (beforeWriteForTests is not null)
+                    await beforeWriteForTests(writeScope.Token).ConfigureAwait(false);
+                await AwaitOutputOperationAsync(
+                    Response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
+                    writeScope,
+                    cancellationToken,
+                    OperationTimeoutCategories.SseWrite,
+                    writeTimeout,
+                    () => abortResponseOnTimeout(Response)).ConfigureAwait(false);
+                await AwaitOutputOperationAsync(
+                    Response.OutputStream.FlushAsync(writeScope.Token),
+                    writeScope,
+                    cancellationToken,
+                    OperationTimeoutCategories.SseWrite,
+                    writeTimeout,
+                    () => abortResponseOnTimeout(Response)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
             }
             finally
             {
                 _writeGate.Release();
             }
         }
+
+        public void Dispose() => _writeGate.Dispose();
     }
 
     private bool HashEqualsConfiguredToken(string provided)
@@ -1224,6 +1448,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             Interlocked.Increment(ref _eventStreamLimitRejectionCount);
     }
 
+    internal static string FormatTimeoutDiagnosticForTests(string category)
+        => FormatTimeoutDiagnostic(category);
+
+    private static string FormatTimeoutDiagnostic(string category)
+        => TimeoutDiagnosticPrefix + category;
+
     /// <summary>Resolved listen spec returned by <see cref="ResolveListenSpec"/>.</summary>
     internal readonly record struct HttpListenSpec(string Prefix, string Host, int Port, bool IsLoopback, bool PortWasEphemeral);
 
@@ -1239,7 +1469,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         string? RejectionReason,
         string? Diagnostic);
 
-    private PendingRequest BeginRequest(HttpListenerContext context)
+    private PendingRequest BeginRequest(HttpListenerContext context, CancellationToken cancellationToken = default)
     {
         var remotePeer = context.Request.RemoteEndPoint is { } endpoint
             ? endpoint.ToString()
@@ -1249,7 +1479,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             Guid.NewGuid().ToString("N"),
             LimitRequestLogField(remotePeer) ?? "<unknown>",
             LimitRequestLogField(context.Request.HttpMethod) ?? string.Empty,
-            LimitRequestLogField(context.Request.Url?.AbsolutePath ?? "/") ?? "/");
+            LimitRequestLogField(context.Request.Url?.AbsolutePath ?? "/") ?? "/",
+            cancellationToken);
     }
 
     internal static string? LimitRequestLogField(string? value)
@@ -1357,16 +1588,19 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         private readonly long _startedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
 
-        internal PendingRequest(HttpListenerContext context, string correlationId, string remotePeer, string method, string path)
+        internal PendingRequest(HttpListenerContext context, string correlationId, string remotePeer, string method, string path, CancellationToken cancellationToken)
         {
             Context = context;
             CorrelationId = correlationId;
             RemotePeer = remotePeer;
             Method = method;
             Path = path;
+            CancellationToken = cancellationToken;
         }
 
         internal HttpListenerContext Context { get; }
+
+        internal CancellationToken CancellationToken { get; }
 
         internal string CorrelationId { get; }
 
@@ -1389,5 +1623,21 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         internal bool Logged { get; set; }
 
         internal TimeSpan Elapsed => System.Diagnostics.Stopwatch.GetElapsedTime(_startedTimestamp);
+    }
+
+    private sealed class HttpMcpTimeoutException : TimeoutException
+    {
+        internal HttpMcpTimeoutException(string category, TimeSpan timeout, Exception innerException)
+            : base(
+                $"HTTP MCP operation timed out; category={category}; timeout_ms={timeout.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture)}.",
+                innerException)
+        {
+            Category = category;
+            Timeout = timeout;
+        }
+
+        internal string Category { get; }
+
+        internal TimeSpan Timeout { get; }
     }
 }

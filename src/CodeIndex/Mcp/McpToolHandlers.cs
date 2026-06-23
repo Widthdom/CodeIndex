@@ -3898,9 +3898,9 @@ public partial class McpServer
             {
                 return CreateToolErrorResponse(
                     id,
-                    $"regular expression timed out after {QueryCommandRunner.FormatRegexMatchTimeout(ex.MatchTimeout)} while scanning indexed file contents.",
-                    category: McpErrorEnvelope.CategoryRegexTimeout,
-                    suggestion: "Simplify the pattern, narrow the scan with path/lang filters, or disable regex mode for literal text.",
+                    RegexTimeoutPolicy.FormatFindTimeout(ex),
+                    category: RegexTimeoutPolicy.RegexTimeoutCategory,
+                    suggestion: RegexTimeoutPolicy.McpFindTimeoutSuggestion,
                     retrySafe: true,
                     extraData: new JsonObject
                     {
@@ -6002,15 +6002,15 @@ public partial class McpServer
                 writer.MarkBatchInProgress();
                 fileBatchMarked = true;
                 MarkSymbolKindFilterMetaIncompleteOnce();
-                using var txn = writer.BeginTransaction();
+                using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
                 var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                 if (generatedSuppressionIssue != null)
                 {
-                    writer.InsertChunks(chunks);
-                    writer.InsertSymbols([]);
-                    writer.InsertReferences([]);
+                    writer.InsertChunks(chunks, requestToken);
+                    writer.InsertSymbols([], requestToken);
+                    writer.InsertReferences([], requestToken);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
                         generatedSuppressionIssue);
@@ -6047,14 +6047,14 @@ public partial class McpServer
                     IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
                         ? [issue]
                         : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
-                    writer.InsertSymbols([]);
-                    writer.InsertReferences([]);
+                    writer.InsertSymbols([], requestToken);
+                    writer.InsertReferences([], requestToken);
                     writer.InsertIssues(fileId, capIssues);
                 }
                 else
                 {
-                    writer.InsertChunks(chunks);
-                    writer.InsertSymbols(symbols);
+                    writer.InsertChunks(chunks, requestToken);
+                    writer.InsertSymbols(symbols, requestToken);
                     List<ReferenceRecord> references;
                     FileIssue? regexTimeoutIssue;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
@@ -6078,7 +6078,7 @@ public partial class McpServer
                         referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references);
+                    writer.InsertReferences(references, requestToken);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
@@ -6100,11 +6100,11 @@ public partial class McpServer
                 try
                 {
                     var skippedRecord = indexer.BuildSkippedFileRecord(filePath);
-                    using var txn = writer.BeginTransaction();
+                    using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     var fileId = writer.UpsertFile(skippedRecord);
-                    writer.InsertChunks([]);
-                    writer.InsertSymbols([]);
-                    writer.InsertReferences([]);
+                    writer.InsertChunks([], requestToken);
+                    writer.InsertSymbols([], requestToken);
+                    writer.InsertReferences([], requestToken);
                     writer.InsertIssues(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();
@@ -6125,7 +6125,7 @@ public partial class McpServer
                     var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
                     if (writer.HasFileAtPath(relativePath))
                     {
-                        using var txn = writer.BeginTransaction();
+                        using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");
                         writer.DeleteFileByPath(relativePath);
                         WriteProjectRootOnce();
                         txn.Commit();
@@ -6170,7 +6170,7 @@ public partial class McpServer
         {
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
             writer.MarkBatchInProgress();
-            using var readinessTxn = writer.BeginTransaction();
+            using var readinessTxn = writer.BeginTransaction(requestToken, "mcp index readiness");
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             writer.MarkSqlGraphContractReady();
@@ -6981,6 +6981,7 @@ public partial class McpServer
             {
                 ["field"] = field,
                 ["reason_code"] = detection.ReasonCode ?? "unknown",
+                ["reason_code_counts"] = CreateSourceCodeReasonCounts(detection),
             },
         };
         return CreateToolErrorResponse(
@@ -6990,6 +6991,21 @@ public partial class McpServer
             suggestion: "Describe the gap in natural language without including code.",
             retrySafe: false,
             extraData: extraData);
+    }
+
+    private static JsonObject CreateSourceCodeReasonCounts(SourceCodeDetectionResult detection)
+    {
+        var counts = new JsonObject();
+        if (detection.ReasonCounts is null)
+            return counts;
+
+        foreach (var reason in detection.ReasonCounts)
+        {
+            if (reason.Value > 0)
+                counts[reason.Key] = reason.Value;
+        }
+
+        return counts;
     }
 
     private static string[]? ReadEvidencePaths(JsonNode? node, out string? error)

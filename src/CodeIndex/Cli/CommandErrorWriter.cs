@@ -8,7 +8,7 @@ internal static class CommandErrorWriter
     private const int SanitizedExceptionTypeNameLimit = 120;
 
     internal static void WriteStdout(string message = "")
-        => Console.WriteLine(message);
+        => CommandOutputWriter.WriteLine(message);
 
     internal static void WriteStderr(string? message = "")
         => Console.Error.WriteLine(message);

@@ -180,7 +180,9 @@ internal sealed record DbCheckpointJsonResult(
     [property: JsonPropertyName("files")] List<string> Files,
     [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false,
     [property: JsonPropertyName("file_limit")] int FileLimit = 0,
-    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("dry_run")] bool DryRun = false,
+    [property: JsonPropertyName("bytes")] long Bytes = 0);
 
 internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -252,7 +254,11 @@ internal sealed record DbSchemaJsonResult(
     [property: JsonPropertyName("entries_truncated")] bool EntriesTruncated = false,
     [property: JsonPropertyName("sql_truncated")] bool SqlTruncated = false,
     [property: JsonPropertyName("entry_limit")] int EntryLimit = 0,
-    [property: JsonPropertyName("sql_text_limit")] int SqlTextLimit = 0);
+    [property: JsonPropertyName("sql_text_limit")] int SqlTextLimit = 0,
+    [property: JsonPropertyName("summary_only")] bool SummaryOnly = false,
+    [property: JsonPropertyName("type_filter")] string? TypeFilter = null,
+    [property: JsonPropertyName("name_filter")] string? NameFilter = null,
+    [property: JsonPropertyName("include_internal")] bool IncludeInternal = true);
 
 internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -728,6 +734,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(List<CliJsonMessage>))]
 [JsonSerializable(typeof(List<DefinitionResult>))]
 [JsonSerializable(typeof(List<FileDependencyResult>))]
+[JsonSerializable(typeof(List<FileFindResult>))]
 [JsonSerializable(typeof(List<FileIssue>))]
 [JsonSerializable(typeof(List<FileResult>))]
 [JsonSerializable(typeof(List<GroupedSymbolHotspotJsonResult>))]
@@ -775,6 +782,9 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchNamedBatchRunJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListItemJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListJsonResult))]
+[JsonSerializable(typeof(SearchRecipeBroadCatchTaxonomyJsonResult))]
+[JsonSerializable(typeof(SearchRecipeBroadCatchBoundaryJsonResult))]
+[JsonSerializable(typeof(SearchRecipeBroadCatchDiagnosticBehaviorJsonResult))]
 [JsonSerializable(typeof(SearchRecipeFilterSupportJsonResult))]
 [JsonSerializable(typeof(SearchRecipeLimitSemanticsJsonResult))]
 [JsonSerializable(typeof(SearchRecipeCompactRunJsonResult))]
@@ -812,6 +822,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(EnvironmentVariableInventoryItem))]
 [JsonSerializable(typeof(EnvironmentVariableInventoryLocation))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusSqliteConnectionPolicy))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
