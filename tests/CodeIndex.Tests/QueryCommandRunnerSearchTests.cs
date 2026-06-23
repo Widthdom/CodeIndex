@@ -2752,6 +2752,66 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RecipeIssueDraftsWarnForMissingRepositoryLabels_Issue3926()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_labels");
+        var handler = new IssueDraftRepositoryLabelsHandler();
+        var httpClient = new HttpClient(handler);
+        IssueDuplicatePreflight.s_httpClientOverride = httpClient;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/reporter.cs",
+                "csharp",
+                """
+                public sealed class Reporter
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        System.Console.Error.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "5",
+                    "--open-issues", "github",
+                    "--repo", "Widthdom/CodeIndex"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var missingLabels = draft
+                .GetProperty("missing_labels")
+                .EnumerateArray()
+                .Select(label => label.GetString())
+                .ToList();
+
+            Assert.Equal(["audit"], missingLabels);
+            Assert.Equal(
+                "Repository label validation against github:Widthdom/CodeIndex found missing label(s): audit.",
+                draft.GetProperty("label_warning").GetString());
+            Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/repos/Widthdom/CodeIndex/issues?state=open&per_page=100&page=1");
+            Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1");
+        }
+        finally
+        {
+            IssueDuplicatePreflight.s_httpClientOverride = null;
+            httpClient.Dispose();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AdHocIssueDraftsUseTitleLabelsAndDuplicatePreflight_Issue3520()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_drafts_ad_hoc");
@@ -7270,5 +7330,27 @@ jobs:
         if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))
             return arg;
         return "'" + arg.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private sealed class IssueDraftRepositoryLabelsHandler : HttpMessageHandler
+    {
+        internal List<string> RequestUris { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestUris.Add(request.RequestUri!.ToString());
+            var json = request.RequestUri.AbsolutePath.EndsWith("/labels", StringComparison.Ordinal)
+                ? """
+                  [
+                    {"name":"security"},
+                    {"name":"bug"}
+                  ]
+                  """
+                : "[]";
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
     }
 }

@@ -1042,6 +1042,9 @@ internal sealed record SearchIssueDraftJsonResult(
     [property: JsonPropertyName("draft_id")] string DraftId,
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("labels")] List<string> Labels,
+    [property: JsonPropertyName("missing_labels")] List<string> MissingLabels,
+    [property: JsonPropertyName("label_warning")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LabelWarning,
     [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
     [property: JsonPropertyName("triage")] IssueDraftTriageMetadataJsonResult Triage,
     [property: JsonPropertyName("body")] string Body,

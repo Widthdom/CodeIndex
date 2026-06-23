@@ -2638,6 +2638,8 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
+        var missingLabels = BuildMissingIssueDraftLabels(labels, preflight);
+        var labelWarning = BuildIssueDraftLabelWarning(missingLabels, preflight);
         var duplicateProbeTriage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, 0);
         var duplicateProbeBody = BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, duplicateProbeTriage, options);
         var duplicateMatches = preflight.FindMatches(
@@ -2651,6 +2653,8 @@ public static partial class QueryCommandRunner
             $"{recipe.Name}/{queryResult.Name}",
             title,
             labels,
+            missingLabels,
+            labelWarning,
             evidencePaths,
             triage,
             BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, triage, options),
@@ -2681,6 +2685,8 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
+        var missingLabels = BuildMissingIssueDraftLabels(labels, preflight);
+        var labelWarning = BuildIssueDraftLabelWarning(missingLabels, preflight);
         var duplicateProbeTriage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, 0);
         var duplicateProbeBody = BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, duplicateProbeTriage);
         var duplicateMatches = preflight.FindMatches(
@@ -2694,6 +2700,8 @@ public static partial class QueryCommandRunner
             "search/ad-hoc",
             title,
             labels,
+            missingLabels,
+            labelWarning,
             evidencePaths,
             triage,
             BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, triage),
@@ -2709,6 +2717,34 @@ public static partial class QueryCommandRunner
                 preflight.Checked,
                 duplicateMatches.Count,
                 duplicateMatches));
+    }
+
+    private static List<string> BuildMissingIssueDraftLabels(
+        IReadOnlyList<string> labels,
+        IssueDuplicatePreflight preflight)
+    {
+        if (!preflight.RepositoryLabelsChecked || labels.Count == 0)
+            return [];
+
+        var repositoryLabels = preflight.RepositoryLabels.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return labels
+            .Where(label => !repositoryLabels.Contains(label))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? BuildIssueDraftLabelWarning(
+        IReadOnlyList<string> missingLabels,
+        IssueDuplicatePreflight preflight)
+    {
+        if (missingLabels.Count == 0)
+            return null;
+
+        var source = string.IsNullOrWhiteSpace(preflight.Source)
+            ? "repository label preflight"
+            : preflight.Source;
+        return $"Repository label validation against {source} found missing label(s): {string.Join(", ", missingLabels)}.";
     }
 
     private static string BuildSearchIssueDraftTitle(SearchAuditRecipe recipe, SearchRecipeQueryResultJsonResult queryResult)

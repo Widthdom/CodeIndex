@@ -213,15 +213,51 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         Assert.True(preflight.Checked);
         Assert.Equal("github:Widthdom/CodeIndex", preflight.Source);
         Assert.Equal(1, preflight.OpenIssueCount);
-        var request = Assert.Single(handler.Requests);
+        Assert.True(preflight.RepositoryLabelsChecked);
+        Assert.Empty(preflight.RepositoryLabels);
+        Assert.Equal(2, handler.Requests.Count);
+        var request = handler.Requests[0];
         Assert.Equal("https://api.github.com/repos/Widthdom/CodeIndex/issues?state=open&per_page=100&page=1", request.Uri);
         Assert.Equal("Bearer", request.AuthorizationScheme);
         Assert.Equal("explicit-token", request.AuthorizationParameter);
+        var labelsRequest = handler.Requests[1];
+        Assert.Equal("https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1", labelsRequest.Uri);
+        Assert.Equal("Bearer", labelsRequest.AuthorizationScheme);
+        Assert.Equal("explicit-token", labelsRequest.AuthorizationParameter);
         var match = Assert.Single(preflight.FindMatches(
             "Issue-draft duplicate preflight should fetch open GitHub issues directly",
             ["enhancement"]));
         Assert.Equal(3449, match.Number);
         Assert.Equal("https://github.example.test/Widthdom/CodeIndex/issues/3449", match.Url);
+    }
+
+    [Fact]
+    public void TryLoad_GitHubSourceFetchesRepositoryLabels_Issue3926()
+    {
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new SingleResponseHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var json = path.EndsWith("/labels", StringComparison.Ordinal)
+                ? """
+                  [
+                    {"name":"bug"},
+                    {"name":"Security"},
+                    {"name":"bug"}
+                  ]
+                  """
+                : "[]";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+        }));
+
+        var loaded = IssueDuplicatePreflight.TryLoad("github", "Widthdom/CodeIndex", out var preflight, out var error);
+
+        Assert.True(loaded, error);
+        Assert.True(preflight.Checked);
+        Assert.True(preflight.RepositoryLabelsChecked);
+        Assert.Equal(["bug", "Security"], preflight.RepositoryLabels);
     }
 
     [Fact]

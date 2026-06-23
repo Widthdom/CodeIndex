@@ -15,6 +15,7 @@ internal sealed class IssueDuplicatePreflight
     internal const int MaxOpenIssueTitleLength = GitHubIssueReporter.MaxGitHubIssueTitleLength;
     internal const int MaxOpenIssueUrlLength = 2048;
     internal const int MaxOpenIssueLabelLength = 128;
+    internal const int MaxRepositoryLabelCount = 1000;
     internal const int MaxOpenIssueNumberLength = 32;
     internal const int MaxTitleTokenizationInputLength = MaxOpenIssueTitleLength;
     internal const int MaxOpenIssueBodyLength = 24 * 1024;
@@ -32,6 +33,8 @@ internal sealed class IssueDuplicatePreflight
     internal const string CustomDuplicateConfidence = "custom";
     private const int GitHubOpenIssuesPerPage = 100;
     private const int MaxGitHubOpenIssuePages = (MaxOpenIssueCount / GitHubOpenIssuesPerPage) + 1;
+    private const int GitHubLabelsPerPage = 100;
+    private const int MaxGitHubLabelPages = (MaxRepositoryLabelCount / GitHubLabelsPerPage) + 1;
     private const string GitHubSourceName = "github";
     private const string GitHubSourcePrefix = "github:";
     private const string GitHubTokenEnvironmentVariable = "CDIDX_GITHUB_TOKEN";
@@ -58,20 +61,30 @@ internal sealed class IssueDuplicatePreflight
     };
 
     private readonly List<OpenIssue> _issues;
+    private readonly List<string> _repositoryLabels;
     private static readonly HttpClient s_defaultHttpClient = CreateDefaultHttpClient();
     internal static HttpClient? s_httpClientOverride;
     private static HttpClient HttpClient => s_httpClientOverride ?? s_defaultHttpClient;
 
-    private IssueDuplicatePreflight(bool isChecked, string? source, List<OpenIssue> issues)
+    private IssueDuplicatePreflight(
+        bool isChecked,
+        string? source,
+        List<OpenIssue> issues,
+        List<string>? repositoryLabels = null,
+        bool repositoryLabelsChecked = false)
     {
         Checked = isChecked;
         Source = source;
         _issues = issues;
+        _repositoryLabels = repositoryLabels ?? [];
+        RepositoryLabelsChecked = repositoryLabelsChecked;
     }
 
     public bool Checked { get; }
     public string? Source { get; }
     public int OpenIssueCount => _issues.Count;
+    public bool RepositoryLabelsChecked { get; }
+    public IReadOnlyList<string> RepositoryLabels => _repositoryLabels;
 
     public static bool IsGitHubOpenIssuesSource(string? source)
         => !string.IsNullOrWhiteSpace(source)
@@ -409,11 +422,16 @@ internal sealed class IssueDuplicatePreflight
                     break;
             }
 
+            var labels = await FetchGitHubRepositoryLabelsAsync(repository, cancellationToken)
+                .ConfigureAwait(false);
+
             return IssueDuplicatePreflightLoadResult.Success(
                 new IssueDuplicatePreflight(
                     true,
                     $"{GitHubSourcePrefix}{repository}",
-                    issues.Take(MaxOpenIssueCount).ToList()));
+                    issues.Take(MaxOpenIssueCount).ToList(),
+                    labels,
+                    repositoryLabelsChecked: true));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -424,6 +442,28 @@ internal sealed class IssueDuplicatePreflight
             return IssueDuplicatePreflightLoadResult.Failure(
                 $"could not fetch --open-issues github for repository '{repository}': {FormatPreflightFailureDetail(ex)}");
         }
+    }
+
+    private static async Task<List<string>> FetchGitHubRepositoryLabelsAsync(
+        string repository,
+        CancellationToken cancellationToken)
+    {
+        var labels = new List<string>();
+        for (var page = 1; page <= MaxGitHubLabelPages && labels.Count < MaxRepositoryLabelCount; page++)
+        {
+            var pageResult = await FetchGitHubRepositoryLabelPageAsync(repository, page, cancellationToken)
+                .ConfigureAwait(false);
+            labels.AddRange(pageResult.Labels);
+            if (pageResult.RawEntryCount == 0 || pageResult.RawEntryCount < GitHubLabelsPerPage)
+                break;
+        }
+
+        return labels
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxRepositoryLabelCount)
+            .ToList();
     }
 
     private static async Task<GitHubOpenIssuePageResult> FetchGitHubOpenIssuePageAsync(
@@ -471,6 +511,73 @@ internal sealed class IssueDuplicatePreflight
             var rawEntryCount = root is JsonArray array ? array.Count : 0;
             return new GitHubOpenIssuePageResult(ParseOpenIssues(root, skipPullRequests: true), rawEntryCount);
         }
+    }
+
+    private static async Task<GitHubRepositoryLabelPageResult> FetchGitHubRepositoryLabelPageAsync(
+        string repository,
+        int page,
+        CancellationToken cancellationToken)
+    {
+        var slash = repository.IndexOf('/');
+        var owner = repository[..slash];
+        var name = repository[(slash + 1)..];
+        var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/labels?per_page={GitHubLabelsPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
+        var timeout = GitHubIssueReporter.ResolveSubmitTimeout();
+        using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
+        var token = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await HttpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                requestCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestCancellation.IsTimeoutCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"GitHub labels preflight timed out after {timeout.TotalSeconds:0} seconds.",
+                ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+                throw new GitHubPreflightException(
+                    await BuildGitHubApiErrorDetailAsync(response, requestCancellation.Token).ConfigureAwait(false));
+
+            var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
+                .ConfigureAwait(false)
+                ?? throw new IOException($"GitHub labels response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
+            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+            var rawEntryCount = root is JsonArray array ? array.Count : 0;
+            return new GitHubRepositoryLabelPageResult(ParseRepositoryLabels(root), rawEntryCount);
+        }
+    }
+
+    private static List<string> ParseRepositoryLabels(JsonNode? root)
+    {
+        if (root is not JsonArray labels)
+            return [];
+
+        var result = new List<string>();
+        foreach (var item in labels)
+        {
+            if (result.Count >= MaxRepositoryLabelCount)
+                break;
+
+            var label = TryReadString(item, MaxOpenIssueLabelLength)
+                ?? TryReadString(item?["name"], MaxOpenIssueLabelLength);
+            if (!string.IsNullOrWhiteSpace(label))
+                result.Add(label.Trim());
+        }
+
+        return result;
     }
 
     private static async Task<string> BuildGitHubApiErrorDetailAsync(
@@ -783,6 +890,8 @@ internal sealed class IssueDuplicatePreflight
     }
 
     private sealed record GitHubOpenIssuePageResult(List<OpenIssue> Issues, int RawEntryCount);
+
+    private sealed record GitHubRepositoryLabelPageResult(List<string> Labels, int RawEntryCount);
 
     private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels, string? Body);
 
