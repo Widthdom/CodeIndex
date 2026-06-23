@@ -1173,7 +1173,7 @@ public static class DbCommandRunner
         var directories = new List<string>();
         try
         {
-            foreach (var directory in Directory.EnumerateDirectories(parent, prefix + "*"))
+            foreach (var directory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(parent, prefix + "*"))
             {
                 if (directories.Count >= limit)
                     return (directories, Truncated: true);
@@ -1232,7 +1232,7 @@ public static class DbCommandRunner
         var directories = new List<string>();
         try
         {
-            foreach (var directory in Directory.EnumerateDirectories(root))
+            foreach (var directory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(root))
             {
                 if (directories.Count >= limit)
                     return (directories, Truncated: true);
@@ -1333,7 +1333,7 @@ public static class DbCommandRunner
         var files = new List<string>();
         try
         {
-            foreach (var file in EnumerateCheckpointFilesForTesting?.Invoke(checkpointPath) ?? Directory.EnumerateFiles(checkpointPath))
+            foreach (var file in EnumerateCheckpointFilesForTesting?.Invoke(checkpointPath) ?? CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(checkpointPath))
             {
                 if (files.Count >= limit)
                     return (files, Truncated: true);

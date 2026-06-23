@@ -1487,7 +1487,7 @@ internal static class ExportImportCommandRunner
     {
         try
         {
-            if (!Directory.Exists(path) || Directory.EnumerateFileSystemEntries(path).Any())
+            if (!Directory.Exists(path) || CodeIndex.FileSystemTraversalPolicy.HasAnyFileSystemEntry(path))
                 return;
 
             Directory.Delete(path);
