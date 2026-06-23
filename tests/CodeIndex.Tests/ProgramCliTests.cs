@@ -282,16 +282,16 @@ public class ProgramCliTests
     }
 
     [Fact]
-    public void Completions_OptionLikeShellTokenReturnsUsageError()
+    public void Completions_JsonFlagReturnsStructuredUnsupportedError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "--json"]);
 
         Assert.Equal(1, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json is not supported for completions", stderr);
-        Assert.Contains("powershell", stderr);
-        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
-        Assert.DoesNotContain("Unknown shell", stderr);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("--json is not supported for completions.", document.RootElement.GetProperty("message").GetString());
+        Assert.Contains("powershell", document.RootElement.GetProperty("hint").GetString());
     }
 
     [Theory]
@@ -765,7 +765,6 @@ public class ProgramCliTests
 
     [Theory]
     [InlineData("completions")]
-    [InlineData("completions", "--json")]
     [InlineData("completions", "bash", "extra")]
     public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
     {
@@ -775,8 +774,6 @@ public class ProgramCliTests
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("Usage: cdidx completions <shell>", stderr);
         Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
-        if (args is ["completions", "--json"])
-            Assert.Contains("--json is not supported for completions", stderr);
     }
 
     [Fact]

@@ -4361,21 +4361,24 @@ internal static partial class ProgramRunner
         return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty}){suffix}";
     }
 
-    private static int RunCompletions(string[] cmdArgs, string commandName = "--completions")
+    private static int RunCompletions(string[] cmdArgs, JsonSerializerOptions jsonOptions, string commandName = "--completions")
     {
         var usage = $"cdidx {commandName} <shell>";
+        var wantsJson = ContainsJsonOutputFlag(cmdArgs);
+        if (wantsJson)
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                "--json is not supported for completions.",
+                CommandExitCodes.UsageError,
+                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`; completions output is already a shell script.",
+                usage);
+
         if (cmdArgs.Length == 0)
             return CommandErrorWriter.Write(
                 $"{commandName} requires a shell value.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-                usage);
-
-        if (cmdArgs[0] == "--json")
-            return CommandErrorWriter.Write(
-                "--json is not supported for completions.",
-                CommandExitCodes.UsageError,
-                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`; completions output is already a shell script.",
                 usage);
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
