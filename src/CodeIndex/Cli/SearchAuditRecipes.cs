@@ -685,6 +685,20 @@ internal static class SearchAuditRecipes
                     ],
                 },
                 new(
+                    "fully-qualified-regex-construction",
+                    "new System.Text.RegularExpressions.Regex",
+                    "Find fully qualified raw BCL regex construction that bypasses a bounded wrapper alias.",
+                    ["audit", "performance"],
+                    "False positives include tests and code that supplies explicit timeouts or RegexOptions.NonBacktracking.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
+                        "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
+                    ],
+                },
+                new(
                     "cancellation-token-none",
                     "CancellationToken.None",
                     "Find production paths that ignore caller cancellation and may need a propagated token.",

@@ -1208,6 +1208,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-serializer-deserialize");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-async-deserialize");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-addwithvalue");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
@@ -1328,7 +1329,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "regex-construction", "bounded-regex-alias", "cancellation-token-none", "sync-over-async"]);
+            ["sqlite-addwithvalue", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "cancellation-token-none", "sync-over-async"]);
         AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,
@@ -1599,6 +1600,24 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/bounded.cs", Assert.Single(boundedAlias.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
             Assert.Contains(boundedAlias.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
             Assert.Equal("src/full.cs", Assert.Single(fullyQualified.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
+
+            var (dotnetExitCode, dotnetStdout, dotnetStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "dotnet-risk-patterns",
+                    "--include-query", "fully-qualified-regex-construction",
+                    "--db", dbPath,
+                    "--json",
+                    "--limit", "10",
+                    "--lang", "csharp"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, dotnetExitCode);
+            Assert.Equal(string.Empty, dotnetStderr);
+            using var dotnetDocument = ParseJsonOutput(dotnetStdout);
+            var dotnetQuery = Assert.Single(dotnetDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal("fully-qualified-regex-construction", dotnetQuery.GetProperty("name").GetString());
+            Assert.Equal("src/full.cs", Assert.Single(dotnetQuery.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
         }
         finally
         {
