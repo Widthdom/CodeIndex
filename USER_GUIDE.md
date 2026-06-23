@@ -1076,13 +1076,20 @@ JSON string array per stdin line. Each array starts with a query command name,
 followed by that command's normal arguments. Each stdin line is capped at
 1,048,576 characters, each decoded string argument is capped at 8,192
 characters, and each command can carry at most 256 arguments after the command
-name:
+name. With no input, `batch` exits 0 and prints nothing by default. Pass
+`--json-summary` when a non-interactive caller needs an explicit final JSON
+object with `commands_processed`, including `0` for immediate EOF:
 
 ```bash
 printf '%s\n' \
   '["search","Authenticate","--json","--exact"]' \
   '["symbols","AuthFixture","--json","--exact-name"]' \
   | cdidx batch --db .cdidx/codeindex.db
+```
+
+```bash
+printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
+# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 Output:
@@ -3657,13 +3664,20 @@ cdidx search "authenticate" --json --verbose
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
 stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
 各 stdin 行は 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、
-各 command は command 名の後ろに最大 256 引数までです:
+各 command は command 名の後ろに最大 256 引数までです。入力がない場合、`batch` は既定で
+exit 0 かつ無出力です。非対話の呼び出し元が即時 EOF を明示的に判定したい場合は
+`--json-summary` を渡すと、`commands_processed: 0` を含む最終 JSON オブジェクトを出力できます:
 
 ```bash
 printf '%s\n' \
   '["search","Authenticate","--json","--exact"]' \
   '["symbols","AuthFixture","--json","--exact-name"]' \
   | cdidx batch --db .cdidx/codeindex.db
+```
+
+```bash
+printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
+# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 出力:
