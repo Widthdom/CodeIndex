@@ -1265,7 +1265,8 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **MCP rate limiter bucket eviction** — `RateLimiter` keeps `(tool, caller)` token buckets only while they are active. `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` defaults to 900 seconds; stale buckets are pruned on later acquisitions so shared or HTTP MCP deployments do not retain historical caller identities for the process lifetime (#2824).
 - **MCP envelope response cap** — `CDIDX_MCP_RESPONSE_MAX_BYTES` defaults to 10 MiB and clamps at 64 MiB. Invalid values fall back to the default; values above the cap are clamped with a stderr warning so operators cannot accidentally disable the JSON-RPC response guard.
 - **MCP `batch_query` response cap** — `batch_query` estimates the UTF-8 JSON size of aggregate slot results and stops appending once the response would exceed `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` (default: 1 MiB / 1,048,576 bytes; maximum: 10 MiB). Truncated responses include `truncated: true`, `truncated_queries`, and byte-limit metadata so clients can split the batch or lower per-slot limits without parsing prose (#1416). Invalid values fall back to the default, values above the maximum are clamped with a stderr warning, and MCP `status` exposes the effective value under `mcp.limits.batch_response_bytes`.
-- **HTTP MCP response and stream caps** — `HttpMcpTransport` caps ordinary JSON response bodies with `CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES` (default: 1,000,000 bytes; maximum: 16,777,216 bytes). Oversized JSON-RPC responses return HTTP 500 with a bounded text diagnostic instead of streaming the payload, while request-loop diagnostics record `request_body_length_unknown` for unknown-length request bodies and `request_body_limit_exceeded` for bodies that cross the request cap. SSE stream writes keep the existing bounded queue and apply write timeouts so disconnected or slow clients do not pin writer work indefinitely.
+- **HTTP MCP response and stream caps** — `HttpMcpTransport` caps ordinary JSON response bodies with `CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES` (default: 1,000,000 bytes; maximum: 16,777,216 bytes). Oversized JSON-RPC responses return HTTP 500 with a bounded text diagnostic instead of streaming the payload, while request-loop diagnostics record `request_body_length_unknown` for unknown-length request bodies and `request_body_limit_exceeded` for bodies that cross the request cap. Response and SSE write timeouts use stable diagnostics such as `timeout:http_response_write` and `timeout:sse_write`; JSON-RPC request timeouts carry `timeout_category: "mcp_request"` so callers can distinguish them from caller cancellation.
+- **MCP bounded queues and concurrency gates** — HTTP request queue slots are acquired before `TryWrite`; once full, requests are rejected with HTTP 429, `Retry-After: 1`, `X-Cdidx-Mcp-Rejection: request_queue_limit`, and `http_request_queue_rejection_count` rather than blocking an HTTP handler. The request-log queue is best-effort and increments `http_request_log_queue_full_drop_count` / `http_request_log_dropped_count` on saturation. Concurrent handler and event-stream gates likewise report `concurrent_handler_limit` and `event_stream_limit`, and semaphores owned by the transport, stream, or frame loop must be disposed by that owner.
 - **MCP pagination offset cap** — `references`, `callers`, and `callees` clamp `offset` to 10,000 before executing SQL queries. `tools/list` advertises the maximum in each offset schema, and MCP `status` mirrors it under `mcp.limits.max_pagination_offset`.
 - **MCP array argument bounds** — MCP string-array filters such as `path`, `project`, `excludePaths`, and mixed `names` arrays reject invalid entries instead of silently dropping them. Arrays are capped at 100 entries and each entry is capped at 4096 characters; `batch_query` reports these validation failures per slot with `request_index` and `ok: false`.
 - **MCP schema lock-down** — Every tool `inputSchema` includes `additionalProperties: false`, and `tools/call` mirrors that contract by rejecting unknown argument names with `-32602` / `invalid_argument` instead of silently defaulting misspelled fields.
@@ -2785,8 +2786,17 @@ HTTP MCP `/events` stream は opt-in の server-initiated `notifications/keep_al
 JSON-RPC response は payload を stream せず、bounded な text diagnostic を持つ HTTP 500
 として返します。request-loop diagnostics は、長さ不明の request body を
 `request_body_length_unknown`、request body 上限超過を `request_body_limit_exceeded`
-として記録します。SSE stream write は既存の bounded queue を維持し、write timeout も適用して、
-切断済みまたは低速な client が writer work を無期限に保持しないようにします。
+として記録します。response write と SSE write の timeout は `timeout:http_response_write`、
+`timeout:sse_write` のような stable diagnostics を使います。JSON-RPC request timeout は
+`timeout_category: "mcp_request"` を持つため、caller cancellation と区別できます。
+
+HTTP request queue は `TryWrite` 前に slot を取得します。満杯時は HTTP handler を block
+せず、HTTP 429、`Retry-After: 1`、`X-Cdidx-Mcp-Rejection: request_queue_limit`、
+`http_request_queue_rejection_count` で拒否を記録します。request-log queue は best-effort
+で、飽和時は `http_request_log_queue_full_drop_count` / `http_request_log_dropped_count`
+を増やします。concurrent handler gate と event-stream gate も `concurrent_handler_limit`、
+`event_stream_limit` を報告します。transport、stream、frame loop が所有する semaphore は、
+その owner が dispose する契約です。
 
 ## データベーススキーマ
 

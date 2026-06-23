@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -41,6 +42,17 @@ public class HttpMcpTransportTests : IDisposable
         var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken: "abc,def"));
 
         Assert.Contains("commas", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_TimeoutDiagnosticsUseStableCategories_Issue3990()
+    {
+        Assert.Equal(
+            "timeout:http_response_write",
+            HttpMcpTransport.FormatTimeoutDiagnosticForTests(OperationTimeoutCategories.HttpResponseWrite));
+        Assert.Equal(
+            "timeout:sse_write",
+            HttpMcpTransport.FormatTimeoutDiagnosticForTests(OperationTimeoutCategories.SseWrite));
     }
 
     [Fact]

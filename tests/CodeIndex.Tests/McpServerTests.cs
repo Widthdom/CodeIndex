@@ -325,7 +325,9 @@ public class McpServerTests : IDisposable
         {
             var error = document.RootElement.GetProperty("error");
             Assert.Equal("Request timed out", error.GetProperty("message").GetString());
-            Assert.True(error.GetProperty("data").GetProperty("isolated_action_draining").GetBoolean());
+            var data = error.GetProperty("data");
+            Assert.Equal(OperationTimeoutCategories.McpRequest, data.GetProperty("timeout_category").GetString());
+            Assert.True(data.GetProperty("isolated_action_draining").GetBoolean());
         }
         var draining = server.BuildRequestTimeoutDiagnosticsStatus();
         Assert.Equal(1, draining["isolated_action_draining_count"]!.GetValue<long>());
@@ -15636,6 +15638,7 @@ public sealed class Caller
             Assert.Equal(-32603, error["code"]!.GetValue<int>());
             Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
             Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+            Assert.Equal(OperationTimeoutCategories.McpRequest, error["data"]!["timeout_category"]!.GetValue<string>());
             Assert.True(error["data"]!["elapsed_ms"]!.GetValue<long>() >= 1);
             Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
             Assert.Equal("internal_error", error["data"]!["category"]!.GetValue<string>());

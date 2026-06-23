@@ -1780,6 +1780,7 @@ public partial class McpServer : IDisposable
             extraData: new JsonObject
             {
                 ["reason"] = "timeout",
+                ["timeout_category"] = OperationTimeoutCategories.McpRequest,
                 ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
                 ["isolated_action_draining"] = isolatedActionDraining,
             });
