@@ -827,6 +827,77 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_JsonSummaryReportsEmptyInput_Issue3906()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_empty_summary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                string.Empty,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(lines);
+            using var summaryDocument = lines[0];
+            var summary = summaryDocument.RootElement;
+            Assert.Equal("1", summary.GetProperty("api_version").GetString());
+            Assert.Equal("batch", summary.GetProperty("command").GetString());
+            Assert.Equal(0, summary.GetProperty("input_lines_read").GetInt32());
+            Assert.Equal(0, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
+            Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, summary.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryReportsProcessedCommandsAndFailures_Issue3906()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_counts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var input = """
+            ["status","--json"]
+            []
+            ["unknown"]
+
+            """;
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("batch line 2 must be a non-empty JSON string array", stderr);
+            Assert.Contains("batch only supports query commands", stderr);
+            Assert.Equal(2, lines.Count);
+            using var statusDocument = lines[0];
+            using var summaryDocument = lines[1];
+            Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
+            var summary = summaryDocument.RootElement;
+            Assert.Equal(3, summary.GetProperty("input_lines_read").GetInt32());
+            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(1, summary.GetProperty("line_errors").GetInt32());
+            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, summary.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
