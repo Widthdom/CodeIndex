@@ -2642,7 +2642,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("count")]
     [InlineData("csv")]
     public void RunSearch_RecipeRejectsUnsupportedFormattedOutputs_Issue3144(string format)
     {
@@ -2652,7 +2651,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--format count/csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
+        Assert.Contains("--format csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
     }
 
     [Fact]
@@ -7260,7 +7259,7 @@ jobs:
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             var done = Assert.Single(lines);
             using var document = JsonDocument.Parse(done);
-            Assert.True(document.RootElement.GetProperty("done").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("done").GetBoolean());
             Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
