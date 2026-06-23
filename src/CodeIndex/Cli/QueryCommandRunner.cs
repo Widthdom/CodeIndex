@@ -365,6 +365,9 @@ public static partial class QueryCommandRunner
         OutputFormatText,
         OutputFormatJson,
         OutputFormatCount,
+        OutputFormatLsp,
+        OutputFormatQf,
+        OutputFormatSarif,
     };
     private static readonly HashSet<string> InspectOutputFormats = new(StringComparer.Ordinal)
     {
@@ -3028,6 +3031,13 @@ public static partial class QueryCommandRunner
     private static LspLocation ToLspLocation(FileIssue result)
         => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
 
+    private static LspLocation ToLspLocation(SymbolResult result)
+    {
+        var startLine = result.StartLine > 0 ? result.StartLine : result.Line;
+        var endLine = result.EndLine >= startLine ? result.EndLine : startLine;
+        return BuildLspLocation(result.Path, startLine, 1, endLine + 1, 1);
+    }
+
     private static LspLocation ToLspLocation(CallerResult result)
         => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
 
@@ -3244,6 +3254,21 @@ public static partial class QueryCommandRunner
     {
         foreach (var item in items)
             Console.WriteLine($"{item.Path}:{item.Line}:{item.Column}:{item.Message}");
+    }
+
+    private static (string Path, int Line, int Column, string Message) ToSymbolQuickfixItem(SymbolResult result)
+        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result));
+
+    private static (string Path, int Line, int Column, string Message, string RuleId) ToSymbolSarifItem(SymbolResult result)
+        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result), string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : $"symbol.{result.Kind}");
+
+    private static int GetSymbolDisplayLine(SymbolResult result)
+        => Math.Max(1, result.Line > 0 ? result.Line : result.StartLine);
+
+    private static string FormatSymbolLocationLabel(SymbolResult result)
+    {
+        var kind = string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : result.Kind;
+        return string.IsNullOrWhiteSpace(result.Name) ? kind : $"{kind} {result.Name}";
     }
 
     private static void WriteSarif(IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items, JsonSerializerOptions jsonOptions)
@@ -4274,7 +4299,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows or `--format count` for symbol totals; compact symbol rows are not currently defined."))
+        if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows, `--format count` for symbol totals, or `--format lsp|qf|sarif` for editor/diagnostic locations; compact symbol rows are not currently defined."))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
@@ -4374,6 +4399,13 @@ public static partial class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
+                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult));
+                    return ZeroResultExitCode(options);
+                }
+                if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbols found", options));
@@ -4386,14 +4418,36 @@ public static partial class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            if (options.OutputFormat == OutputFormatLsp)
+            {
+                WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                return CommandExitCodes.Success;
+            }
+            if (options.OutputFormat == OutputFormatQf)
+            {
+                WriteQuickfix(results.Select(ToSymbolQuickfixItem));
+                return CommandExitCodes.Success;
+            }
+            if (options.OutputFormat == OutputFormatSarif)
+            {
+                WriteSarif(results.Select(ToSymbolSarifItem), jsonOptions);
+                return CommandExitCodes.Success;
+            }
             if (options.Json)
             {
-                foreach (var r in results)
+                if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    if (hasExactPredicate)
-                        WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, exactSignal, jsonOptions);
-                    else
-                        Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult));
+                    Console.WriteLine(JsonSerializer.Serialize(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult));
+                }
+                else
+                {
+                    foreach (var r in results)
+                    {
+                        if (hasExactPredicate)
+                            WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, exactSignal, jsonOptions);
+                        else
+                            Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult));
+                    }
                 }
             }
             else
@@ -11620,7 +11674,8 @@ public static partial class QueryCommandRunner
             if (normalizedArg == "--json"
                 && !string.Equals(arg, "--json", StringComparison.Ordinal)
                 && commandName != "search"
-                && commandName != "files")
+                && commandName != "files"
+                && commandName != "symbols")
             {
                 if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
                 {
@@ -11630,10 +11685,10 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.Write(
                     commandName == "validate"
                         ? "--json=<format> for validate only supports 'array'."
-                        : "--json=<format> is only supported by 'search', 'files', and validate's array output.",
+                        : "--json=<format> is only supported by 'search', 'files', 'symbols', and validate's array output.",
                     commandName == "validate"
                         ? "use plain `--json` or `--json=array`."
-                        : "use plain `--json` here, rerun search/files with `--json=array`, or rerun validate with `--json=array`.",
+                        : "use plain `--json` here, rerun search/files/symbols with `--json=array`, or rerun validate with `--json=array`.",
                     GetUsageLineOrThrow(commandName));
                 return true;
             }
