@@ -199,6 +199,9 @@ public class FileIndexer
         [".yml"] = "yaml",
         [".json"] = "json",
         [".toml"] = "toml",
+        [".config"] = "xml",
+        [".runsettings"] = "xml",
+        [".rules"] = "config",
         [".xaml"] = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
         [".axaml"] = "xml",    // Avalonia XAML / Avalonia XAML
         [".sln"] = "solution", // Visual Studio solution / Visual Studio ソリューション
@@ -381,6 +384,7 @@ public class FileIndexer
         ["packages.lock.json"] = "dependency_lock", // NuGet lockfile / NuGet lockfile
         [".editorconfig"] = "editorconfig",
         [".gitignore"] = "gitignore",
+        [".gitattributes"] = "gitattributes",
         [".dockerignore"] = "dockerignore",
     };
 

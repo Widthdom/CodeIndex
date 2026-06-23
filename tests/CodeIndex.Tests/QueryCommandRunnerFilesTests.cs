@@ -11,6 +11,69 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunFilesAndSearch_IndexRepositoryConfigurationFiles_Issue3898()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_config_files_issue3898");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tests"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".codex", "rules"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "nuget.config"),
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <configuration>
+                  <config>
+                    <add key="signatureValidationMode" value="require" />
+                  </config>
+                </configuration>
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tests", "CodeIndex.Tests.runsettings"),
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <RunSettings>
+                  <RunConfiguration>
+                    <TestSessionTimeout>2700000</TestSessionTimeout>
+                  </RunConfiguration>
+                </RunSettings>
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitattributes"), "*.cs text eol=lf\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".codex", "rules", "codeindex.rules"),
+                "prefix_rule(pattern = [\"rg\"], decision = \"forbidden\")\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            AssertIndexedFilePath(dbPath, "nuget.config", "xml");
+            AssertIndexedFilePath(dbPath, "tests/CodeIndex.Tests.runsettings", "xml");
+            AssertIndexedFilePath(dbPath, ".gitattributes", "gitattributes");
+            AssertIndexedFilePath(dbPath, ".codex/rules/codeindex.rules", "config");
+            AssertSearchesPath(dbPath, "signatureValidationMode", "nuget.config");
+            AssertSearchesPath(dbPath, "TestSessionTimeout", "tests/CodeIndex.Tests.runsettings");
+            AssertSearchesPath(dbPath, "prefix_rule", ".codex/rules/codeindex.rules");
+            AssertSearchesPath(dbPath, "eol", ".gitattributes");
+
+            var (statusExitCode, statusStdout, statusStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+            using var statusDocument = ParseJsonOutput(statusStdout);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(string.Empty, statusStderr);
+            Assert.Equal(0, statusDocument.RootElement.GetProperty("unknown_extension_file_count").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_CanceledToken_RethrowsInsteadOfDatabaseError_Issue3723()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_cancel_issue3723");
@@ -40,6 +103,34 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("Error: --since requires a value.", stderr);
         Assert.Contains("Hint: pass an ISO 8601 datetime", stderr);
         Assert.Contains("--since 2024-01-01", stderr);
+    }
+
+    private void AssertIndexedFilePath(string dbPath, string path, string language)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+            ["--db", dbPath, "--json", "--path", path],
+            _jsonOptions));
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(path, root.GetProperty("path").GetString());
+        Assert.Equal(language, root.GetProperty("lang").GetString());
+    }
+
+    private void AssertSearchesPath(string dbPath, string query, string path)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            [query, "--db", dbPath, "--json=array", "--path", path],
+            _jsonOptions));
+        using var document = ParseJsonOutput(stdout);
+        var results = document.RootElement.EnumerateArray().ToArray();
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.NotEmpty(results);
+        Assert.Contains(results, result => result.GetProperty("path").GetString() == path);
     }
 
     [Fact]
