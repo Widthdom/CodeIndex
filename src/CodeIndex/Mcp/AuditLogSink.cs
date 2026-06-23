@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -417,13 +416,7 @@ internal sealed class AuditLogSink : IDisposable
             bytes => new AuditEventByteLimitExceededException(bytes));
         try
         {
-            using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
-            {
-                Indented = false,
-                // Mirror MetricsSink: local-only JSONL stays human readable in tail/grep.
-                // 出力は local 限定なので tail/grep で読める relaxed encoder を使う。
-                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-            }))
+            using (var jw = new Utf8JsonWriter(buffer, LocalJsonlJsonWriterOptions.Create()))
             {
                 WriteEventCore(jw, evt, includeValues);
             }
