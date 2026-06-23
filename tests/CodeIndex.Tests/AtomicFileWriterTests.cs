@@ -87,6 +87,115 @@ public class AtomicFileWriterTests
     }
 
     [Fact]
+    public void MoveReplacing_ParentDirectoryFlushFailure_ReportsPostReplaceDurabilityFailure_Issue4001()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_move_replace_flush");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "settings.new");
+            var destinationPath = Path.Combine(projectRoot, "settings.json");
+            File.WriteAllText(sourcePath, "new", Utf8NoBom);
+            File.WriteAllText(destinationPath, "old", Utf8NoBom);
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ => throw new IOException("flush failed");
+
+            var ex = Assert.Throws<IOException>(() =>
+                AtomicFileWriter.MoveReplacing(sourcePath, destinationPath));
+
+            Assert.Contains("Atomic replace completed", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("target file was already replaced", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("parent directory could not be flushed", ex.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(sourcePath));
+            Assert.Equal("new", File.ReadAllText(destinationPath, Utf8NoBom));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void MoveFile_AppliesDestinationModeAfterMove_Issue4001()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_move_mode");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "source.db");
+            var destinationPath = Path.Combine(projectRoot, "destination.db");
+            string? modePath = null;
+            File.WriteAllText(sourcePath, "db", Utf8NoBom);
+
+            AtomicFileWriter.MoveFile(
+                sourcePath,
+                destinationPath,
+                overwrite: false,
+                applyDestinationMode: path => modePath = path);
+
+            Assert.False(File.Exists(sourcePath));
+            Assert.Equal("db", File.ReadAllText(destinationPath, Utf8NoBom));
+            Assert.Equal(destinationPath, modePath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PublishDirectory_ParentDirectoryFlushFailure_ReportsPublishedDirectory_Issue4001()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_directory_publish_flush");
+        try
+        {
+            var tempPath = Path.Combine(projectRoot, ".tmp-checkpoint");
+            var destinationPath = Path.Combine(projectRoot, "checkpoint");
+            Directory.CreateDirectory(tempPath);
+            File.WriteAllText(Path.Combine(tempPath, "manifest.txt"), "checkpoint", Utf8NoBom);
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ => throw new IOException("flush failed");
+
+            var ex = Assert.Throws<IOException>(() =>
+                AtomicFileWriter.PublishDirectory(tempPath, destinationPath));
+
+            Assert.Contains("Directory publish completed", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("destination directory was already published", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("parent directory could not be flushed", ex.Message, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(tempPath));
+            Assert.True(File.Exists(Path.Combine(destinationPath, "manifest.txt")));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void TryDeleteFile_CleanupFailureReportsAndSuppresses_Issue4001()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_cleanup_failure");
+        try
+        {
+            var path = Path.Combine(projectRoot, "cleanup.tmp");
+            var failures = new List<Exception>();
+            File.WriteAllText(path, "temp", Utf8NoBom);
+
+            var deleted = AtomicFileWriter.TryDeleteFile(
+                path,
+                failures.Add,
+                _ => throw new IOException("delete denied"));
+
+            Assert.False(deleted);
+            var failure = Assert.Single(failures);
+            Assert.Contains("delete denied", failure.Message, StringComparison.Ordinal);
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void WriteJson_SensitiveProfile_WritesPrivateFileAndFlushesParentDirectory_Issue3688()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("atomic_sensitive");

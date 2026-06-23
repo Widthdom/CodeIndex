@@ -454,7 +454,7 @@ internal static class SymbolExtractionWorker
         {
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
-            AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
+            CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
             AddTestingArguments(startInfo);
             error = string.Empty;
             return true;
@@ -474,7 +474,7 @@ internal static class SymbolExtractionWorker
         }
 
         startInfo.ArgumentList.Add(CommandName);
-        AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
+        CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
         AddTestingArguments(startInfo);
 
         error = string.Empty;
@@ -646,12 +646,6 @@ internal static class SymbolExtractionWorker
 
         if (cancellationToken.WaitHandle.WaitOne(milliseconds))
             cancellationToken.ThrowIfCancellationRequested();
-    }
-
-    private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
-    {
-        startInfo.ArgumentList.Add(ProtocolMaxLineBytesOption);
-        startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
     }
 
     private static void AddTestingArguments(ProcessStartInfo startInfo)

@@ -929,12 +929,21 @@ This recomputes `name_folded` / `*_folded` columns from the existing DB rows and
 If you suspect the SQLite file itself is corrupted (queries crashing with a SQLite error, unexpected `database disk image is malformed` messages), you can probe it explicitly:
 
 ```bash
-cdidx db --integrity-check                              # run PRAGMA integrity_check
-cdidx db --integrity-check --db ./.cdidx/codeindex.db   # point at a specific DB
-cdidx db --integrity-check --json                       # machine-readable result
+cdidx db integrity                                      # run PRAGMA integrity_check
+cdidx db --integrity-check                              # same legacy spelling
+cdidx db integrity --db ./.cdidx/codeindex.db           # point at a specific DB
+cdidx db integrity --json                               # machine-readable result
+cdidx db schema --summary-only --json                   # counts without full SQL payloads
+cdidx db schema --type table --name files --json         # exact schema object projection
+cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
+cdidx db checkpoint before-prune --dry-run --json        # preview snapshot files and bytes
 ```
 
 This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption is detected. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
+
+`db schema` keeps the current full schema dump by default for support bundles. Add `--summary-only` to return only object counts, combine `--type <table|index|trigger|view>` and `--name <object>` for an exact projection, and use `--limit`, `--max-sql-chars`, and `--exclude-internal` to keep schema diagnostics bounded.
+
+`db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Running `db checkpoint` without `--dry-run` creates the snapshot next to the DB; `db restore <name>` replaces the DB and keeps a pre-restore backup directory.
 
 ### Search code
 
@@ -1142,6 +1151,8 @@ cdidx symbols --visibility public,internal           # public/internal symbols
 cdidx symbols --exclude-visibility private           # hide private symbols
 cdidx symbols --kind function --sort hotspot --json  # hotspot-ranked audit stream
 cdidx symbols --kind function --sort size --json     # largest definitions first
+cdidx symbols Run --json=array                       # JSON array instead of NDJSON rows
+cdidx symbols Run --format lsp                       # LSP locations; qf and sarif are also supported
 ```
 
 Use `--exact-name` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact-name` composes with `--name`, positional names, and all existing filters. The older `--exact` spelling still works on these commands for backward compatibility, but `--exact-name` avoids the semantic clash with `search`. For C#, pass the canonical extracted symbol name: operators are stored as `operator +` / `operator checked +`, conversion operators as `explicit operator Money` / `implicit operator decimal`, and indexers as `Item`. If your DB was created before the canonical C# operator/indexer rename landed, a normal `cdidx index .` rewrites unchanged C# rows once to upgrade them; `--rebuild` is not required for that change. `status --json` also exposes `csharp_symbol_name_ready` so you can verify that the canonical C# rename has been applied to the current DB. The fold is NFKC + Unicode CaseFold: common non-ASCII pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, ligatures, sharp-S (`Straße` / `STRASSE`), and Greek final sigma (`Σ` / `ς` / `σ`) now collapse correctly. Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still folds to `i\u0307` rather than plain `i`. DBs with stale fold metadata fall back to ASCII `COLLATE NOCASE` until the DB contains only current folded keys. Prefer `cdidx backfill-fold` to refresh stored folded keys without reparsing. A plain `cdidx index .` is also enough if the scan rewrites or purges every stale row; otherwise use `cdidx index . --rebuild`. Use `status --json` → `fold_ready` to detect which path is active.
@@ -1164,6 +1175,8 @@ With `--json`, symbol results also include definition ranges, optional body rang
 ```json
 {"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
+
+Use `--json=array` when a downstream tool needs one JSON array instead of newline-delimited symbol records. Use `--format lsp`, `--format qf`, or `--format sarif` to emit editor locations, quickfix rows, or SARIF diagnostics for the same symbol result set.
 
 When `definition --body` is combined with `--json`, `body_content` is capped to a bounded excerpt and `body_content_truncated` is true when the stored body exceeds the returned payload.
 
@@ -1443,8 +1456,8 @@ same source location.
 | `--body` | `definition`, `references`, `callers`, `callees`, `impact`, `inspect` | Include reconstructed body content or capped graph-location excerpts |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | Return only counts. `search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` / `hotspots` ignore `--limit` and return authoritative totals; only `impact` still reports the visible page count and may truncate with `--limit` (with `--json`: a single count object; commands that expose file counts add `files`) |
 | `--group-by <symbol\|file\|statement>` | `hotspots` | Choose the hotspot grouping unit. The default is `symbol` for non-SQL scopes and `statement` for `--lang sql`, preserving SQL's statement-oriented grouping; JSON includes `grouped_by` so mixed-language callers can verify the active unit. `file` rolls symbol hotspot volume up to target files. |
-| `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving `definition_sites` / `paths` metadata in JSON. Per-group `paths` samples are capped at 20 entries; `paths_truncated` signals that more definition paths exist. In normal JSON, the top-level `count` is the number of returned name/kind groups after `--limit`; with `--count`, `count`, `files`, and `definition_site_total` are full totals that ignore `--limit`. Use each hotspot's `reference_count` for raw incoming references. Hotspot ordering uses a weighted invocation score (`call` / `instantiate` = 1.0, `subscribe` = 0.3) while still showing the raw reference count; metadata-only edges such as `attribute`, `annotation`, and `type_reference` remain excluded from default hotspots. |
-| `--with-paths` | `impact` | Emit a `paths` array on each caller listing the shortest call chains `[resolvedRoot, intermediate..., callerName]`. Same-depth diamond convergence (e.g. `A → B → foo` and `A → C → foo`) surfaces both routes that the default dedup collapses. Per-row cap (10) keeps JSON payloads bounded; `paths_truncated` signals overflow. Off by default; default behavior is unchanged. |
+| `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving definition-site metadata in JSON. Per-group `paths` stays a capped 20-entry sample for compatibility, `paths_truncated` only reports that this sample omitted additional paths, and `definition_site_details` contains the full definition-site list with path, language, line, container, visibility, and disambiguation key. `representative` identifies the selected display site so partial/type families are not hidden behind the sampled paths. In normal JSON, the top-level `count` is the number of returned name/kind groups after `--limit`; with `--count`, `count`, `files`, and `definition_site_total` are full totals that ignore `--limit`. Use each hotspot's `reference_count` for raw incoming references. Hotspot ordering uses `ranking_score`, which starts from the weighted invocation score (`call` / `instantiate` = 1.0, `subscribe` = 0.3) and applies `generic_name_penalty` to broad names such as `Combine` or `GetString`; JSON keeps `reference_score`, `ranking_score`, and `generic_name_penalty` for diagnostics. Metadata-only edges such as `attribute`, `annotation`, and `type_reference` remain excluded from default hotspots. |
+| `--with-paths` | `impact` | Emit a `paths` array on each caller listing the shortest call chains `[resolvedRoot, intermediate..., callerName]`, plus `path_details` with per-hop definition path, definition line, language, kind, family key, logical target key, and reference site metadata. Same-depth diamond convergence (e.g. `A → B → foo` and `A → C → foo`) surfaces both routes that the default dedup collapses while keeping same-name and partial symbols distinguishable. Per-row cap (10) keeps JSON payloads bounded; `paths_truncated` signals overflow. Off by default; default behavior is unchanged. |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction (max: 10000000) |
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`; max: 10000000) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match (max: 1000) |
@@ -1807,7 +1820,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, and `capability_gaps`. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, `capability_gaps`, and `indexed_file_count`. Add `--language <name>`, `--extension <ext>`, or `--alias <alias>` to retrieve one language row by canonical name, recognized extension/filename pattern, or display alias. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -1918,8 +1931,11 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 Use `cdidx languages --json` as the live capability probe. JSON rows expose
 `symbol_extraction`, `reference_extraction`, `graph_queries`, and
-`capability_gaps`. Add `--indexed-only` when you only want languages present in
-the current DB, and add
+`capability_gaps`; DB-backed probes such as `--indexed-only` and lookup by
+`--language`, `--extension`, or `--alias` also include `indexed_file_count`.
+Add `--indexed-only` when you only want languages present in the current DB, add
+`--language <name>`, `--extension <ext>`, or `--alias <alias>` when you need one
+disambiguated language row, and add
 `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only`
 when auditing a specific structured capability or capability gap. This matrix
 explains the common extraction behavior so users know when to trust structured
@@ -3510,12 +3526,21 @@ cdidx backfill-fold
 SQLite ファイル自体が破損していると疑われる場合（クエリが SQLite エラーで落ちる、`database disk image is malformed` といったメッセージが出る等）には、整合性を明示的に確認できます:
 
 ```bash
-cdidx db --integrity-check                              # PRAGMA integrity_check を実行
-cdidx db --integrity-check --db ./.cdidx/codeindex.db   # 特定 DB を指定
-cdidx db --integrity-check --json                       # 機械可読な結果
+cdidx db integrity                                      # PRAGMA integrity_check を実行
+cdidx db --integrity-check                              # 従来の同義表記
+cdidx db integrity --db ./.cdidx/codeindex.db           # 特定 DB を指定
+cdidx db integrity --json                               # 機械可読な結果
+cdidx db schema --summary-only --json                   # SQL 本文なしで件数だけ確認
+cdidx db schema --type table --name files --json         # schema object を exact に絞り込み
+cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
+cdidx db checkpoint before-prune --dry-run --json        # snapshot 対象 file と byte 数を preview
 ```
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
+
+`db schema` は support bundle 向けに、既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると exact projection を適用できます。schema diagnostics を小さく保つには `--limit`、`--max-sql-chars`、`--exclude-internal` を使います。
+
+`db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。`--dry-run` なしの `db checkpoint` は DB の隣に snapshot を作り、`db restore <name>` は DB を置き換えて pre-restore backup directory を保持します。
 
 `--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
 
@@ -3720,6 +3745,8 @@ cdidx symbols --visibility public,internal           # public/internal シンボ
 cdidx symbols --exclude-visibility private           # private シンボルを除外
 cdidx symbols --kind function --sort hotspot --json  # hotspot ranking の audit stream
 cdidx symbols --kind function --sort size --json     # 大きい definition から表示
+cdidx symbols Run --json=array                       # NDJSON 行ではなく JSON array
+cdidx symbols Run --format lsp                       # LSP locations。qf / sarif も対応
 ```
 
 `--exact-name` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact-name` は `--name`、positional 名、他の全フィルタと組み合わせ可能。従来の `--exact` も後方互換で引き続き使えるが、`search` と意味がぶつからない `--exact-name` を推奨する。C# では抽出済みの canonical symbol name を渡す必要があり、演算子は `operator +` / `operator checked +`、変換演算子は `explicit operator Money` / `implicit operator decimal`、インデクサは `Item` で引く。canonical な C# operator/indexer 名へ変わる前に作った DB でも、通常の `cdidx index .` を 1 回流せば unchanged な C# 行を自動で再抽出して更新するため、この変更だけのために `--rebuild` は不要。upgrade 済みかどうかは `status --json` の `csharp_symbol_name_ready` で判定できる。fold は NFKC 正規化 + Unicode CaseFold で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S（`Straße` / `STRASSE`）、Greek final sigma（`Σ` / `ς` / `σ`）などの非 ASCII 差分も正しく一致する。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は依然 plain `i` ではなく `i\u0307` に fold される。stale な fold metadata を含む DB は、DB 内が current folded key のみになるまで ASCII `COLLATE NOCASE` に黙ってフォールバックする。stored folded key を再解析なしで更新したいなら `cdidx backfill-fold` を優先し、scan が stale row をすべて rewrite / purge できるなら通常の `cdidx index .` でも復帰できる。stale row が残る場合だけ `cdidx index . --rebuild` が必要。`status --json` の `fold_ready` で現在の経路を判定可能。
@@ -3742,6 +3769,8 @@ function   CreateUser                               src/Services/UserService.cs:
 ```json
 {"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
+
+後続ツールが newline-delimited symbol record ではなく単一 JSON array を必要とする場合は `--json=array` を使ってください。同じ symbol result set を editor location、quickfix 行、SARIF diagnostics として出したい場合は `--format lsp`、`--format qf`、`--format sarif` を使います。
 
 `definition --body` と `--json` を組み合わせた場合、`body_content` は bounded excerpt に cap され、保存された body が返却 payload を超えると `body_content_truncated` が true になります。
 
@@ -4020,8 +4049,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--body` | `definition`, `references`, `callers`, `callees`, `impact`, `inspect` | 再構成した本文、または上限付きの graph 位置抜粋を含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | 件数だけを返す。`search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` / `hotspots` は `--limit` を無視した総件数を返し、`impact` だけは visible page count のままで `--limit` によって切り詰められることがある（`--json` 併用時は単一の count オブジェクト。files 件数を出すコマンドは `files` も返す） |
 | `--group-by <symbol\|file\|statement>` | `hotspots` | hotspot の集計単位を選ぶ。既定は非 SQL scope では `symbol`、`--lang sql` では既存の statement-oriented grouping を保つため `statement`。JSON には `grouped_by` が入り、mixed-language 呼び出しでも現在の単位を確認できる。`file` は symbol hotspot の参照量を対象ファイル単位にまとめる。 |
-| `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では `definition_sites` / `paths` metadata を保持したまま返す。group ごとの `paths` sample は 20 件に制限し、さらに definition path がある場合は `paths_truncated` を返す。通常 JSON の top-level `count` は `--limit` 適用後に返された name/kind group 数であり、`--count` 併用時の `count`、`files`、`definition_site_total` は `--limit` を無視した総数を返す。生の incoming reference 数は各 hotspot の `reference_count` を参照する。hotspot の順位付けは重み付き invocation score（`call` / `instantiate` = 1.0、`subscribe` = 0.3）を使い、生の reference count も引き続き表示する。`attribute` / `annotation` / `type_reference` のような metadata-only edge は既定の hotspots から除外されたまま。 |
-| `--with-paths` | `impact` | 各 caller に `paths` 配列を付け、`[resolvedRoot, 中間..., callerName]` の順で最短呼び出し経路を列挙する。同 depth で複数経路が収束するダイヤモンド（例: `A → B → foo` と `A → C → foo`）でも、既定 dedup で潰れる経路をすべて表示する。1 行あたりの保持上限は 10 経路で、超過時は `paths_truncated` を `true` にする。既定では出力しないため、フラグ未指定時の挙動は変更しない。 |
+| `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では definition-site metadata を保持したまま返す。互換性のため group ごとの `paths` は 20 件までの sample として残し、`paths_truncated` はこの sample に未掲載の path があることだけを示す。`definition_site_details` には path、language、line、container、visibility、disambiguation key を含む全 definition-site list を返す。`representative` は表示対象として選ばれた site を示し、partial/type family が path sample の裏に隠れないようにする。通常 JSON の top-level `count` は `--limit` 適用後に返された name/kind group 数であり、`--count` 併用時の `count`、`files`、`definition_site_total` は `--limit` を無視した総数を返す。生の incoming reference 数は各 hotspot の `reference_count` を参照する。hotspot の順位付けは `ranking_score` を使い、重み付き invocation score（`call` / `instantiate` = 1.0、`subscribe` = 0.3）を基準に `Combine` や `GetString` のような広い名前へ `generic_name_penalty` を適用する。JSON には診断用に `reference_score`、`ranking_score`、`generic_name_penalty` を返す。`attribute` / `annotation` / `type_reference` のような metadata-only edge は既定の hotspots から除外されたまま。 |
+| `--with-paths` | `impact` | 各 caller に `paths` 配列を付け、`[resolvedRoot, 中間..., callerName]` の順で最短呼び出し経路を列挙する。さらに `path_details` に各 hop の definition path、definition line、language、kind、family key、logical target key、reference site metadata を出す。同 depth で複数経路が収束するダイヤモンド（例: `A → B → foo` と `A → C → foo`）でも、既定 dedup で潰れる経路をすべて表示しつつ、同名 symbol や partial symbol を区別できる。1 行あたりの保持上限は 10 経路で、超過時は `paths_truncated` を `true` にする。既定では出力しないため、フラグ未指定時の挙動は変更しない。 |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行（最大: 10000000） |
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ、最大: 10000000） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数（最大: 1000） |
@@ -4379,7 +4408,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 ## 対応言語
 
-全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。
+全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。現在の DB に存在する言語だけを一覧するには `cdidx languages --indexed-only --json` を使います。JSON 行には `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`indexed_file_count` が含まれます。言語名・認識済み拡張子/ファイル名 pattern・表示 alias から 1 行を取得するには `--language <name>`、`--extension <ext>`、`--alias <alias>` を追加してください。
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
@@ -4489,8 +4518,10 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 ### 言語別 extraction matrix
 
 現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
-`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。
-現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability や capability gap を監査する場合は
+`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。`--indexed-only` や
+`--language`、`--extension`、`--alias` による DB 参照付き lookup では `indexed_file_count` も含まれます。
+現在の DB に存在する言語だけを見たい場合は `--indexed-only`、言語名・拡張子・表示 alias から 1 行を特定したい場合は
+`--language <name>`、`--extension <ext>`、`--alias <alias>`、特定の構造化 capability や capability gap を監査する場合は
 `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
 

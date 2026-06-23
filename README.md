@@ -103,7 +103,7 @@ while skipping references for only the over-limit file.
 | Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts a read-only LSP shim for editors that can launch an LSP command. |
 | Freshness | `status --check`, `--files`, `--commits`, `--changed-between`, and `--watch` keep the DB aligned with the workspace. |
 | Validation | `cdidx validate` reports encoding and line-ending issues in indexed files. See [Validate indexed files](USER_GUIDE.md#validate-indexed-files). |
-| Language coverage | `cdidx languages --json` is the live capability probe. See [Supported languages](USER_GUIDE.md#supported-languages). |
+| Language coverage | `cdidx languages --json` is the live capability probe; add `--language`, `--extension`, or `--alias` to look up one row. See [Supported languages](USER_GUIDE.md#supported-languages). |
 | Custom extraction | Extension aliases and regex-backed symbol patterns are documented in [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction). |
 | Operations | Install channels, proxy diagnostics, release verification, upgrade, uninstall, troubleshooting, and output controls live in the [User Guide](USER_GUIDE.md). |
 | Internals | Architecture, database schema, status trust fields, release workflow, and extractor contracts live in the [Developer Guide](DEVELOPER_GUIDE.md). |
@@ -284,7 +284,7 @@ cdidx lsp --db .cdidx/codeindex.db
 | editor lookup | `cdidx lsp --db .cdidx/codeindex.db` は、LSP command を起動できる editor 向けの read-only LSP shim です。 |
 | 鮮度管理 | `status --check`、`--files`、`--commits`、`--changed-between`、`--watch` で DB と workspace を揃えます。 |
 | validation | `cdidx validate` は indexed file の encoding / line-ending 問題を報告します。詳細は [Indexed files を validate する](USER_GUIDE.md#indexed-files-を-validate-する)。 |
-| 対応言語 | `cdidx languages --json` が live capability probe です。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |
+| 対応言語 | `cdidx languages --json` が live capability probe です。`--language`、`--extension`、`--alias` で 1 行を lookup できます。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |
 | custom extraction | 拡張子 alias と regex-backed symbol pattern は [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) にあります。 |
 | 運用 | install channel、proxy 診断、release 検証、upgrade、uninstall、troubleshooting、output controls は [ユーザーガイド](USER_GUIDE.md#cdidx日本語) にあります。 |
 | 内部仕様 | architecture、database schema、status trust field、release workflow、extractor contract は [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド) にあります。 |
