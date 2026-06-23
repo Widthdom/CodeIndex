@@ -1046,10 +1046,16 @@ internal sealed record SearchIssueDraftJsonResult(
     [property: JsonPropertyName("label_warning")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LabelWarning,
     [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
+    [property: JsonPropertyName("evidence")] List<SearchIssueDraftEvidenceJsonResult> Evidence,
     [property: JsonPropertyName("triage")] IssueDraftTriageMetadataJsonResult Triage,
     [property: JsonPropertyName("body")] string Body,
     [property: JsonPropertyName("source")] SearchIssueDraftSourceJsonResult Source,
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);
+
+internal sealed record SearchIssueDraftEvidenceJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("line")] int Line,
+    [property: JsonPropertyName("snippet")] string Snippet);
 
 internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("recipe")] string? Recipe,
@@ -1058,7 +1064,13 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
-    [property: JsonPropertyName("result_count")] int ResultCount);
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("result_limit")] int ResultLimit,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount,
+    [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("next_cursor")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor);
 
 internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonPropertyName("name")] string Name,

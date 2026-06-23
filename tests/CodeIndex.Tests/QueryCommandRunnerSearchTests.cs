@@ -2812,6 +2812,79 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RecipeIssueDraftsIncludeRepresentativeEvidenceAndOmittedCounts_Issue3950()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        System.Console.Error.WriteLine(ex.Message);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                """
+                public sealed class B
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        _ = ex.Message;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "1",
+                    "--snippet-lines", "3"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var evidence = Assert.Single(draft.GetProperty("evidence").EnumerateArray());
+            var source = draft.GetProperty("source");
+            var body = draft.GetProperty("body").GetString();
+
+            Assert.StartsWith("src/", evidence.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.True(evidence.GetProperty("line").GetInt32() > 0);
+            Assert.Contains("ex.Message", evidence.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, source.GetProperty("result_limit").GetInt32());
+            Assert.Equal(1, source.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(1, source.GetProperty("minimum_omitted_result_count").GetInt32());
+            Assert.True(source.GetProperty("truncated").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(source.GetProperty("next_cursor").GetString()));
+            Assert.Contains("## Representative evidence", body, StringComparison.Ordinal);
+            Assert.Contains("ex.Message", body, StringComparison.Ordinal);
+            Assert.Contains("## Omitted results", body, StringComparison.Ordinal);
+            Assert.Contains("minimum_omitted_result_count: `1`", body, StringComparison.Ordinal);
+            Assert.Contains("## Replay command", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("public sealed class", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AdHocIssueDraftsUseTitleLabelsAndDuplicatePreflight_Issue3520()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_drafts_ad_hoc");
