@@ -595,8 +595,8 @@ public partial class McpServer : IDisposable
 
     private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
     {
-        using var writeGate = new SemaphoreSlim(1, 1);
-        using var normalFrameGate = new SemaphoreSlim(1, 1);
+        var writeGate = new SemaphoreSlim(1, 1);
+        var normalFrameGate = new SemaphoreSlim(1, 1);
         var tasks = new List<Task>();
 
         while (_running)
@@ -747,6 +747,20 @@ public partial class McpServer : IDisposable
         }
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
+        if (tasks.All(static task => task.IsCompleted))
+        {
+            writeGate.Dispose();
+            normalFrameGate.Dispose();
+        }
+        else
+        {
+            // The bounded EOF drain can intentionally leave late request tasks running. Those
+            // tasks still own these gates until their finally blocks run, so disposing here would
+            // turn late completion into ObjectDisposedException (#3999).
+            // bounded EOF drain は late request task を残すことがある。finally が走るまで gate は
+            // その task が使うため、ここで dispose すると late completion が ObjectDisposedException
+            // になってしまう (#3999)。
+        }
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
