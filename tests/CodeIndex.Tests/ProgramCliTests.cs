@@ -776,6 +776,23 @@ public class ProgramCliTests
         Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
     }
 
+    [Theory]
+    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json")]
+    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json=array")]
+    [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "--json")]
+    [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "zsh", "--json")]
+    [InlineData(CommandExitCodes.InvalidArgument, "config show supports --json only; --json=<format> is not supported.", "config", "show", "--json=array")]
+    public void UtilityCommands_JsonFlagsReturnStructuredUnsupportedErrors(int expectedExitCode, string expectedMessage, params string[] args)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(args);
+
+        Assert.Equal(expectedExitCode, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(expectedMessage, document.RootElement.GetProperty("message").GetString());
+    }
+
     [Fact]
     public void Mcp_JsonFlagReturnsExplicitUnsupportedError()
     {
