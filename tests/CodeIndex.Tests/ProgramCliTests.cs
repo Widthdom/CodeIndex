@@ -705,6 +705,7 @@ public class ProgramCliTests
             {
                 ["CDIDX_DATA_DIR"] = Path.Combine(Path.GetTempPath(), "cdidx-doctor-data"),
                 ["CDIDX_GITHUB_TOKEN"] = "secret-token-value",
+                [GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable] = "true",
                 ["CDIDX_PRIVATE_KEY"] = "private-key-value",
             });
 
@@ -715,12 +716,18 @@ public class ProgramCliTests
         Assert.Contains("rid", stdout);
         Assert.Contains("terminal:", stdout);
         Assert.Contains("paths:", stdout);
+        Assert.Contains("github:", stdout);
+        Assert.Contains("proxy_default_credentials", stdout);
+        Assert.Contains("enabled", stdout);
+        Assert.Contains("max_request_timeout_s", stdout);
         Assert.Contains("cdidx_env:", stdout);
         Assert.Contains("CDIDX_DATA_DIR", stdout);
         Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, stdout);
         Assert.Contains("CDIDX_PRIVATE_KEY", stdout);
         Assert.Contains("<redacted>", stdout);
         Assert.DoesNotContain("secret-token-value", stdout);
+        Assert.DoesNotContain("= true", stdout);
         Assert.DoesNotContain("private-key-value", stdout);
     }
 

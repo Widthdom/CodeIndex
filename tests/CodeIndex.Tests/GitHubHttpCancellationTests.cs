@@ -19,6 +19,26 @@ public sealed class GitHubHttpCancellationTests : IDisposable
     }
 
     [Fact]
+    public void GitHubHttpClientFactory_NormalizesInfiniteTimeoutToBoundedMaximum_Issue3954()
+    {
+        Assert.Equal(
+            GitHubHttpClientFactory.MaxRequestTimeout,
+            GitHubHttpClientFactory.NormalizeRequestTimeout(Timeout.InfiniteTimeSpan));
+        Assert.Equal(
+            GitHubHttpClientFactory.MaxRequestTimeout,
+            GitHubHttpClientFactory.NormalizeRequestTimeout(GitHubHttpClientFactory.MaxRequestTimeout + TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void GitHubHttpClientFactory_ReportsProxyDefaultCredentialsStatusWithoutValue_Issue3954()
+    {
+        env.Set(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, "true");
+
+        Assert.True(GitHubHttpClientFactory.ShouldUseDefaultProxyCredentials());
+        Assert.Equal("enabled", GitHubHttpClientFactory.FormatProxyDefaultCredentialsStatus());
+    }
+
+    [Fact]
     public async Task UpdateChecker_FetchLatestReleaseTagAsync_RequestTimeoutCancelsPendingSend_Issue3684()
     {
         var handler = new BlockingHttpMessageHandler();

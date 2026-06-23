@@ -447,6 +447,10 @@ internal static partial class ProgramRunner
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
         Console.WriteLine();
+        Console.WriteLine("github:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("proxy_default_credentials", GitHubHttpClientFactory.FormatProxyDefaultCredentialsStatus(), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_request_timeout_s", GitHubHttpClientFactory.MaxRequestTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture), indent: "  "));
+        Console.WriteLine();
         Console.WriteLine("cdidx_env:");
         foreach (var (key, value) in EnumerateCdidxEnvironment())
             Console.WriteLine(ConsoleUi.FormatSummaryLine(key, value, indent: "  "));
