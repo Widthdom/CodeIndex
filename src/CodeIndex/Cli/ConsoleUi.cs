@@ -88,7 +88,9 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--group-by <file|symbol>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--group-by <file|symbol>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>] [--unique <path|symbol|origin>] [--count-by <path|symbol|origin>] [--origin <origin>] [--match-origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--search-fields <fields>] [--results-only] [--first-per-file] [--sample <n>] [--per-file-limit <n>] [--max-json-bytes <n>] [--next-steps]"),
+        ("recipes", "cdidx recipes [--json] [--pretty]"),
+        ("audit", "cdidx audit <recipe|recipe/query> [search filters] [--json] [--format <text|json|issue-drafts>]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
@@ -138,6 +140,8 @@ public static class ConsoleUi
     [
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("completions", "--json is not supported; output is a shell script for the selected shell."),
+        ("recipes", "Alias for `cdidx search --list-recipes`; recipe-list JSON is a single object, so --json=array is rejected."),
+        ("audit", "Alias for `cdidx search --recipe <recipe>`; pass search filters after the recipe name."),
         ("db", "schema defaults to the full sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for bounded diagnostics."),
         ("db", "checkpoint --dry-run reports the DB/WAL/SHM files and byte count without creating the checkpoint directory."),
         ("db", "checkpoint creates a filesystem snapshot next to the DB; restore replaces the DB and keeps a pre-restore backup directory."),
@@ -946,6 +950,8 @@ public static class ConsoleUi
         Console.WriteLine("  optimize                   Optimize FTS5 segments in an existing index DB");
         Console.WriteLine("  vacuum                     Reclaim free SQLite pages from an existing index DB");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
+        Console.WriteLine("  recipes                    List built-in search audit recipes");
+        Console.WriteLine("  audit <recipe>             Run a built-in search audit recipe");
         Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
         Console.WriteLine("  goto <query>               Return one best LSP Location for a definition");
         Console.WriteLine("  references <query>         Find indexed references for a symbol (--kind uses reference kind)");
@@ -1421,7 +1427,7 @@ public static class ConsoleUi
 
     private static readonly string[] Commands =
     [
-        "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
