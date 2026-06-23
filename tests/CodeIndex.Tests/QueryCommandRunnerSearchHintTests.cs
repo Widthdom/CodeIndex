@@ -183,6 +183,49 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_PunctuationHeavyJsonArrayAddsHintOnlyToFirstResult_Issue3903()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_substring_hint_once_3903");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/one.cs",
+                "csharp",
+                "var items = values.ToArray();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/two.cs",
+                "csharp",
+                "return values.ToArray();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["ToArray()", "--db", dbPath, "--json=array", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Length);
+            Assert.True(rows[0].TryGetProperty("exact_substring_hint", out _));
+            Assert.DoesNotContain(rows.Skip(1), row => row.TryGetProperty("exact_substring_hint", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void SearchQueryAdvisor_SuggestsExactSubstringForTwoTokenCodePhrase_Issue3975()
+    {
+        Assert.True(SearchQueryAdvisor.ShouldSuggestExactSubstring("async void", rawQuery: false, exact: false, prefix: false));
+    }
+
+    [Fact]
     public void RunSearch_PunctuationHeavyJsonArraySuppressesRankOnlyRows_Issue2821()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_rank_only_2821");

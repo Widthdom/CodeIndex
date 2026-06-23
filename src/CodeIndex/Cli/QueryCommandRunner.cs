@@ -3441,8 +3441,9 @@ public static partial class QueryCommandRunner
     {
         if (hint == null)
             return;
-        foreach (var result in results)
-            result.ExactSubstringHint = hint;
+        var first = results.FirstOrDefault();
+        if (first != null)
+            first.ExactSubstringHint = hint;
     }
 
     private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, DbReader? reader = null)
