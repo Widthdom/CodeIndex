@@ -15431,6 +15431,11 @@ public sealed class Caller
         var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
         Assert.Equal("description", rejection["field"]!.GetValue<string>());
         Assert.Equal(SourceCodeDetector.ReasonStatementEnding, rejection["reason_code"]!.GetValue<string>());
+        var reasonCounts = rejection["reason_code_counts"]!.AsObject();
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonStatementEnding]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonIndentedCodeLines]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonBlockStructure]!.GetValue<int>());
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonFunctionDefinition]!.GetValue<int>());
     }
 
     [Fact]
@@ -15458,6 +15463,8 @@ public sealed class Caller
         var rejection = response["result"]!["structuredContent"]!["source_code_rejection"]!;
         Assert.Equal("description", rejection["field"]!.GetValue<string>());
         Assert.Equal(SourceCodeDetector.ReasonFencedCodeBlock, rejection["reason_code"]!.GetValue<string>());
+        var reasonCounts = rejection["reason_code_counts"]!.AsObject();
+        Assert.Equal(1, reasonCounts[SourceCodeDetector.ReasonFencedCodeBlock]!.GetValue<int>());
         Assert.DoesNotContain(leakedToken, response.ToJsonString());
     }
 
