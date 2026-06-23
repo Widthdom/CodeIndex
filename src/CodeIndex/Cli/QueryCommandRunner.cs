@@ -154,6 +154,7 @@ public static partial class QueryCommandRunner
         "--lang",
         "--kind",
         "--bucket",
+        "--confidence",
         "--min-confidence",
         "--severity",
         "--visibility",
@@ -316,6 +317,7 @@ public static partial class QueryCommandRunner
         "--quiet",
         "-q",
         "--silent",
+        "--actionable",
         "--by-bucket",
         "--all",
         "--summary-only",
@@ -8782,6 +8784,7 @@ public static partial class QueryCommandRunner
         var visibilityFilters = new List<string>();
         var excludeVisibilityFilters = new List<string>();
         bool excludeTests = false;
+        bool unusedActionable = false;
         bool includeGenerated = false;
         DateTime? since = null;
         bool noDedup = false;
@@ -9406,8 +9409,10 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(unusedBucketError!);
                     break;
+                case "--confidence":
                 case "--min-confidence":
-                    if (TryReadStringOptionValue(args, ref i, "--min-confidence", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var minUnusedConfidenceValue, out var minUnusedConfidenceError))
+                    var confidenceFlag = normalizedArg;
+                    if (TryReadStringOptionValue(args, ref i, confidenceFlag, inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var minUnusedConfidenceValue, out var minUnusedConfidenceError))
                     {
                         WarnIfDuplicateSingleValueOption("--min-confidence", minUnusedConfidenceValue!);
                         minUnusedConfidence = minUnusedConfidenceValue?.ToLowerInvariant();
@@ -9847,6 +9852,9 @@ public static partial class QueryCommandRunner
                 case "--exclude-fixtures":
                     excludeFixtures = true;
                     break;
+                case "--actionable":
+                    unusedActionable = true;
+                    break;
                 case "--include-generated":
                     includeGenerated = true;
                     break;
@@ -10033,6 +10041,15 @@ public static partial class QueryCommandRunner
             }
         }
 
+        if (unusedActionable)
+        {
+            unusedBucket ??= "likely_unused_private";
+            minUnusedConfidence ??= "medium";
+            if (visibilityFilters.Count == 0)
+                visibilityFilters.Add("private");
+            excludeTests = true;
+        }
+
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
         var resolvedDbPath = dbResolution.DbPath;
 
@@ -10093,6 +10110,7 @@ public static partial class QueryCommandRunner
             Kind = kind,
             UnusedBucket = unusedBucket,
             MinUnusedConfidence = minUnusedConfidence,
+            UnusedActionable = unusedActionable,
             Severity = severity,
             Query = query,
             RawFts = rawFts,
@@ -11969,6 +11987,8 @@ public static partial class QueryCommandRunner
             yield return $"bucket: {options.UnusedBucket}";
         if (options.MinUnusedConfidence != null)
             yield return $"min-confidence: {options.MinUnusedConfidence}";
+        if (options.UnusedActionable)
+            yield return "actionable: true";
         if (options.RankMode != ReferenceRankMode.Weighted)
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
@@ -12025,6 +12045,8 @@ public static partial class QueryCommandRunner
             query["bucket"] = options.UnusedBucket;
         if (options.MinUnusedConfidence != null)
             query["min_confidence"] = options.MinUnusedConfidence;
+        if (options.UnusedActionable)
+            query["actionable"] = true;
         if (options.AuditScopeExplicit)
             query["audit_scope"] = options.AuditScope;
         if (options.VisibilityFilters.Count > 0)
@@ -13478,6 +13500,7 @@ public static partial class QueryCommandRunner
         ["--cursor"] = "pass the `next_cursor` returned by a prior recipe search response; use it with one selected recipe query.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
         ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
+        ["--confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--visibility"] = "pass one or more of public, protected, internal, private, e.g. `--visibility public,internal`.",
         ["--exclude-visibility"] = "pass one or more of public, protected, internal, private to exclude, e.g. `--exclude-visibility private`.",
@@ -13838,6 +13861,7 @@ public sealed class QueryCommandOptions
     public string? Kind { get; init; }
     public string? UnusedBucket { get; init; }
     public string? MinUnusedConfidence { get; init; }
+    public bool UnusedActionable { get; init; }
     public string? Severity { get; init; }
     public List<string> VisibilityFilters { get; init; } = [];
     public List<string> ExcludeVisibilityFilters { get; init; } = [];

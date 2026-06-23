@@ -1231,6 +1231,36 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_ActionableUsesConfidenceAliasForPrivateCandidates_Issue3977()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--actionable", "--confidence", "medium"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var query = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", query.GetProperty("bucket").GetString());
+            Assert.Equal("medium", query.GetProperty("min_confidence").GetString());
+            Assert.True(query.GetProperty("actionable").GetBoolean());
+            Assert.True(query.GetProperty("exclude_tests").GetBoolean());
+            Assert.Equal("private", query.GetProperty("visibility")[0].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_CSharpPartialClassReferencesDoNotReportPrivateHandlers_Issue3673()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_partial_handlers_3673");
