@@ -3967,6 +3967,9 @@ public partial class DbReader
         var parenDepth = 0;
         for (var i = 0; i < signature.Length; i++)
         {
+            if (TrySkipCSharpSignatureLiteral(signature, ref i))
+                continue;
+
             var ch = signature[i];
             if (ch == '(')
             {
@@ -3993,6 +3996,9 @@ public partial class DbReader
         var depth = 0;
         for (var i = openIndex; i < text.Length; i++)
         {
+            if (TrySkipCSharpSignatureLiteral(text, ref i))
+                continue;
+
             if (text[i] == '(')
             {
                 depth++;
@@ -4008,6 +4014,112 @@ public partial class DbReader
         }
 
         return -1;
+    }
+
+    private static bool TrySkipCSharpSignatureLiteral(string text, ref int index)
+    {
+        if (text[index] == '\'' && TrySkipCSharpCharacterLiteral(text, ref index))
+            return true;
+
+        if (text[index] == '@' && index + 1 < text.Length && text[index + 1] == '"')
+        {
+            index++;
+            return TrySkipCSharpVerbatimStringLiteral(text, ref index);
+        }
+
+        if (text[index] != '"')
+            return false;
+
+        var quoteRunLength = CountCSharpQuoteRun(text, index);
+        if (quoteRunLength >= 3)
+            return TrySkipCSharpRawStringLiteral(text, ref index, quoteRunLength);
+
+        return TrySkipCSharpRegularStringLiteral(text, ref index);
+    }
+
+    private static int CountCSharpQuoteRun(string text, int start)
+    {
+        var index = start;
+        while (index < text.Length && text[index] == '"')
+            index++;
+        return index - start;
+    }
+
+    private static bool TrySkipCSharpCharacterLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '\'')
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpRegularStringLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '"')
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpVerbatimStringLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            index = i;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpRawStringLiteral(string text, ref int index, int quoteRunLength)
+    {
+        for (var i = index + quoteRunLength; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+
+            if (CountCSharpQuoteRun(text, i) < quoteRunLength)
+                continue;
+
+            index = i + quoteRunLength - 1;
+            return true;
+        }
+
+        return false;
     }
 
     private static int SkipCSharpSignatureWhitespace(string text, int index)

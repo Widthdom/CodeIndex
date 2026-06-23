@@ -1458,7 +1458,7 @@ public partial class QueryCommandRunnerTests
                         return includePagination && limit >= offset;
                     }
 
-                    private static string WithDefaultParameter(string value = "demo")
+                    private static string WithDefaultParameter(string value = "(")
                     {
                         return value;
                     }
