@@ -864,7 +864,7 @@ public static partial class IndexCommandRunner
         // full-scan の書き込み全体を outer transaction に入れ、中断時に batch marker /
         // readiness clear / purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
-        using var fullScanTxn = writer.BeginTransaction();
+        using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
         writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
@@ -1395,7 +1395,7 @@ public static partial class IndexCommandRunner
 
                         if (writer.HasFileAtPath(currentJsonIndexFile))
                         {
-                            using var deleteTxn = writer.BeginTransaction();
+                            using var deleteTxn = writer.BeginTransaction(cancellationToken, "full scan delete skipped file");
                             if (writer.DeleteFileByPath(currentJsonIndexFile))
                             {
                                 WriteProjectRootOnce();
@@ -1483,7 +1483,7 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    using var txn = writer.BeginTransaction();
+                    using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
                     if (!startedWithNoIndexedFiles)
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
@@ -1497,9 +1497,9 @@ public static partial class IndexCommandRunner
                     var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
-                        writer.InsertChunks(chunks);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertChunks(chunks, cancellationToken);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         var generatedIssues = AppendIssueIfMissing(
                             item.Issues ?? ValidateWorkItemContent(item, record),
                             generatedSuppressionIssue);
@@ -1544,8 +1544,8 @@ public static partial class IndexCommandRunner
                         IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         if (options.Verbose)
                             WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
@@ -1574,8 +1574,8 @@ public static partial class IndexCommandRunner
                         IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([]);
-                        writer.InsertReferences([]);
+                        writer.InsertSymbols([], cancellationToken);
+                        writer.InsertReferences([], cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         if (options.Verbose)
                             WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
@@ -1591,9 +1591,9 @@ public static partial class IndexCommandRunner
                         currentJsonIndexFile = null;
                         continue;
                     }
-                    writer.InsertChunks(chunks);
+                    writer.InsertChunks(chunks, cancellationToken);
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
-                    writer.InsertSymbols(symbols);
+                    writer.InsertSymbols(symbols, cancellationToken);
                     if (symbolRegexTimeoutIssue != null)
                     {
                         var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
@@ -1651,7 +1651,7 @@ public static partial class IndexCommandRunner
                             item = item with { Issues = AppendIssue(baseIssues, issue) };
                         }
                     }
-                    writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
                     if (references.Count > 0)
                         mutualRecursionRefreshNeeded = true;
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");

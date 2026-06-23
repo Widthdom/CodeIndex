@@ -891,7 +891,7 @@ public class DbWriter
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = "SELECT id, path FROM files WHERE path <> @path";
-            cmd.Parameters.AddWithValue("@path", retainedRelativePath);
+            SqliteCommandPolicy.Add(cmd, "@path", retainedRelativePath);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -1852,7 +1852,7 @@ public class DbWriter
         // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
         using var delCmd = _conn.CreateCommand();
         delCmd.CommandText = "DELETE FROM file_issues WHERE file_id = @fid";
-        delCmd.Parameters.AddWithValue("@fid", fileId);
+        SqliteCommandPolicy.Add(delCmd, "@fid", fileId);
         delCmd.ExecuteNonQuery();
 
         if (issues.Count == 0) return;
@@ -3507,7 +3507,7 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-        cmd.Parameters.AddWithValue("@key", key);
+        SqliteCommandPolicy.Add(cmd, "@key", key);
         return cmd.ExecuteScalar() as string;
     }
     public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
@@ -3518,7 +3518,7 @@ public class DbWriter
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
-        cmd.Parameters.AddWithValue("@name", name);
+        SqliteCommandPolicy.Add(cmd, "@name", name);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -3745,7 +3745,7 @@ public class DbWriter
             : rewriteAll
             ? "SELECT 0"
             : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-        symbols.Parameters.AddWithValue("@lastSymbolId", lastSymbolId);
+        SqliteCommandPolicy.Add(symbols, "@lastSymbolId", lastSymbolId);
 
         using var references = _conn.CreateCommand();
         references.CommandText = rewriteAll
@@ -3757,7 +3757,7 @@ public class DbWriter
                 FROM symbol_references
                 WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                    OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-        references.Parameters.AddWithValue("@lastReferenceId", phase == "references" ? lastReferenceId : 0);
+        SqliteCommandPolicy.Add(references, "@lastReferenceId", phase == "references" ? lastReferenceId : 0);
 
         return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
     }
@@ -3781,7 +3781,7 @@ public class DbWriter
             cmd.CommandText = rewriteAll
                 ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
                 : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-            cmd.Parameters.AddWithValue("@lastSymbolId", lastSymbolId);
+            SqliteCommandPolicy.Add(cmd, "@lastSymbolId", lastSymbolId);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -3829,7 +3829,7 @@ public class DbWriter
                     FROM symbol_references
                     WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                        OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-            cmd.Parameters.AddWithValue("@lastReferenceId", lastReferenceId);
+            SqliteCommandPolicy.Add(cmd, "@lastReferenceId", lastReferenceId);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {

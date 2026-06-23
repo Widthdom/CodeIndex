@@ -1697,48 +1697,17 @@ public static class DbCommandRunner
         out string fullPath,
         out string failureReason)
     {
-        fullPath = string.Empty;
-        failureReason = string.Empty;
-        try
-        {
-            fullPath = PathCasing.NormalizeBoundaryPath(path);
-            var normalizedRoot = PathCasing.NormalizeBoundaryPath(safeRoot);
-            if (string.Equals(fullPath, normalizedRoot, PathCasing.ComparisonFor(normalizedRoot))
-                || !PathCasing.IsPathEqualOrParent(normalizedRoot, fullPath))
-            {
-                failureReason = "target is outside the expected cleanup root";
-                return false;
-            }
-
-            if (!Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
-            {
-                failureReason = "target name does not match the expected temporary-directory prefix";
-                return false;
-            }
-
-            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
-            if (Directory.Exists(longPath))
-            {
-                var attributes = File.GetAttributes(longPath);
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
-                {
-                    failureReason = "target is not a regular temporary directory";
-                    return false;
-                }
-            }
-            else if (File.Exists(longPath))
-            {
-                failureReason = "target is not a directory";
-                return false;
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
-        {
-            failureReason = "target path is invalid";
-            return false;
-        }
+        var options = new DirectoryCleanupBoundaryOptions(
+            expectedNamePrefix,
+            "target is outside the expected cleanup root",
+            "target name does not match the expected temporary-directory prefix",
+            "target is not a regular temporary directory");
+        return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+            path,
+            safeRoot,
+            options,
+            out fullPath,
+            out failureReason);
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)

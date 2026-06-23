@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Xml;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -390,6 +391,68 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Name == "requestedExecutionLevel.uiAccess");
         Assert.Contains(symbols, symbol => symbol.Name == "supportedOS.{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}");
         Assert.Contains(symbols, symbol => symbol.Name == "longPathAware");
+    }
+
+    [Theory]
+    [InlineData(DtdProcessing.Prohibit)]
+    [InlineData(DtdProcessing.Ignore)]
+    public void CreateExtractionXmlReaderSettings_UsesSharedLimits_Issue3981(DtdProcessing dtdProcessing)
+    {
+        var settings = SymbolExtractor.CreateExtractionXmlReaderSettings(dtdProcessing);
+
+        Assert.Equal(dtdProcessing, settings.DtdProcessing);
+        Assert.True(settings.IgnoreComments);
+        Assert.True(settings.IgnoreProcessingInstructions);
+        Assert.Equal(SymbolExtractor.XmlExtractionMaxCharactersInDocument, settings.MaxCharactersInDocument);
+        Assert.Equal(SymbolExtractor.XmlExtractionMaxCharactersFromEntities, settings.MaxCharactersFromEntities);
+    }
+
+    [Fact]
+    public void Extract_AppManifest_IgnoresDtdWithSharedReaderPolicy_Issue3981()
+    {
+        const string content = """
+            <!DOCTYPE assembly [
+              <!ENTITY local "ignored">
+            ]>
+            <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
+            </assembly>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "app_manifest", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "assembly"
+            && symbol.Name == "CodeIndex.App"
+            && symbol.Line == 5);
+    }
+
+    [Fact]
+    public void TryGetXmlStructureIssue_DtdDetectionDoesNotUseExceptionMessage_Issue3981()
+    {
+        const string content = """
+            <?xml version="1.0"?>
+            <!-- <!DOCTYPE ignored> -->
+            <!DOCTYPE root [
+              <!ENTITY injected "value">
+            ]>
+            <root />
+            """;
+
+        Assert.True(SymbolExtractor.TryGetXmlStructureIssue(content, out var issue));
+        Assert.Equal("xml_dtd_prohibited", issue.Kind);
+        Assert.Equal(3, issue.Line);
+    }
+
+    [Fact]
+    public void TryGetXmlStructureIssue_DocumentCharactersBeyondLimitEmitsBudgetIssue_Issue3981()
+    {
+        var content = "<root>" + new string('a', (int)SymbolExtractor.XmlExtractionMaxCharactersInDocument) + "</root>";
+
+        Assert.True(SymbolExtractor.TryGetXmlStructureIssue(content, out var issue));
+        Assert.Equal("xml_structure_budget_exceeded", issue.Kind);
+        Assert.Equal(1, issue.Line);
+        Assert.Contains("document length", issue.Message, StringComparison.Ordinal);
     }
 
     [Fact]

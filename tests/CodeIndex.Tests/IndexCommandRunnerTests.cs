@@ -568,6 +568,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void WorkerProtocol_RejectsExcessiveJsonDepth_Issue3908()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                WorkerProtocolJsonValidator.MaxJsonDepthForTesting = 4;
+                using var input = new StringReader("{\"FileId\":0,\"Lang\":{\"nested\":{\"too\":{\"deep\":\"csharp\"}}}}\n");
+                using var output = new StringWriter();
+                using var error = new StringWriter();
+
+                var handled = SymbolExtractionWorker.TryRunCommand(
+                    [SymbolExtractionWorker.CommandName],
+                    input,
+                    output,
+                    error,
+                    out var exitCode);
+
+                Assert.True(handled);
+                Assert.Equal(0, exitCode);
+                Assert.Equal(string.Empty, error.ToString());
+                using var document = JsonDocument.Parse(output.ToString());
+                var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+                Assert.Equal("worker_protocol_error: JsonException", workerError);
+            }
+            finally
+            {
+                WorkerProtocolJsonValidator.MaxJsonDepthForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
     public void WorkerProtocol_RejectsOversizedJsonStrings_Issue3759()
     {
         lock (TestConsoleLock.Gate)

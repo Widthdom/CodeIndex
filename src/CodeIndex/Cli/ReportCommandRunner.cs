@@ -674,16 +674,14 @@ public static class ReportCommandRunner
         if (maxLines <= 0)
             return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: false, LineCharsTruncated: false);
 
-        using var stream = File.OpenRead(path);
-        var startOffset = Math.Max(0, stream.Length - MaxLogFileTailBytes);
-        stream.Seek(startOffset, SeekOrigin.Begin);
+        using var stream = BoundedFile.OpenReadForTailWindow(path, MaxLogFileTailBytes, out var bytesTruncated);
         using var reader = new StreamReader(
             stream,
             Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: startOffset == 0,
+            detectEncodingFromByteOrderMarks: !bytesTruncated,
             bufferSize: 8192,
             leaveOpen: false);
-        if (startOffset > 0)
+        if (bytesTruncated)
         {
             if (ReadBoundedLogLine(reader, out _) == null)
                 return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: true, LineCharsTruncated: false);
@@ -703,7 +701,7 @@ public static class ReportCommandRunner
         var linesTruncated = lines.Count > maxLines;
         if (linesTruncated)
             lines.Dequeue();
-        return new ReportLogTailReadResult(lines.ToArray(), linesTruncated, startOffset > 0, lineCharsTruncated);
+        return new ReportLogTailReadResult(lines.ToArray(), linesTruncated, bytesTruncated, lineCharsTruncated);
     }
 
     private static string? ReadBoundedLogLine(StreamReader reader, out bool lineTruncated)

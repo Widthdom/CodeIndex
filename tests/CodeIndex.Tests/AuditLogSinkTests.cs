@@ -185,6 +185,113 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_LongNonSecretString_TruncatesWithoutRedaction_Issue3909()
+    {
+        var text = new string('x', 100_000);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.True(state.Truncated);
+        Assert.Contains("string_length_limit", state.TruncationReasons);
+        Assert.Equal(
+            new string('x', AuditLogSink.MaxArgValueStringChars) + "...",
+            sanitized!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_SecretNearDisplayBoundary_RedactsWholeValue_Issue3909()
+    {
+        var padding = new string('x', AuditLogSink.MaxArgValueStringChars - 3);
+        var text = padding + "token=" + new string('s', 64);
+        Assert.True(text.IndexOf("token=", StringComparison.Ordinal) < AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_LongUriCredentialPrefix_RedactsWholeValue_Issue3909()
+    {
+        var password = new string('p', AuditLogSink.MaxSecretValueScanChars);
+        var text = "https://user:" + password + "@example.test/path";
+        Assert.True(text.IndexOf('@', StringComparison.Ordinal) >= AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_LongUriCredentialWithDelimitedPassword_RedactsWholeValue_Issue3909()
+    {
+        var password = "p;" + new string('q', AuditLogSink.MaxSecretValueScanChars);
+        var text = "https://user:" + password + "@example.test/path";
+        Assert.True(text.IndexOf('@', StringComparison.Ordinal) >= AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(";")]
+    [InlineData(",")]
+    [InlineData("'")]
+    public void SanitizeArgValue_LongUriCredentialStartingWithDelimiter_RedactsWholeValue_Issue3909(string delimiter)
+    {
+        var password = delimiter + new string('q', AuditLogSink.MaxSecretValueScanChars);
+        var text = "https://user:" + password + "@example.test/path";
+        Assert.True(text.IndexOf('@', StringComparison.Ordinal) >= AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_BareHostPortUri_DoesNotRedact_Issue3909()
+    {
+        const string text = "http://localhost:5000";
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.Equal(text, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_LongTextWithDelimitedHostPortUri_DoesNotRedact_Issue3909()
+    {
+        var text = "\"http://localhost:5000\";" + new string('x', AuditLogSink.MaxSecretValueScanChars);
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(text), state);
+
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.True(state.Truncated);
+        Assert.StartsWith("\"http://localhost:5000\";", sanitized!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SanitizeArgValue_BudgetsPayloadBeforeClone_Issue3106()
     {
         var items = new JsonArray();
@@ -738,6 +845,40 @@ public class AuditLogSinkTests
             Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
 
             Assert.False(sink.WaitForIdle(TimeSpan.Zero));
+
+            releaseWriter.Set();
+            WaitForAuditLogIdle(sink);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void WaitForIdle_CancelledTokenStopsWaiting_Issue3946()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_idle_cancel_{Guid.NewGuid():N}.jsonl");
+        using var writerEntered = new ManualResetEventSlim();
+        using var releaseWriter = new ManualResetEventSlim();
+        using var waitCancellation = new CancellationTokenSource();
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            sink.BeforeWriteForTests = () =>
+            {
+                writerEntered.Set();
+                releaseWriter.Wait();
+            };
+
+            sink.Record(CreateAuditEvent("search"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
+
+            waitCancellation.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                sink.WaitForIdle(TimeSpan.FromSeconds(5), waitCancellation.Token));
 
             releaseWriter.Set();
             WaitForAuditLogIdle(sink);

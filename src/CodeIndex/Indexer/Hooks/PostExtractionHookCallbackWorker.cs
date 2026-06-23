@@ -374,7 +374,8 @@ internal static class PostExtractionHookCallbackWorker
     internal const int WorkerKillWaitMilliseconds = 5000;
     private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     private const int CapturedConsoleMaxChars = 32 * 1024;
-    internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackWorkerJsonContext.Default.Options;
+    internal static readonly JsonSerializerOptions JsonOptions =
+        WorkerProtocolJsonValidator.CreateSerializerOptions(PostExtractionHookCallbackWorkerJsonContext.Default.Options);
 
     internal static bool TryRunCommand(
         string[] args,

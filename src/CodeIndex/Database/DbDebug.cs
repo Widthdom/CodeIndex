@@ -299,7 +299,7 @@ public static class DbDebug
             explain.Transaction = source.Transaction;
             explain.CommandText = "EXPLAIN QUERY PLAN " + source.CommandText;
             foreach (SqliteParameter parameter in source.Parameters)
-                explain.Parameters.AddWithValue(parameter.ParameterName, parameter.Value ?? DBNull.Value);
+                SqliteCommandPolicy.AddCopy(explain, parameter);
 
             using var reader = explain.ExecuteReader();
             while (reader.Read())

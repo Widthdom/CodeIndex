@@ -8,6 +8,8 @@ public static partial class SymbolExtractor
 {
     internal const int XmlExtractionMaxDepth = 64;
     internal const int XmlExtractionMaxElements = 4096;
+    internal const long XmlExtractionMaxCharactersInDocument = 4L * 1024 * 1024;
+    internal const long XmlExtractionMaxCharactersFromEntities = 16L * 1024;
 
     internal readonly record struct XmlStructureIssue(string Kind, int Line, string Message);
 
@@ -43,7 +45,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings());
+            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings(DtdProcessing.Prohibit));
             while (reader.Read())
             {
                 if (reader.NodeType == XmlNodeType.Element)
@@ -113,9 +115,27 @@ public static partial class SymbolExtractor
         issue = default;
         var elementCount = 0;
 
+        if (content.Length > XmlExtractionMaxCharactersInDocument)
+        {
+            issue = new XmlStructureIssue(
+                "xml_structure_budget_exceeded",
+                1,
+                $"XML document length exceeds the extraction limit of {XmlExtractionMaxCharactersInDocument}; symbol extraction is capped.");
+            return true;
+        }
+
+        if (TryGetXmlDtdDeclarationLine(content, out var dtdLine))
+        {
+            issue = new XmlStructureIssue(
+                "xml_dtd_prohibited",
+                dtdLine,
+                "XML DTD declarations are prohibited during extraction.");
+            return true;
+        }
+
         try
         {
-            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings());
+            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings(DtdProcessing.Prohibit));
             while (reader.Read())
             {
                 if (reader.NodeType != XmlNodeType.Element)
@@ -149,14 +169,6 @@ public static partial class SymbolExtractor
                 }
             }
         }
-        catch (XmlException ex) when (IsDtdProhibitedException(ex))
-        {
-            issue = new XmlStructureIssue(
-                "xml_dtd_prohibited",
-                Math.Max(1, ex.LineNumber),
-                "XML DTD declarations are prohibited during extraction.");
-            return true;
-        }
         catch (XmlException)
         {
             return false;
@@ -165,17 +177,105 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static XmlReaderSettings CreateExtractionXmlReaderSettings() => new()
+    internal static XmlReaderSettings CreateExtractionXmlReaderSettings(DtdProcessing dtdProcessing)
     {
-        DtdProcessing = DtdProcessing.Prohibit,
-        IgnoreComments = true,
-        IgnoreProcessingInstructions = true,
-        XmlResolver = null,
-    };
+        if (dtdProcessing is not (DtdProcessing.Prohibit or DtdProcessing.Ignore))
+            throw new ArgumentOutOfRangeException(nameof(dtdProcessing), dtdProcessing, "Only Prohibit and Ignore are supported for extractor XML readers.");
 
-    private static bool IsDtdProhibitedException(XmlException ex) =>
-        ex.Message.Contains("DTD", StringComparison.OrdinalIgnoreCase)
-        || ex.Message.Contains("DOCTYPE", StringComparison.OrdinalIgnoreCase);
+        return new XmlReaderSettings
+        {
+            DtdProcessing = dtdProcessing,
+            IgnoreComments = true,
+            IgnoreProcessingInstructions = true,
+            MaxCharactersInDocument = XmlExtractionMaxCharactersInDocument,
+            MaxCharactersFromEntities = XmlExtractionMaxCharactersFromEntities,
+            XmlResolver = null,
+        };
+    }
+
+    private static bool TryGetXmlDtdDeclarationLine(string content, out int line)
+    {
+        var span = content.AsSpan();
+        var currentLine = 1;
+
+        for (var index = 0; index < span.Length;)
+        {
+            if (TryAdvanceXmlLineBreak(span, ref index, ref currentLine))
+                continue;
+
+            if (span[index] != '<')
+            {
+                index++;
+                continue;
+            }
+
+            var rest = span[index..];
+            if (rest.StartsWith("<!DOCTYPE".AsSpan(), StringComparison.Ordinal))
+            {
+                line = currentLine;
+                return true;
+            }
+
+            if (rest.StartsWith("<!--".AsSpan(), StringComparison.Ordinal))
+            {
+                index = AdvancePastXmlSegment(span, index + 4, "-->", ref currentLine);
+                continue;
+            }
+
+            if (rest.StartsWith("<![CDATA[".AsSpan(), StringComparison.Ordinal))
+            {
+                index = AdvancePastXmlSegment(span, index + 9, "]]>", ref currentLine);
+                continue;
+            }
+
+            if (rest.StartsWith("<?".AsSpan(), StringComparison.Ordinal))
+            {
+                index = AdvancePastXmlSegment(span, index + 2, "?>", ref currentLine);
+                continue;
+            }
+
+            index++;
+        }
+
+        line = 1;
+        return false;
+    }
+
+    private static int AdvancePastXmlSegment(ReadOnlySpan<char> span, int index, string terminator, ref int currentLine)
+    {
+        var terminatorSpan = terminator.AsSpan();
+        while (index < span.Length)
+        {
+            if (span[index..].StartsWith(terminatorSpan, StringComparison.Ordinal))
+                return index + terminatorSpan.Length;
+
+            if (TryAdvanceXmlLineBreak(span, ref index, ref currentLine))
+                continue;
+
+            index++;
+        }
+
+        return span.Length;
+    }
+
+    private static bool TryAdvanceXmlLineBreak(ReadOnlySpan<char> span, ref int index, ref int currentLine)
+    {
+        if (span[index] == '\n')
+        {
+            currentLine++;
+            index++;
+            return true;
+        }
+
+        if (span[index] == '\r')
+        {
+            currentLine++;
+            index += index + 1 < span.Length && span[index + 1] == '\n' ? 2 : 1;
+            return true;
+        }
+
+        return false;
+    }
 
     private static int? TryAddMsBuildElementSymbol(
         long fileId,

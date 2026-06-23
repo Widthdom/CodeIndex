@@ -668,6 +668,47 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void RunGitCapturingResult_CallerCancellationStopsProcessWait_Issue3969()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-git-caller-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-caller-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsForAnyCommand(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldTimeout = GitHelper.GitCommandTimeout;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        GitHelper.GitCommandTimeout = TimeSpan.FromSeconds(5);
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+            var stopwatch = Stopwatch.StartNew();
+
+            var ex = Assert.Throws<OperationCanceledException>(() =>
+                GitHelper.RunGitCapturingResultForTests(
+                    repoDir,
+                    gitEnvironmentOverrides: null,
+                    cts.Token,
+                    "status"));
+
+            stopwatch.Stop();
+            Assert.Equal(cts.Token, ex.CancellationToken);
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Caller cancellation took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
+        }
+        finally
+        {
+            GitHelper.GitCommandTimeout = oldTimeout;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
     public void RunGitCapturingResult_StartFailureReportsStructuredRedactedDiagnostic_Issue3434()
     {
         if (OperatingSystem.IsWindows())
@@ -694,6 +735,50 @@ public class GitHelperTests : IDisposable
             Assert.NotNull(result.Diagnostic);
             Assert.DoesNotContain(fakeGitDir, result.Diagnostic);
             Assert.True(result.Diagnostic!.Length < 700, result.Diagnostic);
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void RunGitCapturingResult_ScrubsInheritedEnvironmentByAllowlist_Issue3910()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var env = EnvironmentVariableScope.Capture(
+            "HTTPS_PROXY",
+            "CDIDX_TEST_GIT_POLICY_3910",
+            "CDIDX_SECRET_GIT_POLICY_3910");
+        env.Set("HTTPS_PROXY", "http://proxy.example.test:8080");
+        env.Set("CDIDX_TEST_GIT_POLICY_3910", "test-only");
+        env.Set("CDIDX_SECRET_GIT_POLICY_3910", "secret");
+
+        var repoDir = Path.Combine(_tempDir, "repo-git-env");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-env");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatPrintsSelectedEnvironment(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        try
+        {
+            var result = GitHelper.RunGitCapturingResultForTests(
+                repoDir,
+                gitEnvironmentOverrides: null,
+                CancellationToken.None,
+                "status");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("HTTPS_PROXY=http://proxy.example.test:8080", result.Output);
+            Assert.Contains("GIT_TERMINAL_PROMPT=0", result.Output);
+            Assert.Contains("CDIDX_TEST_GIT_POLICY_3910=", result.Output);
+            Assert.Contains("CDIDX_SECRET_GIT_POLICY_3910=", result.Output);
+            Assert.DoesNotContain("test-only", result.Output);
+            Assert.DoesNotContain("secret", result.Output);
         }
         finally
         {
@@ -1408,6 +1493,21 @@ if [ "$1" = "diff-tree" ]; then
 fi
 exit 1
 """.Replace("__CHANGED_PATH__", changedPath, StringComparison.Ordinal));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatPrintsSelectedEnvironment(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+printf 'HTTPS_PROXY=%s\n' "${HTTPS_PROXY:-}"
+printf 'GIT_TERMINAL_PROMPT=%s\n' "${GIT_TERMINAL_PROMPT:-}"
+printf 'CDIDX_TEST_GIT_POLICY_3910=%s\n' "${CDIDX_TEST_GIT_POLICY_3910:-}"
+printf 'CDIDX_SECRET_GIT_POLICY_3910=%s\n' "${CDIDX_SECRET_GIT_POLICY_3910:-}"
+exit 0
+""");
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }

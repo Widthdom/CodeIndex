@@ -75,6 +75,26 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_ResponseWriteCancellationPropagatesCallerToken_Issue3928()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: true, hangFlush: false);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+        var abortCount = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            HttpMcpTransport.WriteBytesWithTimeoutForTestsAsync(
+                stream,
+                [1, 2, 3],
+                TimeSpan.FromSeconds(5),
+                OperationTimeoutCategories.HttpResponseWrite,
+                () => abortCount++,
+                cts.Token));
+
+        Assert.Equal(0, abortCount);
+        Assert.Equal(1, stream.WriteCalls);
+    }
+
+    [Fact]
     public async Task HttpTransport_SseFlushTimeout_AbortsNonCooperativeFlush_Issue3990()
     {
         using var stream = new NonCancellableHangingStream(hangWrite: false, hangFlush: true);
