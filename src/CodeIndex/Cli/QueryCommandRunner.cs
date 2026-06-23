@@ -327,6 +327,54 @@ public static partial class QueryCommandRunner
         StatusReadinessFields.Concat(
         [
             new(
+                "git_head",
+                "Runtime Git HEAD",
+                "the current workspace Git HEAD commit was resolved at status time.",
+                "the field is absent outside a Git checkout or when Git HEAD cannot be resolved.",
+                "Run inside a Git workspace or pass a database tied to a Git workspace to compare index stamps."),
+            new(
+                "git_is_dirty",
+                "Runtime Git dirty state",
+                "`true` means git status reported uncommitted changes, including untracked files; `false` means no changes were reported.",
+                "the field is absent outside a Git checkout or when dirty-state detection is unavailable.",
+                "Run `git status` in the workspace to inspect uncommitted changes directly."),
+            new(
+                "indexed_head_commit",
+                "Legacy full-scan HEAD stamp",
+                "the index records the Git HEAD from the most recent successful full scan for legacy compatibility.",
+                "this full-scan-only stamp can differ from `indexed_head_sha` after incremental indexing and may be absent in legacy or non-Git indexes.",
+                "Prefer `indexed_head_sha` for current freshness checks; rebuild or run `cdidx index <projectPath>` when only this legacy stamp is available."),
+            new(
+                "worktree_head_changed",
+                "Worktree HEAD drift",
+                "`false` means the runtime HEAD matches the latest index HEAD stamp; `true` means the checkout moved since the index stamp.",
+                "the field is absent when neither `indexed_head_sha` nor the legacy `indexed_head_commit` can be compared with runtime HEAD.",
+                "Run `cdidx index <projectPath>` to refresh the index for the current checkout."),
+            new(
+                "indexed_head_sha",
+                "Latest index HEAD stamp",
+                "the index records the Git HEAD from the last successful index run, including incremental updates.",
+                "the field is absent in legacy indexes, non-Git workspaces, or when the index run could not resolve HEAD.",
+                "Use this field before `indexed_head_commit` when auditing freshness after incremental indexing."),
+            new(
+                "indexed_head_branch",
+                "Latest index branch stamp",
+                "the index records the branch short name captured with `indexed_head_sha`.",
+                "the field is absent for detached HEAD, legacy indexes, non-Git workspaces, or unresolved branch names.",
+                "Use it as context for `indexed_head_sha`; rerun `cdidx index <projectPath>` after switching branches."),
+            new(
+                "indexed_head_timestamp",
+                "Latest index HEAD timestamp",
+                "the index records when `indexed_head_sha` and `indexed_head_branch` were stamped.",
+                "the field is absent in legacy indexes or when the index run could not persist the timestamp.",
+                "Rerun `cdidx index <projectPath>` to refresh the timestamp with the current checkout."),
+            new(
+                "commits_ahead_of_indexed_head",
+                "Commits ahead of indexed HEAD",
+                "`0` means runtime HEAD is not ahead of `indexed_head_sha`; positive values mean the checkout advanced after indexing.",
+                "the field is absent when Git comparison is unavailable or history is not comparable.",
+                "Run `cdidx index <projectPath>` when the value is positive before trusting freshness-sensitive results."),
+            new(
                 "path_case_sensitive",
                 "Filesystem case sensitivity",
                 "`true` means the indexed workspace path comparison is case-sensitive; `false` means case-insensitive.",
