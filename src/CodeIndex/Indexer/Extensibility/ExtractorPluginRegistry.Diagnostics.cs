@@ -129,6 +129,8 @@ public sealed class ExtractorRegistryStatus
     public int SymbolExtractorCount { get; init; }
     [JsonPropertyName("reference_extractor_count")]
     public int ReferenceExtractorCount { get; init; }
+    [JsonPropertyName("retained_load_context_count")]
+    public int RetainedLoadContextCount { get; init; }
     [JsonPropertyName("skipped_file_count")]
     public int SkippedFileCount { get; init; }
     [JsonPropertyName("diagnostic_count")]
