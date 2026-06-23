@@ -99,9 +99,10 @@ public static class ConsoleUi
         ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
         ("find", "cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
-        ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
+        ("excerpt", "cdidx excerpt <path[:line|:start-end]> [--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]"),
-        ("inspect", "cdidx inspect <query>|--query <query>|-- <query>|--path <file> --line <line> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--line <line>|--start-line <line>] [--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("inspect", "cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
@@ -115,6 +116,13 @@ public static class ConsoleUi
         ("db", "cdidx db checkpoints --list [--db <path>] [--json]"),
         ("db", "cdidx db restore <name<=128> [--db <path>] [--json]"),
         ("db", "cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
+        ("db-integrity", "cdidx db integrity|--integrity-check [--db <path>] [--json]"),
+        ("db-schema", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),
+        ("db-prune", "cdidx db prune --dry-run|--apply [--db <path>] [--json]"),
+        ("db-checkpoint", "cdidx db checkpoint [name<=128] [--dry-run] [--db <path>] [--json]"),
+        ("db-checkpoints", "cdidx db checkpoints --list [--db <path>] [--json]"),
+        ("db-restore", "cdidx db restore <name<=128> [--db <path>] [--json]"),
+        ("db-restore-backups", "cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
@@ -127,7 +135,10 @@ public static class ConsoleUi
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
-        ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line; max 1,048,576 chars/line and 256 arguments"),
+        ("batch", "cdidx batch [--db <path>]  # stdin is JSON Lines: one JSON string array per line; invalid lines emit per-line JSON errors and make the process exit non-zero"),
+        ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--json]"),
+        ("hooks-uninstall", "cdidx hooks uninstall [--project <path>] [--force] [--json]"),
+        ("hooks-status", "cdidx hooks status [--project <path>] [--json]"),
         ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
@@ -142,11 +153,45 @@ public static class ConsoleUi
         ("completions", "--json is not supported; output is a shell script for the selected shell."),
         ("recipes", "Alias for `cdidx search --list-recipes`; recipe-list JSON is a single object, so --json=array is rejected."),
         ("audit", "Alias for `cdidx search --recipe <recipe>`; pass search filters after the recipe name."),
+        ("references", "--json and --format json emit JSON Lines (one JSON object per result), not a single JSON array."),
+        ("references", "`refs` is a compatibility alias for `references`; prefer `references` in scripts and documentation."),
+        ("excerpt", "Line ranges can be supplied as `path:line` or `path:start-end`; explicit --start/--end flags override range parsing."),
+        ("excerpt", "--focus-line and --focus-length each require --focus-column so clamped excerpts know the column to keep visible."),
+        ("inspect", "In query mode --path is a glob filter; in line mode --path <file> --line <line> selects a source location."),
+        ("status", "`stats` is a compatibility alias for `status`; prefer `status` in scripts and documentation."),
+        ("backfill-fold", "`fold` is a compatibility alias for `backfill-fold`; prefer `backfill-fold` in scripts and documentation."),
+        ("batch", "Each stdin line must be a JSON string array such as [\"search\",\"Needle\",\"--json\"]; blank lines are skipped."),
+        ("batch", "Each input line writes one JSON result or error record; malformed lines and failed commands set a non-zero exit status after draining stdin."),
+        ("hooks", "install writes `.git/hooks/pre-commit`; run `cdidx hooks status` first to inspect the current hook state."),
+        ("hooks-install", "Writes `.git/hooks/pre-commit`; use `cdidx hooks status` first and --force only when replacing an unmanaged hook is intended."),
+        ("hooks-uninstall", "Removes the managed `.git/hooks/pre-commit`; --force is required for unmanaged hook content."),
+        ("hooks-status", "Reports whether `.git/hooks/pre-commit` is managed by cdidx without changing hook files."),
         ("db", "schema defaults to the full sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for bounded diagnostics."),
         ("db", "checkpoint --dry-run reports the DB/WAL/SHM files and byte count without creating the checkpoint directory."),
         ("db", "checkpoint creates a filesystem snapshot next to the DB; restore replaces the DB and keeps a pre-restore backup directory."),
         ("db", "prune --dry-run only counts orphan rows; prune --apply deletes them and may run WAL checkpoint maintenance."),
+        ("db-integrity", "Runs SQLite `PRAGMA integrity_check`; no database content is changed."),
+        ("db-schema", "Defaults to a bounded sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for smaller diagnostics."),
+        ("db-prune", "--dry-run only counts orphan rows; --apply deletes them and may run WAL checkpoint maintenance."),
+        ("db-checkpoint", "--dry-run reports DB/WAL/SHM files and byte count; without --dry-run it creates a filesystem snapshot next to the DB."),
+        ("db-checkpoints", "Lists existing checkpoint snapshots without changing database files."),
+        ("db-restore", "Replaces the DB from a checkpoint and keeps a pre-restore backup directory next to the DB."),
+        ("db-restore-backups", "--list reports pre-restore backups; --prune deletes older backup directories beyond --keep."),
     ];
+
+    private static readonly HashSet<string> HiddenCommandUsageNames = new(StringComparer.Ordinal)
+    {
+        "db-integrity",
+        "db-schema",
+        "db-prune",
+        "db-checkpoint",
+        "db-checkpoints",
+        "db-restore",
+        "db-restore-backups",
+        "hooks-install",
+        "hooks-uninstall",
+        "hooks-status",
+    };
 
     public static string FormatSummaryLine(string label, object? value, int labelWidth = SummaryLabelWidth, string indent = "")
         => $"{indent}{label.PadRight(labelWidth)}: {value}";
@@ -903,8 +948,13 @@ public static class ConsoleUi
 
         Console.WriteLine("Usage:");
         Console.WriteLine("  cdidx <projectPath>");
-        foreach (var (_, usage) in CommandUsageLines)
+        foreach (var (name, usage) in CommandUsageLines)
+        {
+            if (HiddenCommandUsageNames.Contains(name))
+                continue;
+
             WriteHelpLine($"  {usage}");
+        }
         Console.WriteLine();
         PrintCommandSummary();
         Console.WriteLine();
@@ -1243,6 +1293,7 @@ public static class ConsoleUi
 
     public static string? GetUsageLine(string command)
     {
+        command = NormalizeCommandUsageName(command);
         foreach (var (name, usage) in CommandUsageLines)
         {
             if (string.Equals(name, command, StringComparison.Ordinal))
@@ -1254,6 +1305,7 @@ public static class ConsoleUi
 
     public static bool PrintCommandUsage(string command)
     {
+        command = NormalizeCommandUsageName(command);
         var usages = GetCommandUsageLines(command);
         if (usages.Count == 0)
             return false;
@@ -1276,6 +1328,7 @@ public static class ConsoleUi
 
     private static IReadOnlyList<string> GetCommandUsageLines(string command)
     {
+        command = NormalizeCommandUsageName(command);
         var usages = new List<string>();
         foreach (var (name, usage) in CommandUsageLines)
         {
@@ -1291,6 +1344,7 @@ public static class ConsoleUi
 
     private static IReadOnlyList<string> GetCommandUsageNotes(string command)
     {
+        command = NormalizeCommandUsageName(command);
         var notes = new List<string>();
         foreach (var (name, note) in CommandUsageNotes)
         {
@@ -1300,6 +1354,15 @@ public static class ConsoleUi
 
         return notes;
     }
+
+    private static string NormalizeCommandUsageName(string command) =>
+        command switch
+        {
+            "refs" => "references",
+            "stats" => "status",
+            "fold" => "backfill-fold",
+            _ => command,
+        };
 
     // --- Did-you-mean / もしかして ---
 
