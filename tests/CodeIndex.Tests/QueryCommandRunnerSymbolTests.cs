@@ -3972,8 +3972,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("Likely unused private (1)", stdout);
             Assert.Contains("Maybe unused non-public (1)", stdout);
-            Assert.Contains("Public/exported with no refs (6)", stdout);
-            Assert.Contains("Reflection/config suspects (1)", stdout);
+            Assert.Contains("Public/exported with no refs (3)", stdout);
+            Assert.Contains("Intentional-surface suspects (4)", stdout);
             Assert.Contains("confidence=medium", stdout);
             Assert.Contains("confidence=low", stdout);
             Assert.Contains("returned potentially unused symbols; returned buckets:", stderr);
