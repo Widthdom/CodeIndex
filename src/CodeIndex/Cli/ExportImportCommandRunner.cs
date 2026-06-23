@@ -1291,9 +1291,6 @@ internal static class ExportImportCommandRunner
         IProgress<long>? progress = null)
         => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName, cancellationToken, progress);
 
-    private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName)
-        => CopyToWithLimit(source, target, maxBytes, entryName, CancellationToken.None);
-
     private static long CopyToWithLimit(
         Stream source,
         Stream target,

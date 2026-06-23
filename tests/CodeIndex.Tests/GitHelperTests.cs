@@ -668,6 +668,47 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void RunGitCapturingResult_CallerCancellationStopsProcessWait_Issue3969()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-git-caller-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-caller-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsForAnyCommand(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldTimeout = GitHelper.GitCommandTimeout;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        GitHelper.GitCommandTimeout = TimeSpan.FromSeconds(5);
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+            var stopwatch = Stopwatch.StartNew();
+
+            var ex = Assert.Throws<OperationCanceledException>(() =>
+                GitHelper.RunGitCapturingResultForTests(
+                    repoDir,
+                    gitEnvironmentOverrides: null,
+                    cts.Token,
+                    "status"));
+
+            stopwatch.Stop();
+            Assert.Equal(cts.Token, ex.CancellationToken);
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Caller cancellation took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
+        }
+        finally
+        {
+            GitHelper.GitCommandTimeout = oldTimeout;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
     public void RunGitCapturingResult_StartFailureReportsStructuredRedactedDiagnostic_Issue3434()
     {
         if (OperatingSystem.IsWindows())

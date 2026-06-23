@@ -48,6 +48,7 @@ internal static partial class ProgramRunner
     };
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan McpHttpDisposeTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
     private static readonly HashSet<string> TopLevelValueOptionNames =
@@ -2819,10 +2820,35 @@ internal static partial class ProgramRunner
         }
         finally
         {
-            transport.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            DisposeMcpHttpTransport(transport);
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static void DisposeMcpHttpTransport(HttpMcpTransport transport)
+    {
+        try
+        {
+            var disposeTask = transport.DisposeAsync().AsTask();
+            if (disposeTask.Wait(McpHttpDisposeTimeout))
+                return;
+
+            var message = $"MCP HTTP transport disposal did not finish within {FormatDuration(McpHttpDisposeTimeout)}.";
+            GlobalToolLog.Error("mcp_http_transport_dispose_timeout " + message);
+            CommandErrorWriter.WriteStderr("Warning: " + message);
+        }
+        catch (AggregateException ex)
+        {
+            var inner = ex.Flatten().InnerExceptions.FirstOrDefault() ?? ex;
+            GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(inner));
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({inner.GetType().Name}: {inner.Message}).");
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(ex));
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({ex.GetType().Name}: {ex.Message}).");
+        }
     }
 
     private static void LogHttpMcpRequest(HttpMcpTransport.HttpRequestLogRecord record)

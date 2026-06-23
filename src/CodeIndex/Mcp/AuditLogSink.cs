@@ -332,7 +332,13 @@ internal sealed class AuditLogSink : IDisposable
     }
 
     internal bool WaitForIdle(TimeSpan timeout)
-        => Interlocked.Read(ref _pendingRecordCount) <= 0 || _idleEvent.Wait(timeout);
+        => WaitForIdle(timeout, CancellationToken.None);
+
+    internal bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Interlocked.Read(ref _pendingRecordCount) <= 0 || _idleEvent.Wait(timeout, cancellationToken);
+    }
 
     private static int ResolveQueueCapacity(int? queueCapacity)
     {
