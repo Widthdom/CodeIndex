@@ -110,12 +110,14 @@ public static class GitHelper
         if (gitExecutablePath == null)
             return null;
 
-        return CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
+        var startInfo = CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
             fileName: gitExecutablePath,
             workingDirectory: projectRoot,
             redirectStandardOutput: true,
             redirectStandardError: true,
             createNoWindow: true);
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
+        return startInfo;
     }
 
     private static ProcessStartInfo CreateGitStartInfoOrThrow(string projectRoot)

@@ -1626,6 +1626,36 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void CreateInstallerProcessStartInfo_ScrubsEnvironmentByAllowlist_Issue3910()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "HTTPS_PROXY",
+                "CDIDX_VERIFY_POLICY",
+                "CDIDX_TEST_INSTALLER_POLICY_3910",
+                "CDIDX_SECRET_INSTALLER_POLICY_3910");
+            env.Set("HTTPS_PROXY", "http://proxy.example.test:8080");
+            env.Set("CDIDX_VERIFY_POLICY", "strict");
+            env.Set("CDIDX_TEST_INSTALLER_POLICY_3910", "test-only");
+            env.Set("CDIDX_SECRET_INSTALLER_POLICY_3910", "secret");
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx installer env {Guid.NewGuid():N}");
+            var script = Path.Combine(root, "install.sh");
+
+            var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+            Assert.Equal("http://proxy.example.test:8080", startInfo.Environment["HTTPS_PROXY"]);
+            Assert.Equal("strict", startInfo.Environment["CDIDX_VERIFY_POLICY"]);
+            Assert.Equal(root, startInfo.Environment["CDIDX_INSTALL_DIR"]);
+            Assert.False(startInfo.Environment.ContainsKey("CDIDX_TEST_INSTALLER_POLICY_3910"));
+            Assert.False(startInfo.Environment.ContainsKey("CDIDX_SECRET_INSTALLER_POLICY_3910"));
+        }
+    }
+
+    [Fact]
     public void RunInstallerProcess_StartFailureReturnsInstallError_Issue3685()
     {
         lock (TestConsoleLock.Gate)

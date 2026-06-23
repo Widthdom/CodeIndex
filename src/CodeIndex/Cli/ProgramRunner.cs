@@ -3629,6 +3629,7 @@ internal static partial class ProgramRunner
             fileName: ResolveTrustedBashPath(),
             workingDirectory: Path.GetDirectoryName(fullScriptPath) ?? string.Empty);
         CodeIndex.ProcessLaunchPolicy.AddArguments(startInfo, fullScriptPath, releaseTag);
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyUpgradeInstallerEnvironment(startInfo);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
     }
