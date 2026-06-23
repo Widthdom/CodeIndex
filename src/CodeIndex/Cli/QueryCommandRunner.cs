@@ -252,14 +252,14 @@ public static partial class QueryCommandRunner
         "--sections",
         "--fields",
     ];
-    private sealed record StatusReadinessField(
+    private sealed record StatusFieldExplanation(
         string FieldName,
         string Label,
         string ReadyText,
         string DegradedText,
         string Remediation);
 
-    private static readonly StatusReadinessField[] StatusReadinessFields =
+    private static readonly StatusFieldExplanation[] StatusReadinessFields =
     [
         new(
             "graph_table_available",
@@ -322,6 +322,17 @@ public static partial class QueryCommandRunner
             "this DB was written by a newer cdidx, so older readers may degrade instead of trusting newer contract stamps.",
             "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use."),
     ];
+
+    private static readonly StatusFieldExplanation[] StatusExplainFields =
+        StatusReadinessFields.Concat(
+        [
+            new(
+                "path_case_sensitive",
+                "Filesystem case sensitivity",
+                "`true` means the indexed workspace path comparison is case-sensitive; `false` means case-insensitive.",
+                "the field is absent on legacy indexes that predate the workspace case-sensitivity stamp.",
+                "Run `cdidx index <projectPath>` with a current cdidx binary to stamp filesystem case sensitivity."),
+        ]).ToArray();
 
     private static readonly HashSet<string> FlagOnlyOptions =
     [
@@ -13405,11 +13416,11 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanation(string fieldName)
     {
-        var field = FindStatusReadinessField(fieldName);
+        var field = FindStatusFieldExplanation(fieldName);
         if (field == null)
         {
-            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
-            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            CommandErrorWriter.WriteStderr($"Error: unknown status field `{fieldName}`.");
+            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.");
             return CommandExitCodes.UsageError;
         }
 
@@ -13423,19 +13434,19 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
     {
-        var field = FindStatusReadinessField(fieldName);
+        var field = FindStatusFieldExplanation(fieldName);
         if (field == null)
             return CommandErrorWriter.WriteJsonOrHuman(
                 true,
                 jsonOptions,
-                $"unknown status readiness field `{fieldName}`.",
+                $"unknown status field `{fieldName}`.",
                 CommandExitCodes.UsageError,
-                $"use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.",
+                $"use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.",
                 errorCode: CommandErrorCodes.UsageError,
                 category: "usage");
 
         var knownFields = new JsonArray();
-        foreach (var knownField in StatusReadinessFields)
+        foreach (var knownField in StatusExplainFields)
             knownFields.Add(knownField.FieldName);
 
         var payload = new JsonObject
@@ -13452,8 +13463,8 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static StatusReadinessField? FindStatusReadinessField(string fieldName)
-        => StatusReadinessFields.FirstOrDefault(
+    private static StatusFieldExplanation? FindStatusFieldExplanation(string fieldName)
+        => StatusExplainFields.FirstOrDefault(
             field => string.Equals(field.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)
                      || string.Equals(field.Label, fieldName, StringComparison.OrdinalIgnoreCase));
 

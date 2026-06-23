@@ -135,6 +135,9 @@ JSON-RPC interface. There is no public library / SDK API. See
 fields for scripts, MCP clients, and release checks. Detailed semantics live in
 the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration); README keeps the field
 names visible so documentation and tests stay synchronized.
+Use `cdidx status --explain <field>` for concise explanations of visible status
+fields, including readiness fields and runtime diagnostics such as
+`path_case_sensitive`.
 
 | Field group | Fields |
 |---|---|
@@ -318,6 +321,8 @@ JSON-RPC interface です。公開 library / SDK API は提供していません
 freshness、compatibility、remediation field を返します。詳細な意味は
 [開発者ガイド](DEVELOPER_GUIDE.md#ai連携) にあり、README では docs と test を
 同期するため field 名を明示します。
+visible な status field の簡潔な説明は `cdidx status --explain <field>` で確認できます。
+readiness field に加えて、`path_case_sensitive` などの runtime diagnostic field も対象です。
 
 | field group | fields |
 |---|---|

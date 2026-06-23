@@ -958,7 +958,7 @@ public static class ConsoleUi
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
-        Console.WriteLine("  status                     Show database statistics; add --check for freshness, --config for effective config, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  status                     Show database statistics; add --check for freshness, --config for effective config, --explain <field> for field details, or --log-path for logs");
         Console.WriteLine("  workspace                  List manifest members and manage the active workspace");
         Console.WriteLine("  config show                Show resolved workspace config and precedence");
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
