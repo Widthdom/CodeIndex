@@ -82,7 +82,7 @@ public static partial class ExtractorPluginRegistry
             severity: "warning",
             $"Pattern extractor timeout: language '{DiagnosticSanitizer.ForMessage(language)}' kind '{DiagnosticSanitizer.ForMessage(kind)}'.",
             countsAsSkippedFile: false,
-            category: "pattern_regex_timeout");
+            category: RegexTimeoutPolicy.ConfiguredPatternRegexTimeoutCategory);
     }
 
     private static void RecordDiagnostic(

@@ -2138,6 +2138,17 @@ bootstrap prompt, the smoke tests, and this section exist so that any
 regression in the user-facing install flow is caught by the next person
 who opens a cloud session, not by a real user after release.
 
+## Regex timeout and redaction fallback policy
+
+Regex timeout behavior is centralized in `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/RegexTimeoutPolicy.cs`). Keep category strings, user-facing timeout messages, and redaction fallbacks there before adding a new timeout path.
+
+Contract guarantees:
+
+- **Indexing and configured extractor patterns.** Indexing diagnostics use `regex_timeout`; configured pattern diagnostics use `pattern_regex_timeout`. Indexing skips the affected file or pattern so the run can finish and reports bounded diagnostics instead of leaking the pathological pattern input.
+- **Query/find and MCP find.** CLI human/JSON errors and MCP error envelopes use `regex_timeout` with the same timeout duration text. The recovery hint is surface-specific only where CLI flags and MCP tool arguments differ.
+- **Redaction surfaces fail closed.** `DiagnosticRedactor`, `GlobalToolLog`, and MCP audit argument values replace the affected value with the configured redaction placeholder. `DiagnosticSanitizer` omits the whole message with `[message omitted after sanitization timeout]`. `SuggestionStore` records `redaction_timeout` and persists `[REDACTED:redaction_timeout]`. GitHub API response bodies are replaced with `[response body omitted after redaction timeout]`.
+- **Bounded extraction helpers.** `BoundedRegex` keeps extraction best-effort by returning empty matches/`false` or the original input depending on the operation, and records captured timeout diagnostics when a capture scope is active.
+
 ## MCP audit log emission
 
 `AuditLogSink` (`src/CodeIndex/Mcp/AuditLogSink.cs`) is the opt-in per-MCP-server JSONL audit (#1562). It is owned by `ProgramRunner.RunMcp` and threaded into `McpServer` through an internal constructor overload; no other dispatch site participates. Each `tools/call` produces exactly one record — including malformed requests (`tool="(missing)"`) and unknown tools (`error_code=-32602`) — so a misbehaving client cannot hide its activity by varying the request shape.
@@ -4039,6 +4050,17 @@ flowchart TD
 ### なぜこれが重要か
 
 Cloud セッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは、SDK を持つ開発者には可視化されない — ローカルで再ビルドすれば済んでしまうためである。bootstrap プロンプト、スモークテスト、および本セクションを整備しているのは、ユーザー向けインストールフローにおけるリグレッションが、リリース後の実ユーザーではなく、次に Cloud セッションを開いた者によって検出されるようにすることを意図している。
+
+## Regex timeout と redaction fallback policy
+
+Regex timeout の挙動は `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/RegexTimeoutPolicy.cs`) に集約する。新しい timeout 経路を追加する前に、カテゴリ文字列、ユーザー向け timeout メッセージ、redaction fallback をこの policy に置くこと。
+
+契約:
+
+- **indexing と configured extractor pattern。** indexing 診断は `regex_timeout`、configured pattern 診断は `pattern_regex_timeout` を使う。実行を完了できるよう、影響を受けたファイルまたは pattern を skip し、病的な pattern 入力を漏らさず bounded diagnostics を報告する。
+- **query/find と MCP find。** CLI の human/JSON エラーと MCP error envelope は、同じ timeout duration 表記で `regex_timeout` を使う。CLI flag と MCP tool argument が異なる箇所だけ、復旧 hint を surface 別にする。
+- **redaction surface は fail closed。** `DiagnosticRedactor`、`GlobalToolLog`、MCP audit の argument value は、対象値を設定済み redaction placeholder へ置換する。`DiagnosticSanitizer` は `[message omitted after sanitization timeout]` でメッセージ全体を省略する。`SuggestionStore` は `redaction_timeout` を記録し `[REDACTED:redaction_timeout]` を永続化する。GitHub API response body は `[response body omitted after redaction timeout]` に置換する。
+- **bounded extraction helper。** `BoundedRegex` は extraction を best-effort に保つため、operation に応じて empty matches / `false` / 元入力を返し、capture scope が有効な場合は timeout diagnostics を記録する。
 
 ## MCP 監査ログの出力
 
