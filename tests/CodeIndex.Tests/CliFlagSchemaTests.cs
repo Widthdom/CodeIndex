@@ -114,6 +114,14 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void Goto_AcceptsDocumentedExcludeFilters_Issue3934()
+    {
+        var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("goto");
+        Assert.Contains("--exclude-tests", accepted);
+        Assert.Contains("--exclude-path", accepted);
+    }
+
+    [Fact]
     public void UpgradeFlags_SurfaceImplementedSelectionAndJsonOptions()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("upgrade");
