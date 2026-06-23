@@ -12201,6 +12201,14 @@ public static partial class QueryCommandRunner
                 && commandName != "files"
                 && commandName != "symbols")
             {
+                if (commandName == "outline")
+                    {
+                        CommandErrorWriter.Write(
+                            "--json=<format> is not supported by outline because outline emits one JSON object.",
+                            "use plain `--json`; add `--limit <n>` to cap symbols and read the paging metadata (`returned_symbol_count`, `total_symbol_count`, `next_cursor`).",
+                            GetUsageLineOrThrow(commandName));
+                        return true;
+                    }
                 if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;

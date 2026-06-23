@@ -895,6 +895,22 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_JsonArray_WritesOutlineSpecificError_Issue3947()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            ["src/many.cs", "--json=array"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json=<format> is not supported by outline", stderr, StringComparison.Ordinal);
+        Assert.Contains("outline emits one JSON object", stderr, StringComparison.Ordinal);
+        Assert.Contains("use plain `--json`", stderr, StringComparison.Ordinal);
+        Assert.Contains("paging metadata", stderr, StringComparison.Ordinal);
+        Assert.Contains("next_cursor", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunOutline_Json_UsesExplicitLimit_Issue3914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_json_limit");
