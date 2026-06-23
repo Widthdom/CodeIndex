@@ -111,7 +111,7 @@ public static partial class QueryCommandRunner
     private const string HotspotsGroupedByStatement = "statement";
     private const string JsonOutputFormatNdjson = "ndjson";
     private const string JsonOutputFormatArray = "array";
-    private static readonly List<string> SearchRecipeSupportedFormats = ["text", "json", "compact", OutputFormatIssueDrafts];
+    private static readonly List<string> SearchRecipeSupportedFormats = ["text", "json", "count", "compact", OutputFormatIssueDrafts];
     private static readonly SearchRecipeFilterSupportJsonResult SearchRecipeFilterSupport = new(
         Lang: true,
         Path: true,
@@ -507,17 +507,15 @@ public static partial class QueryCommandRunner
                 "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
             return CommandExitCodes.UsageError;
         }
-        if (options.GroupBy != null && (options.ListRecipes || options.NamedSearchQueries.Count > 0 || options.RecipeName != null))
+        if (options.GroupBy != null && (options.ListRecipes || options.NamedSearchQueries.Count > 0))
         {
             var mode = options.ListRecipes
                 ? "--list-recipes"
-                : options.NamedSearchQueries.Count > 0
-                    ? "--named-query"
-                    : "--recipe";
+                : "--named-query";
             WriteUsageError(
                 $"--group-by is not supported with {mode}.",
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe and named-batch output.");
+                "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe-list and named-batch output.");
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatGrouped && (options.ListRecipes || options.NamedSearchQueries.Count > 0 || options.RecipeName != null))
@@ -543,12 +541,12 @@ public static partial class QueryCommandRunner
                     "Run `cdidx search --list-recipes` to list built-in audit recipes.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson)
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCompact)
             {
                 WriteUsageError(
-                    "--format count/compact/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
+                    "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
                     GetUsageLineOrThrow("search"),
-                    "Use plain text output or `--json` / `--format json` for the recipe list.");
+                    "Use plain text output, `--json` / `--format json` for the full recipe list, or `--format compact` for a compact summary.");
                 return CommandExitCodes.UsageError;
             }
             if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -641,9 +639,84 @@ public static partial class QueryCommandRunner
                     "Use plain `--json` for the grouped recipe object.");
                 return CommandExitCodes.UsageError;
             }
+            if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
+            {
+                WriteUsageError(
+                    "--results-only is only supported with NDJSON recipe output.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--recipe <name> --results-only --search-fields path,line,query_name`, or remove --results-only.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.GroupBy != null)
+            {
+                if (options.GroupBy is not "file" and not "symbol" and not "origin")
+                {
+                    WriteUsageError(
+                        "--group-by for recipe search must be one of file, symbol, or origin.",
+                        GetUsageLineOrThrow("search"),
+                        "Use `cdidx search --recipe <name> --group-by file --count`, `--group-by symbol --count`, or `--count-by origin`.");
+                    return CommandExitCodes.UsageError;
+                }
+                if (!options.CountOnly)
+                {
+                    WriteUsageError(
+                        "search --recipe --group-by requires --count.",
+                        GetUsageLineOrThrow("search"),
+                        "Add --count to request grouped recipe result counts, or remove --group-by to print matching snippets.");
+                    return CommandExitCodes.UsageError;
+                }
+            }
+            if (options.CountBy != null && options.CountBy is not "path" and not "file" and not "symbol" and not "origin")
+            {
+                WriteUsageError(
+                    "--count-by for recipe search must be one of path, file, symbol, or origin.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--count-by path`, `--count-by symbol`, or `--count-by origin`.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.UniqueBy != null && options.UniqueBy is not "path" and not "file" and not "symbol" and not "origin")
+            {
+                WriteUsageError(
+                    "--unique for recipe search must be one of path, file, symbol, or origin.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--unique path`, `--unique symbol`, or `--unique origin`.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.CountBy != null && options.UniqueBy != null)
+            {
+                WriteUsageError(
+                    "--count-by cannot be combined with --unique.",
+                    GetUsageLineOrThrow("search"),
+                    "Run one recipe aggregation mode at a time.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.GroupBy != null && (options.CountBy != null || options.UniqueBy != null))
+            {
+                WriteUsageError(
+                    "--group-by cannot be combined with --count-by or --unique.",
+                    GetUsageLineOrThrow("search"),
+                    "Use either `--group-by <field> --count`, `--count-by <field>`, or `--unique <field>`.");
+                return CommandExitCodes.UsageError;
+            }
+            if ((options.GroupBy != null || options.CountBy != null || options.UniqueBy != null) && (options.ResultsOnly || options.SearchFields != null))
+            {
+                WriteUsageError(
+                    "recipe aggregation cannot be combined with --results-only or --search-fields.",
+                    GetUsageLineOrThrow("search"),
+                    "Run the aggregation separately, or remove --count-by/--group-by to stream projected recipe rows.");
+                return CommandExitCodes.UsageError;
+            }
 
             if (options.CountOnly)
+            {
+                if (options.GroupBy != null || options.CountBy != null || options.UniqueBy != null)
+                    return RunSearchRecipeAggregation(options, jsonOptions, exact);
+
                 return RunSearchRecipeCount(options, jsonOptions, exact);
+            }
+
+            if (options.CountBy != null || options.UniqueBy != null)
+                return RunSearchRecipeAggregation(options, jsonOptions, exact);
 
             if (options.OutputFormat == OutputFormatIssueDrafts)
                 return RunSearchRecipeIssueDrafts(options, jsonOptions, exact, cancellationToken);
@@ -1273,7 +1346,7 @@ public static partial class QueryCommandRunner
 
     private static void WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
     {
-        var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!)).ToArray();
+        var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!, queryName: null, recipeName: null)).ToArray();
         if (options.JsonOutputFormat == JsonOutputFormatArray)
         {
             Console.WriteLine(JsonSerializer.Serialize(projected, jsonOptions));
@@ -1296,7 +1369,11 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static JsonObject BuildProjectedSearchResult(CompactSearchResult result, IReadOnlyList<string> fields)
+    private static JsonObject BuildProjectedSearchResult(
+        CompactSearchResult result,
+        IReadOnlyList<string> fields,
+        string? queryName,
+        string? recipeName)
     {
         var payload = new JsonObject();
         foreach (var field in fields)
@@ -1335,6 +1412,12 @@ public static partial class QueryCommandRunner
                     break;
                 case "snippet":
                     payload["snippet"] = result.Snippet;
+                    break;
+                case "query_name":
+                    payload["query_name"] = queryName ?? result.Query;
+                    break;
+                case "recipe":
+                    payload["recipe"] = recipeName;
                     break;
             }
         }
@@ -1452,6 +1535,23 @@ public static partial class QueryCommandRunner
         var recipes = SearchAuditRecipes.All
             .Select(recipe => ToSearchRecipeListItem(recipe))
             .ToList();
+        if (options.OutputFormat == OutputFormatCompact)
+        {
+            var compactRecipes = recipes
+                .Select(recipe => new SearchRecipeCompactListItemJsonResult(
+                    recipe.Name,
+                    recipe.Description,
+                    recipe.DefaultScope,
+                    recipe.Queries.Count,
+                    recipe.RecommendedLabels,
+                    recipe.DefaultPathPatterns,
+                    recipe.DefaultExcludePaths))
+                .ToList();
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchRecipeCompactListJsonResult(JsonOutputContract.ApiVersion, compactRecipes.Count, compactRecipes),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactListJsonResult));
+            return CommandExitCodes.Success;
+        }
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
@@ -1614,6 +1714,19 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            if (options.ResultsOnly || options.SearchFields != null || (options.Json && options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson))
+            {
+                var rowQueryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out _);
+                WriteRecipeSearchResultRows(
+                    recipe.Name,
+                    rowQueryResults,
+                    options,
+                    GetCompactJsonOptions(jsonOptions),
+                    out _,
+                    out _);
+                return CommandExitCodes.Success;
+            }
+
             if (options.OutputFormat == OutputFormatCompact)
             {
                 var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, scope, options, userExact, out var compactTotal);
@@ -1687,6 +1800,113 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"({total} recipe results across {selection.Queries.Count} queries)");
             return CommandExitCodes.Success;
         });
+    }
+
+    private static int RunSearchRecipeAggregation(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
+        {
+            WriteUsageError(
+                selectionError!,
+                GetUsageLineOrThrow("search"),
+                "Use `cdidx search --recipe risky-code/raw-diagnostic-echo`, or `--include-query` / `--exclude-query` with a recipe name.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var recipe = selection.Recipe;
+        var scope = BuildSearchRecipeScope(recipe, options);
+        var groupBy = NormalizeSearchAggregationKey(options.GroupBy ?? options.CountBy ?? options.UniqueBy!);
+        var uniqueOnly = options.UniqueBy != null;
+        var mode = uniqueOnly ? "unique" : options.GroupBy != null ? "group_by" : "count_by";
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryResults = CollectSearchRecipeAggregationResults(
+                reader,
+                selection.Queries,
+                scope,
+                options,
+                userExact,
+                groupBy,
+                out var total,
+                out var fileCount);
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new SearchRecipeAggregationRunJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        ToSearchRecipeListItem(recipe, selection.Queries),
+                        scope,
+                        mode,
+                        groupBy,
+                        uniqueOnly,
+                        selection.Queries.Count,
+                        total,
+                        fileCount,
+                        queryResults),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeAggregationRunJsonResult));
+            }
+            else
+            {
+                foreach (var query in queryResults)
+                {
+                    Console.WriteLine($"[{query.Name}] {query.Query}");
+                    if (uniqueOnly)
+                    {
+                        foreach (var group in query.Groups)
+                            Console.WriteLine(group.Key);
+                    }
+                    else
+                    {
+                        WriteSearchGroupedCounts(groupBy, query.Groups, query.Count, query.FileCount);
+                    }
+                    Console.WriteLine();
+                }
+                CommandErrorWriter.WriteStderr($"({total} recipe results in {fileCount} files across {selection.Queries.Count} queries; {mode} {groupBy})");
+            }
+
+            return CommandExitCodes.Success;
+        });
+    }
+
+    private static void WriteRecipeSearchResultRows(
+        string recipeName,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        QueryCommandOptions options,
+        JsonSerializerOptions ndjsonOptions,
+        out int emittedCount,
+        out bool interrupted)
+    {
+        emittedCount = 0;
+        interrupted = false;
+        var bytesWritten = 0;
+        foreach (var query in queryResults)
+        {
+            foreach (var result in query.Results)
+            {
+                JsonObject payload = options.SearchFields != null
+                    ? BuildProjectedSearchResult(result, options.SearchFields, query.Name, recipeName)
+                    : BuildRecipeSearchResultRow(recipeName, query.Name, result, ndjsonOptions);
+                var line = payload.ToJsonString(ndjsonOptions);
+                if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
+                    return;
+                Console.WriteLine(line);
+                bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
+                emittedCount++;
+            }
+        }
+    }
+
+    private static JsonObject BuildRecipeSearchResultRow(
+        string recipeName,
+        string queryName,
+        CompactSearchResult result,
+        JsonSerializerOptions jsonOptions)
+    {
+        var payload = JsonSerializer.SerializeToNode(result, jsonOptions)?.AsObject() ?? [];
+        payload["recipe"] = recipeName;
+        payload["query_name"] = queryName;
+        return payload;
     }
 
     private static int RunSearchRecipeIssueDrafts(
@@ -2117,6 +2337,61 @@ public static partial class QueryCommandRunner
 
         fileCount = paths.Count;
         return queryCounts;
+    }
+
+    private static List<SearchRecipeAggregationQueryJsonResult> CollectSearchRecipeAggregationResults(
+        DbReader reader,
+        IReadOnlyList<SearchAuditRecipeQuery> recipeQueries,
+        SearchRecipeScopeJsonResult scope,
+        QueryCommandOptions options,
+        bool userExact,
+        string groupBy,
+        out int total,
+        out int fileCount)
+    {
+        var queryResults = new List<SearchRecipeAggregationQueryJsonResult>();
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        total = 0;
+        foreach (var recipeQuery in recipeQueries)
+        {
+            var exact = userExact || recipeQuery.ExactSubstring;
+            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var results = reader.Search(
+                recipeQuery.Query,
+                int.MaxValue,
+                options.Lang,
+                false,
+                queryScope.PathPatterns,
+                queryScope.ExcludePaths,
+                queryScope.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                exact,
+                false,
+                !options.NoVisibilityRank,
+                cursor: options.SearchCursor,
+                guardFilters: options.GuardFilters,
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope,
+                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            foreach (var path in rows.Select(row => row.Result.Path))
+                paths.Add(path);
+
+            var groups = BuildSearchGroupedCounts(groupBy, rows);
+            total += rows.Count;
+            queryResults.Add(new SearchRecipeAggregationQueryJsonResult(
+                recipeQuery.Name,
+                recipeQuery.Query,
+                recipeQuery.Description,
+                recipeQuery.Severity,
+                rows.Count,
+                rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
+                groups));
+        }
+
+        fileCount = paths.Count;
+        return queryResults;
     }
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
@@ -8908,6 +9183,7 @@ public static partial class QueryCommandRunner
         string? dataDir = null;
         bool? json = null;
         string jsonOutputFormat = JsonOutputFormatNdjson;
+        bool jsonOutputFormatExplicit = false;
         int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
@@ -9232,6 +9508,7 @@ public static partial class QueryCommandRunner
                     {
                         json = true;
                         jsonOutputFormat = parsedJsonOutputFormat;
+                        jsonOutputFormatExplicit = true;
                         outputFormat = OutputFormatJson;
                     }
                     else
@@ -10246,6 +10523,7 @@ public static partial class QueryCommandRunner
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
             JsonOutputFormat = jsonOutputFormat,
+            JsonOutputFormatExplicit = jsonOutputFormatExplicit,
             OutputFormat = outputFormat,
             Limit = limit,
             LimitExplicit = limitExplicit,
@@ -10578,8 +10856,16 @@ public static partial class QueryCommandRunner
                 case "snippet":
                     canonical = "snippet";
                     break;
+                case "query":
+                case "query_name":
+                    canonical = "query_name";
+                    break;
+                case "recipe":
+                case "recipe_name":
+                    canonical = "recipe";
+                    break;
                 default:
-                    addParseError($"Error: unsupported --search-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of path,line,end_line,lang,column,symbol,symbol_kind,origin,kind,score,snippet.");
+                    addParseError($"Error: unsupported --search-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of path,line,end_line,lang,column,symbol,symbol_kind,origin,kind,score,snippet,query_name,recipe.");
                     continue;
             }
 
@@ -13991,6 +14277,7 @@ public sealed class QueryCommandOptions
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
     public string JsonOutputFormat { get; init; } = "ndjson";
+    public bool JsonOutputFormatExplicit { get; init; }
     public string OutputFormat { get; init; } = "text";
     public int Limit { get; init; } = 20;
     public bool LimitExplicit { get; init; }

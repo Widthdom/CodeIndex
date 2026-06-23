@@ -826,6 +826,20 @@ internal sealed record SearchRecipeListJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("recipes")] List<SearchRecipeListItemJsonResult> Recipes);
 
+internal sealed record SearchRecipeCompactListJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("recipes")] List<SearchRecipeCompactListItemJsonResult> Recipes);
+
+internal sealed record SearchRecipeCompactListItemJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("default_scope")] string DefaultScope,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
+    [property: JsonPropertyName("default_path_patterns")] List<string> DefaultPathPatterns,
+    [property: JsonPropertyName("default_exclude_paths")] List<string> DefaultExcludePaths);
+
 internal sealed record SearchRecipeListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
@@ -947,6 +961,27 @@ internal sealed record SearchRecipeCountQueryJsonResult(
     [property: JsonPropertyName("file_count")] int FileCount,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles);
+
+internal sealed record SearchRecipeAggregationRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
+    [property: JsonPropertyName("mode")] string Mode,
+    [property: JsonPropertyName("group_by")] string GroupBy,
+    [property: JsonPropertyName("unique")] bool Unique,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("queries")] List<SearchRecipeAggregationQueryJsonResult> Queries);
+
+internal sealed record SearchRecipeAggregationQueryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
 
 internal sealed record SearchRecipeCompactRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
