@@ -382,6 +382,9 @@ public static class ConsoleUi
     internal static void SetProgressAnimationEnabled(bool? enabled)
         => _progressAnimationEnabledOverride = enabled;
 
+    internal static bool? GetProgressAnimationOverrideForDiagnostics()
+        => _progressAnimationEnabledOverride;
+
     internal static bool ShouldUseProgressAnimation()
     {
         if (_progressAnimationEnabledOverride.HasValue)
@@ -1892,6 +1895,9 @@ public static class ConsoleUi
     /// 色出力モードを設定する。Always / Never は環境変数と TTY 判定を上書きする。
     /// </summary>
     public static void SetColorMode(ColorMode mode) => _colorMode = mode;
+
+    internal static ColorMode GetColorModeForDiagnostics()
+        => _colorMode;
 
     internal static ColorMode GetColorMode() => _colorMode;
 

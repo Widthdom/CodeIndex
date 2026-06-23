@@ -565,6 +565,81 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_JsonIncludesDisplayEnvironmentDecisions_Issue3997()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "TERM",
+            "TERM_PROGRAM",
+            "WT_SESSION",
+            "WT_PROFILE_ID",
+            "CI",
+            "CLICOLOR_FORCE",
+            "NO_COLOR",
+            "CLICOLOR",
+            ConsoleUi.DisableProgressEnvironmentVariable,
+            ConsoleUi.PrefersReducedMotionEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable,
+            "LC_ALL",
+            "LC_CTYPE",
+            "LANG",
+            "CDIDX_GITHUB_TOKEN");
+        const string secret = "ghp_123456789012345678901234567890123456";
+        env.Set("TERM", "xterm-256color");
+        env.Set("TERM_PROGRAM", null);
+        env.Set("WT_SESSION", null);
+        env.Set("WT_PROFILE_ID", null);
+        env.Set("CI", null);
+        env.Set("CLICOLOR_FORCE", "1");
+        env.Set("NO_COLOR", null);
+        env.Set("CLICOLOR", null);
+        env.Set(ConsoleUi.DisableProgressEnvironmentVariable, "1");
+        env.Set(ConsoleUi.PrefersReducedMotionEnvironmentVariable, null);
+        env.Set(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "96");
+        env.Set("LC_ALL", null);
+        env.Set("LC_CTYPE", null);
+        env.Set("LANG", "ja_JP.UTF-8");
+        env.Set("CDIDX_GITHUB_TOKEN", secret);
+        ConsoleUi.SetColorMode(ColorMode.Auto);
+        ConsoleUi.SetProgressAnimationEnabled(null);
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.DoesNotContain(secret, stdout);
+            using var document = JsonDocument.Parse(stdout);
+            var display = document.RootElement.GetProperty("display");
+            var color = display.GetProperty("color");
+            Assert.True(color.GetProperty("enabled").GetBoolean());
+            Assert.Equal("CLICOLOR_FORCE", color.GetProperty("source").GetString());
+            var progress = display.GetProperty("progress");
+            Assert.False(progress.GetProperty("enabled").GetBoolean());
+            Assert.Equal(ConsoleUi.DisableProgressEnvironmentVariable, progress.GetProperty("source").GetString());
+            var terminalHint = display.GetProperty("terminal_hint");
+            Assert.True(terminalHint.GetProperty("has_hint").GetBoolean());
+            Assert.Equal("xterm-256color", terminalHint.GetProperty("term").GetString());
+            var maxLineWidth = display.GetProperty("max_line_width");
+            Assert.Equal(96, maxLineWidth.GetProperty("value").GetInt32());
+            Assert.Equal("environment", maxLineWidth.GetProperty("source_kind").GetString());
+            Assert.Equal(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, maxLineWidth.GetProperty("source").GetString());
+            Assert.Equal("parsed", maxLineWidth.GetProperty("status").GetString());
+            var ambiguousWidth = display.GetProperty("ambiguous_width");
+            Assert.True(ambiguousWidth.GetProperty("wide").GetBoolean());
+            Assert.Equal("LANG", ambiguousWidth.GetProperty("source").GetString());
+            Assert.Equal("ja_JP.UTF-8", ambiguousWidth.GetProperty("locale").GetString());
+            Assert.Equal(LineWidthFormatter.DefaultMaxLineWidth, display.GetProperty("truncation").GetProperty("default_max_line_width").GetInt32());
+        }
+        finally
+        {
+            ConsoleUi.SetColorMode(ColorMode.Auto);
+            ConsoleUi.SetProgressAnimationEnabled(null);
+        }
+    }
+
+    [Fact]
     public void Run_QueryTraceStderr_BoundsPathArraysAndValues_Issue3123()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-bounds");

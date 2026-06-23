@@ -480,6 +480,18 @@ internal static partial class ProgramRunner
         Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
         Console.WriteLine();
+        var display = BuildDoctorDisplayJson();
+        Console.WriteLine("display:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("color", display.Color.Enabled, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("color_source", display.Color.Source, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("terminal_hint", display.TerminalHint.HasHint, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("progress", display.Progress.Enabled, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("progress_source", display.Progress.Source, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_line_width", display.MaxLineWidth.Value, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_line_width_source", display.MaxLineWidth.Source, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("ambiguous_width", display.AmbiguousWidth.Wide, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("ambiguous_locale", display.AmbiguousWidth.Locale, indent: "  "));
+        Console.WriteLine();
         Console.WriteLine("paths:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("db", dbResolution.DbPath, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("data_dir", dbResolution.DataDir ?? "<explicit-db>", indent: "  "));
@@ -519,6 +531,7 @@ internal static partial class ProgramRunner
                 Term: FormatDoctorJsonEnvironmentValue("TERM", redactPaths),
                 Locale: CultureInfo.CurrentCulture.Name,
                 UiLocale: CultureInfo.CurrentUICulture.Name),
+            Display: BuildDoctorDisplayJson(),
             Paths: new DoctorPathsJsonResult(
                 Db: RedactDoctorPath(dbResolution.DbPath, redactPaths),
                 DataDir: RedactDoctorPath(dbResolution.DataDir ?? "<explicit-db>", redactPaths),
@@ -534,6 +547,147 @@ internal static partial class ProgramRunner
                 SecretsRedacted: true));
 
         Console.WriteLine(JsonSerializer.Serialize(payload, CliJsonSerializerContextFactory.Create(jsonOptions).DoctorJsonResult));
+    }
+
+    private static DoctorDisplayJsonResult BuildDoctorDisplayJson()
+    {
+        var maxLineWidth = EnvironmentOptionParser.ReadInt32(
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable,
+            LineWidthFormatter.DefaultMaxLineWidth,
+            minimum: 0,
+            maximum: LineWidthFormatter.MaxAllowedLineWidth);
+
+        return new DoctorDisplayJsonResult(
+            Color: BuildDoctorColorDecision(),
+            Progress: BuildDoctorProgressDecision(),
+            TerminalHint: BuildDoctorTerminalHint(),
+            MaxLineWidth: new DoctorDisplayMaxLineWidthJsonResult(
+                maxLineWidth.Value,
+                maxLineWidth.SourceKind,
+                maxLineWidth.Source,
+                maxLineWidth.Status,
+                maxLineWidth.UsedFallback,
+                maxLineWidth.Fallback,
+                maxLineWidth.Minimum,
+                maxLineWidth.Maximum,
+                maxLineWidth.Name,
+                maxLineWidth.RawValue is null ? "<unset>" : ConsoleUi.FormatBoundedValue(maxLineWidth.RawValue)),
+            AmbiguousWidth: BuildDoctorAmbiguousWidthDecision(),
+            Truncation: new DoctorDisplayTruncationJsonResult(
+                LineWidthFormatter.DefaultMaxLineWidth,
+                LineWidthFormatter.MaxAllowedLineWidth,
+                ConsoleUi.DefaultDiagnosticValueCharLimit,
+                "... <truncated; original length N chars>"));
+    }
+
+    private static DoctorDisplayDecisionJsonResult BuildDoctorColorDecision()
+    {
+        var enabled = ConsoleUi.ShouldUseColor();
+        return ConsoleUi.GetColorModeForDiagnostics() switch
+        {
+            ColorMode.Always => new DoctorDisplayDecisionJsonResult(enabled, "flag", "--color=always"),
+            ColorMode.Never => new DoctorDisplayDecisionJsonResult(enabled, "flag", "--color=never"),
+            _ when IsDoctorForceColorRequested() => new DoctorDisplayDecisionJsonResult(enabled, "CLICOLOR_FORCE", "forced"),
+            _ when !string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("NO_COLOR")) => new DoctorDisplayDecisionJsonResult(enabled, "NO_COLOR", "disabled"),
+            _ when CdidxEnvironment.GetEnvironmentVariable("CLICOLOR") == "0" => new DoctorDisplayDecisionJsonResult(enabled, "CLICOLOR", "disabled"),
+            _ => new DoctorDisplayDecisionJsonResult(enabled, "terminal", enabled ? "ansi_available" : "not_interactive")
+        };
+    }
+
+    private static DoctorDisplayDecisionJsonResult BuildDoctorProgressDecision()
+    {
+        var enabled = ConsoleUi.ShouldUseProgressAnimation();
+        var progressOverride = ConsoleUi.GetProgressAnimationOverrideForDiagnostics();
+        if (progressOverride.HasValue)
+            return new DoctorDisplayDecisionJsonResult(enabled, "flag", progressOverride.Value ? "enabled_override" : "--no-progress");
+        if (IsTruthyDoctorEnvironmentValue(CdidxEnvironment.GetEnvironmentVariable(ConsoleUi.DisableProgressEnvironmentVariable)))
+            return new DoctorDisplayDecisionJsonResult(enabled, ConsoleUi.DisableProgressEnvironmentVariable, "disabled");
+        if (IsTruthyDoctorEnvironmentValue(CdidxEnvironment.GetEnvironmentVariable(ConsoleUi.PrefersReducedMotionEnvironmentVariable)))
+            return new DoctorDisplayDecisionJsonResult(enabled, ConsoleUi.PrefersReducedMotionEnvironmentVariable, "reduced_motion");
+        return new DoctorDisplayDecisionJsonResult(enabled, "default", "enabled");
+    }
+
+    private static DoctorDisplayTerminalHintJsonResult BuildDoctorTerminalHint()
+    {
+        var wtSession = FormatDoctorJsonEnvironmentValue("WT_SESSION", redactPaths: false);
+        var wtProfile = FormatDoctorJsonEnvironmentValue("WT_PROFILE_ID", redactPaths: false);
+        return new DoctorDisplayTerminalHintJsonResult(
+            HasDoctorTerminalEnvironmentHint(),
+            IsDoctorTerminalEnvironmentDisabled(),
+            Console.IsOutputRedirected,
+            Console.Out is StringWriter,
+            FormatDoctorJsonEnvironmentValue("TERM", redactPaths: false),
+            FormatDoctorJsonEnvironmentValue("TERM_PROGRAM", redactPaths: false),
+            FormatDoctorJsonEnvironmentValue("CI", redactPaths: false),
+            wtSession != "<unset>" ? wtSession : wtProfile);
+    }
+
+    private static DoctorDisplayAmbiguousWidthJsonResult BuildDoctorAmbiguousWidthDecision()
+    {
+        var locale = CdidxEnvironment.GetEnvironmentVariable("LC_ALL");
+        var source = "LC_ALL";
+        if (string.IsNullOrEmpty(locale))
+        {
+            locale = CdidxEnvironment.GetEnvironmentVariable("LC_CTYPE");
+            source = "LC_CTYPE";
+        }
+        if (string.IsNullOrEmpty(locale))
+        {
+            locale = CdidxEnvironment.GetEnvironmentVariable("LANG");
+            source = "LANG";
+        }
+        if (string.IsNullOrEmpty(locale))
+        {
+            locale = "<unset>";
+            source = "default";
+        }
+
+        var wide = locale.StartsWith("ja", StringComparison.OrdinalIgnoreCase)
+                   || locale.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                   || locale.StartsWith("ko", StringComparison.OrdinalIgnoreCase);
+        return new DoctorDisplayAmbiguousWidthJsonResult(wide, source, ConsoleUi.FormatBoundedValue(locale));
+    }
+
+    private static bool HasDoctorTerminalEnvironmentHint()
+    {
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_SESSION")))
+            return true;
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("WT_PROFILE_ID")))
+            return true;
+        if (!string.IsNullOrEmpty(CdidxEnvironment.GetEnvironmentVariable("TERM_PROGRAM")))
+            return true;
+
+        var term = CdidxEnvironment.GetEnvironmentVariable("TERM");
+        return !string.IsNullOrWhiteSpace(term)
+               && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDoctorTerminalEnvironmentDisabled()
+        => string.Equals(CdidxEnvironment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)
+           || IsDoctorCiEnvironment();
+
+    private static bool IsDoctorCiEnvironment()
+    {
+        var ci = CdidxEnvironment.GetEnvironmentVariable("CI");
+        return !string.IsNullOrEmpty(ci)
+               && !ci.Equals("0", StringComparison.OrdinalIgnoreCase)
+               && !ci.Equals("false", StringComparison.OrdinalIgnoreCase)
+               && !ci.Equals("no", StringComparison.OrdinalIgnoreCase)
+               && !ci.Equals("off", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDoctorForceColorRequested()
+    {
+        var force = CdidxEnvironment.GetEnvironmentVariable("CLICOLOR_FORCE");
+        return !string.IsNullOrEmpty(force) && force != "0";
+    }
+
+    private static bool IsTruthyDoctorEnvironmentValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return value.Trim() is not ("0" or "false" or "False" or "FALSE" or "no" or "No" or "NO");
     }
 
     private static void WriteEnvironmentInventory()

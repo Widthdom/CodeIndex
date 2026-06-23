@@ -51,6 +51,7 @@ internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("base_dir")] string BaseDir,
     [property: JsonPropertyName("cwd")] string Cwd,
     [property: JsonPropertyName("terminal")] DoctorTerminalJsonResult Terminal,
+    [property: JsonPropertyName("display")] DoctorDisplayJsonResult Display,
     [property: JsonPropertyName("paths")] DoctorPathsJsonResult Paths,
     [property: JsonPropertyName("config")] DoctorConfigJsonResult Config,
     [property: JsonPropertyName("cdidx_env")] IReadOnlyList<DoctorEnvironmentVariableJsonResult> CdidxEnv,
@@ -65,6 +66,52 @@ internal sealed record DoctorTerminalJsonResult(
     [property: JsonPropertyName("term")] string Term,
     [property: JsonPropertyName("locale")] string Locale,
     [property: JsonPropertyName("ui_locale")] string UiLocale);
+
+internal sealed record DoctorDisplayJsonResult(
+    [property: JsonPropertyName("color")] DoctorDisplayDecisionJsonResult Color,
+    [property: JsonPropertyName("progress")] DoctorDisplayDecisionJsonResult Progress,
+    [property: JsonPropertyName("terminal_hint")] DoctorDisplayTerminalHintJsonResult TerminalHint,
+    [property: JsonPropertyName("max_line_width")] DoctorDisplayMaxLineWidthJsonResult MaxLineWidth,
+    [property: JsonPropertyName("ambiguous_width")] DoctorDisplayAmbiguousWidthJsonResult AmbiguousWidth,
+    [property: JsonPropertyName("truncation")] DoctorDisplayTruncationJsonResult Truncation);
+
+internal sealed record DoctorDisplayDecisionJsonResult(
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("reason")] string Reason);
+
+internal sealed record DoctorDisplayTerminalHintJsonResult(
+    [property: JsonPropertyName("has_hint")] bool HasHint,
+    [property: JsonPropertyName("disabled")] bool Disabled,
+    [property: JsonPropertyName("stdout_redirected")] bool StdoutRedirected,
+    [property: JsonPropertyName("string_writer_capture")] bool StringWriterCapture,
+    [property: JsonPropertyName("term")] string Term,
+    [property: JsonPropertyName("term_program")] string TermProgram,
+    [property: JsonPropertyName("ci")] string Ci,
+    [property: JsonPropertyName("windows_terminal")] string WindowsTerminal);
+
+internal sealed record DoctorDisplayMaxLineWidthJsonResult(
+    [property: JsonPropertyName("value")] int Value,
+    [property: JsonPropertyName("source_kind")] string SourceKind,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("used_fallback")] bool UsedFallback,
+    [property: JsonPropertyName("fallback")] int Fallback,
+    [property: JsonPropertyName("minimum")] int Minimum,
+    [property: JsonPropertyName("maximum")] int Maximum,
+    [property: JsonPropertyName("environment_variable")] string EnvironmentVariable,
+    [property: JsonPropertyName("raw_value")] string RawValue);
+
+internal sealed record DoctorDisplayAmbiguousWidthJsonResult(
+    [property: JsonPropertyName("wide")] bool Wide,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("locale")] string Locale);
+
+internal sealed record DoctorDisplayTruncationJsonResult(
+    [property: JsonPropertyName("default_max_line_width")] int DefaultMaxLineWidth,
+    [property: JsonPropertyName("max_allowed_line_width")] int MaxAllowedLineWidth,
+    [property: JsonPropertyName("diagnostic_value_char_limit")] int DiagnosticValueCharLimit,
+    [property: JsonPropertyName("marker_format")] string MarkerFormat);
 
 internal sealed record DoctorPathsJsonResult(
     [property: JsonPropertyName("db")] string Db,
@@ -732,6 +779,12 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryStatus))]
 [JsonSerializable(typeof(DoctorConfigJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayAmbiguousWidthJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayDecisionJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayMaxLineWidthJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayTerminalHintJsonResult))]
+[JsonSerializable(typeof(DoctorDisplayTruncationJsonResult))]
 [JsonSerializable(typeof(DoctorEnvironmentVariableJsonResult))]
 [JsonSerializable(typeof(DoctorJsonResult))]
 [JsonSerializable(typeof(DoctorPathsJsonResult))]
