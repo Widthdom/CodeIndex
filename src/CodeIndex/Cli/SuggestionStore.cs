@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 
@@ -41,18 +41,8 @@ public class SuggestionStore
     internal const int MaximumMaxCount = 100_000;
     internal const int MaxSuggestionStoreRecords = MaximumMaxCount;
     private const int FuzzyDedupRecentLimit = 100;
-    private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
-    private const string RedactedBearerToken = "[REDACTED:bearer_token]";
-    private const string RedactedCredential = "[REDACTED:credential]";
-    private const string RedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
-    private const string RedactedRegexTimeout = "[REDACTED:redaction_timeout]";
-    internal const int RedactionFieldLengthLimit = 32768;
-    internal const string RedactionTruncationMarker = "[REDACTED:truncated]";
-    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
-    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
-    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
-    private static readonly Regex s_namedSecretRegex = new(@"(?i)(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]*(?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key|credential)[\p{L}\p{N}_-]*)=(?<value>[^&\s]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
-    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    internal const int RedactionFieldLengthLimit = DiagnosticRedactor.SuggestionRedactionFieldLengthLimit;
+    internal const string RedactionTruncationMarker = DiagnosticRedactor.SuggestionRedactionTruncationMarker;
 
     internal sealed record ArchiveBuildResult(
         IReadOnlyList<byte[]> Lines,
@@ -1075,51 +1065,7 @@ public class SuggestionStore
     };
 
     internal static string RedactSensitiveText(string text, out IReadOnlyCollection<string> redactedTypes)
-    {
-        var types = new SortedSet<string>(StringComparer.Ordinal);
-        var truncated = false;
-        if (text.Length > RedactionFieldLengthLimit)
-        {
-            text = text[..RedactionFieldLengthLimit];
-            truncated = true;
-            types.Add("truncated");
-        }
-
-        try
-        {
-            var redacted = s_awsAccessKeyRegex.Replace(text, match =>
-            {
-                types.Add("aws_access_key");
-                return RedactedAwsAccessKey;
-            });
-            redacted = s_bearerTokenRegex.Replace(redacted, match =>
-            {
-                types.Add("bearer_token");
-                return RedactedBearerToken;
-            });
-            redacted = s_namedSecretRegex.Replace(redacted, match =>
-            {
-                types.Add("credential");
-                return $"{match.Groups[1].Value}{match.Groups["name"].Value}={RedactedCredential}";
-            });
-            redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
-            {
-                if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
-                    return match.Value;
-                types.Add("high_entropy_token");
-                return RedactedHighEntropyToken;
-            });
-
-            redactedTypes = types;
-            return truncated ? redacted + RedactionTruncationMarker : redacted;
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            types.Add("redaction_timeout");
-            redactedTypes = types;
-            return RedactedRegexTimeout;
-        }
-    }
+        => DiagnosticRedactor.RedactSuggestionText(text, out redactedTypes);
 
     private static SuggestionRecord RedactRecordForPersistence(SuggestionRecord record)
     {

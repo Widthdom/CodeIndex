@@ -324,6 +324,24 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatArgs_RedactsSharedSensitiveNames_Issue3933()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+
+        var formatted = GlobalToolLog.FormatArgs([
+            "--github-token",
+            "gh-secret",
+            "--serviceCredential=credential-secret",
+        ]);
+
+        Assert.Contains("--github-token <redacted>", formatted);
+        Assert.Contains("--serviceCredential=<redacted>", formatted);
+        Assert.DoesNotContain("gh-secret", formatted);
+        Assert.DoesNotContain("credential-secret", formatted);
+    }
+
+    [Fact]
     public void FormatArgs_TruncatesOverlongArgumentBeforeRedaction()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
