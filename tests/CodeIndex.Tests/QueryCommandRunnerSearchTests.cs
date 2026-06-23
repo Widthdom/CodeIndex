@@ -1173,9 +1173,16 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("DiagnosticRedactor", StringComparison.Ordinal));
-        Assert.Equal("catch (", emptyCatchQuery.GetProperty("query").GetString());
+        Assert.Equal("catch", emptyCatchQuery.GetProperty("query").GetString());
+        Assert.False(emptyCatchQuery.GetProperty("exact_substring").GetBoolean());
         Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
         Assert.Contains(emptyCatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("broad or empty catch", StringComparison.Ordinal));
+        Assert.Contains(emptyCatchQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
+            filter.GetProperty("option").GetString() == "--require-before" &&
+            filter.GetProperty("query").GetString() == "}");
+        Assert.Contains(emptyCatchQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
+            filter.GetProperty("option").GetString() == "--require-after" &&
+            filter.GetProperty("query").GetString() == "{");
         Assert.Equal(0, emptyCatchQuery.GetProperty("exclude_origins").GetArrayLength());
         Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
         Assert.Equal("new Regex(", regexQuery.GetProperty("query").GetString());
@@ -1389,7 +1396,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "src/code.cs",
+                "src/spaced.cs",
                 "csharp",
                 """
                 public sealed class App
@@ -1401,6 +1408,44 @@ public partial class QueryCommandRunnerTests
                             Work();
                         }
                         catch (Exception)
+                        {
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/no-space.cs",
+                "csharp",
+                """
+                public sealed class NoSpaceCatch
+                {
+                    public void Run()
+                    {
+                        try
+                        {
+                            Work();
+                        }
+                        catch(Exception)
+                        {
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/bare.cs",
+                "csharp",
+                """
+                public sealed class BareCatch
+                {
+                    public void Run()
+                    {
+                        try
+                        {
+                            Work();
+                        }
+                        catch
                         {
                         }
                     }
@@ -1439,10 +1484,13 @@ public partial class QueryCommandRunnerTests
             var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
             Assert.Equal("empty-catch-review", query.GetProperty("name").GetString());
             Assert.Contains(query.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
-            Assert.Equal(1, query.GetProperty("count").GetInt32());
-            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
-            Assert.Equal("src/code.cs", result.GetProperty("path").GetString());
-            Assert.Contains(result.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+            Assert.Equal(3, query.GetProperty("count").GetInt32());
+            var results = query.GetProperty("results").EnumerateArray().ToList();
+            var resultPaths = results.Select(result => result.GetProperty("path").GetString()).ToList();
+            Assert.Contains("src/spaced.cs", resultPaths);
+            Assert.Contains("src/no-space.cs", resultPaths);
+            Assert.Contains("src/bare.cs", resultPaths);
+            Assert.All(results, result => Assert.Contains(result.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code"));
             Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), file => file.GetProperty("path").GetString() == "src/comment.cs");
             Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), file => file.GetProperty("path").GetString() == "src/parser.cs");
 
