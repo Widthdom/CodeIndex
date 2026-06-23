@@ -99,7 +99,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] ExcludeFilterCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "files",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
         "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
     ];
 
