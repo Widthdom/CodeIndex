@@ -86,18 +86,7 @@ internal static class DbConnectionFactory
     }
 
     internal static string ToReadOnlyUri(string dbPath)
-    {
-        if (SqliteFileUri.StartsWithFileScheme(dbPath))
-        {
-            if (!SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
-                throw boundsError ?? new FormatException("Invalid SQLite file URI.");
-
-            return AppendReadOnlyQuery(dbPath);
-        }
-
-        var fileUri = CodeIndex.FileUriPolicy.PathToFileUri(dbPath);
-        return $"{fileUri}?immutable=1&mode=ro";
-    }
+        => SqliteConnectionPolicy.ToReadOnlyUri(dbPath);
 
     internal const string FileUriPathParseFailedReason = "file_uri_path_parse_failed";
     internal const string FileUriParseFailedReason = "file_uri_parse_failed";
@@ -162,12 +151,7 @@ internal static class DbConnectionFactory
         // 済みコミットも正しく読める。
         try
         {
-            var roBuilder = new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            };
-            var conn = new SqliteConnection(roBuilder.ConnectionString);
+            var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
             conn.Open();
             return conn;
         }
@@ -192,16 +176,14 @@ internal static class DbConnectionFactory
             // SqliteConnectionStringBuilder. The builder quotes DataSource values that
             // contain special characters, and the extra quoting was enough in some sandboxes
             // (observed by Codex: raw sqlite3 file:///... ?immutable=1 succeeds while the
-            // builder-wrapped form fails with SQLITE_CANTOPEN). Uri.AbsoluteUri already
-            // percent-encodes everything unsafe in a connection-string context (spaces, %,
-            // ;, ", ', etc. all become %XX), so a raw concatenation is still injection-safe
-            // for this specific input shape. Mode=ReadOnly is redundant with immutable=1 but
-            // kept explicit so cdidx's intent is visible in logs / traces.
+            // builder-wrapped form fails with SQLITE_CANTOPEN). The shared connection policy
+            // percent-encodes connection-string separators that Uri.AbsoluteUri can legally
+            // leave in file paths, then appends the immutable/read-only URI flags.
+            // Mode=ReadOnly is redundant with immutable=1 but kept explicit so cdidx's
+            // intent is visible in logs / traces.
             // builder は DataSource を quote して URI 解釈を壊すため直接組む。
-            // Uri.AbsoluteUri が全ての危険文字を %-エンコードするので raw 連結でも injection 安全。
-            var fileUri = CodeIndex.FileUriPolicy.PathToFileUri(dbPath); // e.g. file:///abs/path.db
-            var rawConnStr = $"Data Source={fileUri}?immutable=1;Mode=ReadOnly";
-            var conn = new SqliteConnection(rawConnStr);
+            // 共有 policy が URI に残り得る connection-string separator を %-エンコードする。
+            var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ImmutableReadOnlyUri));
             conn.Open();
             usedImmutableFallback = true;
             return conn;
@@ -231,17 +213,4 @@ internal static class DbConnectionFactory
             cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private static string AppendReadOnlyQuery(string uriText)
-    {
-        var separator = uriText.Contains('?', StringComparison.Ordinal) ? "&" : "?";
-        var result = uriText;
-        if (!uriText.Contains("immutable=1", StringComparison.OrdinalIgnoreCase))
-        {
-            result += $"{separator}immutable=1";
-            separator = "&";
-        }
-        if (!uriText.Contains("mode=ro", StringComparison.OrdinalIgnoreCase))
-            result += $"{separator}mode=ro";
-        return result;
-    }
 }

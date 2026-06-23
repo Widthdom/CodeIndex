@@ -1296,15 +1296,10 @@ internal static class ExportImportCommandRunner
     }
 
     private static string CreateUnpooledConnectionString(string dbPath)
-        => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
+        => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Unpooled);
 
     private static string CreateReadOnlyUnpooledConnectionString(string dbPath)
-        => new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Pooling = false,
-            Mode = SqliteOpenMode.ReadOnly
-        }.ConnectionString;
+        => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnlyUnpooled);
 
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
         => ReplaceImportedDatabase(tempPath, fullDbPath, CancellationToken.None);
