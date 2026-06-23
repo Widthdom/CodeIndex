@@ -3930,12 +3930,101 @@ public partial class DbReader
 
         if ((kind is "function" or "property")
             && !CSharpPropertyAccessorSignatureRegex.IsMatch(trimmed)
+            && !LooksLikeCSharpCallableSignature(trimmed)
             && CSharpFieldLikeSignatureRegex.IsMatch(trimmed))
         {
             return "field";
         }
 
         return kind;
+    }
+
+    private static bool LooksLikeCSharpCallableSignature(string signature)
+    {
+        var declarationEnd = FindCSharpDeclarationBoundary(signature);
+        var declaration = (declarationEnd >= 0 ? signature[..declarationEnd] : signature).TrimEnd();
+        for (var i = 0; i < declaration.Length; i++)
+        {
+            if (declaration[i] != '(')
+                continue;
+
+            var close = FindMatchingCSharpSignatureParen(declaration, i);
+            if (close < 0)
+                return false;
+
+            var next = SkipCSharpSignatureWhitespace(declaration, close + 1);
+            if (next >= declaration.Length || StartsWithCSharpWhereConstraint(declaration, next))
+                return true;
+
+            i = close;
+        }
+
+        return false;
+    }
+
+    private static int FindCSharpDeclarationBoundary(string signature)
+    {
+        var parenDepth = 0;
+        for (var i = 0; i < signature.Length; i++)
+        {
+            var ch = signature[i];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+
+            if (parenDepth == 0 && (ch == '{' || ch == ';' || ch == '='))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingCSharpSignatureParen(string text, int openIndex)
+    {
+        var depth = 0;
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            if (text[i] == '(')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != ')')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int SkipCSharpSignatureWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static bool StartsWithCSharpWhereConstraint(string text, int index)
+    {
+        const string whereKeyword = "where";
+        if (!text.AsSpan(index).StartsWith(whereKeyword, StringComparison.Ordinal))
+            return false;
+
+        var end = index + whereKeyword.Length;
+        return end >= text.Length || char.IsWhiteSpace(text[end]);
     }
 
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
