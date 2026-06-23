@@ -42,6 +42,8 @@
     "cshtml",
     "css",
     "dart",
+    "dependency_lock",
+    "dependency_manifest",
     "dockerfile",
     "elixir",
     "fortran",

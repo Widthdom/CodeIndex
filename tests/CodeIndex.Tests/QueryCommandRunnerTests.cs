@@ -1307,6 +1307,8 @@ public partial class QueryCommandRunnerTests
     [InlineData("T-SQL", "sql")]
     [InlineData("transact-sql", "sql")]
     [InlineData("transact sql", "sql")]
+    [InlineData("dependency_manifest", "dependency_manifest")]
+    [InlineData("dependency-lock", "dependency_lock")]
     public void ParseArgs_NormalizesLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
@@ -2344,6 +2346,79 @@ public partial class QueryCommandRunnerTests
             Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
             Assert.False(entry.GetProperty("reference_extraction").GetBoolean());
             Assert.False(entry.GetProperty("graph_queries").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsDependencyPackageSymbolExtraction_Issue3899()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var manifest = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "dependency_manifest");
+        var lockfile = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "dependency_lock");
+
+        Assert.True(manifest.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(manifest.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(manifest.GetProperty("graph_queries").GetBoolean());
+        Assert.DoesNotContain("missing-symbols", manifest.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        Assert.Contains("Directory.Packages.props", manifest.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+
+        Assert.True(lockfile.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(lockfile.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(lockfile.GetProperty("graph_queries").GetBoolean());
+        Assert.DoesNotContain("missing-symbols", lockfile.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        Assert.Contains("packages.lock.json", lockfile.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+    }
+
+    [Fact]
+    public void RunSymbolsAndReferences_AcceptDependencyPackageKinds_Issue3899()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_dependency_package_kinds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "Directory.Packages.props",
+                "dependency_manifest",
+                """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Serilog" Version="3.1.1" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            using (var db = new DbContext(dbPath))
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                new DbWriter(db.Connection).MarkGraphReady();
+                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Serilog' AND reference_kind = 'dependency'";
+                Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+            }
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "dependency_manifest", "--kind", "package", "--count"],
+                _jsonOptions));
+            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Serilog", "--db", dbPath, "--lang", "dependency_manifest", "--kind", "dependency", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal("1", symbolsStdout.Trim());
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+            Assert.Equal("1", referencesStdout.Trim());
+            Assert.Equal(string.Empty, referencesStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 

@@ -51,6 +51,9 @@ public static partial class ReferenceExtractor
         if (language == "solution")
             return ExtractSolutionReferences(fileId, lines);
 
+        if (language is "dependency_manifest" or "dependency_lock")
+            return DependencyPackageExtractor.ExtractReferences(fileId, content, lines, path, language);
+
         var swiftTypeAliases = language == "swift"
             ? SwiftReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;

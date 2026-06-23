@@ -10881,6 +10881,20 @@ public sealed class Caller
         Assert.Contains(".htm", htmlExtensions);
         Assert.Contains(".xhtml", htmlExtensions);
         Assert.Contains(".shtml", htmlExtensions);
+
+        var dependencyManifest = languages.First(l => l!["lang"]!.GetValue<string>() == "dependency_manifest")!;
+        Assert.True(dependencyManifest["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(dependencyManifest["reference_extraction"]!.GetValue<bool>());
+        Assert.True(dependencyManifest["graph_queries"]!.GetValue<bool>());
+        Assert.DoesNotContain("missing-symbols", dependencyManifest["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("Directory.Packages.props", dependencyManifest["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        var dependencyLock = languages.First(l => l!["lang"]!.GetValue<string>() == "dependency_lock")!;
+        Assert.True(dependencyLock["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(dependencyLock["reference_extraction"]!.GetValue<bool>());
+        Assert.True(dependencyLock["graph_queries"]!.GetValue<bool>());
+        Assert.DoesNotContain("missing-symbols", dependencyLock["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("packages.lock.json", dependencyLock["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
     }
 
     [Fact]

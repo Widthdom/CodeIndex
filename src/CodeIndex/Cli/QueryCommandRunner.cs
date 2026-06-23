@@ -11616,6 +11616,7 @@ public static partial class QueryCommandRunner
         "namespace",
         "object",
         "operator",
+        "package",
         "procedure",
         "property",
         "protocol",
@@ -13224,7 +13225,7 @@ public static partial class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "dependency", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`

@@ -1449,9 +1449,12 @@ public partial class DbReader : IDisposable
     private static IReadOnlyDictionary<string, string> BuildQueryLanguageAliases()
     {
         var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var languageExtensions = FileIndexer.GetLanguageExtensions();
 
-        foreach (var (pattern, lang) in FileIndexer.GetLanguageExtensions())
+        foreach (var (pattern, lang) in languageExtensions)
             AddQueryLanguageAlias(aliases, pattern, lang);
+        foreach (var lang in languageExtensions.Values.Distinct(StringComparer.OrdinalIgnoreCase))
+            AddQueryLanguageAlias(aliases, lang, lang);
 
         AddQueryLanguageAlias(aliases, "c#", "csharp");
         AddQueryLanguageAlias(aliases, "blazor", "csharp");

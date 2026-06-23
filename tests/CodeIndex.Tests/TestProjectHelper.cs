@@ -76,7 +76,7 @@ internal static class TestProjectHelper
 
             var symbols = SymbolExtractor.Extract(fileId, lang, normalized, path);
             writer.InsertSymbols(symbols);
-            writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+            writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path));
         }
 
         SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
