@@ -152,6 +152,9 @@ public static partial class QueryCommandRunner
         "--max-results",
         "--top",
         "--lang",
+        "--language",
+        "--extension",
+        "--alias",
         "--kind",
         "--bucket",
         "--min-confidence",
@@ -8590,18 +8593,32 @@ public static partial class QueryCommandRunner
         // Sort by language name / 言語名でソート
         var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
 
-        if (options.LanguagesIndexedOnly)
+        if (options.LanguagesIndexedOnly || ShouldLoadLanguageIndexedCounts(options))
         {
             return WithDb(options, jsonOptions, reader =>
             {
-                var indexedLanguages = new HashSet<string>(reader.GetStatus().Languages.Keys, StringComparer.Ordinal);
-                return WriteLanguages(sorted.Where(kv => indexedLanguages.Contains(kv.Key)));
+                var indexedLanguageCounts = reader.GetStatus().Languages;
+                return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts), indexedLanguageCounts);
             });
         }
 
-        return WriteLanguages(sorted);
+        return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts: null), indexedLanguageCounts: null);
 
-        int WriteLanguages(IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages)
+        IEnumerable<KeyValuePair<string, LanguageSupportInfo>> SelectLanguages(
+            IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages,
+            IReadOnlyDictionary<string, long>? indexedLanguageCounts)
+        {
+            var selected = languages;
+            if (options.LanguagesIndexedOnly)
+                selected = selected.Where(kv => indexedLanguageCounts?.ContainsKey(kv.Key) == true);
+            if (HasLanguageLookup(options))
+                selected = selected.Where(kv => LanguageMatchesLookup(kv.Key, kv.Value, options));
+            return selected;
+        }
+
+        int WriteLanguages(
+            IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages,
+            IReadOnlyDictionary<string, long>? indexedLanguageCounts)
         {
             var filtered = languages
                 .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
@@ -8617,7 +8634,8 @@ public static partial class QueryCommandRunner
                     kv.Value.Symbols,
                     kv.Value.References,
                     kv.Value.Graph,
-                    kv.Value.CapabilityGaps)).ToList();
+                    kv.Value.CapabilityGaps,
+                    GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
                 Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
             }
             else
@@ -8628,23 +8646,40 @@ public static partial class QueryCommandRunner
                 // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
                 const int ExtensionColumnWidth = 36;
                 const int AliasColumnWidth = 12;
-                Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
-                Console.WriteLine(new string('-', 85));
+                var showIndexedCounts = indexedLanguageCounts != null;
+                if (showIndexedCounts)
+                {
+                    Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Indexed",-7} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                    Console.WriteLine(new string('-', 93));
+                }
+                else
+                {
+                    Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                    Console.WriteLine(new string('-', 85));
+                }
                 foreach (var (lang, info) in filtered)
                 {
                     var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
                     var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
                     var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
+                    var indexedCount = GetIndexedLanguageCount(indexedLanguageCounts, lang);
+                    var indexedCell = indexedCount?.ToString(CultureInfo.InvariantCulture) ?? "-";
                     var sym = info.Symbols ? "yes" : "-";
                     var refs = info.References ? "yes" : "-";
                     var graph = info.Graph ? "yes" : "-";
                     if (exts.Length <= ExtensionColumnWidth && aliases.Length <= AliasColumnWidth)
                     {
-                        Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {refs,-5} {graph,-7}");
+                        if (showIndexedCounts)
+                            Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {indexedCell,-7} {sym,-9} {refs,-5} {graph,-7}");
+                        else
+                            Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {refs,-5} {graph,-7}");
                     }
                     else
                     {
-                        Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {refs,-5} {graph,-7}");
+                        if (showIndexedCounts)
+                            Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {indexedCell,-7} {sym,-9} {refs,-5} {graph,-7}");
+                        else
+                            Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {refs,-5} {graph,-7}");
                         Console.WriteLine($"  Extensions: {exts}");
                         if (!string.IsNullOrWhiteSpace(aliases))
                             Console.WriteLine($"  Aliases: {aliases}");
@@ -8660,6 +8695,56 @@ public static partial class QueryCommandRunner
     }
 
     private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps);
+
+    private static bool HasLanguageLookup(QueryCommandOptions options)
+        => options.LanguageLookups.Count > 0 || options.LanguageExtensionLookups.Count > 0 || options.LanguageAliasLookups.Count > 0;
+
+    private static bool ShouldLoadLanguageIndexedCounts(QueryCommandOptions options)
+    {
+        if (!HasLanguageLookup(options))
+            return false;
+        if (options.DbPathExplicit)
+            return true;
+        if (options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath));
+    }
+
+    private static long? GetIndexedLanguageCount(IReadOnlyDictionary<string, long>? indexedLanguageCounts, string lang)
+    {
+        if (indexedLanguageCounts == null)
+            return null;
+        return indexedLanguageCounts.TryGetValue(lang, out var count) ? count : 0;
+    }
+
+    private static bool LanguageMatchesLookup(string lang, LanguageSupportInfo language, QueryCommandOptions options)
+        => options.LanguageLookups.Any(lookup => string.Equals(DbReader.NormalizeQueryLanguage(lookup), lang, StringComparison.Ordinal))
+           || options.LanguageExtensionLookups.Any(lookup => LanguageMatchesExtensionLookup(language, lookup))
+           || options.LanguageAliasLookups.Any(lookup => LanguageMatchesAliasLookup(language, lookup));
+
+    private static bool LanguageMatchesExtensionLookup(LanguageSupportInfo language, string lookup)
+    {
+        var normalized = NormalizeLanguageLookupKey(lookup);
+        return language.Extensions.Any(ext => string.Equals(NormalizeLanguageLookupKey(ext), normalized, StringComparison.Ordinal));
+    }
+
+    private static bool LanguageMatchesAliasLookup(LanguageSupportInfo language, string lookup)
+    {
+        var normalized = NormalizeLanguageLookupKey(lookup);
+        return language.Aliases.Any(alias => string.Equals(NormalizeLanguageLookupKey(alias), normalized, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeLanguageLookupKey(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value.Trim())
+        {
+            if (char.IsWhiteSpace(ch) || ch is '-' or '_' or '.')
+                continue;
+            builder.Append(char.ToLowerInvariant(ch));
+        }
+        return builder.ToString();
+    }
 
     private static bool LanguageMatchesCapability(LanguageSupportInfo language, string capability)
         => capability switch
@@ -8861,6 +8946,9 @@ public static partial class QueryCommandRunner
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
+        var languageLookups = new List<string>();
+        var languageExtensionLookups = new List<string>();
+        var languageAliasLookups = new List<string>();
         ProjectFilterRootResolution? projectFilterRootResolution = null;
 
         void AddParseError(string error)
@@ -9095,6 +9183,29 @@ public static partial class QueryCommandRunner
                     {
                         AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use graph, references, symbols, missing-graph, missing-references, missing-symbols, or search-only.");
                     }
+                    break;
+                case "--language":
+                    if (TryReadStringOptionValue(args, ref i, "--language", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var languageValue, out var languageError))
+                    {
+                        languageLookups.Add(languageValue!);
+                        lang = NormalizeLangFilterValue(languageValue);
+                    }
+                    else
+                    {
+                        AddParseError(languageError!);
+                    }
+                    break;
+                case "--extension":
+                    if (TryReadStringOptionValue(args, ref i, "--extension", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var languageExtensionValue, out var languageExtensionError))
+                        languageExtensionLookups.Add(languageExtensionValue!);
+                    else
+                        AddParseError(languageExtensionError!);
+                    break;
+                case "--alias":
+                    if (TryReadStringOptionValue(args, ref i, "--alias", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var languageAliasValue, out var languageAliasError))
+                        languageAliasLookups.Add(languageAliasValue!);
+                    else
+                        AddParseError(languageAliasError!);
                     break;
                 case "--format":
                     if (TryReadStringOptionValue(args, ref i, "--format", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var formatValue, out var formatError))
@@ -10193,6 +10304,9 @@ public static partial class QueryCommandRunner
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
+            LanguageLookups = languageLookups,
+            LanguageExtensionLookups = languageExtensionLookups,
+            LanguageAliasLookups = languageAliasLookups,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
@@ -13938,6 +14052,9 @@ public sealed class QueryCommandOptions
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
+    public List<string> LanguageLookups { get; init; } = [];
+    public List<string> LanguageExtensionLookups { get; init; } = [];
+    public List<string> LanguageAliasLookups { get; init; } = [];
     public string? ParseError { get; init; }
 }
 

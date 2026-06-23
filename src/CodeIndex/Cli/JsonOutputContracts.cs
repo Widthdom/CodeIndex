@@ -315,7 +315,9 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries,
-    [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps);
+    [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps,
+    [property: JsonPropertyName("indexed_file_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);

@@ -2051,6 +2051,7 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -2065,11 +2066,67 @@ public partial class QueryCommandRunnerTests
                 .ToList();
 
             Assert.Equal(["csharp", "markdown"], names);
+            var csharp = document.RootElement.GetProperty("languages").EnumerateArray()
+                .Single(lang => lang.GetProperty("lang").GetString() == "csharp");
+            Assert.Equal(2, csharp.GetProperty("indexed_file_count").GetInt64());
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Theory]
+    [InlineData("--language", "C#", "csharp", 2)]
+    [InlineData("--extension", ".cs", "csharp", 2)]
+    [InlineData("--extension", "csproj", "msbuild", 1)]
+    [InlineData("--alias", "yml", "yaml", 1)]
+    public void RunLanguages_JsonLookupSelectorsReturnSingleLanguageWithIndexedCount_Issue3921(
+        string flag,
+        string value,
+        string expectedLanguage,
+        long expectedIndexedFileCount)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_lookup");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.csproj", "msbuild", "<Project />\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "config/app.yml", "yaml", "name: app\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunLanguages(["--json", flag, value, "--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+            var language = Assert.Single(languages);
+
+            Assert.Equal(expectedLanguage, language.GetProperty("lang").GetString());
+            Assert.Equal(expectedIndexedFileCount, language.GetProperty("indexed_file_count").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--language")]
+    [InlineData("--extension")]
+    [InlineData("--alias")]
+    public void RunLanguages_MissingLookupSelectorReturnsUsageError(string flag)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages([flag], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(flag, stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("languages")}", stderr);
     }
 
     [Fact]

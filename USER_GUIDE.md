@@ -1799,7 +1799,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, and `capability_gaps`. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, `capability_gaps`, and `indexed_file_count`. Add `--language <name>`, `--extension <ext>`, or `--alias <alias>` to retrieve one language row by canonical name, recognized extension/filename pattern, or display alias. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -1910,8 +1910,11 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 Use `cdidx languages --json` as the live capability probe. JSON rows expose
 `symbol_extraction`, `reference_extraction`, `graph_queries`, and
-`capability_gaps`. Add `--indexed-only` when you only want languages present in
-the current DB, and add
+`capability_gaps`; DB-backed probes such as `--indexed-only` and lookup by
+`--language`, `--extension`, or `--alias` also include `indexed_file_count`.
+Add `--indexed-only` when you only want languages present in the current DB, add
+`--language <name>`, `--extension <ext>`, or `--alias <alias>` when you need one
+disambiguated language row, and add
 `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only`
 when auditing a specific structured capability or capability gap. This matrix
 explains the common extraction behavior so users know when to trust structured
@@ -4365,7 +4368,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 ## 対応言語
 
-全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。
+全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。現在の DB に存在する言語だけを一覧するには `cdidx languages --indexed-only --json` を使います。JSON 行には `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`indexed_file_count` が含まれます。言語名・認識済み拡張子/ファイル名 pattern・表示 alias から 1 行を取得するには `--language <name>`、`--extension <ext>`、`--alias <alias>` を追加してください。
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
@@ -4475,8 +4478,10 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 ### 言語別 extraction matrix
 
 現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
-`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。
-現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability や capability gap を監査する場合は
+`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。`--indexed-only` や
+`--language`、`--extension`、`--alias` による DB 参照付き lookup では `indexed_file_count` も含まれます。
+現在の DB に存在する言語だけを見たい場合は `--indexed-only`、言語名・拡張子・表示 alias から 1 行を特定したい場合は
+`--language <name>`、`--extension <ext>`、`--alias <alias>`、特定の構造化 capability や capability gap を監査する場合は
 `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
 
