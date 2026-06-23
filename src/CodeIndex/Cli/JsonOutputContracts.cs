@@ -157,7 +157,10 @@ internal sealed record DbSchemaJsonResult(
     [property: JsonPropertyName("entries_truncated")] bool EntriesTruncated = false,
     [property: JsonPropertyName("sql_truncated")] bool SqlTruncated = false,
     [property: JsonPropertyName("entry_limit")] int EntryLimit = 0,
-    [property: JsonPropertyName("sql_text_limit")] int SqlTextLimit = 0);
+    [property: JsonPropertyName("sql_text_limit")] int SqlTextLimit = 0,
+    [property: JsonPropertyName("summary_only")] bool SummaryOnly = false,
+    [property: JsonPropertyName("type_filter")] string? TypeFilter = null,
+    [property: JsonPropertyName("name_filter")] string? NameFilter = null);
 
 internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("status")] string Status,

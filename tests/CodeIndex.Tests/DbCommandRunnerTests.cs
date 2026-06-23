@@ -20,6 +20,7 @@ public class DbCommandRunnerTests
     public static IEnumerable<object[]> DirectSqliteModeArgs()
     {
         yield return new object[] { new[] { "--integrity-check" } };
+        yield return new object[] { new[] { "integrity" } };
         yield return new object[] { new[] { "schema" } };
         yield return new object[] { new[] { "prune", "--dry-run" } };
     }
@@ -34,12 +35,41 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_IntegritySubcommandSetsFlag_Issue3958()
+    {
+        var options = DbCommandRunner.ParseArgs(["integrity"]);
+
+        Assert.True(options.IntegrityCheck);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_SchemaSubcommandSetsFlag()
     {
         var options = DbCommandRunner.ParseArgs(["schema"]);
 
         Assert.True(options.Schema);
         Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_SchemaProjectionOptionsSetFilters_Issue3958()
+    {
+        var options = DbCommandRunner.ParseArgs(["schema", "--type", "TABLE", "--name", "files", "--summary-only"]);
+
+        Assert.True(options.Schema);
+        Assert.Equal("table", options.SchemaType);
+        Assert.Equal("files", options.SchemaName);
+        Assert.True(options.SchemaSummaryOnly);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_SchemaProjectionOptionsRequireSchema_Issue3958()
+    {
+        var options = DbCommandRunner.ParseArgs(["integrity", "--summary-only"]);
+
+        Assert.Contains("only valid", options.ParseError);
     }
 
     [Fact]
@@ -290,6 +320,30 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_IntegritySubcommand_JsonReportsOk_Issue3958()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_alias_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["integrity", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("ok").GetBoolean());
+            Assert.Equal("integrity_ok", json.GetProperty("diagnostic_code").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_IntegrityCheck_JsonCancellationReturnsInterrupted_Issue3811()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_cancel_{Guid.NewGuid():N}.db");
@@ -368,6 +422,65 @@ public class DbCommandRunnerTests
             Assert.Contains(json.GetProperty("entries").EnumerateArray(), entry =>
                 entry.GetProperty("type").GetString() == "table" &&
                 entry.GetProperty("name").GetString() == "files");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Schema_JsonFiltersByTypeAndName_Issue3958()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_filter_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json", "--type", "table", "--name", "files"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("table", json.GetProperty("type_filter").GetString());
+            Assert.Equal("files", json.GetProperty("name_filter").GetString());
+            Assert.False(json.GetProperty("summary_only").GetBoolean());
+            Assert.Equal(1, json.GetProperty("object_type_counts").GetProperty("table").GetInt32());
+            Assert.Equal(0, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
+            var entry = Assert.Single(json.GetProperty("entries").EnumerateArray());
+            Assert.Equal("table", entry.GetProperty("type").GetString());
+            Assert.Equal("files", entry.GetProperty("name").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Schema_SummaryOnlyOmitsEntriesButKeepsCounts_Issue3958()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_summary_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json", "--type", "table", "--name", "files", "--summary-only"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("summary_only").GetBoolean());
+            Assert.Equal("table", json.GetProperty("type_filter").GetString());
+            Assert.Equal("files", json.GetProperty("name_filter").GetString());
+            Assert.Equal(1, json.GetProperty("object_type_counts").GetProperty("table").GetInt32());
+            Assert.Equal(1, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
+            Assert.Equal(0, json.GetProperty("entries").GetArrayLength());
+            Assert.False(json.GetProperty("truncated").GetBoolean());
         }
         finally
         {

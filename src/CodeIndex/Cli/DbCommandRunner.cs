@@ -26,6 +26,7 @@ public static class DbCommandRunner
     internal const int IntegrityCheckTextLimit = 4096;
     internal const int SchemaEntryLimit = 200;
     internal const int SchemaSqlTextLimit = 8192;
+    private static readonly string[] SchemaObjectTypes = ["table", "index", "trigger", "view"];
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
     private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
@@ -66,7 +67,7 @@ public static class DbCommandRunner
                 jsonOptions,
                 "db requires a mode flag",
                 CommandExitCodes.UsageError,
-                "Pass `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list`, `restore <name>`, or `restore-backups --list|--prune --keep <n>`.",
+                "Pass `integrity`, `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list`, `restore <name>`, or `restore-backups --list|--prune --keep <n>`.",
                 CommandErrorCodes.UsageError);
 
         if ((options.IntegrityCheck ? 1 : 0)
@@ -81,7 +82,7 @@ public static class DbCommandRunner
                 jsonOptions,
                 "db accepts exactly one mode",
                 CommandExitCodes.UsageError,
-                "Run one of `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list`, `cdidx db restore <name>`, or `cdidx db restore-backups --list|--prune --keep <n>`.",
+                "Run one of `cdidx db integrity`, `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list`, `cdidx db restore <name>`, or `cdidx db restore-backups --list|--prune --keep <n>`.",
                 CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
@@ -216,7 +217,7 @@ public static class DbCommandRunner
         try
         {
             ReportMaintenanceProgress("schema", "start", dbPath);
-            var schema = ReadSchema(dbPath, cancellationToken);
+            var schema = ReadSchema(dbPath, options, cancellationToken);
             ReportMaintenanceProgress("schema", "complete", dbPath);
             var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
@@ -236,7 +237,10 @@ public static class DbCommandRunner
                         schema.EntriesTruncated,
                         schema.SqlTruncated,
                         SchemaEntryLimit,
-                        SchemaSqlTextLimit),
+                        SchemaSqlTextLimit,
+                        options.SchemaSummaryOnly,
+                        options.SchemaType,
+                        options.SchemaName),
                     jsonContext.DbSchemaJsonResult));
             }
             else
@@ -244,8 +248,20 @@ public static class DbCommandRunner
                 Console.WriteLine("Database schema");
                 Console.WriteLine($"  database    : {fullPath}");
                 Console.WriteLine($"  user_version: {schema.UserVersion}");
+                if (options.SchemaType is not null || options.SchemaName is not null || options.SchemaSummaryOnly)
+                {
+                    Console.WriteLine($"  type filter : {options.SchemaType ?? "(any)"}");
+                    Console.WriteLine($"  name filter : {options.SchemaName ?? "(any)"}");
+                    Console.WriteLine($"  summary only: {(options.SchemaSummaryOnly ? "yes" : "no")}");
+                }
                 if (schema.Truncated)
                     Console.WriteLine($"  truncated   : yes (entry limit {SchemaEntryLimit:N0}, SQL text limit {SchemaSqlTextLimit:N0} chars)");
+                if (options.SchemaSummaryOnly)
+                {
+                    Console.WriteLine("  objects     : " + string.Join(", ", schema.ObjectTypeCounts.Select(kv => $"{kv.Key}={kv.Value:N0}")));
+                    return CommandExitCodes.Success;
+                }
+
                 foreach (var entry in schema.Entries)
                 {
                     Console.WriteLine();
@@ -674,7 +690,7 @@ public static class DbCommandRunner
         return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
     }
 
-    private static DbSchemaReadResult ReadSchema(string dbPath, CancellationToken cancellationToken)
+    private static DbSchemaReadResult ReadSchema(string dbPath, DbCommandOptions options, CancellationToken cancellationToken)
     {
         using var connection = OpenConnection(dbPath, writable: false, cancellationToken);
         ReportMaintenanceProgress("schema", "read_version", dbPath);
@@ -685,17 +701,30 @@ public static class DbCommandRunner
         var userVersion = rawVersion is long l ? (int)l : (rawVersion is int i ? i : 0);
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("schema", "count_objects", dbPath);
-        var objectTypeCounts = ReadSchemaObjectTypeCounts(connection);
+        var objectTypeCounts = ReadSchemaObjectTypeCounts(connection, options);
+
+        if (options.SchemaSummaryOnly)
+        {
+            return new DbSchemaReadResult(
+                userVersion,
+                [],
+                objectTypeCounts,
+                objectTypeCounts.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
+                EntriesTruncated: false,
+                SqlTruncated: false);
+        }
 
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
+        var whereSql = BuildSchemaWhereSql(options);
+        cmd.CommandText = $@"
             SELECT type, name, tbl_name, substr(sql, 1, @sql_limit)
             FROM sqlite_master
-            WHERE type IN ('table', 'index', 'trigger', 'view')
+            WHERE {whereSql}
             ORDER BY type, name
             LIMIT @entry_limit";
-        cmd.Parameters.AddWithValue("@sql_limit", SchemaSqlTextLimit + 1);
-        cmd.Parameters.AddWithValue("@entry_limit", SchemaEntryLimit + 1);
+        AddSchemaFilterParameters(cmd, options);
+        cmd.Parameters.Add("@sql_limit", SqliteType.Integer).Value = SchemaSqlTextLimit + 1;
+        cmd.Parameters.Add("@entry_limit", SqliteType.Integer).Value = SchemaEntryLimit + 1;
         ReportMaintenanceProgress("schema", "read_entries", dbPath);
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
@@ -732,7 +761,7 @@ public static class DbCommandRunner
         return new DbSchemaReadResult(userVersion, entries, objectTypeCounts, omittedTypeCounts, entriesTruncated, sqlTruncated);
     }
 
-    private static Dictionary<string, int> ReadSchemaObjectTypeCounts(SqliteConnection connection)
+    private static Dictionary<string, int> ReadSchemaObjectTypeCounts(SqliteConnection connection, DbCommandOptions options)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
@@ -743,11 +772,13 @@ public static class DbCommandRunner
         };
 
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
+        var whereSql = BuildSchemaWhereSql(options);
+        cmd.CommandText = $@"
             SELECT type, COUNT(*)
             FROM sqlite_master
-            WHERE type IN ('table', 'index', 'trigger', 'view')
+            WHERE {whereSql}
             GROUP BY type";
+        AddSchemaFilterParameters(cmd, options);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -757,6 +788,24 @@ public static class DbCommandRunner
         }
 
         return counts;
+    }
+
+    private static string BuildSchemaWhereSql(DbCommandOptions options)
+    {
+        var clauses = new List<string> { "type IN ('table', 'index', 'trigger', 'view')" };
+        if (options.SchemaType is not null)
+            clauses.Add("type = @schema_type");
+        if (options.SchemaName is not null)
+            clauses.Add("name = @schema_name");
+        return string.Join(" AND ", clauses);
+    }
+
+    private static void AddSchemaFilterParameters(SqliteCommand cmd, DbCommandOptions options)
+    {
+        if (options.SchemaType is not null)
+            cmd.Parameters.Add("@schema_type", SqliteType.Text).Value = options.SchemaType;
+        if (options.SchemaName is not null)
+            cmd.Parameters.Add("@schema_name", SqliteType.Text).Value = options.SchemaName;
     }
 
     private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows, CancellationToken cancellationToken)
@@ -1607,6 +1656,9 @@ public static class DbCommandRunner
         var restoreBackupsList = false;
         var restoreBackupsPrune = false;
         var restoreBackupsKeep = DefaultRestoreBackupKeepCount;
+        var schemaSummaryOnly = false;
+        string? parsedSchemaType = null;
+        string? parsedSchemaName = null;
         string? name = null;
         string? parseError = null;
 
@@ -1626,8 +1678,30 @@ public static class DbCommandRunner
                 case "--integrity-check":
                     integrityCheck = true;
                     break;
+                case "integrity":
+                    integrityCheck = true;
+                    break;
                 case "schema":
                     schema = true;
+                    break;
+                case "--type" when i + 1 < args.Length:
+                    var schemaType = args[++i].Trim().ToLowerInvariant();
+                    if (!SchemaObjectTypes.Contains(schemaType, StringComparer.Ordinal))
+                        parseError = "--type must be one of table, index, trigger, or view";
+                    else
+                        parsedSchemaType = schemaType;
+                    break;
+                case "--type":
+                    parseError = "--type requires a value";
+                    break;
+                case "--name" when i + 1 < args.Length:
+                    parsedSchemaName = args[++i];
+                    break;
+                case "--name":
+                    parseError = "--name requires a value";
+                    break;
+                case "--summary-only":
+                    schemaSummaryOnly = true;
                     break;
                 case "prune":
                     prune = true;
@@ -1706,6 +1780,8 @@ public static class DbCommandRunner
 
         if (parseError is null && restoreBackups && (pruneDryRun || pruneApply))
             parseError = "--dry-run and --apply are not supported with `cdidx db restore-backups`; use `--prune --keep <n>` to delete retained backups.";
+        if (parseError is null && !schema && (parsedSchemaType is not null || parsedSchemaName is not null || schemaSummaryOnly))
+            parseError = "--type, --name, and --summary-only are only valid with `cdidx db schema`.";
 
         return new DbCommandOptions
         {
@@ -1723,6 +1799,9 @@ public static class DbCommandRunner
             RestoreBackupsList = restoreBackupsList,
             RestoreBackupsPrune = restoreBackupsPrune,
             RestoreBackupsKeep = restoreBackupsKeep,
+            SchemaSummaryOnly = schemaSummaryOnly,
+            SchemaType = parsedSchemaType,
+            SchemaName = parsedSchemaName,
             Name = name,
             ParseError = parseError,
         };
@@ -1766,6 +1845,9 @@ internal sealed class DbCommandOptions
     public bool RestoreBackupsList { get; init; }
     public bool RestoreBackupsPrune { get; init; }
     public int RestoreBackupsKeep { get; init; } = DbCommandRunner.DefaultRestoreBackupKeepCount;
+    public bool SchemaSummaryOnly { get; init; }
+    public string? SchemaType { get; init; }
+    public string? SchemaName { get; init; }
     public string? Name { get; init; }
     public string? ParseError { get; init; }
 }

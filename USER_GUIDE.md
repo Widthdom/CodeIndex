@@ -929,12 +929,17 @@ This recomputes `name_folded` / `*_folded` columns from the existing DB rows and
 If you suspect the SQLite file itself is corrupted (queries crashing with a SQLite error, unexpected `database disk image is malformed` messages), you can probe it explicitly:
 
 ```bash
-cdidx db --integrity-check                              # run PRAGMA integrity_check
-cdidx db --integrity-check --db ./.cdidx/codeindex.db   # point at a specific DB
-cdidx db --integrity-check --json                       # machine-readable result
+cdidx db integrity                                      # run PRAGMA integrity_check
+cdidx db --integrity-check                              # same legacy spelling
+cdidx db integrity --db ./.cdidx/codeindex.db           # point at a specific DB
+cdidx db integrity --json                               # machine-readable result
+cdidx db schema --summary-only --json                   # counts without full SQL payloads
+cdidx db schema --type table --name files --json         # exact schema object projection
 ```
 
 This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption is detected. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
+
+`db schema` keeps the current full schema dump by default. Add `--summary-only` to return only object counts, or combine `--type <table|index|trigger|view>` and `--name <object>` for an exact projection before JSON or human output is emitted.
 
 ### Search code
 
@@ -3502,12 +3507,17 @@ cdidx backfill-fold
 SQLite ファイル自体が破損していると疑われる場合（クエリが SQLite エラーで落ちる、`database disk image is malformed` といったメッセージが出る等）には、整合性を明示的に確認できます:
 
 ```bash
-cdidx db --integrity-check                              # PRAGMA integrity_check を実行
-cdidx db --integrity-check --db ./.cdidx/codeindex.db   # 特定 DB を指定
-cdidx db --integrity-check --json                       # 機械可読な結果
+cdidx db integrity                                      # PRAGMA integrity_check を実行
+cdidx db --integrity-check                              # 従来の同義表記
+cdidx db integrity --db ./.cdidx/codeindex.db           # 特定 DB を指定
+cdidx db integrity --json                               # 機械可読な結果
+cdidx db schema --summary-only --json                   # SQL 本文なしで件数だけ確認
+cdidx db schema --type table --name files --json         # schema object を exact に絞り込み
 ```
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
+
+`db schema` は既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると JSON / human 出力の前に exact projection を適用できます。
 
 `--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
 
