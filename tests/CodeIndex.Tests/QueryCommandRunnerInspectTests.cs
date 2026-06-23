@@ -895,6 +895,56 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_UsesExplicitLimit_Issue3914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_json_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/many.cs",
+                "csharp",
+                """
+                public class Many
+                {
+                    public void M0() { }
+                    public void M1() { }
+                    public void M2() { }
+                    public void M3() { }
+                    public void M4() { }
+                    public void M5() { }
+                    public void M6() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.TryGetProperty("compact", out _));
+            Assert.False(json.TryGetProperty("compact_limit", out _));
+            Assert.False(json.TryGetProperty("truncation", out _));
+            Assert.Equal(2, symbols.Count);
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 3, json.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("returned_symbol_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("cursor_offset").GetInt32());
+            Assert.Equal("outline:2", json.GetProperty("next_cursor").GetString());
+            Assert.True(json.GetProperty("has_more").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_Json_TruncatesRunawaySignatures_Issue2989()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_signature_limit");

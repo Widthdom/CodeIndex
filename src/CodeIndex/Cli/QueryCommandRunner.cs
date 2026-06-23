@@ -5508,6 +5508,9 @@ public static partial class QueryCommandRunner
     }
 
     private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)
+        => ApplyOutlineSymbolLimit(outline, sectionLimit);
+
+    private static JsonObject ApplyOutlineSymbolLimit(OutlineResult outline, int sectionLimit)
     {
         var sections = new JsonObject();
         TruncateCompactSection(outline.Symbols, sectionLimit, sections, "symbols");
@@ -6182,7 +6185,8 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
             }
             else
