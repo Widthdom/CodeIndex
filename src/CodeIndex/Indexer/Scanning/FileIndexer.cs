@@ -3258,6 +3258,14 @@ public partial class FileIndexer
         string relativePath,
         string? knownLanguage,
         CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(absolutePath, relativePath, knownLanguage, detectGeneratedCode: true, cancellationToken);
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        bool detectGeneratedCode,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
@@ -3284,7 +3292,7 @@ public partial class FileIndexer
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
             Modified = loaded.ModifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
+            Generated = detectGeneratedCode && IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
         return new LoadedFileRecord(

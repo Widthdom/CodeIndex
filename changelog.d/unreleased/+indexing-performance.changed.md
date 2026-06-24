@@ -32,6 +32,7 @@ affected:
 - Removed per-line string allocations from generated-code header detection, reducing allocation pressure during record construction.
 - Avoided string allocation while checking generated-code filename suffixes during record construction.
 - Reused scan-time language detection during `status --check` workspace freshness validation, avoiding duplicate language probes while hashing large workspaces.
+- Skipped generated-code classification during `status --check` freshness hashing, since freshness only compares path, checksum, and line metadata.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -51,4 +52,5 @@ affected:
 - generated-code header 判定で行ごとの string allocation を発生させず、record 構築中の allocation pressure を減らしました。
 - record 構築中の generated-code filename suffix 判定で string allocation を避けるようにしました。
 - `status --check` の workspace freshness validation でも scan 時点の language 判定を再利用し、大規模 workspace を hash する際の重複 language probe を避けるようにしました。
+- freshness は path、checksum、line metadata だけを比較するため、`status --check` の freshness hashing 中は generated-code classification を省略するようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

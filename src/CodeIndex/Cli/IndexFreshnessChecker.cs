@@ -87,6 +87,7 @@ internal static class IndexFreshnessChecker
                     target.AbsolutePath,
                     target.RelativePath,
                     knownLanguage,
+                    detectGeneratedCode: false,
                     cancellationToken);
                 var record = loaded.Record;
                 result.WorkspaceFileCount++;
