@@ -95,10 +95,7 @@ public class PropertyBasedParserTests
             query.ExecuteScalar();
             return true;
         }
-        catch (SqliteException ex) when (
-            ex.Message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase) ||
-            ex.Message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase) ||
-            ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
         {
             return false;
         }

@@ -803,6 +803,13 @@ internal static class ExportImportCommandRunner
             CopyToWithLimit(stream, manifestBytes, MaxImportManifestBytes, ManifestEntryName, cancellationToken);
             manifestBytes.Position = 0;
             cancellationToken.ThrowIfCancellationRequested();
+            if (JsonExceedsDepthLimit(manifestBytes.GetBuffer().AsSpan(0, (int)manifestBytes.Length), MaxImportManifestJsonDepth))
+            {
+                manifest = null!;
+                message = $"manifest.json exceeds the JSON depth limit of {MaxImportManifestJsonDepth}";
+                return false;
+            }
+
             var parsedManifest = JsonSerializer.Deserialize<ExportManifest>(manifestBytes, CreateImportManifestJsonOptions(jsonOptions));
             if (parsedManifest == null)
             {
@@ -821,12 +828,10 @@ internal static class ExportImportCommandRunner
             message = FormatImportManifestReadException(ex);
             return false;
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
             manifest = null!;
-            message = IsJsonDepthLimitException(ex)
-                ? $"manifest.json exceeds the JSON depth limit of {MaxImportManifestJsonDepth}"
-                : "manifest.json is not valid export manifest JSON";
+            message = "manifest.json is not valid export manifest JSON";
             return false;
         }
         catch (NotSupportedException)
@@ -864,8 +869,47 @@ internal static class ExportImportCommandRunner
     private static JsonSerializerOptions CreateImportManifestJsonOptions(JsonSerializerOptions jsonOptions)
         => new(jsonOptions) { MaxDepth = MaxImportManifestJsonDepth };
 
-    private static bool IsJsonDepthLimitException(JsonException ex)
-        => ex.Message.Contains("depth", StringComparison.OrdinalIgnoreCase);
+    private static bool JsonExceedsDepthLimit(ReadOnlySpan<byte> json, int maxDepth)
+    {
+        var depth = 0;
+        var inString = false;
+
+        for (var i = 0; i < json.Length; i++)
+        {
+            var value = json[i];
+            if (inString)
+            {
+                if (value == (byte)'\\')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (value == (byte)'"')
+                    inString = false;
+                continue;
+            }
+
+            if (value == (byte)'"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (value is (byte)'{' or (byte)'[')
+            {
+                depth++;
+                if (depth > maxDepth)
+                    return true;
+                continue;
+            }
+
+            if (value is (byte)'}' or (byte)']')
+                depth = Math.Max(0, depth - 1);
+        }
+
+        return false;
+    }
 
     private static bool TryValidateManifestHeader(ExportManifest manifest, out string message)
     {

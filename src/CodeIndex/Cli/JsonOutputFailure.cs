@@ -4,8 +4,6 @@ namespace CodeIndex.Cli;
 
 internal static class JsonOutputFailure
 {
-    internal const string ReflectionDisabledMessage = "Reflection-based serialization has been disabled for this application";
-
     internal static bool TryHandle(Exception ex, out int exitCode)
     {
         if (!IsTrimmedJsonUnavailable(ex))
@@ -20,12 +18,18 @@ internal static class JsonOutputFailure
         return true;
     }
 
-    internal static bool IsTrimmedJsonUnavailable(Exception ex)
+    internal static bool IsTrimmedJsonUnavailable(Exception ex) =>
+        IsTrimmedJsonUnavailable(ex, JsonSerializer.IsReflectionEnabledByDefault);
+
+    internal static bool IsTrimmedJsonUnavailable(Exception ex, bool reflectionEnabledByDefault)
     {
+        if (reflectionEnabledByDefault)
+            return false;
+
         for (var current = ex; current != null; current = current.InnerException)
         {
             if (current is InvalidOperationException &&
-                current.Message.Contains(ReflectionDisabledMessage, StringComparison.Ordinal))
+                IsSystemTextJsonException(current))
             {
                 return true;
             }
@@ -33,4 +37,8 @@ internal static class JsonOutputFailure
 
         return false;
     }
+
+    private static bool IsSystemTextJsonException(Exception ex) =>
+        string.Equals(ex.Source, "System.Text.Json", StringComparison.Ordinal) ||
+        string.Equals(ex.TargetSite?.DeclaringType?.Assembly.GetName().Name, "System.Text.Json", StringComparison.Ordinal);
 }
