@@ -20,6 +20,7 @@ affected:
 - Reduced redundant file-content decoding and checksum work during indexing so large codebase scans spend less time reprocessing unchanged UTF-8 and UTF-16 content.
 - Used direct SHA-256 hashing for CR-free raw byte payloads, avoiding the normalized-checksum scan on the common LF-only source-file path.
 - Streamed checksum calculation now appends CR-free chunks directly, avoiding per-byte normalization loops during unchanged-file probes on LF-only files.
+- Short-circuited UTF-16 heuristic detection when the sample has no NUL bytes, avoiding pair-count scans for ordinary UTF-8 source files.
 - Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
@@ -47,6 +48,7 @@ affected:
 - index 実行時の file-content decode と checksum 処理の重複を減らし、大規模コードベースの scan で未変更 UTF-8 / UTF-16 content の再処理時間を抑えました。
 - CR を含まない raw byte payload では直接 SHA-256 を使い、一般的な LF-only source file で normalized-checksum scan を避けるようにしました。
 - streaming checksum calculation でも CR-free chunk を直接 append し、LF-only file の unchanged-file probe で byte 単位の normalization loop を避けるようにしました。
+- sample に NUL byte がない場合は UTF-16 heuristic detection を即終了し、通常の UTF-8 source file で pair-count scan を避けるようにしました。
 - C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。

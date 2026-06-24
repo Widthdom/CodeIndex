@@ -105,19 +105,23 @@ internal sealed partial class FileContentLoader
         if (pairs == 0)
             return false;
 
+        var sample = rawBytes.AsSpan(0, sampleLength);
+        if (sample.IndexOf((byte)0) < 0)
+            return false;
+
         var evenNulls = 0;
         var oddNulls = 0;
         var oddTextBytes = 0;
         var evenTextBytes = 0;
         for (var i = 0; i < sampleLength; i += 2)
         {
-            if (rawBytes[i] == 0)
+            if (sample[i] == 0)
                 evenNulls++;
-            if (rawBytes[i + 1] == 0)
+            if (sample[i + 1] == 0)
                 oddNulls++;
-            if (IsLikelyTextByte(rawBytes[i + 1]))
+            if (IsLikelyTextByte(sample[i + 1]))
                 oddTextBytes++;
-            if (IsLikelyTextByte(rawBytes[i]))
+            if (IsLikelyTextByte(sample[i]))
                 evenTextBytes++;
         }
 
