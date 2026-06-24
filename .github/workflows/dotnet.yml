@@ -275,8 +275,9 @@ jobs:
               [string]$LogPath
             )
 
-            dotnet @testArgs 2>&1 | Tee-Object -FilePath $LogPath
-            return $LASTEXITCODE
+            dotnet @testArgs 2>&1 | Tee-Object -FilePath $LogPath | ForEach-Object { Write-Host $_ }
+            $exitCode = $LASTEXITCODE
+            return $exitCode
           }
 
           New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
