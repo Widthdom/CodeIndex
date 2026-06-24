@@ -263,6 +263,8 @@ jobs:
           )
 
           $collectCoverage = "${{ matrix.os }}" -eq "ubuntu-latest" -and "${{ matrix.test-framework }}" -eq "net8.0"
+          $collectCoverageText = if ($collectCoverage) { "true" } else { "false" }
+          "collect_coverage=$collectCoverageText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           if ($collectCoverage) {
             $testArgs += @("--collect", "XPlat Code Coverage")
           } else {
@@ -337,7 +339,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: always() && steps.test.outputs.collect_coverage == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
