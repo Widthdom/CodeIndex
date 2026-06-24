@@ -1201,7 +1201,11 @@ public static partial class IndexCommandRunner
                         try
                         {
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
-                            var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, relativeFilePath, extractionCancellationToken);
+                            var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                                filePath,
+                                relativeFilePath,
+                                target.Language,
+                                extractionCancellationToken);
                             var record = loaded.Record;
                             var content = loaded.Content;
                             var rawBytes = loaded.RawBytes;

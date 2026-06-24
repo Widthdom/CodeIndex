@@ -1259,6 +1259,27 @@ public partial class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void BuildLoadedRecordWithRawBytes_KnownLanguage_UsesScanResultLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "script");
+            File.WriteAllText(path, "#!/bin/sh\necho hi\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage: "python");
+
+            Assert.Equal("python", loaded.Record.Lang);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Theory]
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。

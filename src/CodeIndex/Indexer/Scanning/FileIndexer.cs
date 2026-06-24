@@ -3231,6 +3231,13 @@ public partial class FileIndexer
     }
 
     internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(absolutePath, relativePath, knownLanguage: null, cancellationToken);
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
@@ -3250,7 +3257,9 @@ public partial class FileIndexer
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language,
+            Lang = string.IsNullOrEmpty(knownLanguage)
+                ? TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language
+                : knownLanguage,
             Size = loaded.SizeBytes,
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
