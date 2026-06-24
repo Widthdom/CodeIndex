@@ -1593,6 +1593,19 @@ public partial class McpServer : IDisposable
             result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
             result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
             result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;
+            result["http_event_stream_drop_count"] = httpTransport.EventStreamDropCount;
+            result["http_event_stream_write_failure_drop_count"] = httpTransport.EventStreamWriteFailureDropCount;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastEventStreamDropReason))
+                result["http_event_stream_last_drop_reason"] = httpTransport.LastEventStreamDropReason;
+            result["http_auth_denial_count"] = httpTransport.AuthDenialCount;
+            result["http_auth_denial_missing_count"] = httpTransport.AuthDenialMissingCount;
+            result["http_auth_denial_ambiguous_count"] = httpTransport.AuthDenialAmbiguousCount;
+            result["http_auth_denial_wrong_scheme_count"] = httpTransport.AuthDenialWrongSchemeCount;
+            result["http_auth_denial_malformed_token_count"] = httpTransport.AuthDenialMalformedTokenCount;
+            result["http_auth_denial_oversized_token_count"] = httpTransport.AuthDenialOversizedTokenCount;
+            result["http_auth_denial_wrong_token_count"] = httpTransport.AuthDenialWrongTokenCount;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastAuthDenialReason))
+                result["http_auth_denial_last_reason"] = httpTransport.LastAuthDenialReason;
             result["http_auth_required"] = httpTransport.RequiresBearerToken;
             result["http_auth_disabled"] = httpTransport.AuthDisabled;
             if (!string.IsNullOrWhiteSpace(httpTransport.AuthDisabledWarning))

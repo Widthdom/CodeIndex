@@ -116,11 +116,12 @@ bash tools/build-install-sh.sh
 | Normalizer rule | Detail |
 |---|---|
 | Reproducible OPC metadata (#2756) | NuGet's OPC package writer generates a random `package/services/metadata/core-properties/*.psmdcp` part name on each pack run. The normalizer rewrites that part to `package/services/metadata/core-properties/core-properties.psmdcp`, updates the matching content-type and relationship references, and gives ZIP entries stable timestamps. This is the package reproducibility boundary for `.nupkg` and `.snupkg` archives. |
-| Rewrite durability (#3961) | Package normalization writes through collision-resistant `.cdidx-normalize-*.tmp` files beside the package, never deletes a pre-existing legacy `.normalize-tmp` neighbor before rewriting, flushes the completed temp file, replaces the package, and flushes the parent directory on Unix so post-replace durability failures are reported explicitly. Cancellation is checked between ZIP entries and stream chunks, and created temp files are cleaned up best-effort. |
+| Rewrite durability (#3961) | Package normalization writes through collision-resistant `.cdidx-normalize-*.tmp` files beside the package, flushes the completed temp file, replaces the package, and flushes the parent directory on Unix so post-replace durability failures are reported explicitly. Cancellation is checked between ZIP entries and stream chunks, and created temp files are cleaned up best-effort. |
 | Work bounds (#2892) | Before rewriting, the normalizer rejects packages with more than 4096 ZIP entries, any entry above 128 MiB uncompressed, total uncompressed content above 512 MiB, or XML reference text above 16 MiB so crafted packages cannot force unbounded normalization work. |
 | Unsafe ZIP names (#2894) | Before creating the destination archive, the normalizer rejects absolute paths, Windows drive roots, backslash separators, empty path segments, parent-directory segments, empty normalized names, and destination names that collide after path normalization. Those entries are not preserved into normalized packages. |
 | Unsafe ZIP attributes (#3552) | Before copying entries, the normalizer rejects POSIX symlink/device/special-file types and unsafe DOS attributes, then writes normalized entries with scrubbed deterministic external attributes instead of preserving source permission bits. |
 | Failure diagnostics (#3458) | The CLI accepts at most 1024 package paths per run, reports bounded package path and ZIP entry diagnostics instead of raw path-heavy exception text, and emits cleanup deletion failures as per-package `warnings` in JSON output. |
+| Temp-file replacement policy (#3996) | Before rewriting, the normalizer deletes a stale legacy `.normalize-tmp` sidecar only after it can open that file exclusively, and aborts when the file is locked or inaccessible to avoid racing another normalizer. Replacement archives still use collision-resistant same-directory `.cdidx-normalize-*.tmp` sidecars that are flushed, moved over the package, and followed by a parent-directory flush on Unix. |
 
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
 
@@ -520,6 +521,8 @@ Non-empty `search` responses also include `next_cursor`. Passing that value back
 The MCP JSON-RPC `ping` method returns a structured health object with `status`, `uptime_s`, `last_request_at`, `db_open`, `last_db_check_at`, and `transport_ready`. HTTP MCP transports expose the same object at `GET /healthz` on the existing listener. If the HTTP transport is protected by a bearer token, `/healthz` uses the same `Authorization: Bearer <token>` requirement as POST and `/events`.
 
 `db_open` is a lightweight `SELECT 1` probe against the configured SQLite DB. A failed probe reports `status: "degraded"` and includes a sanitized `db_error` exception type instead of raw filesystem or SQLite details.
+
+HTTP health objects also include transport observability counters for request-log drops, response cleanup failures, SSE event-stream drops (`http_event_stream_drop_count`, `http_event_stream_write_failure_drop_count`, `http_event_stream_last_drop_reason`), and bearer auth denial classes (`http_auth_denial_*`). These are internal diagnostics: bearer auth failures still return the generic 401 body unless unsafe debug logging is explicitly enabled.
 
 ### MCP keep-alive notifications
 
@@ -2388,11 +2391,12 @@ bash tools/build-install-sh.sh
 | normalizer rule | 詳細 |
 |---|---|
 | 再現可能な OPC metadata (#2756) | NuGet の OPC package writer は `package/services/metadata/core-properties/*.psmdcp` part 名を pack ごとにランダム生成します。normalizer はその part を `package/services/metadata/core-properties/core-properties.psmdcp` に書き換え、対応する content-type / relationship 参照も更新し、ZIP entry timestamp を固定します。これが `.nupkg` / `.snupkg` archive の package 再現性境界です。 |
-| 書き換えの耐久性 (#3961) | package normalization は package の隣に衝突しにくい `.cdidx-normalize-*.tmp` を作って書き込み、既存の legacy `.normalize-tmp` 隣接ファイルを rewrite 前に削除せず、完成した temp file を flush してから package を置き換え、Unix では parent directory も flush するため、置き換え後の耐久性失敗を明示的に報告します。cancellation は ZIP entry 間と stream chunk 間で確認し、作成済み temp file は best-effort で削除します。 |
+| 書き換えの耐久性 (#3961) | package normalization は package の隣に衝突しにくい `.cdidx-normalize-*.tmp` を作って書き込み、完成した temp file を flush してから package を置き換え、Unix では parent directory も flush するため、置き換え後の耐久性失敗を明示的に報告します。cancellation は ZIP entry 間と stream chunk 間で確認し、作成済み temp file は best-effort で削除します。 |
 | 作業量の上限 (#2892) | 書き換え前に、normalizer は 4096 を超える ZIP entry、128 MiB を超える uncompressed entry、512 MiB を超える合計 uncompressed content、または 16 MiB を超える XML 参照テキストを持つ package を拒否し、細工された package が無制限の normalize 作業を強制できないようにします。 |
 | unsafe ZIP name (#2894) | destination archive を作る前に、normalizer は absolute path、Windows drive root、backslash separator、空の path segment、parent-directory segment、空に正規化される名前、path 正規化後に衝突する destination 名を拒否します。これらの entry は normalized package に保持されません。 |
 | unsafe ZIP attributes (#3552) | entry のコピー前に、normalizer は POSIX symlink / device / special-file type と unsafe DOS 属性を拒否し、source の permission bit を保持せず deterministic に scrub した external attributes で normalized entry を書き込みます。 |
 | failure diagnostics (#3458) | CLI は 1 回の実行で受け付ける package path を最大 1024 件に制限し、raw な path-heavy exception text ではなく bounded な package path / ZIP entry diagnostics を報告し、cleanup 削除失敗を JSON 出力の package ごとの `warnings` として出します。 |
+| temp-file replacement policy (#3996) | rewrite 前に、normalizer は古い legacy `.normalize-tmp` sidecar を排他的に open できた場合だけ削除し、lock 中または access 不能な場合は実行中の別 normalizer との競合を避けるため abort します。replacement archive は引き続き同じ directory の衝突しにくい `.cdidx-normalize-*.tmp` sidecar を使い、完成した temp file を flush して package に移動し、Unix では parent directory も flush します。 |
 
 依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
 
@@ -2844,6 +2848,8 @@ non-empty な `search` response には `next_cursor` も含める。同じ query
 MCP JSON-RPC `ping` method は `status`、`uptime_s`、`last_request_at`、`db_open`、`last_db_check_at`、`transport_ready` を持つ structured health object を返す。HTTP MCP transport は同じ object を既存 listener の `GET /healthz` でも公開する。HTTP transport が bearer token で保護されている場合、`/healthz` も POST と `/events` と同じ `Authorization: Bearer <token>` requirement を使う。
 
 `db_open` は configured SQLite DB に対する軽量な `SELECT 1` probe である。probe が失敗した場合、`status: "degraded"` を返し、raw filesystem / SQLite detail の代わりに sanitized な `db_error` exception type を含める。
+
+HTTP health object には request-log drop、response cleanup failure、SSE event-stream drop（`http_event_stream_drop_count`、`http_event_stream_write_failure_drop_count`、`http_event_stream_last_drop_reason`）、および bearer auth denial class（`http_auth_denial_*`）の transport observability counter も含める。これらは内部診断であり、unsafe debug logging を明示的に有効化しない限り bearer auth failure は generic な 401 body を返し続ける。
 
 ### MCP keep-alive 通知
 

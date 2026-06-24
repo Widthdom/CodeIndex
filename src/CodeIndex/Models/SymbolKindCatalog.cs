@@ -91,6 +91,7 @@ public static class SymbolKindCatalog
         "copy_from",
         "cte_body_reference",
         "decorator",
+        "dependency",
         "extends",
         "from",
         "friend",

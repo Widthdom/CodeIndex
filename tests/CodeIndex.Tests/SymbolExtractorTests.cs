@@ -149,6 +149,63 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SmallMethodsNearLocalFunctionsKeepTightRanges_Issue3912()
+    {
+        const string content = """
+            using System;
+            using System.Collections.Generic;
+
+            internal static partial class QueryLike
+            {
+                private static bool TryWriteFormattedLocations(IEnumerable<int> locations)
+                {
+                    static int Normalize(int value) => value < 0 ? 0 : value;
+                    Func<int, int> transform = value => Normalize(value);
+                    foreach (var location in locations)
+                    {
+                        WriteCompactLocations([transform(location)]);
+                    }
+
+                    return true;
+                }
+
+                private static void WriteCompactLocations(IEnumerable<int> locations)
+                {
+                    foreach (var location in locations)
+                    {
+                        Console.WriteLine(location);
+                    }
+                }
+
+                private static void WriteDependencyJsonGraph<T>(IReadOnlyList<T> edges)
+                    where T : notnull
+                {
+                    foreach (var edge in edges)
+                    {
+                        Console.WriteLine(edge);
+                    }
+                }
+
+                private static void Later()
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var compact = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "WriteCompactLocations"));
+        var graph = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "WriteDependencyJsonGraph"));
+        var later = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "Later"));
+
+        Assert.Equal(18, compact.StartLine);
+        Assert.Equal(24, compact.EndLine);
+        Assert.Equal(19, compact.BodyStartLine);
+        Assert.Equal(24, compact.BodyEndLine);
+        Assert.True(compact.EndLine < graph.StartLine);
+        Assert.True(graph.EndLine < later.StartLine);
+    }
+
+    [Fact]
     public void Extract_BuiltInSymbolRegexes_AdversarialLongLinesDoNotThrow()
     {
         var typeScriptLine = "export const Component = React.memo<" + new string('A', 20000) + new string('<', 2000) + new string('>', 2000) + ">(value);";
