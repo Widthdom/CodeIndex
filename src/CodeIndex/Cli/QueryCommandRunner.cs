@@ -44,6 +44,7 @@ public static partial class QueryCommandRunner
     private const int MaxSearchGroupedPerFileLimit = 20;
     private const int MaxSearchNextStepLimit = 10;
     private const int MaxSearchJsonByteLimit = 16 * 1024 * 1024;
+    private const string BareTokenAuthAuditHint = "Bare `token` searches are intentionally broad. For credential/auth-token review, run `cdidx search --recipe auth-token-audit`; use `cdidx search --recipe broad-token-audit` only when parser, LSP, or cancellation token domains are intentional.";
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -911,7 +912,11 @@ public static partial class QueryCommandRunner
                     {
                         var pathHint = BuildSearchPathGlobHint(reader, options);
                         if (!options.ResultsOnly)
-                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload => AddSearchPathHint(payload, pathHint)).ToJsonString(ndjsonOptions));
+                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload =>
+                            {
+                                AddSearchPathHint(payload, pathHint);
+                                AddBareTokenSearchHint(payload, options);
+                            }).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -1437,7 +1442,7 @@ public static partial class QueryCommandRunner
         foreach (var result in results.Take(MaxSearchNextStepLimit))
         {
             var line = result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine;
-            result.NextSteps =
+            List<SearchCommandHint> nextSteps =
             [
                 new SearchCommandHint
                 {
@@ -1450,6 +1455,15 @@ public static partial class QueryCommandRunner
                     Purpose = "read a bounded source excerpt around this search hit",
                 },
             ];
+            if (IsBareTokenSearch(options))
+            {
+                nextSteps.Add(new SearchCommandHint
+                {
+                    Command = "cdidx search --recipe auth-token-audit --exclude-tests",
+                    Purpose = "narrow bare token search to credential and auth-token contexts",
+                });
+            }
+            result.NextSteps = nextSteps;
             result.NextStepsTruncated = truncated;
         }
     }
@@ -1852,6 +1866,8 @@ public static partial class QueryCommandRunner
                 $"Ad hoc search for `{options.Query}`.",
                 BuildAdHocIssueDraftLabels(options),
                 "Review the evidence paths and surrounding code before filing.",
+                [],
+                [],
                 exact,
                 SearchAuditRecipes.DefaultQuerySeverity,
                 [],
@@ -1905,6 +1921,7 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(options.Limit),
@@ -1919,10 +1936,11 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
@@ -1934,6 +1952,8 @@ public static partial class QueryCommandRunner
                 recipeQuery.Description,
                 recipeQuery.RecommendedLabels,
                 recipeQuery.FalsePositiveGuidance,
+                [.. recipeQuery.RiskEvidence],
+                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
                 exact,
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
@@ -1968,6 +1988,7 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(options.Limit),
@@ -1982,10 +2003,11 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
@@ -1996,6 +2018,8 @@ public static partial class QueryCommandRunner
                 recipeQuery.Query,
                 recipeQuery.Description,
                 recipeQuery.Severity,
+                [.. recipeQuery.RiskEvidence],
+                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
                 [.. recipeQuery.MatchOrigins],
@@ -2012,6 +2036,7 @@ public static partial class QueryCommandRunner
                     row.Result.Path,
                     row.Result.Lang,
                     row.Result.Visibility,
+                    [.. recipeQuery.RiskEvidence],
                     row.Result.StartLine,
                     row.Result.EndLine,
                     row.Compact.MatchLines,
@@ -2020,6 +2045,19 @@ public static partial class QueryCommandRunner
         }
 
         return queryResults;
+    }
+
+    private static IReadOnlyList<SearchGuardFilter> BuildSearchRecipeGuardFilters(QueryCommandOptions options, SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.GuardFilters.Count == 0)
+            return options.GuardFilters;
+        if (options.GuardFilters.Count == 0)
+            return recipeQuery.GuardFilters;
+
+        var guardFilters = new List<SearchGuardFilter>(recipeQuery.GuardFilters.Count + options.GuardFilters.Count);
+        guardFilters.AddRange(recipeQuery.GuardFilters);
+        guardFilters.AddRange(options.GuardFilters);
+        return guardFilters;
     }
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
@@ -2211,6 +2249,58 @@ public static partial class QueryCommandRunner
 
         return queryResults;
     }
+
+    private static List<SearchResult> ApplySearchRecipeFileRejectQueries(
+        DbReader reader,
+        List<SearchResult> results,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.RejectFileQueries.Count == 0 || results.Count == 0)
+            return results;
+
+        var rejectedPaths = new Dictionary<string, bool>(StringComparer.Ordinal);
+        return results
+            .Where(result => !ShouldRejectSearchRecipeFile(reader, result.Path, options, recipeQuery, rejectedPaths))
+            .ToList();
+    }
+
+    private static bool ShouldRejectSearchRecipeFile(
+        DbReader reader,
+        string path,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        Dictionary<string, bool> rejectedPaths)
+    {
+        if (rejectedPaths.TryGetValue(path, out var rejected))
+            return rejected;
+
+        foreach (var rejectQuery in recipeQuery.RejectFileQueries)
+        {
+            var matches = reader.Search(
+                rejectQuery,
+                1,
+                options.Lang,
+                rawQuery: false,
+                pathPatterns: [path],
+                excludePathPatterns: null,
+                excludeTests: false,
+                deduplicate: true,
+                since: options.Since,
+                exact: true,
+                prefix: false,
+                visibilityRank: false);
+            if (matches.Count == 0)
+                continue;
+
+            rejectedPaths[path] = true;
+            return true;
+        }
+
+        rejectedPaths[path] = false;
+        return false;
+    }
+
     private static SearchIssueDraftJsonResult ToSearchIssueDraft(
         SearchAuditRecipe recipe,
         SearchRecipeQueryResultJsonResult queryResult,
@@ -2253,6 +2343,7 @@ public static partial class QueryCommandRunner
                 queryResult.Query,
                 queryResult.Description,
                 queryResult.FalsePositiveGuidance,
+                queryResult.RiskEvidence,
                 queryResult.ExactSubstring,
                 queryResult.Count),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
@@ -2296,6 +2387,7 @@ public static partial class QueryCommandRunner
                 queryResult.Query,
                 queryResult.Description,
                 queryResult.FalsePositiveGuidance,
+                queryResult.RiskEvidence,
                 queryResult.ExactSubstring,
                 queryResult.Count),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
@@ -2372,6 +2464,14 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
+        if (queryResult.RiskEvidence.Count > 0)
+        {
+            sb.AppendLine("## Risk evidence");
+            foreach (var evidence in queryResult.RiskEvidence)
+                sb.AppendLine($"- {evidence}");
+            sb.AppendLine();
+        }
+
         if (queryResult.BroadCatchTaxonomy is not null)
         {
             AppendSearchIssueDraftBroadCatchTaxonomy(sb, queryResult.BroadCatchTaxonomy);
@@ -2612,6 +2712,8 @@ public static partial class QueryCommandRunner
             query.Description,
             query.RecommendedLabels,
             query.FalsePositiveGuidance,
+            [.. query.RiskEvidence],
+            ToSearchRecipeGuardFilterJsonResults(query.GuardFilters),
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
@@ -2620,6 +2722,15 @@ public static partial class QueryCommandRunner
             [.. query.ResultKinds],
             query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
+
+    private static List<SearchRecipeGuardFilterJsonResult> ToSearchRecipeGuardFilterJsonResults(IReadOnlyList<SearchGuardFilter> guardFilters)
+        => guardFilters
+            .Select(filter => new SearchRecipeGuardFilterJsonResult(
+                filter.Role == SearchGuardRole.Require ? "require" : "reject",
+                filter.Direction == SearchGuardDirection.Before ? "before" : "after",
+                filter.Query,
+                BuildSearchGuardReplayOptionName(filter)))
+            .ToList();
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
         List<SearchResult> results,
@@ -2674,6 +2785,8 @@ public static partial class QueryCommandRunner
             compact.ResultKinds = BuildSearchResultKinds(result, compact, displayQuery);
             if (!ApplySearchResultKindFilters(compact, facetFilters))
                 continue;
+            if (recipeQuery is { RiskEvidence.Count: > 0 })
+                compact.RiskEvidence = [.. recipeQuery.RiskEvidence];
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
             {
@@ -12903,6 +13016,9 @@ public static partial class QueryCommandRunner
         if (alternativeHint != null)
             CommandErrorWriter.WriteStderr($"Hint: {alternativeHint}");
 
+        if (IsBareTokenSearch(options))
+            CommandErrorWriter.WriteStderr($"Hint: {BareTokenAuthAuditHint}");
+
         var staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
         if (staleAfter.Error != null)
         {
@@ -12917,6 +13033,22 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.WriteStderr($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
     }
+
+    private static bool IsBareTokenSearch(QueryCommandOptions options)
+        => options.RecipeName == null
+           && options.NamedSearchQueries.Count == 0
+           && string.Equals(options.Query?.Trim(), "token", StringComparison.OrdinalIgnoreCase);
+
+    private static SearchQueryHint? BuildBareTokenSearchHint(QueryCommandOptions options)
+        => IsBareTokenSearch(options)
+            ? new SearchQueryHint
+            {
+                Reason = "bare_token_query_auth_noise",
+                SuggestedAction = BareTokenAuthAuditHint,
+                Flag = "--recipe",
+                McpArgument = "recipe",
+            }
+            : null;
 
     private static SearchQueryHint? BuildSearchPathGlobHint(DbReader reader, QueryCommandOptions options)
     {
@@ -12968,6 +13100,13 @@ public static partial class QueryCommandRunner
     {
         if (pathHint != null)
             payload["path_filter_hint"] = BuildSearchQueryHintJson(pathHint);
+    }
+
+    private static void AddBareTokenSearchHint(JsonObject payload, QueryCommandOptions options)
+    {
+        var hint = BuildBareTokenSearchHint(options);
+        if (hint != null)
+            payload["token_domain_hint"] = BuildSearchQueryHintJson(hint);
     }
 
     private static void WriteExactSubstringHintIfNeeded(SearchQueryHint? hint)

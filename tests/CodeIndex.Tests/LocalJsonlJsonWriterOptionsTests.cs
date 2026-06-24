@@ -24,7 +24,9 @@ public class LocalJsonlJsonWriterOptionsTests
             new[]
             {
                 "src/CodeIndex/Diagnostics/LocalJsonlJsonWriterOptions.cs",
+                "src/CodeIndex/Cli/SearchAuditRecipes.cs",
                 "tests/CodeIndex.Tests/LocalJsonlJsonWriterOptionsTests.cs",
+                "tests/CodeIndex.Tests/QueryCommandRunnerSearchTests.cs",
             });
         AssertOnlyAllowedFilesContain(
             repositoryRoot,
