@@ -3790,10 +3790,7 @@ public static partial class QueryCommandRunner
                 }
                 foreach (var r in results)
                 {
-                    if (exact)
-                        WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult, exactSignal, jsonOptions);
-                    else
-                        Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult));
+                    WriteDefinitionJsonResult(r, options, exact ? exactSignal : null, jsonOptions);
                 }
             }
             else
@@ -4527,6 +4524,61 @@ public static partial class QueryCommandRunner
     {
         foreach (var result in results)
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void WriteDefinitionJsonResult(DefinitionResult result, QueryCommandOptions options, ExactQuerySignal? exactSignal, JsonSerializerOptions jsonOptions)
+    {
+        var payload = JsonSerializer.SerializeToNode(result, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult)!.AsObject();
+        ApplyBodyModeDefinitionContentPolicy(payload, options);
+        if (exactSignal.HasValue)
+            AddExactJsonFields(payload, exactSignal.Value);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void ApplyBodyModeDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)
+    {
+        if (!options.IncludeBody)
+            return;
+
+        OmitDefinitionContent(payload, "body_content_field");
+    }
+
+    private static void ApplyInspectDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)
+    {
+        if (!payload.TryGetPropertyValue("definitions", out var definitionsNode) || definitionsNode is not JsonArray definitions)
+            return;
+
+        var reason = options.IncludeBody ? "body_content_field" : "inspect_body_not_requested";
+        foreach (var definition in definitions.OfType<JsonObject>())
+        {
+            OmitDefinitionContent(definition, reason);
+            if (!options.IncludeBody)
+                OmitDefinitionBodyContent(definition);
+        }
+    }
+
+    private static void OmitDefinitionContent(JsonObject definition, string reason)
+    {
+        if (!definition.Remove("content"))
+            return;
+
+        definition["content_omitted"] = true;
+        definition["content_omitted_reason"] = reason;
+    }
+
+    private static void OmitDefinitionBodyContent(JsonObject definition)
+    {
+        definition.Remove("body_content");
+        definition.Remove("body_content_start_line");
+        definition.Remove("body_content_end_line");
+        definition.Remove("body_content_next_start_line");
+        definition.Remove("body_content_truncated");
+        definition.Remove("body_requested_start_line");
+        definition.Remove("body_requested_end_line");
+        definition.Remove("body_effective_start_line");
+        definition.Remove("body_effective_end_line");
+        definition.Remove("body_content_truncation_reasons");
+        definition.Remove("body_content_recovery");
     }
 
     private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath)
@@ -5806,6 +5858,9 @@ public static partial class QueryCommandRunner
     }
 
     private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)
+        => ApplyOutlineSymbolLimit(outline, sectionLimit);
+
+    private static JsonObject ApplyOutlineSymbolLimit(OutlineResult outline, int sectionLimit)
     {
         var sections = new JsonObject();
         TruncateCompactSection(outline.Symbols, sectionLimit, sections, "symbols");
@@ -6128,13 +6183,15 @@ public static partial class QueryCommandRunner
 
     private static void AddInspectBodyModeJsonFields(JsonObject payload, QueryCommandOptions options, SymbolAnalysisResult analysis)
     {
-        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
-        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
-        var nextStartLine = analysis.Definitions
-            .Where(definition => definition.BodyContentNextStartLine.HasValue)
-            .Select(definition => definition.BodyContentNextStartLine!.Value)
-            .DefaultIfEmpty()
-            .Min();
+        var bodyContentPresent = options.IncludeBody && analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = options.IncludeBody && analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        var nextStartLine = options.IncludeBody
+            ? analysis.Definitions
+                .Where(definition => definition.BodyContentNextStartLine.HasValue)
+                .Select(definition => definition.BodyContentNextStartLine!.Value)
+                .DefaultIfEmpty()
+                .Min()
+            : 0;
 
         var bodyMode = new JsonObject
         {
@@ -6316,6 +6373,7 @@ public static partial class QueryCommandRunner
                     payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
                 }
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
+                ApplyInspectDefinitionContentPolicy(payload, options);
                 AddInspectBodyModeJsonFields(payload, options, analysis);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
@@ -6491,7 +6549,8 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
             }
             else
@@ -12721,6 +12780,14 @@ public static partial class QueryCommandRunner
                 && commandName != "files"
                 && commandName != "symbols")
             {
+                if (commandName == "outline")
+                {
+                    CommandErrorWriter.Write(
+                        "--json=<format> is not supported by outline because outline emits one JSON object.",
+                        "use plain `--json`; add `--limit <n>` to cap symbols and read the paging metadata (`returned_symbol_count`, `total_symbol_count`, `next_cursor`).",
+                        GetUsageLineOrThrow(commandName));
+                    return true;
+                }
                 if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;

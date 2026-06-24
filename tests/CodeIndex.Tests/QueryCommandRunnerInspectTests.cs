@@ -556,6 +556,51 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_JsonWithoutBody_OmitsDefinitionContent_Issue3913()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_json_omits_content");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = json.GetProperty("definitions").EnumerateArray().Single();
+            var bodyMode = json.GetProperty("body_mode");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.False(definition.TryGetProperty("body_content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("inspect_body_not_requested", definition.GetProperty("content_omitted_reason").GetString());
+            Assert.False(bodyMode.GetProperty("include_body").GetBoolean());
+            Assert.False(bodyMode.GetProperty("body_content_present").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_BodyOnlyJson_EmitsDefinitionBodiesOnly_Issue3056()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_only_json");
@@ -589,6 +634,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(["definitions"], selectedFields);
             Assert.Contains("return 42;", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definition.GetProperty("content_omitted_reason").GetString());
             Assert.False(json.TryGetProperty("file", out _));
             Assert.False(json.TryGetProperty("references", out _));
             Assert.False(json.TryGetProperty("callers", out _));
@@ -642,6 +690,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(7, definition.GetProperty("body_content_end_line").GetInt32());
             Assert.Equal(8, definition.GetProperty("body_content_next_start_line").GetInt32());
             Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definition.GetProperty("content_omitted_reason").GetString());
         }
         finally
         {
@@ -743,7 +794,10 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(JsonValueKind.Null, definition.GetProperty("body_content").ValueKind);
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.False(definition.TryGetProperty("body_content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("inspect_body_not_requested", definition.GetProperty("content_omitted_reason").GetString());
             Assert.False(bodyMode.GetProperty("include_body").GetBoolean());
             Assert.False(bodyMode.GetProperty("definitions_only").GetBoolean());
             Assert.False(bodyMode.GetProperty("body_content_present").GetBoolean());
@@ -895,6 +949,72 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, symbolTruncation.GetProperty("returned").GetInt32());
             Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 3, symbolTruncation.GetProperty("source_count").GetInt32());
             Assert.True(symbolTruncation.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_JsonArray_WritesOutlineSpecificError_Issue3947()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            ["src/many.cs", "--json=array"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json=<format> is not supported by outline", stderr, StringComparison.Ordinal);
+        Assert.Contains("outline emits one JSON object", stderr, StringComparison.Ordinal);
+        Assert.Contains("use plain `--json`", stderr, StringComparison.Ordinal);
+        Assert.Contains("paging metadata", stderr, StringComparison.Ordinal);
+        Assert.Contains("next_cursor", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunOutline_Json_UsesExplicitLimit_Issue3914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_json_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/many.cs",
+                "csharp",
+                """
+                public class Many
+                {
+                    public void M0() { }
+                    public void M1() { }
+                    public void M2() { }
+                    public void M3() { }
+                    public void M4() { }
+                    public void M5() { }
+                    public void M6() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.TryGetProperty("compact", out _));
+            Assert.False(json.TryGetProperty("compact_limit", out _));
+            Assert.False(json.TryGetProperty("truncation", out _));
+            Assert.Equal(2, symbols.Count);
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 3, json.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("returned_symbol_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("cursor_offset").GetInt32());
+            Assert.Equal("outline:2", json.GetProperty("next_cursor").GetString());
+            Assert.True(json.GetProperty("has_more").GetBoolean());
         }
         finally
         {

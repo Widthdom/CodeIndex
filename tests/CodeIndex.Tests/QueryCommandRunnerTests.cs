@@ -3862,7 +3862,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(6, property.GetProperty("end_line").GetInt32());
             Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
             Assert.Equal(6, definitionJson.GetProperty("end_line").GetInt32());
-            Assert.Contains("=> 42;", definitionJson.GetProperty("content").GetString());
+            Assert.False(definitionJson.TryGetProperty("content", out _));
+            Assert.True(definitionJson.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definitionJson.GetProperty("content_omitted_reason").GetString());
+            Assert.Contains("=> 42;", definitionJson.GetProperty("body_content").GetString());
         }
         finally
         {
@@ -3999,8 +4002,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(10, property.GetProperty("end_line").GetInt32());
             Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
             Assert.Equal(10, definitionJson.GetProperty("end_line").GetInt32());
-            Assert.Contains("> 15 => 2,", definitionJson.GetProperty("content").GetString());
-            Assert.Contains("_ => 1", definitionJson.GetProperty("content").GetString());
+            Assert.False(definitionJson.TryGetProperty("content", out _));
+            Assert.True(definitionJson.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definitionJson.GetProperty("content_omitted_reason").GetString());
+            Assert.Contains("> 15 => 2,", definitionJson.GetProperty("body_content").GetString());
+            Assert.Contains("_ => 1", definitionJson.GetProperty("body_content").GetString());
         }
         finally
         {
