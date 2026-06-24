@@ -7,6 +7,9 @@ internal sealed partial class FileContentLoader
 {
     internal static string ComputeChecksum(byte[] bytes)
     {
+        if (Array.IndexOf(bytes, (byte)0x0D) < 0)
+            return ComputeRawChecksum(bytes);
+
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var pendingCarriageReturn = false;
         AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
@@ -157,6 +160,14 @@ internal sealed partial class FileContentLoader
     {
         Span<byte> hash = stackalloc byte[32];
         if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
+            throw new InvalidOperationException("SHA256 produced an unexpected hash length");
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string ComputeRawChecksum(ReadOnlySpan<byte> bytes)
+    {
+        Span<byte> hash = stackalloc byte[32];
+        if (!SHA256.TryHashData(bytes, hash, out var written) || written != hash.Length)
             throw new InvalidOperationException("SHA256 produced an unexpected hash length");
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
