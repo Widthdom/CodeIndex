@@ -5,6 +5,8 @@ namespace CodeIndex.Indexer;
 internal sealed partial class FileContentLoader(long maxFileSizeBytes)
 {
     private const int GitLfsPointerMaxBytes = 1024;
+    private static readonly UTF8Encoding StrictUtf8Encoding = new(false, throwOnInvalidBytes: true);
+    private static readonly UTF8Encoding LenientUtf8Encoding = new(false, throwOnInvalidBytes: false);
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
 
     internal readonly record struct NormalizedIndexableContent(
@@ -268,11 +270,11 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
 
         try
         {
-            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null, inspection);
+            return (StrictUtf8Encoding.GetString(bytes), null, inspection);
         }
         catch (DecoderFallbackException)
         {
-            var content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
+            var content = LenientUtf8Encoding.GetString(bytes);
             return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)", inspection);
         }
     }
