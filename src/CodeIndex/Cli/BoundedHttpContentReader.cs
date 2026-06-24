@@ -6,6 +6,7 @@ namespace CodeIndex.Cli;
 internal static class BoundedHttpContentReader
 {
     internal const int PooledCopyBufferSize = 81920;
+    internal const int MaxInitialMemoryStreamCapacity = 1 * 1024 * 1024;
 
     internal static async Task<byte[]> ReadAsByteArrayAsync(
         HttpContent content,
@@ -39,7 +40,7 @@ internal static class BoundedHttpContentReader
     {
         if (content.Headers.ContentLength is long contentLength
             && contentLength > 0
-            && contentLength <= int.MaxValue)
+            && contentLength <= MaxInitialMemoryStreamCapacity)
         {
             return new MemoryStream((int)contentLength);
         }
