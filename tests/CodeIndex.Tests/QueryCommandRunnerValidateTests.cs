@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -279,4 +280,66 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void RunValidate_ExcludeFiltersScopeIssues_Issue3897()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_exclude_filters");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "generated"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tests"));
+            WriteUtf8BomFile(Path.Combine(projectRoot, "src", "App.cs"), "class App {}\n");
+            WriteUtf8BomFile(Path.Combine(projectRoot, "src", "generated", "Generated.cs"), "class Generated {}\n");
+            WriteUtf8BomFile(Path.Combine(projectRoot, "tests", "AppTests.cs"), "class AppTests {}\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--json", "--exclude-tests", "--exclude-path", "generated"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var issues = root.GetProperty("issues");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal("src/App.cs", issues[0].GetProperty("path").GetString());
+            Assert.Equal("bom", issues[0].GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ValidateContent_SuppressesSolutionUtf8BomNoise_Issue3897()
+    {
+        var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF, 0x63, 0x6C, 0x61, 0x73, 0x73 };
+
+        var solutionIssues = FileIndexer.ValidateContent(
+            "CodeIndex.sln",
+            rawBytes,
+            "\uFEFFMicrosoft Visual Studio Solution File, Format Version 12.00\n",
+            "text");
+        var csharpIssues = FileIndexer.ValidateContent(
+            "src/Bom.cs",
+            rawBytes,
+            "\uFEFFclass Bom {}\n",
+            "csharp");
+
+        Assert.DoesNotContain(solutionIssues, issue => issue.Kind == "bom");
+        Assert.Contains(csharpIssues, issue => issue.Kind == "bom");
+    }
+
+    private static void WriteUtf8BomFile(string path, string content)
+        => File.WriteAllBytes(path, [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(content)]);
 }
