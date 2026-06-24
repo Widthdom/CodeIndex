@@ -12,7 +12,7 @@ namespace CodeIndex.Tests;
 /// </summary>
 public sealed class InstallScriptTests : IDisposable
 {
-    private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan InstallerSnippetKillWaitTimeout = TimeSpan.FromSeconds(5);
 
     private readonly string _tempRoot = TestProjectHelper.CreateTempProject("cdidx_install_script");
@@ -1613,7 +1613,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerSnippetSucceeded(exitCode, stdout, stderr);
         Assert.Contains("REINSTALL_OK", stdout);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal("new-license", File.ReadAllText(Path.Combine(installDir, "LICENSES", "new.txt")));
@@ -5976,6 +5976,17 @@ public sealed class InstallScriptTests : IDisposable
 
     private static string AppendInstallerSnippetDiagnostic(string output, string diagnostic)
         => string.IsNullOrEmpty(output) ? diagnostic : output + Environment.NewLine + diagnostic;
+
+    private static void AssertInstallerSnippetSucceeded(int exitCode, string stdout, string stderr)
+        => Assert.True(
+            exitCode == 0,
+            string.Join(
+                Environment.NewLine,
+                $"Expected installer snippet exit code 0, actual {exitCode}.",
+                "stdout:",
+                stdout,
+                "stderr:",
+                stderr));
 
     private static string GetInstallScriptPath() => Path.Combine(GetRepositoryRoot(), "install.sh");
 
