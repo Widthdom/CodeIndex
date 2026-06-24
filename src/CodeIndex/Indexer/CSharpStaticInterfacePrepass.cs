@@ -106,6 +106,16 @@ internal static class CSharpStaticInterfacePrepass
 
     internal static bool MayContainCSharpStaticInterfaceContract(string content)
     {
+        var contentSpan = content.AsSpan();
+        if (contentSpan.IndexOf('{') < 0
+            || !ContainsCSharpWord(contentSpan, "interface")
+            || !ContainsCSharpWord(contentSpan, "static")
+            || (!ContainsCSharpWord(contentSpan, "abstract")
+                && !ContainsCSharpWord(contentSpan, "virtual")))
+        {
+            return false;
+        }
+
         var masked = MaskCSharpCommentsAndStrings(content);
         var index = 0;
         while ((index = IndexOfCSharpWord(masked, "interface", index)) >= 0)
