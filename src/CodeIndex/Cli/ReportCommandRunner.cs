@@ -34,6 +34,7 @@ public static class ReportCommandRunner
     internal const int MaxSchemaRowCountScanRows = 1000;
     internal const string RedactedPlaceholder = "[redacted]";
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    internal static readonly DateTimeOffset BundleEntryModificationTime = DateTimeOffset.UnixEpoch;
     private const string SchemaTableLabelPrefix = "table_";
     private const string TruncatedLogLineSuffix = "...[line truncated]";
     private const int SupportManifestVersion = 1;
@@ -210,6 +211,7 @@ public static class ReportCommandRunner
         sb.AppendLine("- `env.txt` — human-readable OS / runtime summary.");
         sb.AppendLine("- `schema.txt` — capped SQLite table labels and bounded row counts (no raw table names or row contents).");
         sb.AppendLine("- `support-manifest.json` — machine-readable redaction, omission, readiness, and diagnostic summary.");
+        sb.AppendLine("- Archive entry modification times are fixed for reproducible tar metadata; generation time is recorded in `metadata.json`, `env.txt`, and `support-manifest.json`.");
         if (includeLog)
         {
             sb.AppendLine(
@@ -768,7 +770,7 @@ public static class ReportCommandRunner
                     {
                         DataStream = new MemoryStream(bytes, writable: false),
                         Mode = BundleFileMode,
-                        ModificationTime = bundle.GeneratedAtUtc,
+                        ModificationTime = BundleEntryModificationTime,
                     };
                     tar.WriteEntry(entry);
                 }
