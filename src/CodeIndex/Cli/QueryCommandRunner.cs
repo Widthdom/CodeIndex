@@ -11,6 +11,7 @@ using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Cli;
 

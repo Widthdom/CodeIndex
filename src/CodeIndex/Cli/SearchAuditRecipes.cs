@@ -294,6 +294,42 @@ internal static class SearchAuditRecipes
                     ],
                 },
                 new(
+                    "static-regex-match",
+                    " Regex.Match(",
+                    "Find static Regex.Match calls that may need BoundedRegex or an explicit timeout overload.",
+                    ["audit", "performance"],
+                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
+                {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: static System.Text.RegularExpressions.Regex.Match can run without the shared timeout policy.",
+                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "static-regex-replace",
+                    " Regex.Replace(",
+                    "Find static Regex.Replace calls that may need BoundedRegex or an explicit timeout overload.",
+                    ["audit", "performance"],
+                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
+                {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: static System.Text.RegularExpressions.Regex.Replace can run without the shared timeout policy.",
+                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
                     "regex-timeout-handling",
                     "RegexMatchTimeoutException",
                     "Find regex timeout handling boundaries that may need consistent diagnostics and recovery behavior.",
@@ -766,6 +802,42 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                },
+                new(
+                    "static-regex-match",
+                    " Regex.Match(",
+                    "Find static Regex.Match calls that may need BoundedRegex or an explicit timeout overload.",
+                    ["audit", "performance"],
+                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
+                {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: static System.Text.RegularExpressions.Regex.Match can run without the shared timeout policy.",
+                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "static-regex-replace",
+                    " Regex.Replace(",
+                    "Find static Regex.Replace calls that may need BoundedRegex or an explicit timeout overload.",
+                    ["audit", "performance"],
+                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
+                {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: static System.Text.RegularExpressions.Regex.Replace can run without the shared timeout policy.",
+                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
+                    ],
+                    MatchOrigins = ["code"],
                 },
                 new(
                     "cancellation-token-none",
