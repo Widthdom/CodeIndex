@@ -3495,14 +3495,14 @@ public partial class FileIndexer
 
     private static bool HasGeneratedCodeFileName(string relativePath)
     {
-        var fileName = Path.GetFileName(relativePath);
-        return fileName.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".g.dart", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".gen.go", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".generated.ts", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("_pb.go", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("_pb2.py", StringComparison.OrdinalIgnoreCase);
+        var fileName = Path.GetFileName(relativePath.AsSpan());
+        return fileName.EndsWith(".Designer.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".g.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".g.dart".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".gen.go".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".generated.ts".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("_pb.go".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("_pb2.py".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasGeneratedCodeHeader(string content)

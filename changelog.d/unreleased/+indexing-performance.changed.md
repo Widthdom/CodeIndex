@@ -29,6 +29,7 @@ affected:
 - Reused full-scan generated-code suppression decisions between extraction and write phases, avoiding duplicate pattern checks per indexed file.
 - Reused generated-code suppression decisions across unchanged-file checks and write paths in CLI update, full-scan, and MCP indexing.
 - Removed per-line string allocations from generated-code header detection, reducing allocation pressure during record construction.
+- Avoided string allocation while checking generated-code filename suffixes during record construction.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -46,4 +47,5 @@ affected:
 - full-scan の generated-code suppression 判定を extraction phase と write phase で再利用し、index 対象ファイルごとの重複 pattern check を避けました。
 - CLI update、full-scan、MCP index で generated-code suppression 判定を unchanged-file check と write path の間で再利用するようにしました。
 - generated-code header 判定で行ごとの string allocation を発生させず、record 構築中の allocation pressure を減らしました。
+- record 構築中の generated-code filename suffix 判定で string allocation を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
