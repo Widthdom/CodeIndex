@@ -3274,6 +3274,28 @@ public partial class FileIndexer
             rawByteFilter: null,
             cancellationToken)!;
 
+    internal bool RawFileMayContainCSharpStaticInterfaceContract(
+        string absolutePath,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
+            throw new InvalidOperationException("Only regular files can be indexed");
+
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
+        var probe = CSharpStaticInterfacePrepass.CreateRawByteContractProbe();
+        return _contentLoader.RawByteChunksMayMatch(
+            absolutePath,
+            normalizedRelativePath,
+            probe.AppendAndCheck,
+            cancellationToken);
+    }
+
     internal string? LoadNormalizedContentForPrepass(
         string absolutePath,
         string relativePath,

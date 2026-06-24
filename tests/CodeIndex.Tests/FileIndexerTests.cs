@@ -1163,6 +1163,78 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void RawFileMayContainCSharpStaticInterfaceContract_TokenSplitAcrossReadBuffer_ReturnsTrue()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Program.cs");
+            var prefix = new string('x', 81920 - "inter".Length);
+            File.WriteAllText(
+                path,
+                prefix + """
+                interface IFixture
+                {
+                    static abstract int Count { get; }
+                }
+                """);
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            Assert.True(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RawFileMayContainCSharpStaticInterfaceContract_MissingContractTokens_ReturnsFalse()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Program.cs");
+            File.WriteAllText(path, "public interface IFixture { static int Count => 0; }\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            Assert.False(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RawFileMayContainCSharpStaticInterfaceContract_OverExplicitMaxFileBytes_ThrowsActionableOverrideMessage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Program.cs");
+            File.WriteAllText(path, "public interface IFixture { static abstract int Count { get; } }\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
+
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(
+                () => indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+            Assert.Contains("File too large", ex.Message);
+            Assert.Contains("--max-file-bytes", ex.Message);
+            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void BuildRecordWithRawBytes_ExplicitMaxFileBytes_AllowsLargerSourceFile()
     {
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");

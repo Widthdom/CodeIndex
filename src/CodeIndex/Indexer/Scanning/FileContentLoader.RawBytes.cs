@@ -2,6 +2,8 @@ namespace CodeIndex.Indexer;
 
 internal sealed partial class FileContentLoader
 {
+    internal delegate bool RawByteChunkPredicate(ReadOnlySpan<byte> bytes);
+
     private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
         string absolutePath,
         string normalizedRelativePath,
@@ -56,6 +58,47 @@ internal sealed partial class FileContentLoader
         return (bytes, sizeBytes, modifiedUtc);
     }
 
+    internal bool RawByteChunksMayMatch(
+        string absolutePath,
+        string normalizedRelativePath,
+        RawByteChunkPredicate chunkPredicate,
+        CancellationToken cancellationToken)
+    {
+        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+        for (var attempt = 0; ; attempt++)
+        {
+            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
+            bool matched;
+            using (var stream = new FileStream(
+                ioPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 81920,
+                options: FileOptions.SequentialScan))
+            {
+                var initialLength = stream.Length;
+                if (initialLength > maxFileSizeBytes)
+                    throw new FileIndexer.FileTooLargeSkippedException(
+                        normalizedRelativePath,
+                        initialLength,
+                        maxFileSizeBytes,
+                        BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+
+                matched = RawByteChunksMayMatch(
+                    stream,
+                    initialLength,
+                    normalizedRelativePath,
+                    chunkPredicate,
+                    cancellationToken);
+            }
+
+            var modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
+            if (matched || modifiedUtc == modifiedBeforeRead || attempt > 0)
+                return matched;
+        }
+    }
+
     private (byte[] Bytes, long SizeBytes) ReadStreamBytesWithKnownInitialLength(
         FileStream stream,
         long initialLength,
@@ -87,6 +130,51 @@ internal sealed partial class FileContentLoader
             (byte)extra,
             normalizedRelativePath,
             cancellationToken);
+    }
+
+    private bool RawByteChunksMayMatch(
+        FileStream stream,
+        long initialLength,
+        string normalizedRelativePath,
+        RawByteChunkPredicate chunkPredicate,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[81920];
+        long total = 0;
+
+        while (total < initialLength)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(
+                buffer,
+                0,
+                (int)Math.Min(buffer.Length, initialLength - total));
+            if (read == 0)
+                return false;
+
+            total += read;
+            if (chunkPredicate(buffer.AsSpan(0, read)))
+                return true;
+        }
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+                return false;
+
+            total += read;
+            if (total > maxFileSizeBytes)
+                throw new FileIndexer.FileTooLargeSkippedException(
+                    normalizedRelativePath,
+                    total,
+                    maxFileSizeBytes,
+                    BuildFileTooLargeMessage(total, grewDuringRead: true));
+
+            if (chunkPredicate(buffer.AsSpan(0, read)))
+                return true;
+        }
     }
 
     private (byte[] Bytes, long SizeBytes) ReadStreamBytesAfterGrowth(

@@ -53,7 +53,7 @@ The test project mirrors the production areas closely.
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   launches the isolated symbol worker to prove legacy worker environment variables are ignored. Its callback budget includes process startup and is intentionally wider than ordinary in-process checks so local process load does not turn the legacy-env regression check into a timeout flake (#3863).
-- `IndexCommandRunnerTests` also covers `CSharpStaticInterfacePrepass` text and raw-byte contract probes. Keep byte-array and chunked raw-token probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
+- `IndexCommandRunnerTests` and `FileIndexerTests` also cover `CSharpStaticInterfacePrepass` text, raw-byte, chunked raw-token, and streaming file contract probes. Keep byte-array, chunked, and file-level probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` and `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
   exercise watch-loop startup and shutdown under redirected console output. These tests wait for the watch start line before cancelling and always cancel/drain the dedicated watch task before restoring `Console.Out` / `Console.Error`; do not replace that synchronization with fixed sleeps because full-suite load can delay the long-running task startup.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
@@ -282,7 +282,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   isolated symbol worker を起動し、legacy worker 環境変数が無視されることを検証します。この callback budget はプロセス起動時間も含むため、通常の in-process チェックより意図的に広く取り、ローカル負荷で legacy-env 回帰テストが timeout flake にならないようにします（#3863）。
-- `IndexCommandRunnerTests` は `CSharpStaticInterfacePrepass` のテキスト判定と raw-byte 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array と chunked raw-token probe のカバレッジを揃えてください。
+- `IndexCommandRunnerTests` と `FileIndexerTests` は `CSharpStaticInterfacePrepass` のテキスト判定、raw-byte、chunked raw-token、streaming file 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array、chunked、file-level probe のカバレッジを揃えてください。
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` と `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
   リダイレクトした console 出力の下で watch loop の起動と停止を検証する。これらのテストは watch start 行を待ってからキャンセルし、`Console.Out` / `Console.Error` を戻す前に専用 watch task を必ず cancel/drain する。full suite の負荷で long-running task の起動が遅れることがあるため、この同期を固定 sleep に戻さないこと。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
