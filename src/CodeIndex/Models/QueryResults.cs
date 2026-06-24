@@ -54,7 +54,15 @@ public sealed class SearchDiagnostic
 
 public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
 
-public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
+public readonly record struct QueryCountResult(
+    int Count,
+    int FileCount,
+    bool IncludesSql = false,
+    long? TotalBytes = null,
+    double? AverageBytes = null,
+    long? MaxBytes = null,
+    string? MaxBytesPath = null,
+    bool? BytesAuthoritative = null);
 
 public readonly record struct UnusedCountResult(
     int Count,

@@ -1469,6 +1469,10 @@ public class FileIndexerTests
         Assert.Equal("dependency_lock", map["packages.lock.json"]);
         Assert.Equal("solution", map[".sln"]);
         Assert.Equal("app_manifest", map[".manifest"]);
+        Assert.Equal("xml", map[".config"]);
+        Assert.Equal("xml", map[".runsettings"]);
+        Assert.Equal("config", map[".rules"]);
+        Assert.Equal("gitattributes", map[".gitattributes"]);
         Assert.Equal("assembly", map[".s"]);
         Assert.Equal("assembly", map[".S"]);
 
