@@ -12,6 +12,9 @@ namespace CodeIndex.Tests;
 /// </summary>
 public sealed class InstallScriptTests : IDisposable
 {
+    private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan InstallerSnippetKillWaitTimeout = TimeSpan.FromSeconds(5);
+
     private readonly string _tempRoot = TestProjectHelper.CreateTempProject("cdidx_install_script");
 
     public void Dispose()
@@ -5916,9 +5919,25 @@ public sealed class InstallScriptTests : IDisposable
 
             using var process = Process.Start(psi)
                 ?? throw new InvalidOperationException("Failed to start bash install snippet / bash install snippet の起動に失敗");
-            var stdOut = process.StandardOutput.ReadToEnd();
-            var stdErr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
+            var stdOutTask = process.StandardOutput.ReadToEndAsync();
+            var stdErrTask = process.StandardError.ReadToEndAsync();
+            var timedOut = !process.WaitForExit((int)InstallerSnippetTimeout.TotalMilliseconds);
+            if (timedOut)
+            {
+                var killDiagnostic = TryKillInstallerSnippet(process);
+                process.WaitForExit((int)InstallerSnippetKillWaitTimeout.TotalMilliseconds);
+
+                var timeoutDiagnostic = $"Installer snippet timed out after {InstallerSnippetTimeout}.";
+                if (!string.IsNullOrEmpty(killDiagnostic))
+                    timeoutDiagnostic += $" {killDiagnostic}";
+                return (
+                    -1,
+                    ReadInstallerSnippetOutput(stdOutTask),
+                    AppendInstallerSnippetDiagnostic(ReadInstallerSnippetOutput(stdErrTask), timeoutDiagnostic));
+            }
+
+            var stdOut = ReadInstallerSnippetOutput(stdOutTask);
+            var stdErr = ReadInstallerSnippetOutput(stdErrTask);
             return (process.ExitCode, stdOut, stdErr);
         }
         finally
@@ -5926,6 +5945,37 @@ public sealed class InstallScriptTests : IDisposable
             TestProjectHelper.DeleteFile(scriptPath);
         }
     }
+
+    private static string TryKillInstallerSnippet(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            return string.Empty;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            return $"Process cleanup failed: {ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    private static string ReadInstallerSnippetOutput(Task<string> outputTask)
+    {
+        try
+        {
+            return outputTask.Wait((int)InstallerSnippetKillWaitTimeout.TotalMilliseconds)
+                ? outputTask.GetAwaiter().GetResult()
+                : "<output capture incomplete>";
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or AggregateException)
+        {
+            return $"<output capture failed: {ex.GetType().Name}: {ex.Message}>";
+        }
+    }
+
+    private static string AppendInstallerSnippetDiagnostic(string output, string diagnostic)
+        => string.IsNullOrEmpty(output) ? diagnostic : output + Environment.NewLine + diagnostic;
 
     private static string GetInstallScriptPath() => Path.Combine(GetRepositoryRoot(), "install.sh");
 
