@@ -1463,7 +1463,8 @@ if [ "$1" = "rev-parse" ]; then
     exit 0
   fi
   if [ "$2" = "--verify" ]; then
-    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    commit=${3%^\{commit\}}
+    printf '%s\n' "$commit"
     exit 0
   fi
 fi
