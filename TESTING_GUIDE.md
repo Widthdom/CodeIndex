@@ -129,6 +129,7 @@ Prefer the existing helper before writing new setup code.
 - Use `DeleteDirectory(path)` in temp-workspace `finally` / `Dispose` cleanup paths, including tests that intentionally remove the workspace earlier in the scenario.
 - Do not reimplement recursive temp-directory cleanup in individual test files; keep local wrappers as thin delegates to `TestProjectHelper.DeleteDirectory` when a shorter call keeps existing tests readable.
 - `DeleteFile(path)` retries standalone temp-DB cleanup and uses the same Windows-specific SQLite pool release fallback when pooled handles block deletion.
+- DB maintenance test files may keep thin local helpers such as `InitializeEmptyDb`, `ReleaseSqlitePools`, and `DeleteDbFile` when a class owns standalone `.db` files directly; keep those wrappers delegated to `DbContext`, `SqliteConnection.ClearAllPools()`, and `TestProjectHelper.DeleteFile` so pool-release intent remains explicit.
 - `SqlitePoolCleanup` centralizes the Windows SQLite pool workaround for tests. Tests that own a temporary SQLite file for their whole lifetime can enter an exclusive owner lease and dispose it idempotently before deleting the file, instead of calling `SqliteConnection.ClearAllPools()` directly from `Dispose`.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
 - Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
@@ -347,6 +348,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 一時 workspace の `finally` / `Dispose` cleanup では、そのテストシナリオ内で workspace を意図的に先に削除する場合も含めて、`DeleteDirectory(path)` を使ってください。
 - 個別のテストファイルで再帰的な一時ディレクトリ cleanup を再実装しないでください。短い呼び出し名で既存テストの読みやすさを保ちたい場合も、ローカル wrapper は `TestProjectHelper.DeleteDirectory` への薄い委譲に留めます。
 - `DeleteFile(path)` は standalone な temp DB cleanup をリトライし、pooled handle が削除を妨げる場合は同じ Windows 向け SQLite pool 解放フォールバックを使います。
+- DB maintenance 系のテストファイルが standalone な `.db` ファイルを直接所有する場合は、`InitializeEmptyDb`、`ReleaseSqlitePools`、`DeleteDbFile` のような薄い local helper を置いて構いません。ただし wrapper は `DbContext`、`SqliteConnection.ClearAllPools()`、`TestProjectHelper.DeleteFile` へ委譲し、pool 解放の意図が見える名前にしてください。
 - `SqlitePoolCleanup` は Windows 向け SQLite pool workaround を集約します。テストの生存期間中ずっと一時 SQLite ファイルを所有するテストは、`SqliteConnection.ClearAllPools()` を直接呼ぶ代わりに exclusive owner lease に入り、削除前に冪等に dispose できます。
 - `SqliteConnection.ClearAllPools()` を意図的に呼ぶテスト、process-global な環境変数を変更するテスト、プロセスのカレントディレクトリを上書きするテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。これらのハザードを持つ新しいテストも、この collection に入れて無関係なクラスとの並列実行を避けてください。
 - Process-global な環境変数を変更するテストでは `EnvironmentVariableScope.Capture(...)` を使い、setup や assertion が失敗しても単一の disposable cleanup 経路で元の値へ戻してください。
