@@ -1,6 +1,7 @@
 ---
 category: changed
 affected:
+  - src/CodeIndex/Cli/IndexCommandRunner.DryRun.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
@@ -21,6 +22,7 @@ affected:
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
 - Reused scan-time language data when update mode expands the C# static-interface workspace, reducing repeated language probes on expanded update sets.
 - Reused update-mode language probes for stat-based unchanged-file checks, removing another redundant probe on each index target.
+- Reused dry-run language probes while building candidate records, reducing duplicate detection work in large dry-run previews.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -31,4 +33,5 @@ affected:
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。
 - update mode が C# static-interface workspace を拡張するときも scan 時点の言語情報を再利用し、拡張された更新対象で language probe を繰り返さないようにしました。
 - update mode の language probe を stat-based unchanged-file 判定にも再利用し、index 対象ごとの追加 probe を削りました。
+- dry-run の candidate record 構築でも language probe を再利用し、大規模 dry-run preview での重複検出処理を減らしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

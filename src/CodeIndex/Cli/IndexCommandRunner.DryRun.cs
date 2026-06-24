@@ -123,7 +123,7 @@ public static partial class IndexCommandRunner
                 continue;
             }
 
-            var probe = ProbeDryRunFile(dryIndexer, f);
+            var probe = ProbeDryRunFile(dryIndexer, f, displayRelativePath);
             if (!probe.Supported)
             {
                 if (probe.UnknownExtension)
@@ -564,7 +564,10 @@ public static partial class IndexCommandRunner
         return dotIndex <= 0 ? fileName : fileName[..dotIndex];
     }
 
-    private static DryRunFileProbe ProbeDryRunFile(FileIndexer indexer, string absolutePath)
+    private static DryRunFileProbe ProbeDryRunFile(
+        FileIndexer indexer,
+        string absolutePath,
+        string relativePath)
     {
         var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
         if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
@@ -582,8 +585,18 @@ public static partial class IndexCommandRunner
 
         try
         {
-            var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
-            return new DryRunFileProbe(true, record.Lang ?? "unknown", record.Checksum, warning, Unsupported: false, UnknownExtension: false);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                absolutePath,
+                relativePath,
+                detection.Language);
+            var record = loaded.Record;
+            return new DryRunFileProbe(
+                true,
+                record.Lang ?? "unknown",
+                record.Checksum,
+                loaded.Warning,
+                Unsupported: false,
+                UnknownExtension: false);
         }
         catch (Exception ex)
         {
