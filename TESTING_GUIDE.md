@@ -93,7 +93,7 @@ The test project mirrors the production areas closely.
   Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores, SQLite page counts), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
 - `PropertyBasedParserTests.cs`
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
-- `TestProjectHelper.cs`, `TestConsoleLock.cs`
+- `TestProjectHelper.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
   Shared test helpers.
 
 ## Conventions
@@ -137,6 +137,10 @@ Prefer the existing helper before writing new setup code.
 - Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
 
 Use these helpers when possible so test behavior stays consistent across files and operating systems.
+
+### `RepositoryTestPaths`
+
+Use `RepositoryTestPaths` for tests that inspect checked-in repository files such as GitHub workflows, `global.json`, or documentation. Prefer `ReadText(...)`, `ReadWorkflow(...)`, and `Combine(...)` over repeating repository-root discovery and `Path.Combine` chains inside individual test classes.
 
 ### `TestConsoleLock`
 
@@ -313,7 +317,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score、SQLite page count など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
 - `PropertyBasedParserTests.cs`
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
-- `TestProjectHelper.cs`、`TestConsoleLock.cs`
+- `TestProjectHelper.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`
   共有テストヘルパー。
 
 ## 規約
@@ -358,6 +362,10 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Process-global な環境変数を変更するテストでは `EnvironmentVariableScope.Capture(...)` を使い、setup や assertion が失敗しても単一の disposable cleanup 経路で元の値へ戻してください。
 
 テスト挙動をファイル間・OS間で揃えるため、可能な限りこれらを使ってください。
+
+### `RepositoryTestPaths`
+
+GitHub workflow、`global.json`、ドキュメントなど、checked-in されたリポジトリ内ファイルを検査するテストでは `RepositoryTestPaths` を使ってください。各テストクラス内で repository-root 探索や `Path.Combine` の連鎖を繰り返す代わりに、`ReadText(...)`、`ReadWorkflow(...)`、`Combine(...)` を優先します。
 
 ### `TestConsoleLock`
 

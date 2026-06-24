@@ -12,7 +12,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_PublishesTrimmedSelfContainedBinariesAndVerifiesCliJson()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("-p:PublishTrimmed=true", workflow);
         Assert.DoesNotContain("-p:PublishTrimmed=false", workflow);
@@ -29,7 +29,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_VerifiesPublishedInstallForTheCurrentRid()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("expected_rids=\"linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64\"", workflow);
         Assert.Contains("asset=\"CodeIndex-${rid}.zip\"", workflow);
@@ -49,7 +49,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_HomebrewFormulaInstallsNativeSqliteAssetAndTouchesSqlite()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("Download release artifacts for checksum calculation", workflow);
         Assert.Contains("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1", workflow);
@@ -84,7 +84,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_GeneratesCycloneDxSbomAndShipsItAsReleaseAsset()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         // Pin the global tool to a known version so an upstream major release
         // cannot silently shift the CLI surface (flag renames have happened
@@ -116,7 +116,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_ValidatesNuGetVersionBeforePublishing()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("Release tag must be a v-prefixed SemVer version", workflow);
         Assert.Contains("jq -r '.version // empty' version.json", workflow);
@@ -145,7 +145,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_ValidatesReleaseTagBeforePrivilegedJobs()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("preflight:", workflow);
         Assert.Contains("name: Validate release tag", workflow);
@@ -160,7 +160,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_UsesChangelogToolForTemplatedReleaseNotes()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("gh release list", workflow);
         Assert.Contains("--exclude-drafts", workflow);
@@ -185,7 +185,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_NormalizesNuGetCorePropertiesBeforePublishing()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("Normalize NuGet package metadata part names", workflow);
         Assert.Contains("dotnet run --project tools/CodeIndex.PackageNormalize --", workflow);
@@ -886,12 +886,11 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
-        var root = GetRepositoryRoot();
-        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
-        var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
-        var dockerignore = File.ReadAllText(Path.Combine(root, ".dockerignore"));
-        var entrypoint = File.ReadAllText(Path.Combine(root, "scripts", "docker-entrypoint.sh"));
-        var project = File.ReadAllText(Path.Combine(root, "src", "CodeIndex", "CodeIndex.csproj"));
+        var workflow = ReadReleaseWorkflow();
+        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile");
+        var dockerignore = RepositoryTestPaths.ReadText(".dockerignore");
+        var entrypoint = RepositoryTestPaths.ReadText("scripts", "docker-entrypoint.sh");
+        var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
 
         Assert.Contains("publish-container:", workflow);
         Assert.Contains("needs: [preflight, create-release]", workflow);
@@ -956,7 +955,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void Dependabot_DoesNotBumpIlLinkPastReleaseSdkMajor()
     {
-        var dependabot = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "dependabot.yml"));
+        var dependabot = RepositoryTestPaths.ReadText(".github", "dependabot.yml");
 
         Assert.Contains("dependency-name: Microsoft.NET.ILLink.Tasks", dependabot);
         Assert.Contains("version-update:semver-major", dependabot);
@@ -965,7 +964,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void MutationWorkflow_PinsActionsByCommitSha()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "mutation-testing.yml"));
+        var workflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
 
         Assert.Contains("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2", workflow);
         Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", workflow);
@@ -973,18 +972,7 @@ public class ReleaseWorkflowTests
         Assert.DoesNotContain("actions/setup-dotnet@v5", workflow);
     }
 
-    private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
+    private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
 
     private static (int ExitCode, string Stdout, string Stderr) RunPackageNormalizeCli(string[] args)
     {

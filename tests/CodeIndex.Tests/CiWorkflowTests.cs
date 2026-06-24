@@ -8,7 +8,7 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
+        var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
         var normalizedWorkflow = workflow.ReplaceLineEndings("\n");
 
         Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
@@ -75,7 +75,7 @@ public class CiWorkflowTests
     [Fact]
     public void Runsettings_DefinesSessionTimeoutAndXunitLongRunningDiagnostics()
     {
-        var path = Path.Combine(GetRepositoryRoot(), "tests", "CodeIndex.Tests", "CodeIndex.Tests.runsettings");
+        var path = RepositoryTestPaths.Combine("tests", "CodeIndex.Tests", "CodeIndex.Tests.runsettings");
         var document = XDocument.Load(path);
 
         Assert.Equal(
@@ -92,9 +92,8 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetSdkAndMutationToolVersions_ArePinned()
     {
-        var root = GetRepositoryRoot();
-        var codeowners = File.ReadAllText(Path.Combine(root, ".github", "CODEOWNERS"));
-        using var globalJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "global.json")));
+        var codeowners = RepositoryTestPaths.ReadText(".github", "CODEOWNERS");
+        using var globalJson = JsonDocument.Parse(RepositoryTestPaths.ReadText("global.json"));
         var sdk = globalJson.RootElement.GetProperty("sdk");
 
         Assert.Equal("9.0.301", sdk.GetProperty("version").GetString());
@@ -110,21 +109,21 @@ public class CiWorkflowTests
             "release.yml",
         })
         {
-            var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", workflowName));
+            var workflow = RepositoryTestPaths.ReadWorkflow(workflowName);
             Assert.Contains("8.0.413", workflow);
             Assert.Contains("9.0.301", workflow);
             Assert.DoesNotContain("8.0.x", workflow);
             Assert.DoesNotContain("9.0.x", workflow);
         }
 
-        var mutationWorkflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "mutation-testing.yml"));
+        var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
         Assert.Contains("dotnet tool install --global dotnet-stryker --version 4.14.0", mutationWorkflow);
     }
 
     [Fact]
     public void DotnetWorkflow_UsesSdkCompatibleNuGetAudit()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
+        var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
 
         Assert.Contains(
             "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1",
@@ -137,7 +136,7 @@ public class CiWorkflowTests
     [Fact]
     public void TestingGuide_DocumentsSharedStateParallelismInventory()
     {
-        var guide = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "TESTING_GUIDE.md"));
+        var guide = RepositoryTestPaths.ReadText("TESTING_GUIDE.md");
 
         Assert.Contains("Shared state and parallelism audit", guide);
         Assert.Contains("SQLite pool sensitive", guide);
@@ -147,16 +146,4 @@ public class CiWorkflowTests
         Assert.Contains("共有状態と並列実行の監査", guide);
     }
 
-    private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
 }
