@@ -11,8 +11,11 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class GitHelperTests : IDisposable
 {
-    // Keep below the fake git scripts' 5-second sleep so missed cancellation still fails.
-    private static readonly TimeSpan GitCancellationWallClockLimit = TimeSpan.FromSeconds(4);
+    private const int FakeGitHangSeconds = 15;
+
+    // Keep below the fake git scripts' sleep so missed timeout/cancellation still fails,
+    // while leaving room for process cleanup under full-suite load.
+    private static readonly TimeSpan GitCancellationWallClockLimit = TimeSpan.FromSeconds(10);
 
     private readonly string _tempDir;
 
@@ -658,7 +661,9 @@ public class GitHelperTests : IDisposable
             Assert.Equal(-1, result.ExitCode);
             Assert.Equal(GitCommandFailureKind.TimedOut, result.FailureKind);
             Assert.Contains("timed out", result.Diagnostic);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Timeout took {stopwatch.Elapsed}.");
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Timeout took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit}.");
         }
         finally
         {
@@ -1611,9 +1616,9 @@ exit 23
     private static void WriteFakeGitThatHangsForAnyCommand(string directory)
     {
         var script = Path.Combine(directory, "git");
-        File.WriteAllText(script, """
+        File.WriteAllText(script, $$"""
 #!/bin/sh
-sleep 5
+sleep {{FakeGitHangSeconds}}
 exit 0
 """);
         if (!OperatingSystem.IsWindows())

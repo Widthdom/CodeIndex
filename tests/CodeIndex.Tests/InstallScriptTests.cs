@@ -12,6 +12,9 @@ namespace CodeIndex.Tests;
 /// </summary>
 public sealed class InstallScriptTests : IDisposable
 {
+    private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan InstallerSnippetKillWaitTimeout = TimeSpan.FromSeconds(5);
+
     private readonly string _tempRoot = TestProjectHelper.CreateTempProject("cdidx_install_script");
 
     public void Dispose()
@@ -40,7 +43,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Uninstall complete", stdout);
         Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
@@ -76,7 +79,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["XDG_CACHE_HOME"] = cacheRoot + "/",
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Removed", stdout);
         Assert.False(Directory.Exists(cdidxCache));
@@ -699,7 +702,7 @@ public sealed class InstallScriptTests : IDisposable
 
             mkdir -p "{{installDir}}"
             cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
@@ -1454,7 +1457,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
@@ -1524,7 +1527,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Contains("INSTALL_OK", stdout);
         Assert.Contains("LICENSE:license text", stdout);
         Assert.Contains("COMMERCIAL:commercial license text", stdout);
@@ -1556,7 +1559,7 @@ public sealed class InstallScriptTests : IDisposable
             $$"""
             mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
             cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.24.6"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
@@ -1567,7 +1570,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.24.6"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
@@ -1610,7 +1613,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Contains("REINSTALL_OK", stdout);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal("new-license", File.ReadAllText(Path.Combine(installDir, "LICENSES", "new.txt")));
@@ -5916,9 +5919,25 @@ public sealed class InstallScriptTests : IDisposable
 
             using var process = Process.Start(psi)
                 ?? throw new InvalidOperationException("Failed to start bash install snippet / bash install snippet の起動に失敗");
-            var stdOut = process.StandardOutput.ReadToEnd();
-            var stdErr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
+            var stdOutTask = process.StandardOutput.ReadToEndAsync();
+            var stdErrTask = process.StandardError.ReadToEndAsync();
+            var timedOut = !process.WaitForExit((int)InstallerSnippetTimeout.TotalMilliseconds);
+            if (timedOut)
+            {
+                var killDiagnostic = TryKillInstallerSnippet(process);
+                process.WaitForExit((int)InstallerSnippetKillWaitTimeout.TotalMilliseconds);
+
+                var timeoutDiagnostic = $"Installer snippet timed out after {InstallerSnippetTimeout}.";
+                if (!string.IsNullOrEmpty(killDiagnostic))
+                    timeoutDiagnostic += $" {killDiagnostic}";
+                return (
+                    -1,
+                    ReadInstallerSnippetOutput(stdOutTask),
+                    AppendInstallerSnippetDiagnostic(ReadInstallerSnippetOutput(stdErrTask), timeoutDiagnostic));
+            }
+
+            var stdOut = ReadInstallerSnippetOutput(stdOutTask);
+            var stdErr = ReadInstallerSnippetOutput(stdErrTask);
             return (process.ExitCode, stdOut, stdErr);
         }
         finally
@@ -5926,6 +5945,48 @@ public sealed class InstallScriptTests : IDisposable
             TestProjectHelper.DeleteFile(scriptPath);
         }
     }
+
+    private static string TryKillInstallerSnippet(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            return string.Empty;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            return $"Process cleanup failed: {ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    private static string ReadInstallerSnippetOutput(Task<string> outputTask)
+    {
+        try
+        {
+            return outputTask.Wait((int)InstallerSnippetKillWaitTimeout.TotalMilliseconds)
+                ? outputTask.GetAwaiter().GetResult()
+                : "<output capture incomplete>";
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or AggregateException)
+        {
+            return $"<output capture failed: {ex.GetType().Name}: {ex.Message}>";
+        }
+    }
+
+    private static string AppendInstallerSnippetDiagnostic(string output, string diagnostic)
+        => string.IsNullOrEmpty(output) ? diagnostic : output + Environment.NewLine + diagnostic;
+
+    private static void AssertInstallerCommandSucceeded(int exitCode, string stdout, string stderr)
+        => Assert.True(
+            exitCode == 0,
+            string.Join(
+                Environment.NewLine,
+                $"Expected installer command exit code 0, actual {exitCode}.",
+                "stdout:",
+                stdout,
+                "stderr:",
+                stderr));
 
     private static string GetInstallScriptPath() => Path.Combine(GetRepositoryRoot(), "install.sh");
 
