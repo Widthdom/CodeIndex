@@ -126,10 +126,11 @@ internal static class CSharpStaticInterfacePrepass
     internal static bool RawBytesMayContainCSharpStaticInterfaceContract(byte[] bytes)
     {
         var span = bytes.AsSpan();
-        return ContainsAsciiTokenInCommonEncodings(span, CSharpInterfaceKeywordBytes)
-               && ContainsAsciiTokenInCommonEncodings(span, CSharpStaticKeywordBytes)
-               && (ContainsAsciiTokenInCommonEncodings(span, CSharpAbstractKeywordBytes)
-                   || ContainsAsciiTokenInCommonEncodings(span, CSharpVirtualKeywordBytes));
+        var mayContainUtf16 = span.IndexOf((byte)0) >= 0;
+        return ContainsAsciiTokenInCommonEncodings(span, CSharpInterfaceKeywordBytes, mayContainUtf16)
+               && ContainsAsciiTokenInCommonEncodings(span, CSharpStaticKeywordBytes, mayContainUtf16)
+               && (ContainsAsciiTokenInCommonEncodings(span, CSharpAbstractKeywordBytes, mayContainUtf16)
+                   || ContainsAsciiTokenInCommonEncodings(span, CSharpVirtualKeywordBytes, mayContainUtf16));
     }
 
     internal static RawByteContractProbe CreateRawByteContractProbe() => new();
@@ -157,6 +158,7 @@ internal static class CSharpStaticInterfacePrepass
         private bool _hasStatic;
         private bool _hasAbstract;
         private bool _hasVirtual;
+        private bool _mayContainUtf16;
 
         internal bool MayContainContractCandidate => _hasInterface && _hasStatic && (_hasAbstract || _hasVirtual);
 
@@ -196,14 +198,17 @@ internal static class CSharpStaticInterfacePrepass
 
         private void Scan(ReadOnlySpan<byte> bytes)
         {
+            if (!_mayContainUtf16 && bytes.IndexOf((byte)0) >= 0)
+                _mayContainUtf16 = true;
+
             if (!_hasInterface)
-                _hasInterface = ContainsAsciiTokenInCommonEncodings(bytes, CSharpInterfaceKeywordBytes);
+                _hasInterface = ContainsAsciiTokenInCommonEncodings(bytes, CSharpInterfaceKeywordBytes, _mayContainUtf16);
             if (!_hasStatic)
-                _hasStatic = ContainsAsciiTokenInCommonEncodings(bytes, CSharpStaticKeywordBytes);
+                _hasStatic = ContainsAsciiTokenInCommonEncodings(bytes, CSharpStaticKeywordBytes, _mayContainUtf16);
             if (!_hasAbstract)
-                _hasAbstract = ContainsAsciiTokenInCommonEncodings(bytes, CSharpAbstractKeywordBytes);
+                _hasAbstract = ContainsAsciiTokenInCommonEncodings(bytes, CSharpAbstractKeywordBytes, _mayContainUtf16);
             if (!_hasVirtual)
-                _hasVirtual = ContainsAsciiTokenInCommonEncodings(bytes, CSharpVirtualKeywordBytes);
+                _hasVirtual = ContainsAsciiTokenInCommonEncodings(bytes, CSharpVirtualKeywordBytes, _mayContainUtf16);
         }
 
         private void CaptureTail(ReadOnlySpan<byte> bytes)
@@ -216,11 +221,14 @@ internal static class CSharpStaticInterfacePrepass
         }
     }
 
-    private static bool ContainsAsciiTokenInCommonEncodings(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> token)
+    private static bool ContainsAsciiTokenInCommonEncodings(
+        ReadOnlySpan<byte> bytes,
+        ReadOnlySpan<byte> token,
+        bool mayContainUtf16)
     {
         if (bytes.IndexOf(token) >= 0)
             return true;
-        if (bytes.IndexOf((byte)0) < 0)
+        if (!mayContainUtf16)
             return false;
 
         return ContainsUtf16AsciiToken(bytes, token, littleEndian: true)
