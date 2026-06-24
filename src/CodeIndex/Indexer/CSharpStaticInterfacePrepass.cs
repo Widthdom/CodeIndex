@@ -321,7 +321,7 @@ internal static class CSharpStaticInterfacePrepass
         if (start < 0 || endExclusive <= start || endExclusive > masked.Length)
             return false;
 
-        var header = masked[start..endExclusive];
+        var header = masked.AsSpan(start, endExclusive - start);
         return ContainsCSharpWord(header, "static")
                && (ContainsCSharpWord(header, "abstract")
                    || ContainsCSharpWord(header, "virtual"));
@@ -550,14 +550,18 @@ internal static class CSharpStaticInterfacePrepass
                || ContainsCSharpWord(symbol.Signature!, "virtual"));
 
     private static bool ContainsCSharpWord(string text, string word)
+        => ContainsCSharpWord(text.AsSpan(), word);
+
+    private static bool ContainsCSharpWord(ReadOnlySpan<char> text, string word)
     {
         var index = 0;
         while (index < text.Length)
         {
-            index = text.IndexOf(word, index, StringComparison.Ordinal);
-            if (index < 0)
+            var found = text[index..].IndexOf(word.AsSpan(), StringComparison.Ordinal);
+            if (found < 0)
                 return false;
 
+            index += found;
             var before = index == 0 ? '\0' : text[index - 1];
             var afterIndex = index + word.Length;
             var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
