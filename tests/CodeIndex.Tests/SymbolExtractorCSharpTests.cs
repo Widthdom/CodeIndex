@@ -122,22 +122,22 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_QueryCommandRunnerFormattingMethodEndsBeforeNextCommand()
+    public void Extract_CSharp_QueryCommandRunnerLocationFormattingMethodEndsBeforeNextFormatter()
     {
         var source = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
             "src",
             "CodeIndex",
             "Cli",
-            "QueryCommandRunner.cs"));
+            "QueryCommandRunner.Locations.cs"));
 
         var symbols = SymbolExtractor.Extract(1, "csharp", source);
 
         var compactLocations = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WriteCompactLocations"));
-        var runGoto = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "RunGoto"));
+        var delimitedLocations = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WriteDelimitedLocations"));
         Assert.True(
-            compactLocations.EndLine < runGoto.StartLine,
-            $"WriteCompactLocations ended at line {compactLocations.EndLine}, but RunGoto starts at {runGoto.StartLine}.");
+            compactLocations.EndLine < delimitedLocations.StartLine,
+            $"WriteCompactLocations ended at line {compactLocations.EndLine}, but WriteDelimitedLocations starts at {delimitedLocations.StartLine}.");
     }
 
     [Fact]
