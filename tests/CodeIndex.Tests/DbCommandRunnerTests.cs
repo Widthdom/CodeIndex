@@ -843,11 +843,50 @@ public class DbCommandRunnerTests
             var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "--db", dbPath, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
-            Assert.Equal("20260623040506789", json.GetProperty("name").GetString());
+            var checkpointName = json.GetProperty("name").GetString();
+            Assert.NotNull(checkpointName);
+            Assert.StartsWith("20260623040506789-", checkpointName, StringComparison.Ordinal);
+            Assert.Equal(50, checkpointName.Length);
             var checkpointPath = json.GetProperty("checkpoint_path").GetString();
             Assert.NotNull(checkpointPath);
             var manifest = File.ReadAllText(Path.Combine(checkpointPath, "manifest.txt"));
             Assert.Contains($"created_at_utc={fixedTime:O}", manifest, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbCommandRunner.UtcNowForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointAutomaticNameAvoidsInjectedClockCollision_Issue3987()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_collision_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, 789, TimeSpan.Zero);
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+            DbCommandRunner.UtcNowForTesting = () => fixedTime;
+
+            var (firstExit, firstJson) = RunAndCaptureJson(["checkpoint", "--db", dbPath, "--json"]);
+            var (secondExit, secondJson) = RunAndCaptureJson(["checkpoint", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, firstExit);
+            Assert.Equal(CommandExitCodes.Success, secondExit);
+            var firstName = firstJson.GetProperty("name").GetString();
+            var secondName = secondJson.GetProperty("name").GetString();
+            Assert.NotNull(firstName);
+            Assert.NotNull(secondName);
+            Assert.StartsWith("20260623040506789-", firstName, StringComparison.Ordinal);
+            Assert.StartsWith("20260623040506789-", secondName, StringComparison.Ordinal);
+            Assert.NotEqual(firstName, secondName);
+            Assert.True(Directory.Exists(Path.Combine(dbPath + ".checkpoints", firstName)));
+            Assert.True(Directory.Exists(Path.Combine(dbPath + ".checkpoints", secondName)));
         }
         finally
         {

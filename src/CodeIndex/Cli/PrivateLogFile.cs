@@ -110,7 +110,12 @@ internal static class PrivateLogFile
             : string.Compare(left.FullName, right.FullName, StringComparison.Ordinal);
     }
 
-    internal static void PruneOldFiles(string directory, string pattern, int retainedFileCount, Action<PrivateLogFileDiagnostic>? diagnosticSink = null)
+    internal static void PruneOldFiles(
+        string directory,
+        string pattern,
+        int retainedFileCount,
+        Action<PrivateLogFileDiagnostic>? diagnosticSink = null,
+        Action<string>? deleteOverride = null)
     {
         try
         {
@@ -125,7 +130,12 @@ internal static class PrivateLogFile
             foreach (var file in directoryInfo.EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
             {
                 if (ShouldPruneFile(file, retainedPaths, retainedFiles, retainedFileCount))
-                    file.Delete();
+                {
+                    AtomicFileWriter.TryDeleteFile(
+                        file.FullName,
+                        ex => ReportDiagnostic(diagnosticSink, "prune_old_file_delete", file.FullName, ex),
+                        deleteOverride);
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

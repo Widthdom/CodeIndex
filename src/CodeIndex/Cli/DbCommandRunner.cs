@@ -146,7 +146,7 @@ public static class DbCommandRunner
     internal static string CreateAutomaticCheckpoint(string dbPath)
     {
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
-        var name = AutoCheckpointPrefix + GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        var name = AutoCheckpointPrefix + MakeTimestampCheckpointName();
         return CreateCheckpoint(fullDbPath, name).CheckpointPath;
     }
 
@@ -1572,7 +1572,9 @@ public static class DbCommandRunner
         => ConsoleUi.FormatBoundedValue(name, CheckpointNameDiagnosticTextLimit);
 
     private static string MakeTimestampCheckpointName()
-        => GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        => GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
+            + "-"
+            + Guid.NewGuid().ToString("N");
 
     private static string MakeRestorePathSuffix()
         => GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture)

@@ -123,6 +123,36 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void DeleteSpoolFile_DeleteFailureWarnsAndSuppresses_Issue3962()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("watch_spool_cleanup");
+        try
+        {
+            var spoolPath = Path.Combine(projectRoot, "cdidx-watch-subrun-test.jsonl");
+            File.WriteAllText(spoolPath, "{}");
+
+            var stderr = ConsoleCapture.CaptureError(() =>
+            {
+                var deleted = IndexWatchRunner.DeleteSpoolFileForTesting(
+                    spoolPath,
+                    _ => throw new IOException("delete denied"));
+
+                Assert.False(deleted);
+            });
+
+            Assert.True(File.Exists(spoolPath));
+            Assert.Contains("Warning [watch_spool_cleanup_failed]", stderr, StringComparison.Ordinal);
+            Assert.Contains(Path.GetFileName(spoolPath), stderr, StringComparison.Ordinal);
+            Assert.Contains("io", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FileChangeBatcher_Add_WhenPendingPathLimitExceeded_CollapsesToFullRescan()
     {
         var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
