@@ -2,6 +2,7 @@
 category: changed
 affected:
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.Checksum.cs
   - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
@@ -18,6 +19,7 @@ affected:
 - Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
+- Reused scan-time language data when update mode expands the C# static-interface workspace, reducing repeated language probes on expanded update sets.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -26,4 +28,5 @@ affected:
 - C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。
+- update mode が C# static-interface workspace を拡張するときも scan 時点の言語情報を再利用し、拡張された更新対象で language probe を繰り返さないようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

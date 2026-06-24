@@ -253,6 +253,31 @@ public static partial class IndexCommandRunner
             throw new IndexInterruptedException(updated + removed, targetPaths.Count);
         }
 
+        string ToUpdateAbsolutePath(string path)
+            => Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+
+        string ToUpdateRelativePath(string path)
+            => Path.IsPathRooted(path)
+                ? Path.GetRelativePath(projectRoot, path)
+                : path;
+
+        IEnumerable<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
+            IReadOnlyDictionary<string, string>? scannedLanguages)
+        {
+            foreach (var targetPath in targetPaths)
+            {
+                var absPath = ToUpdateAbsolutePath(targetPath);
+                string? language = null;
+                if (scannedLanguages != null && scannedLanguages.TryGetValue(absPath, out var scannedLanguage))
+                    language = scannedLanguage;
+
+                yield return CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+            }
+        }
+
+        IReadOnlyDictionary<string, string>? scannedUpdateLanguages = null;
         ThrowIfUpdateCancelled();
         WriteIndexJsonLiveness(options, "checking C# workspace contracts...");
         var csharpWorkspaceHeartbeat = StartIndexJsonPhaseHeartbeat(options, "checking C# workspace contracts");
@@ -262,8 +287,7 @@ public static partial class IndexCommandRunner
             csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                 writer,
                 indexer,
-                projectRoot,
-                targetPaths,
+                BuildCSharpPrepassTargets(scannedUpdateLanguages),
                 cancellationToken: cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -281,6 +305,7 @@ public static partial class IndexCommandRunner
             try
             {
                 var scanResult = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                scannedUpdateLanguages = scanResult.FileLanguages;
                 foreach (var filePath in scanResult.Files)
                 {
                     if (scanResult.FileLanguages.TryGetValue(filePath, out var language)
@@ -291,8 +316,7 @@ public static partial class IndexCommandRunner
                 csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
-                    projectRoot,
-                    targetPaths,
+                    BuildCSharpPrepassTargets(scannedUpdateLanguages),
                     cancellationToken: cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -328,12 +352,13 @@ public static partial class IndexCommandRunner
         using var symbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
         try
         {
-            foreach (var relPath in targetPaths)
+            foreach (var targetPath in targetPaths)
             {
                 ThrowIfUpdateCancelled();
                 StartUpdateSpinnerIfNeeded();
+                var relPath = ToUpdateRelativePath(targetPath);
                 currentUpdatePath = relPath;
-                var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
+                var absPath = ToUpdateAbsolutePath(targetPath);
                 var dbPath = FileIndexer.NormalizeIndexPath(relPath);
                 var fileBatchMarked = false;
                 try
@@ -602,7 +627,15 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var loaded = indexer.BuildLoadedRecordWithRawBytes(absPath, cancellationToken);
+                    string? knownLanguage = null;
+                    if (scannedUpdateLanguages != null && scannedUpdateLanguages.TryGetValue(absPath, out var scannedLanguage))
+                        knownLanguage = scannedLanguage;
+
+                    var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                        absPath,
+                        relPath,
+                        knownLanguage,
+                        cancellationToken);
                     var record = loaded.Record;
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
