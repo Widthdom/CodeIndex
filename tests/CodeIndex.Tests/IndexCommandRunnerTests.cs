@@ -12812,47 +12812,7 @@ public sealed class Caller
     }
 
     private static void DeleteDirectory(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-
-        ClearAttributes(path);
-
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            SqliteConnection.ClearAllPools();
-
-            try
-            {
-                Directory.Delete(path, recursive: true);
-                return;
-            }
-            catch (IOException) when (attempt < 4)
-            {
-                System.Threading.Thread.Sleep(100);
-                ClearAttributes(path);
-            }
-            catch (UnauthorizedAccessException) when (attempt < 4)
-            {
-                System.Threading.Thread.Sleep(100);
-                ClearAttributes(path);
-            }
-        }
-    }
-
-    private static void ClearAttributes(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-
-        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            File.SetAttributes(file, FileAttributes.Normal);
-
-        foreach (var dir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
-            File.SetAttributes(dir, FileAttributes.Normal);
-
-        File.SetAttributes(path, FileAttributes.Normal);
-    }
+        => TestProjectHelper.DeleteDirectory(path);
 
     [Fact]
     public void IndexLock_Acquire_OnPosix_WritesPrivateInfoFile()
