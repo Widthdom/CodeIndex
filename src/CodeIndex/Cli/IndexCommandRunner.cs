@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
@@ -412,19 +413,19 @@ public static partial class IndexCommandRunner
 
     private static IndexMemorySampleJsonResult CaptureMemorySample(string phase, Stopwatch stopwatch)
     {
-        var gcInfo = GC.GetGCMemoryInfo();
+        var snapshot = ProcessMemorySnapshot.Capture();
         return new IndexMemorySampleJsonResult
         {
             Phase = phase,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
-            HeapBytes = GC.GetTotalMemory(forceFullCollection: false),
-            TotalAllocatedBytes = GC.GetTotalAllocatedBytes(),
-            GcHeapSizeBytes = gcInfo.HeapSizeBytes,
-            FragmentedBytes = gcInfo.FragmentedBytes,
-            WorkingSetBytes = Process.GetCurrentProcess().WorkingSet64,
-            Gen0Collections = GC.CollectionCount(0),
-            Gen1Collections = GC.CollectionCount(1),
-            Gen2Collections = GC.CollectionCount(2),
+            HeapBytes = snapshot.HeapBytes,
+            TotalAllocatedBytes = snapshot.TotalAllocatedBytes,
+            GcHeapSizeBytes = snapshot.GcHeapSizeBytes,
+            FragmentedBytes = snapshot.FragmentedBytes,
+            WorkingSetBytes = snapshot.WorkingSetBytes,
+            Gen0Collections = snapshot.Gen0Collections,
+            Gen1Collections = snapshot.Gen1Collections,
+            Gen2Collections = snapshot.Gen2Collections,
         };
     }
 

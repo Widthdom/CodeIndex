@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
@@ -1265,15 +1266,15 @@ public sealed class StatusProcessMetrics
 
     public static StatusProcessMetrics Capture()
     {
-        var gcInfo = GC.GetGCMemoryInfo();
+        var snapshot = ProcessMemorySnapshot.Capture();
         return new StatusProcessMetrics
         {
-            HeapBytes = GC.GetTotalMemory(forceFullCollection: false),
-            GcHeapSizeBytes = gcInfo.HeapSizeBytes,
-            GcGen0Count = GC.CollectionCount(0),
-            GcGen1Count = GC.CollectionCount(1),
-            GcGen2Count = GC.CollectionCount(2),
-            WorkingSetBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
+            HeapBytes = snapshot.HeapBytes,
+            GcHeapSizeBytes = snapshot.GcHeapSizeBytes,
+            GcGen0Count = snapshot.Gen0Collections,
+            GcGen1Count = snapshot.Gen1Collections,
+            GcGen2Count = snapshot.Gen2Collections,
+            WorkingSetBytes = snapshot.WorkingSetBytes,
         };
     }
 }

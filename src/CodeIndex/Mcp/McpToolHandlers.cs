@@ -5572,14 +5572,14 @@ public partial class McpServer
 
     private static JsonObject CaptureMcpIndexMemorySample(string stage, Stopwatch stopwatch)
     {
-        using var process = Process.GetCurrentProcess();
+        var snapshot = ProcessMemorySnapshot.Capture();
         return new JsonObject
         {
             ["stage"] = stage,
             ["elapsed_ms"] = stopwatch.ElapsedMilliseconds,
-            ["managed_bytes"] = GC.GetTotalMemory(forceFullCollection: false),
-            ["working_set_bytes"] = process.WorkingSet64,
-            ["private_bytes"] = process.PrivateMemorySize64,
+            ["managed_bytes"] = snapshot.HeapBytes,
+            ["working_set_bytes"] = snapshot.WorkingSetBytes,
+            ["private_bytes"] = snapshot.PrivateBytes,
         };
     }
 
