@@ -90,7 +90,11 @@ internal sealed partial class FileContentLoader
             if (total > maxBytes)
                 return false;
 
-            AppendNormalizedChecksumBytes(hasher, buffer.AsSpan(0, read), ref pendingCarriageReturn);
+            var bytes = buffer.AsSpan(0, read);
+            if (!pendingCarriageReturn && bytes.IndexOf((byte)0x0D) < 0)
+                hasher.AppendData(bytes);
+            else
+                AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
         }
 
         FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
