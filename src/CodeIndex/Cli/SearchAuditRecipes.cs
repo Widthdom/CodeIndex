@@ -39,9 +39,12 @@ internal static class SearchAuditRecipes
         "DEVELOPER_GUIDE.md",
         "TESTING_GUIDE.md",
         "AGENT_GUIDE.md",
+        ".agent_harness/**",
+        ".claude/**",
         ".codex/**",
         ".github/**"
     ];
+    private static readonly string[] DefaultExecutableExcludeOriginsValue = [SearchMatchClassifier.HelpText];
     private static readonly SearchRecipeBroadCatchTaxonomyJsonResult BroadExceptionCatchTaxonomy = new(
         [
             new(
@@ -365,7 +368,8 @@ internal static class SearchAuditRecipes
                         "positive: placeholders, documentation, or explicit redaction helpers are usually lower-risk token mentions."
                     ],
                 }
-            ]),
+            ],
+            DefaultExecutableExcludeOriginsValue),
         SourceScopedRecipe(
             "auth-token-audit",
             "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
@@ -954,11 +958,26 @@ internal static class SearchAuditRecipes
     private static SearchAuditRecipe SourceScopedRecipe(
         string name,
         string description,
-        List<SearchAuditRecipeQuery> queries) => new(name, description, queries)
+        List<SearchAuditRecipeQuery> queries,
+        IReadOnlyList<string>? defaultExcludeOrigins = null) => new(name, description, ApplyDefaultQueryExcludeOrigins(queries, defaultExcludeOrigins))
         {
             DefaultPathPatterns = [.. DefaultSourcePathPatternsValue],
             DefaultExcludePaths = [.. DefaultSourceExcludePathsValue],
         };
+
+    private static List<SearchAuditRecipeQuery> ApplyDefaultQueryExcludeOrigins(
+        List<SearchAuditRecipeQuery> queries,
+        IReadOnlyList<string>? defaultExcludeOrigins)
+    {
+        if (defaultExcludeOrigins is null || defaultExcludeOrigins.Count == 0)
+            return queries;
+
+        return queries
+            .Select(query => query.MatchOrigins.Count == 0 && query.ExcludeOrigins.Count == 0
+                ? query with { ExcludeOrigins = [.. defaultExcludeOrigins] }
+                : query)
+            .ToList();
+    }
 
     private static SearchAuditRecipe AllScopedRecipe(
         string name,

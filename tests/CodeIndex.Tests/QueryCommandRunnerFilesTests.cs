@@ -2712,6 +2712,36 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_ExcludeTestsAppliesProductionSourceDefaults_Issue3918()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_exclude_tests_source_3918");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, ".agent_harness/command_guard_core.py", "python", "def guard_harness():\n    pass\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, ".claude/hooks/bash-guard.py", "python", "def bash_guard():\n    pass\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "class AppTests {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json=array", "--exclude-tests", "--limit", "10"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var files = document.RootElement.EnumerateArray().ToArray();
+            var file = Assert.Single(files);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/App.cs", file.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_JsonArray_ZeroResultsEmitsEmptyArray_Issue2993()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_json_array_zero");

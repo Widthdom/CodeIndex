@@ -1150,6 +1150,66 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_ExcludeTestsAppliesProductionSourceDefaults_Issue3918()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var harnessFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = ".agent_harness/command_guard_core.py",
+                    Lang = "python",
+                    Size = 80,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertSymbols(
+                [
+                    new SymbolRecord
+                    {
+                        FileId = harnessFileId,
+                        Kind = "function",
+                        Name = "guard_harness",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 2,
+                        Signature = "def guard_harness():",
+                        Visibility = "private",
+                    },
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--exclude-tests", "--limit", "10"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToList();
+            var query = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.All(symbols, symbol => Assert.StartsWith("src/", symbol.GetProperty("path").GetString(), StringComparison.Ordinal));
+            Assert.DoesNotContain(symbols, symbol => symbol.GetProperty("name").GetString() == "guard_harness");
+            Assert.Contains(query.GetProperty("effective_path").EnumerateArray(), path => path.GetString() == "src/**");
+            Assert.Contains(query.GetProperty("effective_exclude_path").EnumerateArray(), path => path.GetString() == ".agent_harness/**");
+            Assert.Contains(query.GetProperty("effective_exclude_path").EnumerateArray(), path => path.GetString() == ".claude/**");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonByBucketGroupsReturnedSymbolsByTaxonomyBucket()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
