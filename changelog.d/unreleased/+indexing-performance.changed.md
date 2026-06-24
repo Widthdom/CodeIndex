@@ -3,6 +3,7 @@ category: changed
 affected:
   - src/CodeIndex/Cli/IndexCommandRunner.DryRun.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
+  - src/CodeIndex/Cli/IndexFreshnessChecker.cs
   - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.Checksum.cs
@@ -30,6 +31,7 @@ affected:
 - Reused generated-code suppression decisions across unchanged-file checks and write paths in CLI update, full-scan, and MCP indexing.
 - Removed per-line string allocations from generated-code header detection, reducing allocation pressure during record construction.
 - Avoided string allocation while checking generated-code filename suffixes during record construction.
+- Reused scan-time language detection during `status --check` workspace freshness validation, avoiding duplicate language probes while hashing large workspaces.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -48,4 +50,5 @@ affected:
 - CLI update、full-scan、MCP index で generated-code suppression 判定を unchanged-file check と write path の間で再利用するようにしました。
 - generated-code header 判定で行ごとの string allocation を発生させず、record 構築中の allocation pressure を減らしました。
 - record 構築中の generated-code filename suffix 判定で string allocation を避けるようにしました。
+- `status --check` の workspace freshness validation でも scan 時点の language 判定を再利用し、大規模 workspace を hash する際の重複 language probe を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
