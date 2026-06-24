@@ -1467,6 +1467,9 @@ public static partial class IndexCommandRunner
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
 
+                    var generatedSuppressionIssue = item.GeneratedSuppressionChecked
+                        ? item.GeneratedSuppressionIssue
+                        : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     long? existingId = null;
                     if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                     {
@@ -1492,7 +1495,7 @@ public static partial class IndexCommandRunner
                         existingId = null;
                     }
                     if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
                     {
                         existingId = null;
                     }
@@ -1534,9 +1537,6 @@ public static partial class IndexCommandRunner
                             item.Content!,
                             item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!))
                         : ReassignChunkFileIds(item.Chunks, fileId);
-                    var generatedSuppressionIssue = item.GeneratedSuppressionChecked
-                        ? item.GeneratedSuppressionIssue
-                        : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
                         writer.InsertChunks(chunks, cancellationToken);

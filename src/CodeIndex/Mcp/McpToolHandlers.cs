@@ -6010,6 +6010,7 @@ public partial class McpServer
                 var record = loaded.Record;
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
+                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                 var existingId = writer.GetUnchangedFileId(
                     record.Path,
                     record.Modified,
@@ -6035,7 +6036,7 @@ public partial class McpServer
                     }
                 }
                 if (existingId != null
-                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
                 {
                     existingId = null;
                 }
@@ -6054,7 +6055,6 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
-                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                 if (generatedSuppressionIssue != null)
                 {
                     writer.InsertChunks(chunks, requestToken);

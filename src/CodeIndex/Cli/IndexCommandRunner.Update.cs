@@ -645,6 +645,7 @@ public static partial class IndexCommandRunner
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
+                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
 
                     if (warning != null && !options.Json && !options.Quiet)
                     {
@@ -672,7 +673,7 @@ public static partial class IndexCommandRunner
                         existingId = null;
                     }
                     if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
                     {
                         existingId = null;
                     }
@@ -714,7 +715,6 @@ public static partial class IndexCommandRunner
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                     var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
-                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
                         writer.InsertChunks(chunks, cancellationToken);
