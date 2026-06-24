@@ -792,6 +792,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchRecipeCompactResultJsonResult))]
 [JsonSerializable(typeof(SearchRecipeTopFileJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryListItemJsonResult))]
+[JsonSerializable(typeof(SearchRecipeGuardFilterJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryResultJsonResult))]
 [JsonSerializable(typeof(SearchRecipeRunJsonResult))]
 [JsonSerializable(typeof(SearchRecipeScopeJsonResult))]

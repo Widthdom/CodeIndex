@@ -889,6 +889,8 @@ public sealed class CompactSearchResult
     public List<string> MatchOrigins { get; set; } = [];
     public List<SearchMatchFacet> MatchFacets { get; set; } = [];
     public List<string> ResultKinds { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? RiskEvidence { get; set; }
     public bool TestFile { get; set; }
     public bool TestSymbol { get; set; }
     public bool TestFixture { get; set; }

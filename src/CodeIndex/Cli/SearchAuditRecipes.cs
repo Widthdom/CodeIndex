@@ -1,4 +1,5 @@
 using CodeIndex;
+using CodeIndex.Database;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -98,13 +99,27 @@ internal static class SearchAuditRecipes
                     "JsonDocument.Parse",
                     "Find direct JSON parsing calls that may need input size limits or streaming alternatives.",
                     ["audit", "bug"],
-                    "False positives include tests, deliberately bounded callers, and parsing of already-small generated payloads."),
+                    "False positives include tests, deliberately bounded callers, and parsing of already-small generated payloads.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: DOM parsing can materialize an entire payload and should have an upstream byte or depth bound.",
+                        "positive: generated payloads, fixed literals, and callers with explicit byte caps are usually lower risk."
+                    ],
+                },
                 new(
                     "full-materialization",
                     "ReadToEnd",
                     "Find full stream/string materialization that may need bounded reads or incremental processing.",
                     ["audit", "performance"],
-                    "False positives include bounded in-memory test fixtures and tiny diagnostic payloads."),
+                    "False positives include bounded in-memory test fixtures and tiny diagnostic payloads.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: whole stream or string content may be buffered before size or cancellation checks.",
+                        "positive: nearby bounded reader, byte cap, line cap, or tiny trusted source can explain intentional materialization."
+                    ],
+                },
                 new(
                     "file-read-all-text",
                     "File.ReadAllText",
@@ -122,13 +137,27 @@ internal static class SearchAuditRecipes
                     "int.MaxValue",
                     "Find sentinel or unbounded limit probes that may hide huge allocation or traversal paths.",
                     ["audit", "bug"],
-                    "False positives include defensive upper-bound constants that are never passed to allocation or query limits."),
+                    "False positives include defensive upper-bound constants that are never passed to allocation or query limits.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: sentinel limits can bypass practical allocation, traversal, or query bounds.",
+                        "positive: saturation helpers, explicit cap comments, or test-only ceiling probes often make the hit non-actionable."
+                    ],
+                },
                 new(
                     "raw-diagnostic-echo",
                     "ex.Message",
                     "Find raw exception-message echoes that may need redaction before CLI, JSON, MCP, or GitHub output.",
                     ["audit", "security"],
-                    "False positives include messages that are already sanitized by the surrounding writer."),
+                    "False positives include messages that are already sanitized by the surrounding writer.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw exception messages can carry absolute paths, command lines, SQL, or secret-like values into user-visible output.",
+                        "positive: DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or a dedicated sanitizer nearby is strong safe evidence."
+                    ],
+                },
                 new(
                     "cancellation-gap",
                     "CancellationToken.None",
@@ -138,11 +167,22 @@ internal static class SearchAuditRecipes
                 new(
                     "empty-catch-review",
                     "catch",
-                    "Find catch blocks that may be empty, overly broad, or swallowing diagnostic context.",
+                    "Find C# catch clauses that may be empty, overly broad, or swallowing diagnostic context.",
                     ["audit", "bug"],
-                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures.")
+                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures.",
+                    ExactSubstring: false)
                 {
                     MatchOrigins = ["code"],
+                    GuardFilters =
+                    [
+                        new(SearchGuardRole.Require, SearchGuardDirection.Before, "}"),
+                        new(SearchGuardRole.Require, SearchGuardDirection.After, "{")
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: broad or empty catch clauses can swallow recovery diagnostics or hide unexpected failures.",
+                        "positive: explicit rethrow, translation to a stable error contract, or documented best-effort cleanup can make a catch intentional."
+                    ],
                 },
                 new(
                     "broad-exception-catch",
@@ -159,7 +199,14 @@ internal static class SearchAuditRecipes
                     "ProcessStartInfo",
                     "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
                     ["audit", "security"],
-                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion."),
+                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: launch sites need review for UseShellExecute, WorkingDirectory, Environment mutation, and ArgumentList usage.",
+                        "positive: shared safe-launch wrappers and explicit ArgumentList setup usually lower risk compared with ad hoc Process.Start calls."
+                    ],
+                },
                 new(
                     "process-start-direct",
                     "Process.Start",
@@ -189,13 +236,60 @@ internal static class SearchAuditRecipes
                     "OrdinalIgnoreCase",
                     "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
                     ["audit", "portability"],
-                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains."),
+                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: path equality and path dictionaries may need the indexed filesystem case-sensitivity signal.",
+                        "positive: protocol tokens, option names, labels, header names, or language keywords are non-path domains."
+                    ],
+                },
                 new(
                     "regex-construction",
-                    "new Regex",
+                    "new Regex(",
                     "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
                     ["audit", "performance"],
-                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs.")
+                {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
+                    ],
+                },
+                new(
+                    "bounded-regex-alias",
+                    "using Regex = CodeIndex.Indexer.BoundedRegex",
+                    "Find files where `new Regex(...)` is backed by the repository bounded regex wrapper alias.",
+                    ["audit", "performance"],
+                    "This is positive evidence for regex-construction hits; still review whether the bounded wrapper receives trusted patterns and inputs.",
+                    ExactSubstring: true)
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: the Regex identifier aliases CodeIndex.Indexer.BoundedRegex, separating wrapper construction from raw BCL Regex.",
+                        "risk: alias evidence does not prove every regex input is small; check the matching construction site when the same file also appears in regex-construction."
+                    ],
+                },
+                new(
+                    "fully-qualified-regex-construction",
+                    "new System.Text.RegularExpressions.Regex",
+                    "Find fully qualified raw BCL regex construction that bypasses a bounded wrapper alias.",
+                    ["audit", "performance"],
+                    "False positives include tests and code that supplies explicit timeouts or RegexOptions.NonBacktracking.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
+                        "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
+                    ],
+                },
                 new(
                     "regex-timeout-handling",
                     "RegexMatchTimeoutException",
@@ -213,13 +307,27 @@ internal static class SearchAuditRecipes
                     "Authorization",
                     "Find authorization header or auth-boundary handling that may need redaction and egress review.",
                     ["audit", "security"],
-                    "False positives include documentation, tests, and already-redacted header-name-only handling."),
+                    "False positives include documentation, tests, and already-redacted header-name-only handling.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: HTTP Authorization header values and outbound auth boundaries need storage, redaction, and egress review.",
+                        "positive: SQL ALTER AUTHORIZATION, parser grammar, and header-name-only constants are usually structural false positives."
+                    ],
+                },
                 new(
                     "http-client-construction",
                     "new HttpClient",
                     "Find direct HTTP client construction that may need lifetime, timeout, and outbound-boundary review.",
                     ["audit", "security"],
-                    "False positives include tests, short-lived CLI probes with explicit timeouts, and shared factory wrappers."),
+                    "False positives include tests, short-lived CLI probes with explicit timeouts, and shared factory wrappers.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: ad hoc clients can miss timeout, handler lifetime, proxy, auth, or egress-boundary policy.",
+                        "positive: shared factories with explicit timeout and handler policy are lower-risk construction sites."
+                    ],
+                },
                 new(
                     "bearer-token-handling",
                     "Bearer",
@@ -247,6 +355,317 @@ internal static class SearchAuditRecipes
                     ["audit", "security"],
                     "False positives include documentation and tests; use the broad-token-audit recipe or an ad hoc `token` search when you intentionally need lexical-token coverage.",
                     ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: auth-token material can be logged, persisted, or forwarded across trust boundaries without redaction.",
+                        "positive: placeholders, documentation, or explicit redaction helpers are usually lower-risk token mentions."
+                    ],
+                }
+            ]),
+        SourceScopedRecipe(
+            "auth-token-audit",
+            "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
+            [
+                new(
+                    "bearer-token",
+                    "Bearer",
+                    "Find bearer token handling that may need source, storage, logging, and outbound request review.",
+                    ["audit", "security"],
+                    "False positives include examples, tests, and redacted token placeholders.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: bearer tokens often authorize outbound requests and should not be logged, cached, or persisted without policy.",
+                        "positive: redacted placeholders, sanitized diagnostics, and isolated test fixtures are usually lower risk."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "authorization-header",
+                    "Authorization",
+                    "Find authorization header construction and forwarding paths that may carry token material.",
+                    ["audit", "security"],
+                    "False positives include non-secret authorization enum names and documentation-only references.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: Authorization headers can propagate bearer or API tokens into logs, telemetry, redirects, or unintended hosts.",
+                        "positive: shared outbound clients with redaction, host allowlists, and sanitized diagnostics are safer evidence."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "github-token",
+                    "github token",
+                    "Find GitHub token handling without matching generic parser or cancellation token domains.",
+                    ["audit", "security"],
+                    "False positives include docs and examples that do not load, store, log, or transmit real tokens.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: GitHub tokens can grant repository or workflow access and need storage, scope, and logging review.",
+                        "positive: token-scope validation, secret providers, and redaction boundaries are useful safe evidence."
+                    ],
+                },
+                new(
+                    "api-token",
+                    "api token",
+                    "Find API token handling without broad lexical token noise.",
+                    ["audit", "security"],
+                    "False positives include documentation or placeholder examples that do not touch runtime secret material.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: API tokens can cross process, network, or persistence boundaries if not scoped and redacted.",
+                        "positive: secret-store loading, explicit scope validation, and sanitized output paths lower the risk."
+                    ],
+                },
+                new(
+                    "access-token",
+                    "access token",
+                    "Find access-token contexts that may need expiration, refresh, storage, or logging review.",
+                    ["audit", "security"],
+                    "False positives include auth protocol docs and redacted example payloads.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: access tokens usually have expiry and scope semantics that can be mishandled in caches or logs.",
+                        "positive: expiry-aware caches, refresh policy, and redacted serializers are useful safe evidence."
+                    ],
+                },
+                new(
+                    "token-secret",
+                    "token secret",
+                    "Find token-secret contexts where credential material may be produced, stored, or redacted.",
+                    ["audit", "security"],
+                    "False positives include labels or documentation that do not reference runtime token values.",
+                    ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: token secret paths often need source-of-truth, retention, and redaction review.",
+                        "positive: secret providers, short-lived values, and sanitized diagnostics are safer evidence."
+                    ],
+                }
+            ]),
+        SourceScopedRecipe(
+            "dogfood-risk-patterns",
+            "Focused audit searches for recurring risk patterns found while dogfooding cdidx.",
+            [
+                new(
+                    "exception-message-classifier",
+                    ".Message.Contains",
+                    "Find exception-message substring classifiers that may be brittle across runtimes, locales, and providers.",
+                    ["audit", "bug"],
+                    "False positives include test assertions and code that classifies already-normalized diagnostic codes.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: substring checks on exception messages can break across runtimes, localization, or provider versions.",
+                        "positive: typed exception properties, error codes, or normalized diagnostic classifiers are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "static-regex-api",
+                    "Regex.",
+                    "Find direct/static Regex API usage that may bypass BoundedRegex timeout policy.",
+                    ["audit", "performance", "security"],
+                    "False positives include BoundedRegex internals and tests that intentionally exercise raw Regex behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: static Regex APIs can run without explicit timeout or shared bounded-regex policy.",
+                        "positive: BoundedRegex wrappers, precompiled generated regex, or explicit timeout overloads are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "relaxed-json-encoder",
+                    "UnsafeRelaxedJsonEscaping",
+                    "Find relaxed JSON encoder usage that may need HTML/script embedding and downstream consumer review.",
+                    ["audit", "security"],
+                    "False positives include payloads that are never embedded in HTML, script, logs, or browser-visible contexts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: relaxed escaping can expose JSON to HTML/script or log-injection contexts if reused outside trusted boundaries.",
+                        "positive: machine-only payloads with explicit content-type and no HTML/script embedding are lower risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "temp-file-name",
+                    "GetTempFileName",
+                    "Find deterministic or pre-created temporary file names that may need race, retention, and overwrite review.",
+                    ["audit", "security"],
+                    "False positives include isolated test fixtures and immediately-opened handles with exclusive access.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: deterministic or pre-created temp names can create race, retention, or stale-file overwrite hazards.",
+                        "positive: random names opened atomically with exclusive access and cleanup policy are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "overwrite-file-move",
+                    "File.Move",
+                    "Find file moves that may overwrite or replace outputs without atomicity and destination policy review.",
+                    ["audit", "bug"],
+                    "False positives include test-only moves and callers that validate destination ownership, overwrite intent, and rollback behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: overwrite moves can clobber user data or leave partial state without atomic replacement and rollback policy.",
+                        "positive: explicit destination validation, backup/rollback, and same-volume atomic replace are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "suppressed-cleanup-diagnostics",
+                    "catch (Exception",
+                    "Find broad cleanup catches that may suppress diagnostics during best-effort cleanup.",
+                    ["audit", "bug"],
+                    "False positives include cleanup paths that intentionally log, aggregate, or surface suppressed failures.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: best-effort cleanup can hide root-cause failures when broad catches suppress diagnostics.",
+                        "positive: logging, aggregation, retry policy, or explicit non-critical cleanup comments reduce filing priority."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "wall-clock-deadline",
+                    "DateTime.UtcNow",
+                    "Find wall-clock time used in deadline or duration logic that may need monotonic time review.",
+                    ["audit", "bug"],
+                    "False positives include timestamps used only for display, logging, serialization, or durable metadata.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: wall-clock time can move backward or jump across clock adjustments, breaking deadlines and durations.",
+                        "positive: TimeProvider, Stopwatch, or monotonic clock helpers are safer evidence for elapsed-time logic."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "local-wall-clock-deadline",
+                    "DateTime.Now",
+                    "Find local wall-clock time used in deadline or duration logic that may need timezone and monotonicity review.",
+                    ["audit", "bug"],
+                    "False positives include display-only timestamps and UI formatting paths.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: local wall-clock time includes timezone and daylight-saving shifts in addition to clock jumps.",
+                        "positive: display-only formatting or TimeProvider-backed elapsed-time logic is lower risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "max-value-sentinel",
+                    "MaxValue",
+                    "Find sentinel maximum limits that may hide unbounded allocation, traversal, or query behavior.",
+                    ["audit", "bug"],
+                    "False positives include pure constants, saturation helpers, and tests that do not feed allocation or traversal limits.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: MaxValue sentinels can bypass practical bounds for allocation, traversal, timeout, or query limits.",
+                        "positive: explicit clamping, saturation helper names, or test-only probes are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "recipe-output-contract",
+                    "SearchRecipe",
+                    "Find search recipe output contract paths that may need schema, compact output, and issue-draft compatibility review.",
+                    ["audit"],
+                    "False positives include recipe metadata definitions and tests that intentionally assert contract behavior.")
+                {
+                    Severity = "low",
+                    RiskEvidence =
+                    [
+                        "risk: recipe contract changes can break JSON, compact, issue-draft, or downstream automation consumers.",
+                        "positive: source-generated JSON contracts and focused snapshot tests are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "raw-sql-command-text",
+                    "CommandText",
+                    "Find raw SQL command construction that may need parameterization and identifier interpolation review.",
+                    ["audit", "security"],
+                    "False positives include constant SQL text with parameterized values and trusted migration scripts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw SQL command text can interpolate identifiers, table names, or values without parameterization.",
+                        "positive: parameters for values and allowlisted identifier helpers are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "pragma-command",
+                    "PRAGMA",
+                    "Find SQLite PRAGMA usage that may need helper, transaction, and identifier policy review.",
+                    ["audit", "security"],
+                    "False positives include read-only PRAGMA probes with constant names and bounded diagnostics.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: PRAGMA helpers can bypass normal parameterization and alter connection or database-wide behavior.",
+                        "positive: constant PRAGMA names, allowlisted values, and isolated connection setup are safer evidence."
+                    ],
+                },
+                new(
+                    "environment-variable-parser",
+                    "GetEnvironmentVariable",
+                    "Find environment-variable option parsing that may silently fall back instead of warning on invalid values.",
+                    ["audit", "bug"],
+                    "False positives include required variables that fail closed and callers that report parse diagnostics.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: silent fallback can hide misspelled or invalid environment options in automation.",
+                        "positive: explicit warnings, parse diagnostics, or fail-closed behavior are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "plugin-activator",
+                    "Activator.CreateInstance",
+                    "Find plugin constructor paths that may need constructor side-effect and lifecycle review.",
+                    ["audit", "bug"],
+                    "False positives include trusted test fixtures and tightly controlled type allowlists.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: reflective construction can run plugin constructors with unexpected side effects or missing lifecycle hooks.",
+                        "positive: allowlisted types, explicit constructor contracts, and disposal/lifecycle handling are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "assembly-load-context",
+                    "AssemblyLoadContext",
+                    "Find plugin assembly load contexts that may need unloadability, retention, and dependency isolation review.",
+                    ["audit", "bug"],
+                    "False positives include tests that intentionally exercise load-context retention behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: retained AssemblyLoadContext references can prevent plugin unload or cross-plugin dependency isolation.",
+                        "positive: collectible contexts, weak-reference unload checks, and explicit disposal are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                }
             ]),
         SourceScopedRecipe(
             "json-parse-apis",
@@ -301,10 +720,50 @@ internal static class SearchAuditRecipes
                     "False positives include helper declarations; callers should prefer AddText/AddInt64/AddLimit/AddOffset wrappers for concrete value types."),
                 new(
                     "regex-construction",
-                    "new Regex",
+                    "new Regex(",
                     "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
                     ["audit", "performance"],
-                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs.")
+                {
+                    RejectFileQueries =
+                    [
+                        "using Regex = CodeIndex.Indexer.BoundedRegex"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
+                    ],
+                },
+                new(
+                    "bounded-regex-alias",
+                    "using Regex = CodeIndex.Indexer.BoundedRegex",
+                    "Find files where `new Regex(...)` is backed by the repository bounded regex wrapper alias.",
+                    ["audit", "performance"],
+                    "This is positive evidence for regex-construction hits; still review whether the bounded wrapper receives trusted patterns and inputs.",
+                    ExactSubstring: true)
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: the Regex identifier aliases CodeIndex.Indexer.BoundedRegex, separating wrapper construction from raw BCL Regex.",
+                        "risk: alias evidence does not prove every regex input is small; check the matching construction site when the same file also appears in regex-construction."
+                    ],
+                },
+                new(
+                    "fully-qualified-regex-construction",
+                    "new System.Text.RegularExpressions.Regex",
+                    "Find fully qualified raw BCL regex construction that bypasses a bounded wrapper alias.",
+                    ["audit", "performance"],
+                    "False positives include tests and code that supplies explicit timeouts or RegexOptions.NonBacktracking.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
+                        "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
+                    ],
+                },
                 new(
                     "cancellation-token-none",
                     "CancellationToken.None",
@@ -363,6 +822,25 @@ internal static class SearchAuditRecipes
                     "Find broad filesystem entry traversal that may need explicit exception handling and pruning policy.",
                     ["audit", "performance", "security"],
                     "False positives include isolated test cleanup and known-small directories."),
+                new(
+                    "enumerate-without-options",
+                    "Directory.Enumerate",
+                    "Find direct Directory.Enumerate* calls that do not have nearby EnumerationOptions evidence and may need traversal policy review.",
+                    ["audit", "performance", "security"],
+                    "False positives include known-small directories, already-budgeted traversal helpers, and wrappers that enforce cancellation or reparse-point policy.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: direct Directory.Enumerate* calls without nearby EnumerationOptions can inherit default recursion, inaccessible-path, and reparse-point behavior.",
+                        "positive: known-small directories, cancellation/budget checks, and shared traversal wrappers can explain intentional direct enumeration."
+                    ],
+                    GuardFilters =
+                    [
+                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "EnumerationOptions"),
+                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "EnumerationOptions")
+                    ],
+                    MatchOrigins = ["code"],
+                },
                 new(
                     "enumeration-options",
                     "EnumerationOptions",
@@ -425,7 +903,48 @@ internal static class SearchAuditRecipes
                     "Find every token mention when a broad token audit is explicitly requested.",
                     ["audit", "security"],
                     "This intentionally includes parser/tokenizer code, syntax tokens, LSP tokens, cancellation tokens, docs, and tests.",
+                    ExactSubstring: false),
+                new(
+                    "auth-token",
+                    "auth token",
+                    "Facet broad token audits to credential/auth-token material.",
+                    ["audit", "security"],
+                    "Use auth-token-audit for a source-scoped review that avoids parser, LSP, and cancellation-token domains.",
                     ExactSubstring: false)
+                {
+                    RiskEvidence =
+                    [
+                        "risk: auth-token material can cross logging, persistence, or outbound request boundaries.",
+                        "positive: redaction helpers and secret providers are strong safe evidence."
+                    ],
+                },
+                new(
+                    "parser-token",
+                    "SyntaxToken",
+                    "Facet broad token audits to parser or syntax-token domains that are usually not credential material.",
+                    ["audit"],
+                    "This is a negative-domain facet for separating parser/tokenizer noise from credential-token review.")
+                {
+                    Severity = "info",
+                },
+                new(
+                    "cancellation-token",
+                    "CancellationToken",
+                    "Facet broad token audits to cancellation-token domains that are usually control-flow, not credentials.",
+                    ["audit"],
+                    "This is a negative-domain facet for separating cancellation plumbing from credential-token review.")
+                {
+                    Severity = "info",
+                },
+                new(
+                    "lsp-token",
+                    "SemanticToken",
+                    "Facet broad token audits to LSP semantic-token domains that are usually protocol data, not credentials.",
+                    ["audit"],
+                    "This is a negative-domain facet for separating LSP protocol token data from credential-token review.")
+                {
+                    Severity = "info",
+                }
             ])
     ];
 
@@ -917,6 +1436,9 @@ internal sealed record SearchAuditRecipeQuery(
     bool ExactSubstring = true)
 {
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
+    public List<string> RiskEvidence { get; init; } = [];
+    public List<SearchGuardFilter> GuardFilters { get; init; } = [];
+    public List<string> RejectFileQueries { get; init; } = [];
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public List<string> MatchOrigins { get; init; } = [];
@@ -965,6 +1487,8 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("guard_filters")] List<SearchRecipeGuardFilterJsonResult> GuardFilters,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
@@ -975,6 +1499,12 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
+
+internal sealed record SearchRecipeGuardFilterJsonResult(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("direction")] string Direction,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("option")] string Option);
 
 internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
     [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,
@@ -1029,6 +1559,8 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("guard_filters")] List<SearchRecipeGuardFilterJsonResult> GuardFilters,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
@@ -1061,6 +1593,8 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
+    [property: JsonPropertyName("guard_filters")] List<SearchRecipeGuardFilterJsonResult> GuardFilters,
     [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
     [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
@@ -1085,6 +1619,7 @@ internal sealed record SearchRecipeCompactResultJsonResult(
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("lang")] string? Lang,
     [property: JsonPropertyName("visibility")] string? Visibility,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("chunk_start_line")] int ChunkStartLine,
     [property: JsonPropertyName("chunk_end_line")] int ChunkEndLine,
     [property: JsonPropertyName("match_lines")] List<int> MatchLines,
@@ -1117,6 +1652,7 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("risk_evidence")] List<string> RiskEvidence,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("result_count")] int ResultCount);
 
