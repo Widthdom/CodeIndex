@@ -45,7 +45,9 @@ public class CiWorkflowTests
         Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);
         Assert.Contains("TestResults/**/*.dump", workflow);
-        Assert.Contains("always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
+        Assert.Contains("\"collect_coverage=$collectCoverageText\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
+        Assert.Contains("if: always() && steps.test.outputs.collect_coverage == 'true'", workflow);
+        Assert.DoesNotContain("always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
         Assert.DoesNotContain("always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')", workflow);
     }
 
