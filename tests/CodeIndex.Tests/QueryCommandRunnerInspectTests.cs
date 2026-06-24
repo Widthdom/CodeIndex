@@ -735,7 +735,10 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(JsonValueKind.Null, definition.GetProperty("body_content").ValueKind);
+            Assert.False(definition.TryGetProperty("content", out _));
+            Assert.False(definition.TryGetProperty("body_content", out _));
+            Assert.True(definition.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("inspect_body_not_requested", definition.GetProperty("content_omitted_reason").GetString());
             Assert.False(bodyMode.GetProperty("include_body").GetBoolean());
             Assert.False(bodyMode.GetProperty("definitions_only").GetBoolean());
             Assert.False(bodyMode.GetProperty("body_content_present").GetBoolean());
