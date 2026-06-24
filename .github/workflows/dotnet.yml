@@ -220,7 +220,6 @@ jobs:
           $primaryLane = "${{ matrix.os }}" -eq "ubuntu-latest" -and "${{ matrix.test-framework }}" -eq "net8.0"
           $primaryLaneText = if ($primaryLane) { "true" } else { "false" }
           "primary_lane=$primaryLaneText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "collect_coverage=$primaryLaneText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Audit NuGet package vulnerabilities
         if: steps.lane.outputs.primary_lane == 'true'
@@ -271,7 +270,7 @@ jobs:
             "--results-directory", "./TestResults"
           )
 
-          $collectCoverage = "${{ steps.lane.outputs.collect_coverage }}" -eq "true"
+          $collectCoverage = "${{ steps.lane.outputs.primary_lane }}" -eq "true"
           if ($collectCoverage) {
             $testArgs += @("--collect", "XPlat Code Coverage")
           } else {
@@ -346,7 +345,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && steps.lane.outputs.collect_coverage == 'true'
+        if: always() && steps.lane.outputs.primary_lane == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}

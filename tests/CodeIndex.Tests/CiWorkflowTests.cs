@@ -18,9 +18,7 @@ public class CiWorkflowTests
         Assert.Contains(
             "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
             workflow);
-        Assert.Contains(
-            "\"collect_coverage=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
-            workflow);
+        Assert.DoesNotContain("collect_coverage", workflow);
         Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
@@ -33,7 +31,7 @@ public class CiWorkflowTests
             "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
             normalizedWorkflow);
         Assert.Contains(
-            "$collectCoverage = \"${{ steps.lane.outputs.collect_coverage }}\" -eq \"true\"",
+            "$collectCoverage = \"${{ steps.lane.outputs.primary_lane }}\" -eq \"true\"",
             workflow);
         Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-latest/net8.0", workflow);
         Assert.Contains("--blame-crash", workflow);
@@ -60,7 +58,7 @@ public class CiWorkflowTests
         Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);
         Assert.Contains("TestResults/**/*.dump", workflow);
-        Assert.Contains("if: always() && steps.lane.outputs.collect_coverage == 'true'", workflow);
+        Assert.Contains("if: always() && steps.lane.outputs.primary_lane == 'true'", workflow);
         Assert.Contains(
             "- name: Publish\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
