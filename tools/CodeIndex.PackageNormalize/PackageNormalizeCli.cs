@@ -411,6 +411,44 @@ internal static class PackageNormalizeRewriteFile
         }
     }
 
+    internal static void DeleteStaleLegacyTempFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+
+            using (new FileStream(
+                path,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.Read,
+                    Share = FileShare.None,
+                    Options = FileOptions.DeleteOnClose,
+                }))
+            {
+            }
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw BuildLegacyTempCleanupException(path, ex);
+        }
+    }
+
+    private static InvalidOperationException BuildLegacyTempCleanupException(string path, Exception inner)
+    {
+        return new InvalidOperationException(
+            $"Temporary normalized package {PackageNormalizeDiagnostics.FormatPath(path)} already exists but could not be locked and removed; aborting normalization to avoid racing another package normalizer.",
+            inner);
+    }
+
     private static void FlushParentDirectoryAfterReplace(string path)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
@@ -469,6 +507,7 @@ public static class PackageCorePropertiesNormalizer
 {
     public const string CanonicalCorePropertiesPath = "package/services/metadata/core-properties/core-properties.psmdcp";
 
+    private const string LegacyTempSuffix = ".normalize-tmp";
     private const int SafeExternalAttributes = 0;
     private const int DosAttributeMask = 0xFF;
     private const int DosArchiveAttribute = 0x20;
@@ -529,12 +568,15 @@ public static class PackageCorePropertiesNormalizer
         cancellationToken.ThrowIfCancellationRequested();
 
         var fullPath = Path.GetFullPath(packagePath);
+        var legacyTempPath = fullPath + LegacyTempSuffix;
         var tempPath = PackageNormalizeRewriteFile.BuildTempPath(fullPath);
         var tempCreated = false;
         var completed = false;
 
         try
         {
+            PackageNormalizeRewriteFile.DeleteStaleLegacyTempFile(legacyTempPath);
+
             using (var sourceStream = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false))
             {

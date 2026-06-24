@@ -221,6 +221,15 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(0, root.GetProperty("http_concurrent_handler_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_request_queue_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_event_stream_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_event_stream_drop_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_missing_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_ambiguous_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_wrong_scheme_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_malformed_token_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_oversized_token_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_wrong_token_count").GetInt64());
         Assert.False(root.GetProperty("http_auth_required").GetBoolean());
         Assert.True(root.GetProperty("http_auth_disabled").GetBoolean());
         Assert.Equal(
@@ -251,6 +260,31 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(1, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
         Assert.Equal("test abort cleanup:io_error:IOException", root.GetProperty("http_response_abort_cleanup_last_error").GetString());
         Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", root.GetProperty("http_response_close_cleanup_last_error").GetString());
+    }
+
+    [Fact]
+    public async Task HttpTransport_Healthz_ReportsEventStreamDropReasons_Issue3966()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        harness.SetKeepAlive(
+            TimeSpan.FromMilliseconds(1),
+            () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes + 1));
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.EventStreamDropCount > 0, "event stream drop counter");
+
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
+        Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
     }
 
     [Fact]
@@ -1350,6 +1384,83 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_Healthz_ReportsAuthDenialClassesWithoutChangingWireResponse_Issue3966()
+    {
+        const string token = "s3cret-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+
+        using (var request = CreatePostRequest())
+        {
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", new[] { $"Bearer {token}", $"Bearer {token}" });
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", "Basic abc");
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token);
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation(
+                "Authorization",
+                "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrong-token");
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using var healthRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(harness.Endpoint), "healthz"));
+        healthRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var healthResponse = await client.SendAsync(healthRequest);
+
+        Assert.Equal(HttpStatusCode.OK, healthResponse.StatusCode);
+        var body = await healthResponse.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal(6, root.GetProperty("http_auth_denial_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_missing_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_ambiguous_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_wrong_scheme_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_malformed_token_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_oversized_token_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_wrong_token_count").GetInt64());
+        Assert.Equal(HttpMcpTransport.AuthDenialWrongToken, root.GetProperty("http_auth_denial_last_reason").GetString());
+
+        HttpRequestMessage CreatePostRequest()
+            => new(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+            };
+
+        static async Task AssertUnauthorizedAsync(HttpClient client, HttpRequestMessage request)
+        {
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+            Assert.Equal("Missing or invalid bearer token.\n", await response.Content.ReadAsStringAsync());
+        }
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestLogger_DetailedAuthOutcomeRequiresUnsafeDebug_Issue3469()
     {
         using var env = EnvironmentVariableScope.Capture(McpServer.DebugEnvironmentVariable);
@@ -1610,6 +1721,8 @@ public class HttpMcpTransportTests : IDisposable
         public bool HasEventStreams => _transport.HasEventStreams;
 
         public int EventStreamCount => _transport.EventStreamCount;
+
+        public long EventStreamDropCount => _transport.EventStreamDropCount;
 
         public long RequestLogDroppedCount => _transport.RequestLogDroppedCount;
 

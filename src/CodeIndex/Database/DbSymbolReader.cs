@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
@@ -1048,120 +1049,131 @@ public partial class DbReader
 
         foreach (var symbol in symbols)
         {
-            var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
-            if (definitionExcerpt == null)
-                continue;
-
-            string? bodyContent = null;
-            int? bodyContentStartLine = null;
-            int? bodyContentEndLine = null;
-            int? bodyContentNextStartLine = null;
-            var bodyContentTruncated = false;
-            int? bodyRequestedStartLine = null;
-            int? bodyRequestedEndLine = null;
-            int? bodyEffectiveStartLine = null;
-            int? bodyEffectiveEndLine = null;
-            var bodyContentTruncationReasons = new List<string>();
-            ExcerptRecoveryHint? bodyContentRecovery = null;
-            if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-            {
-                var requestedBodyLines = Math.Clamp(
-                    bodyLineCount ?? DefinitionBodyMaxLines,
-                    1,
-                    DefinitionBodyMaxRequestedLines);
-                var effectiveBodyStartLine = Math.Clamp(
-                    bodyStartLine ?? symbol.BodyStartLine.Value,
-                    symbol.BodyStartLine.Value,
-                    symbol.BodyEndLine.Value);
-                var cappedBodyEndLine = Math.Min(
-                    symbol.BodyEndLine.Value,
-                    effectiveBodyStartLine + requestedBodyLines - 1);
-                var bodyExcerpt = GetExcerpt(symbol.Path, effectiveBodyStartLine, cappedBodyEndLine);
-                if (bodyExcerpt != null)
-                {
-                    bodyRequestedStartLine = symbol.BodyStartLine.Value;
-                    bodyRequestedEndLine = symbol.BodyEndLine.Value;
-                    bodyEffectiveStartLine = bodyExcerpt.StartLine;
-                    bodyEffectiveEndLine = bodyExcerpt.EndLine;
-                    bodyContent = bodyExcerpt.Content;
-                    bodyContentStartLine = bodyExcerpt.StartLine;
-                    bodyContentEndLine = bodyExcerpt.EndLine;
-                    bodyContentTruncationReasons.AddRange(bodyExcerpt.ContentTruncationReasons);
-                    bodyContentRecovery = bodyExcerpt.ContentRecovery;
-                    if (cappedBodyEndLine < symbol.BodyEndLine.Value)
-                    {
-                        bodyContentTruncated = true;
-                        AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_line_cap");
-                        var recoveryStartLine = cappedBodyEndLine + 1;
-                        var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
-                        bodyContentNextStartLine = recoveryStartLine;
-                        bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
-                    }
-                    bodyContentTruncated |= bodyExcerpt.ContentTruncated;
-                    var byteClamp = ClampDefinitionBodyBytes(bodyContent);
-                    bodyContent = byteClamp.Content;
-                    if (byteClamp.Truncated)
-                    {
-                        bodyContentTruncated = true;
-                        AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_byte_cap");
-                        if (byteClamp.ReturnedLineCount > 0)
-                        {
-                            bodyContentEndLine = Math.Min(
-                                bodyExcerpt.EndLine,
-                                bodyExcerpt.StartLine + byteClamp.ReturnedLineCount - 1);
-                            var nextStartLine = bodyContentEndLine.Value + 1;
-                            if (nextStartLine <= symbol.BodyEndLine.Value)
-                                bodyContentNextStartLine = nextStartLine;
-                        }
-                        else
-                        {
-                            bodyContentEndLine = bodyExcerpt.StartLine;
-                            var nextStartLine = bodyExcerpt.StartLine + 1;
-                            if (nextStartLine <= symbol.BodyEndLine.Value)
-                                bodyContentNextStartLine = nextStartLine;
-                        }
-                        bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
-                    }
-                }
-            }
-
-            results.Add(new DefinitionResult
-            {
-                Path = symbol.Path,
-                Lang = symbol.Lang,
-                Kind = symbol.Kind,
-                SubKind = symbol.SubKind,
-                Name = symbol.Name,
-                Line = symbol.Line,
-                StartLine = symbol.StartLine,
-                EndLine = symbol.EndLine,
-                BodyStartLine = symbol.BodyStartLine,
-                BodyEndLine = symbol.BodyEndLine,
-                Signature = symbol.Signature,
-                ContainerKind = symbol.ContainerKind,
-                ContainerName = symbol.ContainerName,
-                Visibility = symbol.Visibility,
-                ReturnType = symbol.ReturnType,
-                Disambiguator = BuildDefinitionDisambiguator(symbol),
-                Content = definitionExcerpt.Content,
-                BodyContent = bodyContent,
-                BodyContentStartLine = bodyContentStartLine,
-                BodyContentEndLine = bodyContentEndLine,
-                BodyContentNextStartLine = bodyContentNextStartLine,
-                BodyContentTruncated = bodyContentTruncated,
-                BodyRequestedStartLine = bodyRequestedStartLine,
-                BodyRequestedEndLine = bodyRequestedEndLine,
-                BodyEffectiveStartLine = bodyEffectiveStartLine,
-                BodyEffectiveEndLine = bodyEffectiveEndLine,
-                BodyContentTruncationReasons = bodyContentTruncationReasons.Count > 0 ? bodyContentTruncationReasons : null,
-                BodyContentRecovery = bodyContentRecovery,
-                Complexity = bodyContent != null && !bodyContentTruncated
-                    ? SymbolExtractor.EstimateComplexity(bodyContent)
-                    : null,
-            });
+            var definition = BuildDefinitionResult(symbol, includeBody, bodyStartLine, bodyLineCount);
+            if (definition != null)
+                results.Add(definition);
         }
 
         return results;
+    }
+
+    private DefinitionResult? BuildDefinitionResult(
+        SymbolResult symbol,
+        bool includeBody,
+        int? bodyStartLine = null,
+        int? bodyLineCount = null)
+    {
+        var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
+        if (definitionExcerpt == null)
+            return null;
+
+        string? bodyContent = null;
+        int? bodyContentStartLine = null;
+        int? bodyContentEndLine = null;
+        int? bodyContentNextStartLine = null;
+        var bodyContentTruncated = false;
+        int? bodyRequestedStartLine = null;
+        int? bodyRequestedEndLine = null;
+        int? bodyEffectiveStartLine = null;
+        int? bodyEffectiveEndLine = null;
+        var bodyContentTruncationReasons = new List<string>();
+        ExcerptRecoveryHint? bodyContentRecovery = null;
+        if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+        {
+            var requestedBodyLines = Math.Clamp(
+                bodyLineCount ?? DefinitionBodyMaxLines,
+                1,
+                DefinitionBodyMaxRequestedLines);
+            var effectiveBodyStartLine = Math.Clamp(
+                bodyStartLine ?? symbol.BodyStartLine.Value,
+                symbol.BodyStartLine.Value,
+                symbol.BodyEndLine.Value);
+            var cappedBodyEndLine = Math.Min(
+                symbol.BodyEndLine.Value,
+                effectiveBodyStartLine + requestedBodyLines - 1);
+            var bodyExcerpt = GetExcerpt(symbol.Path, effectiveBodyStartLine, cappedBodyEndLine);
+            if (bodyExcerpt != null)
+            {
+                bodyRequestedStartLine = symbol.BodyStartLine.Value;
+                bodyRequestedEndLine = symbol.BodyEndLine.Value;
+                bodyEffectiveStartLine = bodyExcerpt.StartLine;
+                bodyEffectiveEndLine = bodyExcerpt.EndLine;
+                bodyContent = bodyExcerpt.Content;
+                bodyContentStartLine = bodyExcerpt.StartLine;
+                bodyContentEndLine = bodyExcerpt.EndLine;
+                bodyContentTruncationReasons.AddRange(bodyExcerpt.ContentTruncationReasons);
+                bodyContentRecovery = bodyExcerpt.ContentRecovery;
+                if (cappedBodyEndLine < symbol.BodyEndLine.Value)
+                {
+                    bodyContentTruncated = true;
+                    AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_line_cap");
+                    var recoveryStartLine = cappedBodyEndLine + 1;
+                    var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
+                    bodyContentNextStartLine = recoveryStartLine;
+                    bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
+                }
+                bodyContentTruncated |= bodyExcerpt.ContentTruncated;
+                var byteClamp = ClampDefinitionBodyBytes(bodyContent);
+                bodyContent = byteClamp.Content;
+                if (byteClamp.Truncated)
+                {
+                    bodyContentTruncated = true;
+                    AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_byte_cap");
+                    if (byteClamp.ReturnedLineCount > 0)
+                    {
+                        bodyContentEndLine = Math.Min(
+                            bodyExcerpt.EndLine,
+                            bodyExcerpt.StartLine + byteClamp.ReturnedLineCount - 1);
+                        var nextStartLine = bodyContentEndLine.Value + 1;
+                        if (nextStartLine <= symbol.BodyEndLine.Value)
+                            bodyContentNextStartLine = nextStartLine;
+                    }
+                    else
+                    {
+                        bodyContentEndLine = bodyExcerpt.StartLine;
+                        var nextStartLine = bodyExcerpt.StartLine + 1;
+                        if (nextStartLine <= symbol.BodyEndLine.Value)
+                            bodyContentNextStartLine = nextStartLine;
+                    }
+                    bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
+                }
+            }
+        }
+
+        return new DefinitionResult
+        {
+            Path = symbol.Path,
+            Lang = symbol.Lang,
+            Kind = symbol.Kind,
+            SubKind = symbol.SubKind,
+            Name = symbol.Name,
+            Line = symbol.Line,
+            StartLine = symbol.StartLine,
+            EndLine = symbol.EndLine,
+            BodyStartLine = symbol.BodyStartLine,
+            BodyEndLine = symbol.BodyEndLine,
+            Signature = symbol.Signature,
+            ContainerKind = symbol.ContainerKind,
+            ContainerName = symbol.ContainerName,
+            Visibility = symbol.Visibility,
+            ReturnType = symbol.ReturnType,
+            Disambiguator = BuildDefinitionDisambiguator(symbol),
+            Content = definitionExcerpt.Content,
+            BodyContent = bodyContent,
+            BodyContentStartLine = bodyContentStartLine,
+            BodyContentEndLine = bodyContentEndLine,
+            BodyContentNextStartLine = bodyContentNextStartLine,
+            BodyContentTruncated = bodyContentTruncated,
+            BodyRequestedStartLine = bodyRequestedStartLine,
+            BodyRequestedEndLine = bodyRequestedEndLine,
+            BodyEffectiveStartLine = bodyEffectiveStartLine,
+            BodyEffectiveEndLine = bodyEffectiveEndLine,
+            BodyContentTruncationReasons = bodyContentTruncationReasons.Count > 0 ? bodyContentTruncationReasons : null,
+            BodyContentRecovery = bodyContentRecovery,
+            Complexity = bodyContent != null && !bodyContentTruncated
+                ? SymbolExtractor.EstimateComplexity(bodyContent)
+                : null,
+        };
     }
 
     private static void AddBodyContentTruncationReason(List<string> reasons, string reason)
@@ -1688,6 +1700,160 @@ public partial class DbReader
 
         return results;
     }
+
+    public SymbolAnalysisResult AnalyzeFileLine(
+        string path,
+        int line,
+        int limit = 10,
+        string? lang = null,
+        bool includeBody = false,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth,
+        int? bodyStartLine = null,
+        int? bodyLineCount = null,
+        string? kind = null)
+    {
+        lang = DbReader.NormalizeQueryLanguage(lang);
+        using var txn = _conn.BeginTransaction(deferred: true);
+
+        var query = $"{path}:{line.ToString(CultureInfo.InvariantCulture)}";
+        var file = GetFileByPath(path);
+        var freshness = GetWorkspaceFreshness();
+        var graphLanguage = lang ?? file?.Lang;
+        List<SymbolResult> symbolsAtLine = file == null
+            ? []
+            : GetSymbolsAtLine(path, line, Math.Max(limit, 1), kind, lang);
+        var primarySymbol = symbolsAtLine.FirstOrDefault();
+        var primaryLineDefinition = primarySymbol == null
+            ? null
+            : BuildDefinitionResult(primarySymbol, includeBody, bodyStartLine, bodyLineCount);
+        List<DefinitionResult> definitions = primaryLineDefinition == null ? [] : [primaryLineDefinition];
+        var primaryDefinition = definitions.FirstOrDefault();
+        var hasSupportedGraphDefinition = primaryDefinition != null
+            && ReferenceExtractor.SupportsSymbolGraph(primaryDefinition.Lang, primaryDefinition.Kind, primaryDefinition.ContainerKind) == true;
+        var baseGraphSupported = graphLanguage == null
+            ? (bool?)null
+            : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            baseGraphSupported,
+            hasUnsupportedEnumMember: false,
+            hasSupportedGraphDefinition);
+        var references = primaryDefinition != null
+            ? SearchReferences(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth)
+            : [];
+        var callers = primaryDefinition != null
+            ? GetCallers(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+            : [];
+        var callees = primaryDefinition != null
+            ? GetCallees(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+            : [];
+        var nearbySymbols = file != null
+            ? GetNearbySymbols(
+                path,
+                line,
+                Math.Min(limit, 10),
+                primaryDefinition?.Name,
+                primaryDefinition?.StartLine)
+            : [];
+        ApplyQueryOutputSignatureLimits(definitions);
+        ApplyQueryOutputSignatureLimits(nearbySymbols);
+
+        var result = new SymbolAnalysisResult
+        {
+            Query = query,
+            File = file,
+            WorkspaceIndexedAt = freshness.IndexedAt,
+            WorkspaceLatestModified = freshness.LatestModified,
+            GraphLanguage = graphLanguage,
+            GraphSupported = baseGraphSupported,
+            GraphSupportReason = graphSupportReason,
+            Definitions = definitions,
+            NearbySymbols = nearbySymbols,
+            References = references,
+            Callers = callers,
+            Callees = callees,
+            GraphTableAvailable = _hasReferencesTable,
+        };
+        txn.Commit();
+        return result;
+    }
+
+    private List<SymbolResult> GetSymbolsAtLine(string path, int line, int limit, string? kind, string? lang)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var startLineSql = GetSymbolColumnSql("start_line", "s.line");
+        var endLineSql = GetSymbolColumnSql("end_line", "s.line");
+        var bodyStartLineSql = GetSymbolColumnSql("body_start_line");
+        var bodyEndLineSql = GetSymbolColumnSql("body_end_line");
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {startLineSql} AS start_line,
+                   {endLineSql} AS end_line,
+                   {bodyStartLineSql} AS body_start_line,
+                   {bodyEndLineSql} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND @line BETWEEN {startLineSql} AND {endLineSql}";
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        sql += $@"
+            ORDER BY
+                CASE WHEN {startLineSql} = @line THEN 0 ELSE 1 END,
+                ({endLineSql} - {startLineSql}),
+                CASE WHEN {bodyStartLineSql} IS NOT NULL
+                       AND {bodyEndLineSql} IS NOT NULL
+                       AND @line BETWEEN {bodyStartLineSql} AND {bodyEndLineSql}
+                     THEN 0 ELSE 1 END,
+                {startLineSql} DESC
+            LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@line", line);
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+
+        var results = new List<SymbolResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            results.Add(ReadSymbolResult(reader));
+
+        return results;
+    }
+
+    private static SymbolResult ReadSymbolResult(SqliteDataReader reader)
+        => new()
+        {
+            Path = reader.GetString(0),
+            Lang = GetNullableString(reader, 1),
+            Kind = reader.GetString(2),
+            Name = reader.GetString(3),
+            Line = reader.GetInt32(4),
+            StartLine = GetInt32OrFallback(reader, 5, 4),
+            EndLine = GetInt32OrFallback(reader, 6, 4),
+            BodyStartLine = GetNullableInt32(reader, 7),
+            BodyEndLine = GetNullableInt32(reader, 8),
+            Signature = GetNullableString(reader, 9),
+            ContainerKind = GetNullableString(reader, 10),
+            ContainerName = GetNullableString(reader, 11),
+            Visibility = GetNullableString(reader, 12),
+            ReturnType = GetNullableString(reader, 13),
+        };
 
     /// <summary>
     /// Bundle definition, graph, and local file context for one symbol query.

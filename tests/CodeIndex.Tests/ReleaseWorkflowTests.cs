@@ -228,19 +228,19 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
-    public void PackageNormalizer_PreservesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3961()
+    public void PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_PreservesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3961));
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996));
         try
         {
             var packagePath = Path.Combine(projectRoot, "rewrite.nupkg");
             var legacyTempPath = packagePath + ".normalize-tmp";
             CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            File.WriteAllText(legacyTempPath, "do not delete", Encoding.UTF8);
+            File.WriteAllText(legacyTempPath, "stale temp", Encoding.UTF8);
 
             PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
 
-            Assert.Equal("do not delete", File.ReadAllText(legacyTempPath, Encoding.UTF8));
+            Assert.False(File.Exists(legacyTempPath));
             Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-normalize-*.tmp"));
 
             using var archive = ZipFile.OpenRead(packagePath);
@@ -546,6 +546,100 @@ public class ReleaseWorkflowTests
             Assert.Contains(".cdidx-normalize-cleanup-warning.", warning);
             Assert.DoesNotContain(projectRoot, warning);
             Assert.DoesNotContain("/private/path", warning);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "legacy-temp.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "stale temp");
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            Assert.False(File.Exists(legacyTempPath));
+            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "locked-legacy.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "active legacy temp");
+
+            using var lockedLegacyTemp = new FileStream(
+                legacyTempPath,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.ReadWrite,
+                    Share = FileShare.None,
+                });
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+
+            Assert.Contains("could not be locked and removed", exception.Message);
+            Assert.Contains("locked-legacy.nupkg.normalize-tmp", exception.Message);
+            Assert.DoesNotContain(projectRoot, exception.Message);
+            Assert.True(File.Exists(legacyTempPath));
+            Assert.Empty(Directory
+                .EnumerateFiles(projectRoot)
+                .Where(path => Path.GetFileName(path).Contains(".normalize-tmp.", StringComparison.Ordinal)));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == "package/services/metadata/core-properties/random.psmdcp");
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RemovesReadOnlyLegacyTempFileOnUnixBeforeRewrite()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesReadOnlyLegacyTempFileOnUnixBeforeRewrite));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "readonly-legacy.nupkg");
+            var legacyTempPath = packagePath + ".normalize-tmp";
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            File.WriteAllText(legacyTempPath, "read-only stale temp");
+            File.SetUnixFileMode(legacyTempPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+
+            Assert.False(File.Exists(legacyTempPath));
+            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
         }
         finally
         {

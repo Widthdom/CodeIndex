@@ -63,6 +63,28 @@ public static partial class QueryCommandRunner
     {
         MaxDepth = BatchMaxJsonDepth,
     };
+    private static readonly HashSet<string> DependencyNoiseSymbols = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Array",
+        "Console",
+        "DateTime",
+        "Dictionary",
+        "Directory",
+        "Enumerable",
+        "File",
+        "IEnumerable",
+        "List",
+        "Math",
+        "Path",
+        "Read",
+        "ReadLine",
+        "Regex",
+        "String",
+        "StringBuilder",
+        "Task",
+        "Write",
+        "WriteLine",
+    };
 
     [ThreadStatic]
     private static DbReader? s_batchReader;
@@ -4685,17 +4707,21 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountListFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
-                if (counts.Count == 0)
+                if (options.Json)
                 {
-                    Console.WriteLine(options.Json
-                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
-                        : "0");
-                    return CommandExitCodes.Success;
+                    var payload = BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options);
+                    if (options.RawBytes)
+                        AddFileCountBytesJsonFields(payload, counts);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
-
-                Console.WriteLine(options.Json
-                    ? BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.Count, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
-                    : $"{counts.Count}");
+                else
+                    Console.WriteLine(options.RawBytes ? FormatFileCountBytesSummary(counts) : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
 
@@ -4741,6 +4767,29 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static void AddFileCountBytesJsonFields(JsonObject payload, QueryCountResult counts)
+    {
+        payload["total_bytes"] = counts.TotalBytes ?? 0;
+        payload["average_bytes"] = counts.AverageBytes ?? 0;
+        payload["max_bytes"] = counts.MaxBytes ?? 0;
+        payload["max_bytes_path"] = counts.MaxBytesPath;
+        payload["bytes_authoritative"] = counts.BytesAuthoritative ?? true;
+    }
+
+    private static string FormatFileCountBytesSummary(QueryCountResult counts)
+    {
+        var totalBytes = counts.TotalBytes ?? 0;
+        var averageBytes = counts.AverageBytes ?? 0;
+        var maxBytes = counts.MaxBytes ?? 0;
+        var maxPath = string.IsNullOrEmpty(counts.MaxBytesPath)
+            ? "none"
+            : counts.MaxBytesPath;
+        var authority = (counts.BytesAuthoritative ?? true) ? "true" : "false";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{counts.Count} files, {totalBytes} bytes total, average {averageBytes:0.##} bytes, max {maxBytes} bytes ({maxPath}), bytes_authoritative: {authority}");
     }
 
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -6089,19 +6138,33 @@ public static partial class QueryCommandRunner
             var inspectQuery = pathLineInspectMode
                 ? $"{inspectPath}:{options.StartLine!.Value}"
                 : options.Query!;
-            var analysis = reader.AnalyzeSymbol(
-                inspectQuery,
-                inspectLimit,
-                options.Lang,
-                options.IncludeBody,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
-                exact,
-                options.MaxLineWidth,
-                options.BodyStartLine,
-                options.BodyLines,
-                kind: options.Kind);
+            var analysis = pathLineInspectMode
+                ? reader.AnalyzeFileLine(
+                    inspectPath!,
+                    options.StartLine!.Value,
+                    inspectLimit,
+                    options.Lang,
+                    options.IncludeBody,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    options.MaxLineWidth,
+                    options.BodyStartLine,
+                    options.BodyLines,
+                    kind: options.Kind)
+                : reader.AnalyzeSymbol(
+                    inspectQuery,
+                    inspectLimit,
+                    options.Lang,
+                    options.IncludeBody,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    exact,
+                    options.MaxLineWidth,
+                    options.BodyStartLine,
+                    options.BodyLines,
+                    kind: options.Kind);
             var sourceExcerpt = BuildInspectSourceExcerpt(reader, options, analysis, inspectPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -7446,10 +7509,16 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 var zeroSqlGraphSignal = baseSqlGraphSignal;
+                var zeroSymbolFilter = ApplyDependencySymbolFilters([], options).Summary;
+                if (depsFormat is OutputFormatJsonGraph)
+                {
+                    WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
+                    return ZeroResultExitCode(options);
+                }
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal));
+                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal)).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter)).ToJsonString(jsonOptions));
                 else
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
@@ -7460,27 +7529,60 @@ public static partial class QueryCommandRunner
             }
 
             List<List<string>> cycles = [];
-            var outputEdges = options.DependencyCycles
-                ? FilterCycleEdges(cycleCandidates, out cycles).Take(options.Limit).ToList()
-                : results;
+            List<FileDependencyResult> outputEdges;
+            DependencySymbolFilterResult symbolFilter;
             if (options.DependencyCycles)
+            {
+                symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
+                outputEdges = FilterCycleEdges(symbolFilter.Edges, out cycles).Take(options.Limit).ToList();
                 cycles = cycles.Take(options.Limit).ToList();
+            }
+            else
+            {
+                symbolFilter = ApplyDependencySymbolFilters(results, options);
+                outputEdges = symbolFilter.Edges;
+            }
             var sqlGraphSignalPaths = options.DependencyCycles
                 ? cycles.Count > 0
                     ? cycles.SelectMany(static cycle => cycle)
-                    : cycleCandidates.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
-                : results.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
+                    : symbolFilter.Edges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
+                : outputEdges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
             var sqlGraphSignal = NarrowSqlGraphContractSignalByPaths(
                 reader,
                 baseSqlGraphSignal,
                 sqlGraphSignalPaths,
                 options.Lang);
+            if (!options.DependencyCycles && outputEdges.Count == 0)
+            {
+                if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
+                {
+                    WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                }
+                else if (options.Json)
+                {
+                    Console.WriteLine(BuildJsonZeroResultPayload(
+                        reader,
+                        jsonOptions,
+                        resultsKey: "edges",
+                        graphTableAvailable: true,
+                        degraded: !sqlGraphSignal.Ready,
+                        queryOptions: options,
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary)).ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
+                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                }
+                return ZeroResultExitCode(options);
+            }
             if (options.DependencyCycles && cycles.Count == 0)
             {
                 if (options.Json)
                 {
                     var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
-                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
+                    AddFreshnessHint(payload, reader);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -7493,7 +7595,7 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions);
+                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
                 return CommandExitCodes.Success;
             }
 
@@ -7501,13 +7603,14 @@ public static partial class QueryCommandRunner
             {
                 var payload = new JsonObject
                 {
-                    ["count"] = options.DependencyCycles ? cycles.Count : results.Count,
+                    ["count"] = options.DependencyCycles ? cycles.Count : outputEdges.Count,
                 };
                 if (options.DependencyCycles)
                     payload["cycles"] = BuildDependencyCyclesJson(cycles);
                 else
-                    payload["edges"] = JsonSerializer.SerializeToNode(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
-                AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
+                AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
+                AddFreshnessHint(payload, reader);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -7521,12 +7624,12 @@ public static partial class QueryCommandRunner
                     return CommandExitCodes.Success;
                 }
 
-                foreach (var r in results)
+                foreach (var r in outputEdges)
                 {
                     var syms = r.Symbols.Length > 60 ? r.Symbols[..57] + "..." : r.Symbols;
                     Console.WriteLine($"{r.SourcePath,-45} -> {r.TargetPath,-45} ({r.ReferenceCount} refs: {syms})");
                 }
-                CommandErrorWriter.WriteStderr($"({results.Count} dependency edges)");
+                CommandErrorWriter.WriteStderr($"({outputEdges.Count} dependency edges)");
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
@@ -7682,7 +7785,140 @@ public static partial class QueryCommandRunner
         return array;
     }
 
-    private static void WriteDependencyGraph(IReadOnlyList<FileDependencyResult> edges, string format, JsonSerializerOptions jsonOptions)
+    private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
+    {
+        var applied = options.DependencySuppressNoise || options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
+        if (!applied)
+        {
+            var unchangedSymbolCount = edges.Sum(edge => SplitDependencySymbols(edge.Symbols).Count);
+            return new DependencySymbolFilterResult(
+                edges.ToList(),
+                new DependencySymbolFilterSummary(
+                    Applied: false,
+                    SuppressNoise: false,
+                    Symbols: [],
+                    SymbolFamilies: [],
+                    EdgesBefore: edges.Count,
+                    EdgesAfter: edges.Count,
+                    SymbolsBefore: unchangedSymbolCount,
+                    SymbolsAfter: unchangedSymbolCount));
+        }
+
+        var filteredEdges = new List<FileDependencyResult>(edges.Count);
+        var symbolsBefore = 0;
+        var symbolsAfter = 0;
+        foreach (var edge in edges)
+        {
+            var symbols = SplitDependencySymbols(edge.Symbols);
+            symbolsBefore += symbols.Count;
+            var keptSymbols = symbols
+                .Where(symbol => KeepDependencySymbol(symbol, options))
+                .ToList();
+            symbolsAfter += keptSymbols.Count;
+            if (keptSymbols.Count == 0)
+                continue;
+            filteredEdges.Add(CopyDependencyEdge(edge, string.Join(",", keptSymbols)));
+        }
+
+        return new DependencySymbolFilterResult(
+            filteredEdges,
+            new DependencySymbolFilterSummary(
+                Applied: true,
+                SuppressNoise: options.DependencySuppressNoise,
+                Symbols: options.DependencySymbols.ToArray(),
+                SymbolFamilies: options.DependencySymbolFamilies.ToArray(),
+                EdgesBefore: edges.Count,
+                EdgesAfter: filteredEdges.Count,
+                SymbolsBefore: symbolsBefore,
+                SymbolsAfter: symbolsAfter));
+    }
+
+    private static bool KeepDependencySymbol(string symbol, QueryCommandOptions options)
+    {
+        if (options.DependencySuppressNoise && DependencyNoiseSymbols.Contains(symbol))
+            return false;
+
+        var hasNameFilters = options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
+        if (!hasNameFilters)
+            return true;
+
+        return options.DependencySymbols.Contains(symbol, StringComparer.Ordinal)
+               || options.DependencySymbolFamilies.Any(family => symbol.StartsWith(family, StringComparison.Ordinal));
+    }
+
+    private static List<string> SplitDependencySymbols(string symbols)
+        => symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private static FileDependencyResult CopyDependencyEdge(FileDependencyResult edge, string symbols)
+        => new()
+        {
+            ResultKind = edge.ResultKind,
+            SourcePath = edge.SourcePath,
+            TargetPath = edge.TargetPath,
+            SourceDb = edge.SourceDb,
+            TargetDb = edge.TargetDb,
+            ReferenceCount = edge.ReferenceCount,
+            Symbols = symbols,
+        };
+
+    private static void AddDependencySchemaJsonFields(
+        JsonObject payload,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        SqlGraphContractSignal sqlGraphSignal,
+        DependencySymbolFilterSummary symbolFilter)
+    {
+        payload["api_version"] = JsonOutputContract.ApiVersion;
+        payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddDependencySymbolFilterJsonFields(payload, symbolFilter, jsonOptions);
+    }
+
+    private static void AddDependencySymbolFilterJsonFields(JsonObject payload, DependencySymbolFilterSummary symbolFilter, JsonSerializerOptions jsonOptions)
+    {
+        if (!symbolFilter.Applied)
+            return;
+
+        var filter = new JsonObject
+        {
+            ["suppress_noise"] = symbolFilter.SuppressNoise,
+            ["edges_before"] = symbolFilter.EdgesBefore,
+            ["edges_after"] = symbolFilter.EdgesAfter,
+            ["edges_removed"] = symbolFilter.EdgesBefore - symbolFilter.EdgesAfter,
+            ["symbols_before"] = symbolFilter.SymbolsBefore,
+            ["symbols_after"] = symbolFilter.SymbolsAfter,
+            ["symbols_removed"] = symbolFilter.SymbolsBefore - symbolFilter.SymbolsAfter,
+        };
+        if (symbolFilter.Symbols.Count > 0)
+            filter["symbol"] = JsonSerializer.SerializeToNode(symbolFilter.Symbols.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (symbolFilter.SymbolFamilies.Count > 0)
+            filter["symbol_family"] = JsonSerializer.SerializeToNode(symbolFilter.SymbolFamilies.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        payload["symbol_filter"] = filter;
+    }
+
+    private static JsonArray BuildDependencySymbolsJson(string symbols)
+        => new(SplitDependencySymbols(symbols).Select(symbol => JsonValue.Create(symbol)).ToArray<JsonNode?>());
+
+    private sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
+
+    private sealed record DependencySymbolFilterSummary(
+        bool Applied,
+        bool SuppressNoise,
+        IReadOnlyList<string> Symbols,
+        IReadOnlyList<string> SymbolFamilies,
+        int EdgesBefore,
+        int EdgesAfter,
+        int SymbolsBefore,
+        int SymbolsAfter);
+
+    private static void WriteDependencyGraph(
+        IReadOnlyList<FileDependencyResult> edges,
+        string format,
+        JsonSerializerOptions jsonOptions,
+        DbReader reader,
+        QueryCommandOptions options,
+        SqlGraphContractSignal sqlGraphSignal,
+        DependencySymbolFilterSummary symbolFilter)
     {
         switch (format)
         {
@@ -7702,12 +7938,18 @@ public static partial class QueryCommandRunner
                 Console.WriteLine("</graph></graphml>");
                 break;
             case OutputFormatJsonGraph:
-                WriteDependencyJsonGraph(edges, jsonOptions);
+                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter);
                 break;
         }
     }
 
-    private static void WriteDependencyJsonGraph(IReadOnlyList<FileDependencyResult> edges, JsonSerializerOptions jsonOptions)
+    private static void WriteDependencyJsonGraph(
+        IReadOnlyList<FileDependencyResult> edges,
+        JsonSerializerOptions jsonOptions,
+        DbReader reader,
+        QueryCommandOptions options,
+        SqlGraphContractSignal sqlGraphSignal,
+        DependencySymbolFilterSummary symbolFilter)
     {
         var seenNodes = new HashSet<string>(StringComparer.Ordinal);
         var nodes = new List<string>();
@@ -7719,65 +7961,20 @@ public static partial class QueryCommandRunner
                 nodes.Add(edge.TargetPath);
         }
 
-        var writer = Console.Out;
-        if (!jsonOptions.WriteIndented)
+        var payload = new JsonObject
         {
-            writer.Write("{\"nodes\":[");
-            for (var i = 0; i < nodes.Count; i++)
+            ["nodes"] = new JsonArray(nodes.Select(node => (JsonNode?)new JsonObject { ["id"] = node }).ToArray()),
+            ["edges"] = new JsonArray(edges.Select(edge => (JsonNode?)new JsonObject
             {
-                if (i > 0)
-                    writer.Write(',');
-                writer.Write("{\"id\":");
-                writer.Write(JsonSerializer.Serialize(nodes[i], jsonOptions));
-                writer.Write('}');
-            }
-
-            writer.Write("],\"edges\":[");
-            for (var i = 0; i < edges.Count; i++)
-            {
-                if (i > 0)
-                    writer.Write(',');
-                var edge = edges[i];
-                writer.Write("{\"source\":");
-                writer.Write(JsonSerializer.Serialize(edge.SourcePath, jsonOptions));
-                writer.Write(",\"target\":");
-                writer.Write(JsonSerializer.Serialize(edge.TargetPath, jsonOptions));
-                writer.Write(",\"reference_count\":");
-                writer.Write(edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
-                writer.Write('}');
-            }
-
-            writer.WriteLine("]}");
-            return;
-        }
-
-        writer.WriteLine("{");
-        writer.WriteLine("  \"nodes\": [");
-        for (var i = 0; i < nodes.Count; i++)
-        {
-            writer.Write("    { \"id\": ");
-            writer.Write(JsonSerializer.Serialize(nodes[i], jsonOptions));
-            writer.Write(" }");
-            writer.WriteLine(i + 1 < nodes.Count ? "," : string.Empty);
-        }
-
-        writer.WriteLine("  ],");
-        writer.WriteLine("  \"edges\": [");
-        for (var i = 0; i < edges.Count; i++)
-        {
-            var edge = edges[i];
-            writer.Write("    { \"source\": ");
-            writer.Write(JsonSerializer.Serialize(edge.SourcePath, jsonOptions));
-            writer.Write(", \"target\": ");
-            writer.Write(JsonSerializer.Serialize(edge.TargetPath, jsonOptions));
-            writer.Write(", \"reference_count\": ");
-            writer.Write(edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
-            writer.Write(" }");
-            writer.WriteLine(i + 1 < edges.Count ? "," : string.Empty);
-        }
-
-        writer.WriteLine("  ]");
-        writer.WriteLine("}");
+                ["source"] = edge.SourcePath,
+                ["target"] = edge.TargetPath,
+                ["reference_count"] = edge.ReferenceCount,
+                ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
+            }).ToArray()),
+        };
+        AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
+        AddFreshnessHint(payload, reader);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
@@ -9039,7 +9236,13 @@ public static partial class QueryCommandRunner
             var issueLimit = HasOption(cmdArgs, "--limit") || HasOption(cmdArgs, "--top")
                 ? options.Limit
                 : (int?)null;
-            var issues = reader.GetIssues(options.Kind, options.PathPatterns, issueLimit, options.Severity);
+            var issues = reader.GetIssues(
+                options.Kind,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                issueLimit,
+                options.Severity);
             var issuesAvailable = reader._hasIssuesTable;
             if (options.CountOnly || options.OutputFormat == OutputFormatCount)
             {
@@ -9507,6 +9710,9 @@ public static partial class QueryCommandRunner
         List<string>? mapSections = null;
         bool mapSummaryOnly = false;
         bool dependencyCycles = false;
+        bool dependencySuppressNoise = false;
+        var dependencySymbols = new List<string>();
+        var dependencySymbolFamilies = new List<string>();
         string? recipeName = null;
         var includeRecipeQueries = new List<string>();
         var excludeRecipeQueries = new List<string>();
@@ -9553,6 +9759,23 @@ public static partial class QueryCommandRunner
             }
 
             guardFilters.Add(new SearchGuardFilter(role, direction, value));
+        }
+
+        void AddDependencySymbolFilter(string optionName, string value, List<string> target)
+        {
+            var trimmed = value.Trim();
+            if (trimmed.Length == 0)
+            {
+                AddParseError($"Error: {optionName} value cannot be empty.");
+                return;
+            }
+            if (trimmed.Length > QueryLimits.MaxQueryLength)
+            {
+                AddParseError($"Error: {optionName} value too long (max {QueryLimits.MaxQueryLength} characters).");
+                return;
+            }
+            if (!target.Contains(trimmed, StringComparer.Ordinal))
+                target.Add(trimmed);
         }
 
         void AddIssueDraftLabels(string rawLabels)
@@ -10222,6 +10445,21 @@ public static partial class QueryCommandRunner
                     break;
                 case "--cycles":
                     dependencyCycles = true;
+                    break;
+                case "--suppress-noise":
+                    dependencySuppressNoise = true;
+                    break;
+                case "--symbol":
+                    if (TryReadStringOptionValue(args, ref i, "--symbol", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dependencySymbolValue, out var dependencySymbolError))
+                        AddDependencySymbolFilter("--symbol", dependencySymbolValue!, dependencySymbols);
+                    else
+                        AddParseError(dependencySymbolError!);
+                    break;
+                case "--symbol-family":
+                    if (TryReadStringOptionValue(args, ref i, "--symbol-family", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dependencySymbolFamilyValue, out var dependencySymbolFamilyError))
+                        AddDependencySymbolFilter("--symbol-family", dependencySymbolFamilyValue!, dependencySymbolFamilies);
+                    else
+                        AddParseError(dependencySymbolFamilyError!);
                     break;
                 case "--strict-not-found":
                     strictNotFound = true;
@@ -10900,6 +11138,9 @@ public static partial class QueryCommandRunner
             MapSections = mapSections,
             MapSummaryOnly = mapSummaryOnly,
             DependencyCycles = dependencyCycles,
+            DependencySuppressNoise = dependencySuppressNoise,
+            DependencySymbols = dependencySymbols,
+            DependencySymbolFamilies = dependencySymbolFamilies,
             RecipeName = recipeName,
             IncludeRecipeQueries = includeRecipeQueries,
             ExcludeRecipeQueries = excludeRecipeQueries,
@@ -12210,6 +12451,7 @@ public static partial class QueryCommandRunner
         "namespace",
         "object",
         "operator",
+        "package",
         "procedure",
         "property",
         "protocol",
@@ -12930,6 +13172,14 @@ public static partial class QueryCommandRunner
             query["dedup"] = false;
         if (options.RawKinds)
             query["raw_kinds"] = true;
+        if (options.DependencyCycles)
+            query["cycles"] = true;
+        if (options.DependencySuppressNoise)
+            query["suppress_noise"] = true;
+        if (options.DependencySymbols.Count > 0)
+            query["symbol"] = JsonSerializer.SerializeToNode(options.DependencySymbols, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.DependencySymbolFamilies.Count > 0)
+            query["symbol_family"] = JsonSerializer.SerializeToNode(options.DependencySymbolFamilies, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.FocusLine.HasValue)
             query["focus_line"] = options.FocusLine.Value;
         if (options.FocusColumn.HasValue)
@@ -13855,7 +14105,7 @@ public static partial class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "dependency", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
@@ -14789,6 +15039,9 @@ public sealed class QueryCommandOptions
     public List<string>? MapSections { get; init; }
     public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
+    public bool DependencySuppressNoise { get; init; }
+    public List<string> DependencySymbols { get; init; } = [];
+    public List<string> DependencySymbolFamilies { get; init; } = [];
     public string? RecipeName { get; init; }
     public List<string> IncludeRecipeQueries { get; init; } = [];
     public List<string> ExcludeRecipeQueries { get; init; } = [];
