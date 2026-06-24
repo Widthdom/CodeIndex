@@ -588,25 +588,53 @@ internal static class CdidxConfigFile
 
     internal static int RunValidate(string[] args, JsonSerializerOptions jsonOptions)
     {
-        if (args.Length > 0)
+        var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        var json = false;
+        var remaining = new List<string>();
+        foreach (var arg in args)
         {
-            CommandErrorWriter.Write("validate-config does not accept positional arguments.", "run `cdidx validate-config` from the workspace whose config should be validated.");
-            return CommandExitCodes.UsageError;
+            if (arg == "--json")
+            {
+                json = true;
+                continue;
+            }
+
+            if (arg.StartsWith("--json=", StringComparison.Ordinal))
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    true,
+                    jsonOptions,
+                    "validate-config supports --json only; --json=<format> is not supported.",
+                    CommandExitCodes.InvalidArgument,
+                    "use `cdidx validate-config --json`.");
+            }
+
+            remaining.Add(arg);
         }
+
+        if (remaining.Count > 0)
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                "validate-config does not accept positional arguments.",
+                CommandExitCodes.UsageError,
+                "run `cdidx validate-config` from the workspace whose config should be validated.");
 
         var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name));
         if (result.Failed)
         {
-            CommandErrorWriter.WriteStderr(result.Error);
-            return CommandExitCodes.UsageError;
+            return CommandErrorWriter.WriteJsonOrHuman(
+                json,
+                jsonOptions,
+                result.Error ?? "configuration file validation failed.",
+                CommandExitCodes.UsageError,
+                $"fix or remove `{FileName}`.");
         }
 
-        var payload = new Dictionary<string, object?>
-        {
-            ["valid"] = true,
-            ["path"] = result.Path,
-        };
-        Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+        var payload = new ValidateConfigJsonResult(true, result.Path);
+        Console.WriteLine(JsonSerializer.Serialize(
+            payload,
+            CliJsonSerializerContextFactory.Create(jsonOptions).ValidateConfigJsonResult));
         return CommandExitCodes.Success;
     }
 

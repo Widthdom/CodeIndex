@@ -8,6 +8,8 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class CdidxConfigFileTests
 {
+    private readonly JsonSerializerOptions _jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
+
     [Fact]
     public void LoadAndApply_NoFile_NoOp()
     {
@@ -23,6 +25,71 @@ public class CdidxConfigFileTests
             Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void RunValidate_NoConfigJson_ReturnsValidWithNullPath_Issue3892()
+    {
+        var dir = CreateTempDir();
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".git"));
+            Environment.CurrentDirectory = dir;
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => CdidxConfigFile.RunValidate(["--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.True(payload.GetProperty("valid").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, payload.GetProperty("path").ValueKind);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public void RunValidate_PositionalJson_ReturnsStructuredError_Issue3892()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => CdidxConfigFile.RunValidate(["extra", "--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var payload = document.RootElement;
+        Assert.Equal("error", payload.GetProperty("status").GetString());
+        Assert.Contains("does not accept positional arguments", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunValidate_InvalidConfigJson_ReturnsStructuredErrorThroughProgramRunner_Issue3892()
+    {
+        var dir = CreateTempDir();
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, CdidxConfigFile.FileName), "{ invalid json");
+            Environment.CurrentDirectory = dir;
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(["validate-config", "--json"], _jsonOptions, appVersion: "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.Equal("error", payload.GetProperty("status").GetString());
+            Assert.Contains("Invalid JSON", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(dir);
+        }
     }
 
     [Fact]

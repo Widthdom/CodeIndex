@@ -648,6 +648,11 @@ internal sealed record VersionInfoJsonResult(
     [property: JsonPropertyName("build_date")] string BuildDate,
     [property: JsonPropertyName("dirty")] string Dirty);
 
+internal sealed record ValidateConfigJsonResult(
+    [property: JsonPropertyName("valid")] bool Valid,
+    [property: JsonPropertyName("path")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Path);
+
 [JsonSourceGenerationOptions(
     WriteIndented = false,
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
@@ -854,6 +859,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(UnusedSymbolResult))]
 [JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(UpgradeJsonResult))]
+[JsonSerializable(typeof(ValidateConfigJsonResult))]
 [JsonSerializable(typeof(VacuumResult))]
 [JsonSerializable(typeof(VersionInfoJsonResult))]
 [JsonSerializable(typeof(WorkspaceListJsonResult))]
