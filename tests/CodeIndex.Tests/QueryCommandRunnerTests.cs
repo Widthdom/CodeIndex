@@ -105,7 +105,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stderr);
         using var document = ParseJsonOutput(stdout);
         Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
-        Assert.Equal("unknown status readiness field `invalid`.", document.RootElement.GetProperty("message").GetString());
+        Assert.Equal("unknown status field `invalid`.", document.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]

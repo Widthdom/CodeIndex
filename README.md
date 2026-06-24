@@ -135,6 +135,9 @@ JSON-RPC interface. There is no public library / SDK API. See
 fields for scripts, MCP clients, and release checks. Detailed semantics live in
 the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration); README keeps the field
 names visible so documentation and tests stay synchronized.
+Use `cdidx status --explain <field>` for concise explanations of visible status
+fields, including readiness fields and runtime diagnostics such as
+`path_case_sensitive`.
 
 | Field group | Fields |
 |---|---|
@@ -149,6 +152,10 @@ names visible so documentation and tests stay synchronized.
 `worktree_head_changed` compares the runtime HEAD with the latest successful
 index stamp from `indexed_head_sha` when available, and falls back to the older
 full-scan-only `indexed_head_commit` only for legacy DBs.
+`status --explain indexed_head_sha` describes the last-successful-index stamp,
+while `status --explain indexed_head_commit` calls out the legacy
+full-scan-only stamp so consumers can prefer `indexed_head_sha` after
+incremental indexing.
 
 Runtime diagnostics under `extractors` include `retained_load_context_count` so
 long-running processes can see how many plugin assembly load contexts are still
@@ -318,6 +325,8 @@ JSON-RPC interface です。公開 library / SDK API は提供していません
 freshness、compatibility、remediation field を返します。詳細な意味は
 [開発者ガイド](DEVELOPER_GUIDE.md#ai連携) にあり、README では docs と test を
 同期するため field 名を明示します。
+visible な status field の簡潔な説明は `cdidx status --explain <field>` で確認できます。
+readiness field に加えて、`path_case_sensitive` などの runtime diagnostic field も対象です。
 
 | field group | fields |
 |---|---|
@@ -332,6 +341,9 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 `worktree_head_changed` は、利用可能な場合は最新の成功 index stamp である
 `indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の
 full-scan 限定 `indexed_head_commit` に fallback します。
+`status --explain indexed_head_sha` は最後に成功した index stamp を説明し、
+`status --explain indexed_head_commit` は legacy 向けの full-scan 限定 stamp であることを
+明示するため、incremental indexing 後の consumer は `indexed_head_sha` を優先できます。
 
 `extractors` の runtime diagnostics は `retained_load_context_count` を含むため、
 長時間実行プロセスは保持中の plugin assembly load context 数を確認できます。

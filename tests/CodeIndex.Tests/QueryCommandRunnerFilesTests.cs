@@ -1236,7 +1236,36 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_Explain_RejectsUnknownReadinessField()
+    public void RunStatus_Explain_PrintsVisibleStatusFieldDescriptionWithoutDatabase_Issue3936()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "path_case_sensitive"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Filesystem case sensitivity (path_case_sensitive)", stdout);
+        Assert.Contains("case-sensitive", stdout);
+        Assert.Contains("case-insensitive", stdout);
+        Assert.Contains("cdidx index <projectPath>", stdout);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_PrintsHeadFreshnessFieldDescriptionWithoutDatabase_Issue3911()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "indexed_head_commit"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Legacy full-scan HEAD stamp (indexed_head_commit)", stdout);
+        Assert.Contains("full-scan-only", stdout);
+        Assert.Contains("indexed_head_sha", stdout);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_RejectsUnknownStatusField()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--explain", "nope"],
@@ -1244,8 +1273,9 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("unknown status readiness field", stderr);
+        Assert.Contains("unknown status field", stderr);
         Assert.Contains("fold_ready", stderr);
+        Assert.Contains("path_case_sensitive", stderr);
     }
 
     [Fact]
@@ -1266,6 +1296,26 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("ASCII COLLATE NOCASE", json.GetProperty("degraded").GetString());
         Assert.Contains("cdidx backfill-fold", json.GetProperty("remediation").GetString());
         Assert.Contains("fold_ready", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("indexed_head_sha", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("indexed_head_commit", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+    }
+
+    [Fact]
+    public void RunStatus_ExplainJson_PrintsHeadFreshnessFieldDescription_Issue3911()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "indexed_head_sha", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal("indexed_head_sha", json.GetProperty("field").GetString());
+        Assert.Equal("Latest index HEAD stamp", json.GetProperty("label").GetString());
+        Assert.Contains("including incremental updates", json.GetProperty("ready").GetString());
+        Assert.Contains("indexed_head_commit", json.GetProperty("remediation").GetString());
     }
 
     [Theory]

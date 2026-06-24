@@ -253,14 +253,14 @@ public static partial class QueryCommandRunner
         "--sections",
         "--fields",
     ];
-    private sealed record StatusReadinessField(
+    private sealed record StatusFieldExplanation(
         string FieldName,
         string Label,
         string ReadyText,
         string DegradedText,
         string Remediation);
 
-    private static readonly StatusReadinessField[] StatusReadinessFields =
+    private static readonly StatusFieldExplanation[] StatusReadinessFields =
     [
         new(
             "graph_table_available",
@@ -323,6 +323,65 @@ public static partial class QueryCommandRunner
             "this DB was written by a newer cdidx, so older readers may degrade instead of trusting newer contract stamps.",
             "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use."),
     ];
+
+    private static readonly StatusFieldExplanation[] StatusExplainFields =
+        StatusReadinessFields.Concat(
+        [
+            new(
+                "git_head",
+                "Runtime Git HEAD",
+                "the current workspace Git HEAD commit was resolved at status time.",
+                "the field is absent outside a Git checkout or when Git HEAD cannot be resolved.",
+                "Run inside a Git workspace or pass a database tied to a Git workspace to compare index stamps."),
+            new(
+                "git_is_dirty",
+                "Runtime Git dirty state",
+                "`true` means git status reported uncommitted changes, including untracked files; `false` means no changes were reported.",
+                "the field is absent outside a Git checkout or when dirty-state detection is unavailable.",
+                "Run `git status` in the workspace to inspect uncommitted changes directly."),
+            new(
+                "indexed_head_commit",
+                "Legacy full-scan HEAD stamp",
+                "the index records the Git HEAD from the most recent successful full scan for legacy compatibility.",
+                "this full-scan-only stamp can differ from `indexed_head_sha` after incremental indexing and may be absent in legacy or non-Git indexes.",
+                "Prefer `indexed_head_sha` for current freshness checks; rebuild or run `cdidx index <projectPath>` when only this legacy stamp is available."),
+            new(
+                "worktree_head_changed",
+                "Worktree HEAD drift",
+                "`false` means the runtime HEAD matches the latest index HEAD stamp; `true` means the checkout moved since the index stamp.",
+                "the field is absent when neither `indexed_head_sha` nor the legacy `indexed_head_commit` can be compared with runtime HEAD.",
+                "Run `cdidx index <projectPath>` to refresh the index for the current checkout."),
+            new(
+                "indexed_head_sha",
+                "Latest index HEAD stamp",
+                "the index records the Git HEAD from the last successful index run, including incremental updates.",
+                "the field is absent in legacy indexes, non-Git workspaces, or when the index run could not resolve HEAD.",
+                "Use this field before `indexed_head_commit` when auditing freshness after incremental indexing."),
+            new(
+                "indexed_head_branch",
+                "Latest index branch stamp",
+                "the index records the branch short name captured with `indexed_head_sha`.",
+                "the field is absent for detached HEAD, legacy indexes, non-Git workspaces, or unresolved branch names.",
+                "Use it as context for `indexed_head_sha`; rerun `cdidx index <projectPath>` after switching branches."),
+            new(
+                "indexed_head_timestamp",
+                "Latest index HEAD timestamp",
+                "the index records when `indexed_head_sha` and `indexed_head_branch` were stamped.",
+                "the field is absent in legacy indexes or when the index run could not persist the timestamp.",
+                "Rerun `cdidx index <projectPath>` to refresh the timestamp with the current checkout."),
+            new(
+                "commits_ahead_of_indexed_head",
+                "Commits ahead of indexed HEAD",
+                "`0` means runtime HEAD is not ahead of `indexed_head_sha`; positive values mean the checkout advanced after indexing.",
+                "the field is absent when Git comparison is unavailable or history is not comparable.",
+                "Run `cdidx index <projectPath>` when the value is positive before trusting freshness-sensitive results."),
+            new(
+                "path_case_sensitive",
+                "Filesystem case sensitivity",
+                "`true` means the indexed workspace path comparison is case-sensitive; `false` means case-insensitive.",
+                "the field is absent on legacy indexes that predate the workspace case-sensitivity stamp.",
+                "Run `cdidx index <projectPath>` with a current cdidx binary to stamp filesystem case sensitivity."),
+        ]).ToArray();
 
     private static readonly HashSet<string> FlagOnlyOptions =
     [
@@ -5768,22 +5827,12 @@ public static partial class QueryCommandRunner
         }
 
         var keep = new HashSet<string>(RepoMapSummaryJsonProperties, StringComparer.Ordinal);
-        if (MapSectionEnabled(options, "languages"))
-            keep.Add("languages");
-        if (MapSectionEnabled(options, "tree"))
-            keep.Add("modules");
-        if (MapSectionEnabled(options, "hotspots"))
-        {
-            keep.Add("topFiles");
-            keep.Add("symbolRichFiles");
-            keep.Add("referenceRichFiles");
-            keep.Add("entrypoints");
-        }
-        if (MapSectionEnabled(options, "metrics"))
-            keep.Add("largestFiles");
+        foreach (var section in options.MapSections)
+            AddRepoMapSectionJsonProperties(keep, section);
 
         KeepRepoMapJsonProperties(payload, keep);
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
+        payload["section_properties"] = BuildRepoMapSectionProperties(options.MapSections);
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
         if (options.Compact && compactTruncation != null)
@@ -5810,10 +5859,41 @@ public static partial class QueryCommandRunner
         "graph_table_available",
     };
 
+    private static readonly IReadOnlyDictionary<string, string[]> RepoMapSectionJsonProperties = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    {
+        ["languages"] = ["languages"],
+        ["tree"] = ["modules"],
+        ["hotspots"] = ["top_files", "symbol_rich_files", "reference_rich_files", "entrypoints"],
+        ["metrics"] = ["largest_files"],
+    };
+
     private static void KeepRepoMapJsonProperties(JsonObject payload, IReadOnlySet<string> keep)
     {
         foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
             payload.Remove(propertyName);
+    }
+
+    private static void AddRepoMapSectionJsonProperties(HashSet<string> keep, string section)
+    {
+        if (!RepoMapSectionJsonProperties.TryGetValue(section, out var properties))
+            return;
+
+        foreach (var property in properties)
+            keep.Add(property);
+    }
+
+    private static JsonObject BuildRepoMapSectionProperties(IEnumerable<string> sections)
+    {
+        var payload = new JsonObject();
+        foreach (var section in sections)
+        {
+            if (!RepoMapSectionJsonProperties.TryGetValue(section, out var properties))
+                continue;
+
+            payload[section] = new JsonArray(properties.Select(property => JsonValue.Create(property)).ToArray<JsonNode?>());
+        }
+
+        return payload;
     }
 
     private static int GetCompactSectionLimit(QueryCommandOptions options)
@@ -13671,11 +13751,11 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanation(string fieldName)
     {
-        var field = FindStatusReadinessField(fieldName);
+        var field = FindStatusFieldExplanation(fieldName);
         if (field == null)
         {
-            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
-            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            CommandErrorWriter.WriteStderr($"Error: unknown status field `{fieldName}`.");
+            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.");
             return CommandExitCodes.UsageError;
         }
 
@@ -13689,19 +13769,19 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
     {
-        var field = FindStatusReadinessField(fieldName);
+        var field = FindStatusFieldExplanation(fieldName);
         if (field == null)
             return CommandErrorWriter.WriteJsonOrHuman(
                 true,
                 jsonOptions,
-                $"unknown status readiness field `{fieldName}`.",
+                $"unknown status field `{fieldName}`.",
                 CommandExitCodes.UsageError,
-                $"use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.",
+                $"use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.",
                 errorCode: CommandErrorCodes.UsageError,
                 category: "usage");
 
         var knownFields = new JsonArray();
-        foreach (var knownField in StatusReadinessFields)
+        foreach (var knownField in StatusExplainFields)
             knownFields.Add(knownField.FieldName);
 
         var payload = new JsonObject
@@ -13718,8 +13798,8 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static StatusReadinessField? FindStatusReadinessField(string fieldName)
-        => StatusReadinessFields.FirstOrDefault(
+    private static StatusFieldExplanation? FindStatusFieldExplanation(string fieldName)
+        => StatusExplainFields.FirstOrDefault(
             field => string.Equals(field.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)
                      || string.Equals(field.Label, fieldName, StringComparison.OrdinalIgnoreCase));
 

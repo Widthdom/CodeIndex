@@ -2846,22 +2846,44 @@ public partial class McpServer
             "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "worktree_head_changed",
             "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth", "minEntrypointConfidence",
         };
-        if (sections.Contains("languages"))
-            keep.Add("languages");
-        if (sections.Contains("tree") || sections.Contains("modules"))
-            keep.Add("modules");
-        if (sections.Contains("hotspots"))
-        {
-            keep.Add("topFiles");
-            keep.Add("symbolRichFiles");
-            keep.Add("referenceRichFiles");
-            keep.Add("entrypoints");
-        }
-        if (sections.Contains("metrics"))
-            keep.Add("largestFiles");
+        foreach (var section in sections)
+            AddMapSectionStructuredProperties(keep, section);
         foreach (var key in structured.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
             structured.Remove(key);
         structured["sections"] = new JsonArray(sections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
+        structured["sectionProperties"] = BuildMapSectionStructuredProperties(sections);
+    }
+
+    private static readonly IReadOnlyDictionary<string, string[]> MapSectionStructuredProperties = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    {
+        ["languages"] = ["languages"],
+        ["tree"] = ["modules"],
+        ["modules"] = ["modules"],
+        ["hotspots"] = ["topFiles", "symbolRichFiles", "referenceRichFiles", "entrypoints"],
+        ["metrics"] = ["largestFiles"],
+    };
+
+    private static void AddMapSectionStructuredProperties(HashSet<string> keep, string section)
+    {
+        if (!MapSectionStructuredProperties.TryGetValue(section, out var properties))
+            return;
+
+        foreach (var property in properties)
+            keep.Add(property);
+    }
+
+    private static JsonObject BuildMapSectionStructuredProperties(IReadOnlySet<string> sections)
+    {
+        var payload = new JsonObject();
+        foreach (var section in sections)
+        {
+            if (!MapSectionStructuredProperties.TryGetValue(section, out var properties))
+                continue;
+
+            payload[section] = new JsonArray(properties.Select(property => JsonValue.Create(property)).ToArray<JsonNode?>());
+        }
+
+        return payload;
     }
 
     private JsonNode ExecuteAnalyzeSymbol(JsonNode? id, JsonNode? args)
