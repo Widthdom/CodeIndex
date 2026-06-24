@@ -6,6 +6,10 @@ internal sealed partial class FileContentLoader
 {
     private static readonly UTF8Encoding StrictUtf8Encoding = new(false, throwOnInvalidBytes: true);
     private static readonly UTF8Encoding LenientUtf8Encoding = new(false, throwOnInvalidBytes: false);
+    private static readonly UnicodeEncoding Utf16LeBomEncoding = new(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: false);
+    private static readonly UnicodeEncoding Utf16LeNoBomEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: false);
+    private static readonly UnicodeEncoding Utf16BeBomEncoding = new(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: false);
+    private static readonly UnicodeEncoding Utf16BeNoBomEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: false);
 
     private (string Content, string? Warning, FileContentInspection Inspection) DecodeIndexableContent(byte[] bytes, string relativePath)
     {
@@ -24,8 +28,7 @@ internal sealed partial class FileContentLoader
 
         if (isUtf16Encoded)
         {
-            var content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
-                .GetString(bytes);
+            var content = GetUtf16Encoding(utf16BigEndian, hasUtf16Bom).GetString(bytes);
             var warning = hasUtf16Bom
                 ? null
                 : $"{relativePath}: decoded as {(utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
@@ -41,6 +44,13 @@ internal sealed partial class FileContentLoader
             var content = LenientUtf8Encoding.GetString(bytes);
             return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)", inspection);
         }
+    }
+
+    private static UnicodeEncoding GetUtf16Encoding(bool bigEndian, bool hasBom)
+    {
+        return bigEndian
+            ? hasBom ? Utf16BeBomEncoding : Utf16BeNoBomEncoding
+            : hasBom ? Utf16LeBomEncoding : Utf16LeNoBomEncoding;
     }
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
