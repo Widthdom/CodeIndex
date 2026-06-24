@@ -13,13 +13,28 @@ public class CiWorkflowTests
 
         Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
         Assert.Contains(
-            "- name: Audit NuGet package vulnerabilities\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'",
+            "- name: Select CI lane\n        id: lane",
             normalizedWorkflow);
         Assert.Contains(
-            "- name: Verify developer task wrapper\n        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'\n        run: make lint",
+            "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
+            workflow);
+        Assert.Contains(
+            "\"collect_coverage=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
+            workflow);
+        Assert.Contains(
+            "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
+            normalizedWorkflow);
+        Assert.Contains(
+            "- name: Verify developer task wrapper\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: make lint",
             normalizedWorkflow);
         Assert.DoesNotContain("- name: Verify formatting", normalizedWorkflow);
         Assert.Contains("\"${{ matrix.os }}\" -eq \"ubuntu-latest\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"", workflow);
+        Assert.Contains(
+            "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
+            normalizedWorkflow);
+        Assert.Contains(
+            "$collectCoverage = \"${{ steps.lane.outputs.collect_coverage }}\" -eq \"true\"",
+            workflow);
         Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-latest/net8.0", workflow);
         Assert.Contains("--blame-crash", workflow);
         Assert.Contains("--blame-hang", workflow);
@@ -45,15 +60,14 @@ public class CiWorkflowTests
         Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);
         Assert.Contains("TestResults/**/*.dump", workflow);
-        Assert.Contains("\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
-        Assert.Contains("\"collect_coverage=$collectCoverageText\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
-        Assert.Contains("if: always() && steps.test.outputs.collect_coverage == 'true'", workflow);
+        Assert.Contains("if: always() && steps.lane.outputs.collect_coverage == 'true'", workflow);
         Assert.Contains(
-            "- name: Publish\n        if: steps.test.outputs.primary_lane == 'true'",
+            "- name: Publish\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
         Assert.Contains(
-            "- name: Upload build artifact\n        if: steps.test.outputs.primary_lane == 'true'",
+            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
+        Assert.DoesNotContain("if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
         Assert.DoesNotContain("always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
         Assert.DoesNotContain("always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')", workflow);
     }
