@@ -111,18 +111,12 @@ internal sealed partial class FileContentLoader
 
         var evenNulls = 0;
         var oddNulls = 0;
-        var oddTextBytes = 0;
-        var evenTextBytes = 0;
         for (var i = 0; i < sampleLength; i += 2)
         {
             if (sample[i] == 0)
                 evenNulls++;
             if (sample[i + 1] == 0)
                 oddNulls++;
-            if (IsLikelyTextByte(sample[i + 1]))
-                oddTextBytes++;
-            if (IsLikelyTextByte(sample[i]))
-                evenTextBytes++;
         }
 
         const double NullParityThreshold = 0.30;
@@ -132,18 +126,30 @@ internal sealed partial class FileContentLoader
         var leScore = (double)oddNulls / pairs;
         var beOppositeScore = (double)oddNulls / pairs;
         var leOppositeScore = (double)evenNulls / pairs;
+        var mayBeBigEndian = beScore >= NullParityThreshold
+            && beOppositeScore <= OppositeNullThreshold;
+        var mayBeLittleEndian = leScore >= NullParityThreshold
+            && leOppositeScore <= OppositeNullThreshold;
+        if (!mayBeBigEndian && !mayBeLittleEndian)
+            return false;
 
-        if (beScore >= NullParityThreshold
-            && beOppositeScore <= OppositeNullThreshold
-            && (double)oddTextBytes / pairs >= TextByteThreshold)
+        var oddTextBytes = 0;
+        var evenTextBytes = 0;
+        for (var i = 0; i < sampleLength; i += 2)
+        {
+            if (mayBeBigEndian && IsLikelyTextByte(sample[i + 1]))
+                oddTextBytes++;
+            if (mayBeLittleEndian && IsLikelyTextByte(sample[i]))
+                evenTextBytes++;
+        }
+
+        if (mayBeBigEndian && (double)oddTextBytes / pairs >= TextByteThreshold)
         {
             bigEndian = true;
             return true;
         }
 
-        if (leScore >= NullParityThreshold
-            && leOppositeScore <= OppositeNullThreshold
-            && (double)evenTextBytes / pairs >= TextByteThreshold)
+        if (mayBeLittleEndian && (double)evenTextBytes / pairs >= TextByteThreshold)
         {
             bigEndian = false;
             return true;
