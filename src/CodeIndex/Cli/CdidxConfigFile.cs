@@ -628,7 +628,7 @@ internal static class CdidxConfigFile
                 jsonOptions,
                 result.Error ?? "configuration file validation failed.",
                 CommandExitCodes.UsageError,
-                $"fix or remove `{FileName}`.");
+                "fix or remove the discovered config file.");
         }
 
         var payload = new ValidateConfigJsonResult(true, result.Path);
