@@ -271,7 +271,12 @@ public static partial class IndexCommandRunner
                 var absPath = ToUpdateAbsolutePath(targetPath);
                 string? language = null;
                 if (scannedLanguages != null && scannedLanguages.TryGetValue(absPath, out var scannedLanguage))
+                {
+                    if (scannedLanguage != "csharp")
+                        continue;
+
                     language = scannedLanguage;
+                }
 
                 yield return CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
             }
