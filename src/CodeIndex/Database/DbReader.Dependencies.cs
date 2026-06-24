@@ -261,8 +261,8 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 sql += $" AND {sourceFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
         }
-        if (!reverse && excludeTests)
-            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
+        if (excludeTests)
+            sql += $" AND NOT {DependencyTestPathCondition($"{sourceFilterAlias}.path")}";
         sql += @"
                 GROUP BY src.id, src.path, src.lang, r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, logical_reference_kind
             ),
@@ -372,8 +372,8 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 sql += $" AND {targetFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
         }
-        if (reverse && excludeTests)
-            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
+        if (excludeTests)
+            sql += $" AND NOT {DependencyTestPathCondition($"{targetFilterAlias}.path")}";
         sql += @"
                 GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @", " + targetLogicalSymbolSegmentCountExpr + @"
             ),
@@ -494,9 +494,22 @@ public partial class DbReader
                 FROM edges
                 GROUP BY source_path, target_path
             ),
+            limited_edge_totals AS (
+                SELECT source_path,
+                       target_path,
+                       reference_count
+                FROM edge_totals
+                ORDER BY reference_count DESC, source_path, target_path
+                LIMIT @limit
+            ),
             distinct_edge_symbols AS (
-                SELECT DISTINCT source_path, target_path, symbol_name
+                SELECT DISTINCT edges.source_path,
+                                edges.target_path,
+                                edges.symbol_name
                 FROM edges
+                JOIN limited_edge_totals
+                  ON limited_edge_totals.source_path = edges.source_path
+                 AND limited_edge_totals.target_path = edges.target_path
             ),
             ranked_edge_symbols AS (
                 SELECT source_path,
@@ -505,17 +518,16 @@ public partial class DbReader
                        ROW_NUMBER() OVER (PARTITION BY source_path, target_path ORDER BY symbol_name) AS symbol_rank
                 FROM distinct_edge_symbols
             )
-            SELECT edge_totals.source_path,
-                   edge_totals.target_path,
-                   edge_totals.reference_count,
+            SELECT limited_edge_totals.source_path,
+                   limited_edge_totals.target_path,
+                   limited_edge_totals.reference_count,
                    COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END), '') AS symbols
-            FROM edge_totals
+            FROM limited_edge_totals
             LEFT JOIN ranked_edge_symbols
-              ON ranked_edge_symbols.source_path = edge_totals.source_path
-             AND ranked_edge_symbols.target_path = edge_totals.target_path
-            GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
-            ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
-            LIMIT @limit";
+              ON ranked_edge_symbols.source_path = limited_edge_totals.source_path
+             AND ranked_edge_symbols.target_path = limited_edge_totals.target_path
+            GROUP BY limited_edge_totals.source_path, limited_edge_totals.target_path, limited_edge_totals.reference_count
+            ORDER BY limited_edge_totals.reference_count DESC, limited_edge_totals.source_path, limited_edge_totals.target_path";
 
         cmd.CommandText = sql;
         if (lang != null)
@@ -547,6 +559,9 @@ public partial class DbReader
         }
         return results;
     }
+
+    private static string DependencyTestPathCondition(string pathSql)
+        => "(" + TestPathCondition.Replace("f.path", pathSql) + $" OR lower({pathSql}) LIKE '%.test%/%')";
 
     private void AppendDependencyGeneratedFilter(ref string sql, string fileAlias)
     {
