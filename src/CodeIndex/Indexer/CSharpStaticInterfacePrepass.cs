@@ -48,13 +48,16 @@ internal static class CSharpStaticInterfacePrepass
                 if (indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null)
                     continue;
 
+                if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
+                    absolutePath,
+                    target.RelativePath,
+                    cancellationToken))
+                    continue;
+
                 var content = indexer.LoadNormalizedContentForPrepass(
                     absolutePath,
                     target.RelativePath,
-                    RawBytesMayContainCSharpStaticInterfaceContract,
                     cancellationToken);
-                if (content == null)
-                    continue;
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
 
