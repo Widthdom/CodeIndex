@@ -4793,9 +4793,7 @@ public class FileIndexerTests
             // 文字列オーバーロードではなくコードポイントで確認する。
             Assert.DoesNotContain('\uFEFF', content);
             Assert.Equal(2, record.Lines);
-            var expectedChecksum = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+            var expectedChecksum = RawSha256Hex(Encoding.UTF8.GetBytes(content));
             Assert.Equal(expectedChecksum, record.Checksum);
         }
         finally
@@ -4837,9 +4835,7 @@ public class FileIndexerTests
             // future regression that re-introduces raw-byte hashing fails loudly.
             // 期待値も固定: LF 正規化後 payload の SHA256。生バイトハッシュへ戻ると
             // 落ちるようにしておく。
-            var expected = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes("line1\nline2\nline3\n"))).ToLowerInvariant();
+            var expected = RawSha256Hex(Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
             Assert.Equal(expected, lfRecord.Checksum);
         }
         finally
@@ -4914,8 +4910,7 @@ public class FileIndexerTests
         Assert.True(FileContentLoader.CanReuseRawBytesForNormalizedChecksum(content, null, inspection, normalized));
 
         var loaded = LoadFileContentForTest(bytes);
-        var expected = Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var expected = RawSha256Hex(bytes);
 
         Assert.Equal(content, loaded.Content);
         Assert.Null(loaded.Warning);
@@ -4987,8 +4982,7 @@ public class FileIndexerTests
         var payload = new byte[16 * 1024];
         for (int i = 0; i < payload.Length; i++)
             payload[i] = (byte)(i % 95 + 32); // printable ASCII (no CR / LF)
-        var expected = Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+        var expected = RawSha256Hex(payload);
         Assert.Equal(expected, FileIndexer.ComputeChecksum(payload));
     }
 
@@ -6230,6 +6224,9 @@ public class FileIndexerTests
             TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
+
+    private static string RawSha256Hex(byte[] bytes)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
 
     private static void WriteFileIndexerPatternConfig(string projectRoot, string fileName, string content)
     {

@@ -101,6 +101,7 @@ The test project mirrors the production areas closely.
 - Keep test names descriptive. The current suite mostly uses `Method_Scenario_ExpectedBehavior`.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
+- When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
 - If a behavior change is user-visible, update tests, `CHANGELOG.md`, and any affected docs together.
 
@@ -320,6 +321,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
+- raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
