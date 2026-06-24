@@ -4900,6 +4900,30 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Load_LfOnlyUtf8CanReuseRawChecksum()
+    {
+        var content = new string('a', 4097)
+            + "\n"
+            + char.ConvertFromUtf32(0x1F680)
+            + new string('b', 4097)
+            + "\n";
+        var bytes = Encoding.UTF8.GetBytes(content);
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
+        var inspection = FileContentInspection.Inspect(bytes);
+
+        Assert.True(FileContentLoader.CanReuseRawBytesForNormalizedChecksum(content, null, inspection, normalized));
+
+        var loaded = LoadFileContentForTest(bytes);
+        var expected = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+
+        Assert.Equal(content, loaded.Content);
+        Assert.Null(loaded.Warning);
+        Assert.False(loaded.Inspection.IsUtf16);
+        Assert.Equal(expected, loaded.Checksum);
+    }
+
+    [Fact]
     public void FileContentLoader_Load_DetectsOversizeLineDuringCanonicalization()
     {
         var longLine = new string('a', ChunkSplitter.MaxLineLength + 1);

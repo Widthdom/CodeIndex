@@ -40,7 +40,9 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
 
         var (content, warning, inspection) = DecodeIndexableContent(bytes, relativePath);
         var normalized = NormalizeForIndexing(content);
-        var checksum = ComputeChecksumFromNormalizedContent(normalized.Content);
+        var checksum = CanReuseRawBytesForNormalizedChecksum(content, warning, inspection, normalized)
+            ? ComputeChecksum(bytes)
+            : ComputeChecksumFromNormalizedContent(normalized.Content);
 
         return new LoadedFileContent(
             normalized.Content,
@@ -52,6 +54,17 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             checksum,
             warning,
             inspection);
+    }
+
+    internal static bool CanReuseRawBytesForNormalizedChecksum(
+        string decodedContent,
+        string? decodeWarning,
+        FileContentInspection inspection,
+        NormalizedIndexableContent normalized)
+    {
+        return decodeWarning is null
+            && !inspection.IsUtf16
+            && ReferenceEquals(normalized.Content, decodedContent);
     }
 
     internal string LoadNormalizedContentForPrepass(
