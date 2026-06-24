@@ -3268,11 +3268,22 @@ public partial class FileIndexer
     }
 
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
-        => LoadNormalizedContentForPrepass(
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
+            throw new InvalidOperationException("Only regular files can be indexed");
+
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
+        return _contentLoader.LoadNormalizedContentForPrepass(
             absolutePath,
+            normalizedRelativePath,
             relativePath,
-            rawByteFilter: null,
-            cancellationToken)!;
+            cancellationToken);
+    }
 
     internal bool RawFileMayContainCSharpStaticInterfaceContract(
         string absolutePath,
@@ -3293,29 +3304,6 @@ public partial class FileIndexer
             absolutePath,
             normalizedRelativePath,
             probe.AppendAndCheck,
-            cancellationToken);
-    }
-
-    internal string? LoadNormalizedContentForPrepass(
-        string absolutePath,
-        string relativePath,
-        Func<byte[], bool>? rawByteFilter,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!IsFilePathSyntaxIndexable(absolutePath))
-            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
-
-        var indexability = GetFileIndexabilityForIndexing(absolutePath);
-        if (indexability != FileProbeStatus.Supported)
-            throw new InvalidOperationException("Only regular files can be indexed");
-
-        var normalizedRelativePath = NormalizeIndexPath(relativePath);
-        return _contentLoader.LoadNormalizedContentForPrepass(
-            absolutePath,
-            normalizedRelativePath,
-            relativePath,
-            rawByteFilter,
             cancellationToken);
     }
 

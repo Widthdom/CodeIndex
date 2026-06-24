@@ -72,29 +72,12 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         string relativePath,
         CancellationToken cancellationToken)
     {
-        return LoadNormalizedContentForPrepass(
-            absolutePath,
-            normalizedRelativePath,
-            relativePath,
-            rawByteFilter: null,
-            cancellationToken)!;
-    }
-
-    internal string? LoadNormalizedContentForPrepass(
-        string absolutePath,
-        string normalizedRelativePath,
-        string relativePath,
-        Func<byte[], bool>? rawByteFilter,
-        CancellationToken cancellationToken)
-    {
         var (bytes, _, _) = ReadRawBytesWithSizeLimit(
             absolutePath,
             normalizedRelativePath,
             cancellationToken);
         if (IsGitLfsPointer(bytes))
             return string.Empty;
-        if (rawByteFilter != null && !rawByteFilter(bytes))
-            return null;
 
         var (content, _, _) = DecodeIndexableContent(bytes, relativePath);
         return NormalizeContentForPrepass(content);
