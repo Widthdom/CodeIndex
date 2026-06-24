@@ -1566,6 +1566,8 @@ public partial class QueryCommandRunnerTests
             "DEVELOPER_GUIDE.md",
             "TESTING_GUIDE.md",
             "AGENT_GUIDE.md",
+            ".agent_harness/**",
+            ".claude/**",
             ".codex/**",
             ".github/**"
         };
