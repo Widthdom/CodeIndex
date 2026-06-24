@@ -25,7 +25,7 @@ public static partial class QueryCommandRunner
     internal const int DefaultCompactSectionLimit = 5;
     private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
-    internal const int DefaultDependencyCycleGraphLimit = 1_000;
+    internal const int DefaultDependencyCycleGraphLimit = 50;
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int FindAllCandidateFileLimit = 4096;
