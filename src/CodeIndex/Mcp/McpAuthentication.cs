@@ -51,10 +51,13 @@ internal static class McpAuthenticationLimits
     internal const int MaxTokenCharacters = 4096;
     internal const int Sha256HashBytes = 32;
     private const int StackTokenUtf8ByteThreshold = 1024;
-    internal const string OversizedTokenFailureReason = "auth token mismatch";
+    internal const string OversizedTokenFailureReason = "auth token oversized";
 
     internal static bool IsTokenOversized(string? token)
         => token is { Length: > MaxTokenCharacters };
+
+    internal static bool IsTokenOversized(ReadOnlySpan<char> token)
+        => token.Length > MaxTokenCharacters;
 
     internal static bool IsTokenShapeValid(ReadOnlySpan<char> token)
     {

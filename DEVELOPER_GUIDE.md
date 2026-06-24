@@ -522,6 +522,8 @@ The MCP JSON-RPC `ping` method returns a structured health object with `status`,
 
 `db_open` is a lightweight `SELECT 1` probe against the configured SQLite DB. A failed probe reports `status: "degraded"` and includes a sanitized `db_error` exception type instead of raw filesystem or SQLite details.
 
+HTTP health objects also include transport observability counters for request-log drops, response cleanup failures, SSE event-stream drops (`http_event_stream_drop_count`, `http_event_stream_write_failure_drop_count`, `http_event_stream_last_drop_reason`), and bearer auth denial classes (`http_auth_denial_*`). These are internal diagnostics: bearer auth failures still return the generic 401 body unless unsafe debug logging is explicitly enabled.
+
 ### MCP keep-alive notifications
 
 HTTP MCP `/events` streams can emit opt-in server-initiated `notifications/keep_alive` JSON-RPC notifications. Set `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` to a finite value from `1` to `300` seconds to enable them; unset, non-finite, or out-of-range values keep the default off behavior and emit a warning. Stdio sessions do not emit keep-alive notifications by default because the parent process owns liveness for that transport.
@@ -2846,6 +2848,8 @@ non-empty な `search` response には `next_cursor` も含める。同じ query
 MCP JSON-RPC `ping` method は `status`、`uptime_s`、`last_request_at`、`db_open`、`last_db_check_at`、`transport_ready` を持つ structured health object を返す。HTTP MCP transport は同じ object を既存 listener の `GET /healthz` でも公開する。HTTP transport が bearer token で保護されている場合、`/healthz` も POST と `/events` と同じ `Authorization: Bearer <token>` requirement を使う。
 
 `db_open` は configured SQLite DB に対する軽量な `SELECT 1` probe である。probe が失敗した場合、`status: "degraded"` を返し、raw filesystem / SQLite detail の代わりに sanitized な `db_error` exception type を含める。
+
+HTTP health object には request-log drop、response cleanup failure、SSE event-stream drop（`http_event_stream_drop_count`、`http_event_stream_write_failure_drop_count`、`http_event_stream_last_drop_reason`）、および bearer auth denial class（`http_auth_denial_*`）の transport observability counter も含める。これらは内部診断であり、unsafe debug logging を明示的に有効化しない限り bearer auth failure は generic な 401 body を返し続ける。
 
 ### MCP keep-alive 通知
 
