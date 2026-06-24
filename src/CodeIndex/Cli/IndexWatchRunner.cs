@@ -347,7 +347,7 @@ internal static class IndexWatchRunner
             {
                 spoolPath = Path.Combine(Path.GetTempPath(), $"cdidx-watch-subrun-{Guid.NewGuid():N}.jsonl");
                 spoolWriter = new StreamWriter(
-                    new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read),
+                    CreateSubRunSpoolFileStream(spoolPath),
                     new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             }
 
@@ -421,6 +421,9 @@ internal static class IndexWatchRunner
         DeleteSpoolFile(spoolPath);
         return subRunExitCode;
     }
+
+    internal static FileStream CreateSubRunSpoolFileStream(string spoolPath)
+        => DataDirectorySecurity.OpenPrivateFileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
 
     private static bool TryWriteSpooledSubRunOutput(string? spoolPath, out bool endedWithLineBreak)
     {

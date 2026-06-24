@@ -48,6 +48,7 @@ internal static partial class ProgramRunner
     };
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan McpHttpDisposeTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
     private static readonly HashSet<string> TopLevelValueOptionNames =
@@ -329,7 +330,7 @@ internal static partial class ProgramRunner
 
         try
         {
-            using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(path));
+            using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
             if (stream.Length > TestExtractorMaxInputBytes)
             {
                 exitCode = WriteTestExtractorTooLargeError(displayRole, stream.Length);
@@ -517,6 +518,10 @@ internal static partial class ProgramRunner
         Console.WriteLine("config:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
+        Console.WriteLine();
+        Console.WriteLine("github:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("proxy_default_credentials", GitHubHttpClientFactory.FormatProxyDefaultCredentialsStatus(), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("max_request_timeout_s", GitHubHttpClientFactory.MaxRequestTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture), indent: "  "));
         Console.WriteLine();
         Console.WriteLine("cdidx_env:");
         foreach (var (key, value) in EnumerateCdidxEnvironment())
@@ -2815,10 +2820,35 @@ internal static partial class ProgramRunner
         }
         finally
         {
-            transport.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            DisposeMcpHttpTransport(transport);
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static void DisposeMcpHttpTransport(HttpMcpTransport transport)
+    {
+        try
+        {
+            var disposeTask = transport.DisposeAsync().AsTask();
+            if (disposeTask.Wait(McpHttpDisposeTimeout))
+                return;
+
+            var message = $"MCP HTTP transport disposal did not finish within {FormatDuration(McpHttpDisposeTimeout)}.";
+            GlobalToolLog.Error("mcp_http_transport_dispose_timeout " + message);
+            CommandErrorWriter.WriteStderr("Warning: " + message);
+        }
+        catch (AggregateException ex)
+        {
+            var inner = ex.Flatten().InnerExceptions.FirstOrDefault() ?? ex;
+            GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(inner));
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({inner.GetType().Name}: {inner.Message}).");
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(ex));
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({ex.GetType().Name}: {ex.Message}).");
+        }
     }
 
     private static void LogHttpMcpRequest(HttpMcpTransport.HttpRequestLogRecord record)
@@ -3625,6 +3655,7 @@ internal static partial class ProgramRunner
             fileName: ResolveTrustedBashPath(),
             workingDirectory: Path.GetDirectoryName(fullScriptPath) ?? string.Empty);
         CodeIndex.ProcessLaunchPolicy.AddArguments(startInfo, fullScriptPath, releaseTag);
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyUpgradeInstallerEnvironment(startInfo);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
     }
@@ -3898,60 +3929,17 @@ internal static partial class ProgramRunner
         out string fullPath,
         out string failureReason)
     {
-        fullPath = string.Empty;
-        failureReason = string.Empty;
-        try
-        {
-            fullPath = NormalizeCleanupBoundaryPath(Path.GetFullPath(path));
-            var tempRoot = NormalizeCleanupBoundaryPath(Path.GetTempPath());
-            if (string.Equals(fullPath, tempRoot, PathCasing.ComparisonFor(tempRoot))
-                || !PathCasing.IsPathEqualOrParent(tempRoot, fullPath))
-            {
-                failureReason = "target is outside the expected cleanup root";
-                return false;
-            }
-
-            if (!Path.GetFileName(fullPath).StartsWith(UpgradeInstallerDirectoryPrefix, StringComparison.Ordinal))
-            {
-                failureReason = "target name does not match the expected upgrade temporary-directory prefix";
-                return false;
-            }
-
-            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
-            if (Directory.Exists(longPath))
-            {
-                var directoryInfo = new DirectoryInfo(fullPath);
-                directoryInfo.Refresh();
-                var attributes = directoryInfo.Attributes;
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
-                    || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
-                {
-                    failureReason = "target is a symbolic link, reparse point, or device";
-                    return false;
-                }
-            }
-            else if (File.Exists(longPath))
-            {
-                failureReason = "target is not a directory";
-                return false;
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
-        {
-            failureReason = "target path is invalid";
-            return false;
-        }
-    }
-
-    private static string NormalizeCleanupBoundaryPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(fullPath);
-        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
-            return fullPath;
-        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var options = new DirectoryCleanupBoundaryOptions(
+            UpgradeInstallerDirectoryPrefix,
+            "target is outside the expected cleanup root",
+            "target name does not match the expected upgrade temporary-directory prefix",
+            "target is a symbolic link, reparse point, or device");
+        return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+            path,
+            Path.GetTempPath(),
+            options,
+            out fullPath,
+            out failureReason);
     }
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(
@@ -4008,7 +3996,7 @@ internal static partial class ProgramRunner
             Uri.EscapeDataString(assetName));
 
     private static HttpClient CreateUpgradeHttpClient()
-        => new() { Timeout = TimeSpan.FromSeconds(20) };
+        => GitHubHttpClientFactory.CreateReleaseDownloadHttpClient(TimeSpan.FromSeconds(20));
 
     internal static async Task<string> DownloadReleaseChecksumManifestAsync(
         HttpClient client,
@@ -4016,18 +4004,24 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(timeout);
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
+        GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            downloadCts.Token).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+            downloadScope.Token).ConfigureAwait(false);
+        await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
+            response,
+            ReleaseChecksumAssetName,
+            downloadScope.Token).ConfigureAwait(false);
         var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
             response.Content,
             MaxReleaseChecksumBytes,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
         return Encoding.UTF8.GetString(bytes);
     }
 
@@ -4062,7 +4056,7 @@ internal static partial class ProgramRunner
         if (!IsSha256Hex(expectedSha256Hex))
             throw new InvalidDataException($"Release checksum for {assetName} is not a valid SHA-256 digest.");
 
-        using var stream = File.OpenRead(path);
+        using var stream = BoundedFile.OpenReadForHash(path);
         var actual = Sha256StreamHasher.ComputeHex(stream, cancellationToken);
         if (!string.Equals(actual, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(
@@ -4090,19 +4084,25 @@ internal static partial class ProgramRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(timeout);
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
+        GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            downloadCts.Token).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+            downloadScope.Token).ConfigureAwait(false);
+        await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
+            response,
+            InstallerScriptAssetName,
+            downloadScope.Token).ConfigureAwait(false);
         await BoundedHttpContentReader.WriteToPrivateFileAsync(
             response.Content,
             scriptPath,
             MaxInstallerScriptBytes,
-            downloadCts.Token).ConfigureAwait(false);
+            downloadScope.Token).ConfigureAwait(false);
     }
 
     internal static bool CanWriteDirectory(string directory)
@@ -4353,21 +4353,24 @@ internal static partial class ProgramRunner
         return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty}){suffix}";
     }
 
-    private static int RunCompletions(string[] cmdArgs, string commandName = "--completions")
+    private static int RunCompletions(string[] cmdArgs, JsonSerializerOptions jsonOptions, string commandName = "--completions")
     {
         var usage = $"cdidx {commandName} <shell>";
+        var wantsJson = ContainsJsonOutputFlag(cmdArgs);
+        if (wantsJson)
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                "--json is not supported for completions.",
+                CommandExitCodes.UsageError,
+                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`; completions output is already a shell script.",
+                usage);
+
         if (cmdArgs.Length == 0)
             return CommandErrorWriter.Write(
                 $"{commandName} requires a shell value.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-                usage);
-
-        if (cmdArgs[0] == "--json")
-            return CommandErrorWriter.Write(
-                "--json is not supported for completions.",
-                CommandExitCodes.UsageError,
-                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`; completions output is already a shell script.",
                 usage);
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
@@ -4400,8 +4403,18 @@ internal static partial class ProgramRunner
         return message.StartsWith(prefix, StringComparison.Ordinal) ? message[prefix.Length..] : message;
     }
 
-    private static int ShowError(string[] args, string message)
+    private static int ShowError(string[] args, string message, JsonSerializerOptions jsonOptions)
     {
+        if (ContainsJsonOutputFlag(args))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                message,
+                CommandExitCodes.UsageError,
+                "run `cdidx --help` to list available commands.");
+        }
+
         CommandErrorWriter.WriteStderr($"Error: {message}");
 
         var input = args[0];

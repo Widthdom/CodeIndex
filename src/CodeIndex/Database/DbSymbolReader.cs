@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
@@ -109,6 +110,83 @@ public partial class DbReader
         "return",
         "type",
     };
+    private static readonly string[] UnusedContractPathSegments =
+    [
+        "/contracts/",
+        "/contract/",
+        "/dtos/",
+        "/dto/",
+        "/models/",
+        "/model/",
+        "/schemas/",
+        "/schema/",
+    ];
+    private static readonly string[] UnusedRecordContractSuffixes =
+    [
+        "Dto",
+        "DTO",
+        "Request",
+        "Response",
+        "Result",
+        "Results",
+        "Model",
+        "Payload",
+        "Envelope",
+    ];
+    private static readonly string[] UnusedGeneratedPathMarkers =
+    [
+        ".g.cs",
+        ".generated.",
+        "/generated/",
+        "/obj/",
+        "/bin/",
+    ];
+    private static readonly HashSet<string> UnusedExceptionMetadataNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CharactersRead",
+        "Utf8BytesRead",
+        "SizeLimit",
+        "Limit",
+        "ByteCount",
+        "BytesRead",
+        "Offset",
+        "Position",
+        "Path",
+        "FileName",
+        "LineNumber",
+        "ColumnNumber",
+        "ActualSize",
+        "MaxSize",
+        "Length",
+    };
+    private static readonly string[] UnusedConfigMemberTerms =
+    [
+        "Configuration",
+        "Config",
+        "Options",
+        "Settings",
+        "Manifest",
+        "Schema",
+        "Metadata",
+        "Limit",
+        "Max",
+        "Min",
+        "Size",
+        "Bytes",
+        "Count",
+        "Capacity",
+        "Timeout",
+        "Version",
+        "Kind",
+        "Category",
+        "Severity",
+        "Source",
+        "Target",
+        "Path",
+        "Name",
+        "Id",
+        "Key",
+    ];
     private const int UnusedAttributeContextWindow = 16;
     private const int UnusedPublicOverfetchMultiplier = 16;
     private const int UnusedPublicOverfetchMinimum = 64;
@@ -206,9 +284,6 @@ public partial class DbReader
 
     private static void EnsureVisibilityFilterParameterBudget(IReadOnlyCollection<string>? visibilityFilters, IReadOnlyCollection<string>? excludeVisibilityFilters)
         => SqliteDynamicSql.EnsureParameterBudget((visibilityFilters?.Count ?? 0) + (excludeVisibilityFilters?.Count ?? 0), "visibility filters");
-
-    private static bool HasVisibilityFilters(IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
-        => visibilityFilters is { Count: > 0 } || excludeVisibilityFilters is { Count: > 0 };
 
     private static List<string> ExpandVisibilityFilterValues(IReadOnlyList<string> filters)
     {
@@ -421,8 +496,8 @@ public partial class DbReader
     private static void AddQualifiedSymbolQueryParameters(SqliteCommand cmd, string parameterStem, string query)
     {
         var container = GetQualifiedQueryContainer(query);
-        cmd.Parameters.AddWithValue($"@{parameterStem}Container", container);
-        cmd.Parameters.AddWithValue($"@{parameterStem}ContainerSuffixLike", $"%.{EscapeLikeQuery(container)}");
+        SqliteCommandPolicy.Add(cmd, $"@{parameterStem}Container", container);
+        SqliteCommandPolicy.Add(cmd, $"@{parameterStem}ContainerSuffixLike", $"%.{EscapeLikeQuery(container)}");
     }
 
     private bool HasSingleQualifiedSymbolDefinition(string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
@@ -468,10 +543,10 @@ public partial class DbReader
 
     private static void AddQualifiedGraphQueryParameters(SqliteCommand cmd, string query, bool allowLeafFallback, bool allowCSharpContextMatch = false)
     {
-        cmd.Parameters.AddWithValue("@aliasQuerySuffix", GetQualifiedQuerySuffix(query));
-        cmd.Parameters.AddWithValue("@aliasQueryLeaf", SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@allowQualifiedLeafFallback", allowLeafFallback ? 1 : 0);
-        cmd.Parameters.AddWithValue("@allowCSharpQualifiedContextMatch", allowCSharpContextMatch ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuerySuffix", GetQualifiedQuerySuffix(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeaf", SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@allowQualifiedLeafFallback", allowLeafFallback ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@allowCSharpQualifiedContextMatch", allowCSharpContextMatch ? 1 : 0);
     }
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
@@ -531,31 +606,31 @@ public partial class DbReader
                 : _foldReady
                     ? NameFold.Fold(value) ?? value
                     : value;
-            cmd.Parameters.AddWithValue("@query0", paramValue);
-            cmd.Parameters.AddWithValue("@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
-            cmd.Parameters.AddWithValue("@query0NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
-            cmd.Parameters.AddWithValue("@query0Leaf", SqlNameResolver.GetLeafName(value));
-            cmd.Parameters.AddWithValue("@query0LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
-            cmd.Parameters.AddWithValue("@query0SegmentCount", SqlNameResolver.GetSegmentCount(value));
-            cmd.Parameters.AddWithValue("@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
+            SqliteCommandPolicy.Add(cmd, "@query0", paramValue);
+            SqliteCommandPolicy.Add(cmd, "@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+            SqliteCommandPolicy.Add(cmd, "@query0NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
+            SqliteCommandPolicy.Add(cmd, "@query0Leaf", SqlNameResolver.GetLeafName(value));
+            SqliteCommandPolicy.Add(cmd, "@query0LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
+            SqliteCommandPolicy.Add(cmd, "@query0SegmentCount", SqlNameResolver.GetSegmentCount(value));
+            SqliteCommandPolicy.Add(cmd, "@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
             if (SqlNameResolver.HasQualifier(value))
                 AddQualifiedSymbolQueryParameters(cmd, "query0", value);
             if (rustQualifiedParts.QualifiedPath != null)
             {
-                cmd.Parameters.AddWithValue("@query0RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
-                cmd.Parameters.AddWithValue("@query0RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
-                cmd.Parameters.AddWithValue("@query0RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+                SqliteCommandPolicy.Add(cmd, "@query0RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                SqliteCommandPolicy.Add(cmd, "@query0RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                SqliteCommandPolicy.Add(cmd, "@query0RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
             }
         }
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
@@ -639,30 +714,30 @@ public partial class DbReader
                     : _foldReady
                         ? NameFold.Fold(value) ?? value
                         : value;
-                cmd.Parameters.AddWithValue($"@query{i}", paramValue);
-                cmd.Parameters.AddWithValue($"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
-                cmd.Parameters.AddWithValue($"@query{i}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
-                cmd.Parameters.AddWithValue($"@query{i}Leaf", SqlNameResolver.GetLeafName(value));
-                cmd.Parameters.AddWithValue($"@query{i}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
-                cmd.Parameters.AddWithValue($"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
-                cmd.Parameters.AddWithValue($"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
+                SqliteCommandPolicy.Add(cmd, $"@query{i}", paramValue);
+                SqliteCommandPolicy.Add(cmd, $"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+                SqliteCommandPolicy.Add(cmd, $"@query{i}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
+                SqliteCommandPolicy.Add(cmd, $"@query{i}Leaf", SqlNameResolver.GetLeafName(value));
+                SqliteCommandPolicy.Add(cmd, $"@query{i}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
+                SqliteCommandPolicy.Add(cmd, $"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
+                SqliteCommandPolicy.Add(cmd, $"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
                 if (SqlNameResolver.HasQualifier(value))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{i}", value);
                 var swiftBacktickAlias = ComputeSwiftBacktickAlias(value, lang);
                 if (swiftBacktickAlias != null)
                 {
-                    cmd.Parameters.AddWithValue($"@query{i}SwiftBacktickAlias", _foldReady
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}SwiftBacktickAlias", _foldReady
                         ? NameFold.Fold(swiftBacktickAlias) ?? swiftBacktickAlias
                         : swiftBacktickAlias);
                 }
             }
         }
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
@@ -857,25 +932,25 @@ public partial class DbReader
                     paramValue = NameFold.Fold(effectiveQueries[idx]) ?? effectiveQueries[idx];
                 else
                     paramValue = effectiveQueries[idx];
-                cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
-                cmd.Parameters.AddWithValue($"@query{idx}Normalized", SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
-                cmd.Parameters.AddWithValue($"@query{idx}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
-                cmd.Parameters.AddWithValue($"@query{idx}Leaf", SqlNameResolver.GetLeafName(effectiveQueries[idx]));
-                cmd.Parameters.AddWithValue($"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
-                cmd.Parameters.AddWithValue($"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
-                cmd.Parameters.AddWithValue($"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}", paramValue);
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}Normalized", SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}Leaf", SqlNameResolver.GetLeafName(effectiveQueries[idx]));
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
                 if (SqlNameResolver.HasQualifier(effectiveQueries[idx]))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{idx}", effectiveQueries[idx]);
                 if (rustQualifiedParts.QualifiedPath != null)
                 {
-                    cmd.Parameters.AddWithValue($"@query{idx}RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
-                    cmd.Parameters.AddWithValue($"@query{idx}RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
-                    cmd.Parameters.AddWithValue($"@query{idx}RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
                 }
                 var swiftBacktickAlias = ComputeSwiftBacktickAlias(effectiveQueries[idx], lang);
                 if (swiftBacktickAlias != null)
                 {
-                    cmd.Parameters.AddWithValue($"@query{idx}SwiftBacktickAlias", _foldReady
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}SwiftBacktickAlias", _foldReady
                         ? NameFold.Fold(swiftBacktickAlias) ?? swiftBacktickAlias
                         : swiftBacktickAlias);
                 }
@@ -884,26 +959,26 @@ public partial class DbReader
         var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
         var preferCaseInsensitiveExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
         var preferSqlLeafMatch = preferCaseInsensitiveExactMatch && !SqlNameResolver.HasQualifier(effectiveQueries![0]);
-        cmd.Parameters.AddWithValue("@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
-        cmd.Parameters.AddWithValue("@preferLiteralNormalizedSqlMatch", preferLiteralExactMatch ? 1 : 0);
-        cmd.Parameters.AddWithValue("@preferCaseInsensitiveExactMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
-        cmd.Parameters.AddWithValue("@preferCaseInsensitiveNormalizedSqlMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
-        cmd.Parameters.AddWithValue("@preferCaseInsensitiveSqlLeafMatch", preferSqlLeafMatch ? 1 : 0);
-        cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
-        cmd.Parameters.AddWithValue("@rawQueryNormalized", preferLiteralExactMatch ? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
-        cmd.Parameters.AddWithValue("@rawQueryNormalizedFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
-        cmd.Parameters.AddWithValue("@rawQueryLeaf", preferLiteralExactMatch ? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
-        cmd.Parameters.AddWithValue("@rawQueryLeafFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries![0])) ?? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
-        cmd.Parameters.AddWithValue("@rawQuerySegmentCount", preferLiteralExactMatch ? SqlNameResolver.GetSegmentCount(effectiveQueries![0]) : 0);
+        SqliteCommandPolicy.Add(cmd, "@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@preferLiteralNormalizedSqlMatch", preferLiteralExactMatch ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@preferCaseInsensitiveExactMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@preferCaseInsensitiveNormalizedSqlMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@preferCaseInsensitiveSqlLeafMatch", preferSqlLeafMatch ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQueryNormalized", preferLiteralExactMatch ? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQueryNormalizedFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQueryLeaf", preferLiteralExactMatch ? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQueryLeafFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries![0])) ?? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQuerySegmentCount", preferLiteralExactMatch ? SqlNameResolver.GetSegmentCount(effectiveQueries![0]) : 0);
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
 
         var includeRankingMetadata = sortMode != SymbolSortMode.Name;
         var sortModeName = sortMode.ToString().ToLowerInvariant();
@@ -974,120 +1049,131 @@ public partial class DbReader
 
         foreach (var symbol in symbols)
         {
-            var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
-            if (definitionExcerpt == null)
-                continue;
-
-            string? bodyContent = null;
-            int? bodyContentStartLine = null;
-            int? bodyContentEndLine = null;
-            int? bodyContentNextStartLine = null;
-            var bodyContentTruncated = false;
-            int? bodyRequestedStartLine = null;
-            int? bodyRequestedEndLine = null;
-            int? bodyEffectiveStartLine = null;
-            int? bodyEffectiveEndLine = null;
-            var bodyContentTruncationReasons = new List<string>();
-            ExcerptRecoveryHint? bodyContentRecovery = null;
-            if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-            {
-                var requestedBodyLines = Math.Clamp(
-                    bodyLineCount ?? DefinitionBodyMaxLines,
-                    1,
-                    DefinitionBodyMaxRequestedLines);
-                var effectiveBodyStartLine = Math.Clamp(
-                    bodyStartLine ?? symbol.BodyStartLine.Value,
-                    symbol.BodyStartLine.Value,
-                    symbol.BodyEndLine.Value);
-                var cappedBodyEndLine = Math.Min(
-                    symbol.BodyEndLine.Value,
-                    effectiveBodyStartLine + requestedBodyLines - 1);
-                var bodyExcerpt = GetExcerpt(symbol.Path, effectiveBodyStartLine, cappedBodyEndLine);
-                if (bodyExcerpt != null)
-                {
-                    bodyRequestedStartLine = symbol.BodyStartLine.Value;
-                    bodyRequestedEndLine = symbol.BodyEndLine.Value;
-                    bodyEffectiveStartLine = bodyExcerpt.StartLine;
-                    bodyEffectiveEndLine = bodyExcerpt.EndLine;
-                    bodyContent = bodyExcerpt.Content;
-                    bodyContentStartLine = bodyExcerpt.StartLine;
-                    bodyContentEndLine = bodyExcerpt.EndLine;
-                    bodyContentTruncationReasons.AddRange(bodyExcerpt.ContentTruncationReasons);
-                    bodyContentRecovery = bodyExcerpt.ContentRecovery;
-                    if (cappedBodyEndLine < symbol.BodyEndLine.Value)
-                    {
-                        bodyContentTruncated = true;
-                        AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_line_cap");
-                        var recoveryStartLine = cappedBodyEndLine + 1;
-                        var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
-                        bodyContentNextStartLine = recoveryStartLine;
-                        bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
-                    }
-                    bodyContentTruncated |= bodyExcerpt.ContentTruncated;
-                    var byteClamp = ClampDefinitionBodyBytes(bodyContent);
-                    bodyContent = byteClamp.Content;
-                    if (byteClamp.Truncated)
-                    {
-                        bodyContentTruncated = true;
-                        AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_byte_cap");
-                        if (byteClamp.ReturnedLineCount > 0)
-                        {
-                            bodyContentEndLine = Math.Min(
-                                bodyExcerpt.EndLine,
-                                bodyExcerpt.StartLine + byteClamp.ReturnedLineCount - 1);
-                            var nextStartLine = bodyContentEndLine.Value + 1;
-                            if (nextStartLine <= symbol.BodyEndLine.Value)
-                                bodyContentNextStartLine = nextStartLine;
-                        }
-                        else
-                        {
-                            bodyContentEndLine = bodyExcerpt.StartLine;
-                            var nextStartLine = bodyExcerpt.StartLine + 1;
-                            if (nextStartLine <= symbol.BodyEndLine.Value)
-                                bodyContentNextStartLine = nextStartLine;
-                        }
-                        bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
-                    }
-                }
-            }
-
-            results.Add(new DefinitionResult
-            {
-                Path = symbol.Path,
-                Lang = symbol.Lang,
-                Kind = symbol.Kind,
-                SubKind = symbol.SubKind,
-                Name = symbol.Name,
-                Line = symbol.Line,
-                StartLine = symbol.StartLine,
-                EndLine = symbol.EndLine,
-                BodyStartLine = symbol.BodyStartLine,
-                BodyEndLine = symbol.BodyEndLine,
-                Signature = symbol.Signature,
-                ContainerKind = symbol.ContainerKind,
-                ContainerName = symbol.ContainerName,
-                Visibility = symbol.Visibility,
-                ReturnType = symbol.ReturnType,
-                Disambiguator = BuildDefinitionDisambiguator(symbol),
-                Content = definitionExcerpt.Content,
-                BodyContent = bodyContent,
-                BodyContentStartLine = bodyContentStartLine,
-                BodyContentEndLine = bodyContentEndLine,
-                BodyContentNextStartLine = bodyContentNextStartLine,
-                BodyContentTruncated = bodyContentTruncated,
-                BodyRequestedStartLine = bodyRequestedStartLine,
-                BodyRequestedEndLine = bodyRequestedEndLine,
-                BodyEffectiveStartLine = bodyEffectiveStartLine,
-                BodyEffectiveEndLine = bodyEffectiveEndLine,
-                BodyContentTruncationReasons = bodyContentTruncationReasons.Count > 0 ? bodyContentTruncationReasons : null,
-                BodyContentRecovery = bodyContentRecovery,
-                Complexity = bodyContent != null && !bodyContentTruncated
-                    ? SymbolExtractor.EstimateComplexity(bodyContent)
-                    : null,
-            });
+            var definition = BuildDefinitionResult(symbol, includeBody, bodyStartLine, bodyLineCount);
+            if (definition != null)
+                results.Add(definition);
         }
 
         return results;
+    }
+
+    private DefinitionResult? BuildDefinitionResult(
+        SymbolResult symbol,
+        bool includeBody,
+        int? bodyStartLine = null,
+        int? bodyLineCount = null)
+    {
+        var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
+        if (definitionExcerpt == null)
+            return null;
+
+        string? bodyContent = null;
+        int? bodyContentStartLine = null;
+        int? bodyContentEndLine = null;
+        int? bodyContentNextStartLine = null;
+        var bodyContentTruncated = false;
+        int? bodyRequestedStartLine = null;
+        int? bodyRequestedEndLine = null;
+        int? bodyEffectiveStartLine = null;
+        int? bodyEffectiveEndLine = null;
+        var bodyContentTruncationReasons = new List<string>();
+        ExcerptRecoveryHint? bodyContentRecovery = null;
+        if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+        {
+            var requestedBodyLines = Math.Clamp(
+                bodyLineCount ?? DefinitionBodyMaxLines,
+                1,
+                DefinitionBodyMaxRequestedLines);
+            var effectiveBodyStartLine = Math.Clamp(
+                bodyStartLine ?? symbol.BodyStartLine.Value,
+                symbol.BodyStartLine.Value,
+                symbol.BodyEndLine.Value);
+            var cappedBodyEndLine = Math.Min(
+                symbol.BodyEndLine.Value,
+                effectiveBodyStartLine + requestedBodyLines - 1);
+            var bodyExcerpt = GetExcerpt(symbol.Path, effectiveBodyStartLine, cappedBodyEndLine);
+            if (bodyExcerpt != null)
+            {
+                bodyRequestedStartLine = symbol.BodyStartLine.Value;
+                bodyRequestedEndLine = symbol.BodyEndLine.Value;
+                bodyEffectiveStartLine = bodyExcerpt.StartLine;
+                bodyEffectiveEndLine = bodyExcerpt.EndLine;
+                bodyContent = bodyExcerpt.Content;
+                bodyContentStartLine = bodyExcerpt.StartLine;
+                bodyContentEndLine = bodyExcerpt.EndLine;
+                bodyContentTruncationReasons.AddRange(bodyExcerpt.ContentTruncationReasons);
+                bodyContentRecovery = bodyExcerpt.ContentRecovery;
+                if (cappedBodyEndLine < symbol.BodyEndLine.Value)
+                {
+                    bodyContentTruncated = true;
+                    AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_line_cap");
+                    var recoveryStartLine = cappedBodyEndLine + 1;
+                    var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
+                    bodyContentNextStartLine = recoveryStartLine;
+                    bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
+                }
+                bodyContentTruncated |= bodyExcerpt.ContentTruncated;
+                var byteClamp = ClampDefinitionBodyBytes(bodyContent);
+                bodyContent = byteClamp.Content;
+                if (byteClamp.Truncated)
+                {
+                    bodyContentTruncated = true;
+                    AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_byte_cap");
+                    if (byteClamp.ReturnedLineCount > 0)
+                    {
+                        bodyContentEndLine = Math.Min(
+                            bodyExcerpt.EndLine,
+                            bodyExcerpt.StartLine + byteClamp.ReturnedLineCount - 1);
+                        var nextStartLine = bodyContentEndLine.Value + 1;
+                        if (nextStartLine <= symbol.BodyEndLine.Value)
+                            bodyContentNextStartLine = nextStartLine;
+                    }
+                    else
+                    {
+                        bodyContentEndLine = bodyExcerpt.StartLine;
+                        var nextStartLine = bodyExcerpt.StartLine + 1;
+                        if (nextStartLine <= symbol.BodyEndLine.Value)
+                            bodyContentNextStartLine = nextStartLine;
+                    }
+                    bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
+                }
+            }
+        }
+
+        return new DefinitionResult
+        {
+            Path = symbol.Path,
+            Lang = symbol.Lang,
+            Kind = symbol.Kind,
+            SubKind = symbol.SubKind,
+            Name = symbol.Name,
+            Line = symbol.Line,
+            StartLine = symbol.StartLine,
+            EndLine = symbol.EndLine,
+            BodyStartLine = symbol.BodyStartLine,
+            BodyEndLine = symbol.BodyEndLine,
+            Signature = symbol.Signature,
+            ContainerKind = symbol.ContainerKind,
+            ContainerName = symbol.ContainerName,
+            Visibility = symbol.Visibility,
+            ReturnType = symbol.ReturnType,
+            Disambiguator = BuildDefinitionDisambiguator(symbol),
+            Content = definitionExcerpt.Content,
+            BodyContent = bodyContent,
+            BodyContentStartLine = bodyContentStartLine,
+            BodyContentEndLine = bodyContentEndLine,
+            BodyContentNextStartLine = bodyContentNextStartLine,
+            BodyContentTruncated = bodyContentTruncated,
+            BodyRequestedStartLine = bodyRequestedStartLine,
+            BodyRequestedEndLine = bodyRequestedEndLine,
+            BodyEffectiveStartLine = bodyEffectiveStartLine,
+            BodyEffectiveEndLine = bodyEffectiveEndLine,
+            BodyContentTruncationReasons = bodyContentTruncationReasons.Count > 0 ? bodyContentTruncationReasons : null,
+            BodyContentRecovery = bodyContentRecovery,
+            Complexity = bodyContent != null && !bodyContentTruncated
+                ? SymbolExtractor.EstimateComplexity(bodyContent)
+                : null,
+        };
     }
 
     private static void AddBodyContentTruncationReason(List<string> reasons, string reason)
@@ -1280,28 +1366,28 @@ public partial class DbReader
                 : _foldReady
                     ? NameFold.Fold(normalizedQuery) ?? normalizedQuery
                     : normalizedQuery;
-            cmd.Parameters.AddWithValue("@query", paramValue);
-            cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
-            cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(normalizedQuery)) ?? SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
-            cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(normalizedQuery));
-            cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(normalizedQuery)) ?? SqlNameResolver.GetLeafName(normalizedQuery));
-            cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(normalizedQuery));
-            cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(normalizedQuery))}%");
+            SqliteCommandPolicy.Add(cmd, "@query", paramValue);
+            SqliteCommandPolicy.Add(cmd, "@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
+            SqliteCommandPolicy.Add(cmd, "@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(normalizedQuery)) ?? SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
+            SqliteCommandPolicy.Add(cmd, "@queryLeaf", SqlNameResolver.GetLeafName(normalizedQuery));
+            SqliteCommandPolicy.Add(cmd, "@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(normalizedQuery)) ?? SqlNameResolver.GetLeafName(normalizedQuery));
+            SqliteCommandPolicy.Add(cmd, "@querySegmentCount", SqlNameResolver.GetSegmentCount(normalizedQuery));
+            SqliteCommandPolicy.Add(cmd, "@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(normalizedQuery))}%");
             if (SqlNameResolver.HasQualifier(normalizedQuery))
                 AddQualifiedSymbolQueryParameters(cmd, "query", normalizedQuery);
             if (rustQualifiedParts.QualifiedPath != null)
             {
-                cmd.Parameters.AddWithValue("@queryRustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
-                cmd.Parameters.AddWithValue("@queryRustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
-                cmd.Parameters.AddWithValue("@queryRustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+                SqliteCommandPolicy.Add(cmd, "@queryRustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                SqliteCommandPolicy.Add(cmd, "@queryRustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                SqliteCommandPolicy.Add(cmd, "@queryRustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
             }
         }
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
@@ -1580,13 +1666,13 @@ public partial class DbReader
         sql += " ORDER BY CASE WHEN @focusLine BETWEEN " + GetSymbolColumnSql("start_line", "s.line") + " AND " + GetSymbolColumnSql("end_line", "s.line") + " THEN 0 ELSE abs(" + GetSymbolColumnSql("start_line", "s.line") + " - @focusLine) END, " + GetSymbolColumnSql("start_line", "s.line") + " LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@path", path);
-        cmd.Parameters.AddWithValue("@focusLine", focusLine);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
+        SqliteCommandPolicy.Add(cmd, "@focusLine", focusLine);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
         if (excludeName != null && excludeStartLine != null)
         {
-            cmd.Parameters.AddWithValue("@excludeName", excludeName);
-            cmd.Parameters.AddWithValue("@excludeStartLine", excludeStartLine.Value);
+            SqliteCommandPolicy.Add(cmd, "@excludeName", excludeName);
+            SqliteCommandPolicy.Add(cmd, "@excludeStartLine", excludeStartLine.Value);
         }
 
         var results = new List<SymbolResult>();
@@ -1614,6 +1700,160 @@ public partial class DbReader
 
         return results;
     }
+
+    public SymbolAnalysisResult AnalyzeFileLine(
+        string path,
+        int line,
+        int limit = 10,
+        string? lang = null,
+        bool includeBody = false,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth,
+        int? bodyStartLine = null,
+        int? bodyLineCount = null,
+        string? kind = null)
+    {
+        lang = DbReader.NormalizeQueryLanguage(lang);
+        using var txn = _conn.BeginTransaction(deferred: true);
+
+        var query = $"{path}:{line.ToString(CultureInfo.InvariantCulture)}";
+        var file = GetFileByPath(path);
+        var freshness = GetWorkspaceFreshness();
+        var graphLanguage = lang ?? file?.Lang;
+        List<SymbolResult> symbolsAtLine = file == null
+            ? []
+            : GetSymbolsAtLine(path, line, Math.Max(limit, 1), kind, lang);
+        var primarySymbol = symbolsAtLine.FirstOrDefault();
+        var primaryLineDefinition = primarySymbol == null
+            ? null
+            : BuildDefinitionResult(primarySymbol, includeBody, bodyStartLine, bodyLineCount);
+        List<DefinitionResult> definitions = primaryLineDefinition == null ? [] : [primaryLineDefinition];
+        var primaryDefinition = definitions.FirstOrDefault();
+        var hasSupportedGraphDefinition = primaryDefinition != null
+            && ReferenceExtractor.SupportsSymbolGraph(primaryDefinition.Lang, primaryDefinition.Kind, primaryDefinition.ContainerKind) == true;
+        var baseGraphSupported = graphLanguage == null
+            ? (bool?)null
+            : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            baseGraphSupported,
+            hasUnsupportedEnumMember: false,
+            hasSupportedGraphDefinition);
+        var references = primaryDefinition != null
+            ? SearchReferences(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth)
+            : [];
+        var callers = primaryDefinition != null
+            ? GetCallers(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+            : [];
+        var callees = primaryDefinition != null
+            ? GetCallees(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+            : [];
+        var nearbySymbols = file != null
+            ? GetNearbySymbols(
+                path,
+                line,
+                Math.Min(limit, 10),
+                primaryDefinition?.Name,
+                primaryDefinition?.StartLine)
+            : [];
+        ApplyQueryOutputSignatureLimits(definitions);
+        ApplyQueryOutputSignatureLimits(nearbySymbols);
+
+        var result = new SymbolAnalysisResult
+        {
+            Query = query,
+            File = file,
+            WorkspaceIndexedAt = freshness.IndexedAt,
+            WorkspaceLatestModified = freshness.LatestModified,
+            GraphLanguage = graphLanguage,
+            GraphSupported = baseGraphSupported,
+            GraphSupportReason = graphSupportReason,
+            Definitions = definitions,
+            NearbySymbols = nearbySymbols,
+            References = references,
+            Callers = callers,
+            Callees = callees,
+            GraphTableAvailable = _hasReferencesTable,
+        };
+        txn.Commit();
+        return result;
+    }
+
+    private List<SymbolResult> GetSymbolsAtLine(string path, int line, int limit, string? kind, string? lang)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var startLineSql = GetSymbolColumnSql("start_line", "s.line");
+        var endLineSql = GetSymbolColumnSql("end_line", "s.line");
+        var bodyStartLineSql = GetSymbolColumnSql("body_start_line");
+        var bodyEndLineSql = GetSymbolColumnSql("body_end_line");
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {startLineSql} AS start_line,
+                   {endLineSql} AS end_line,
+                   {bodyStartLineSql} AS body_start_line,
+                   {bodyEndLineSql} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND @line BETWEEN {startLineSql} AND {endLineSql}";
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        sql += $@"
+            ORDER BY
+                CASE WHEN {startLineSql} = @line THEN 0 ELSE 1 END,
+                ({endLineSql} - {startLineSql}),
+                CASE WHEN {bodyStartLineSql} IS NOT NULL
+                       AND {bodyEndLineSql} IS NOT NULL
+                       AND @line BETWEEN {bodyStartLineSql} AND {bodyEndLineSql}
+                     THEN 0 ELSE 1 END,
+                {startLineSql} DESC
+            LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@line", line);
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+
+        var results = new List<SymbolResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            results.Add(ReadSymbolResult(reader));
+
+        return results;
+    }
+
+    private static SymbolResult ReadSymbolResult(SqliteDataReader reader)
+        => new()
+        {
+            Path = reader.GetString(0),
+            Lang = GetNullableString(reader, 1),
+            Kind = reader.GetString(2),
+            Name = reader.GetString(3),
+            Line = reader.GetInt32(4),
+            StartLine = GetInt32OrFallback(reader, 5, 4),
+            EndLine = GetInt32OrFallback(reader, 6, 4),
+            BodyStartLine = GetNullableInt32(reader, 7),
+            BodyEndLine = GetNullableInt32(reader, 8),
+            Signature = GetNullableString(reader, 9),
+            ContainerKind = GetNullableString(reader, 10),
+            ContainerName = GetNullableString(reader, 11),
+            Visibility = GetNullableString(reader, 12),
+            ReturnType = GetNullableString(reader, 13),
+        };
 
     /// <summary>
     /// Bundle definition, graph, and local file context for one symbol query.
@@ -1832,15 +2072,15 @@ public partial class DbReader
         sql += " LIMIT 1";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@queryRaw", query);
-        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
-        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        SqliteCommandPolicy.Add(cmd, "@queryRaw", query);
+        SqliteCommandPolicy.Add(cmd, "@queryFolded", NameFold.Fold(query) ?? query);
+        SqliteCommandPolicy.Add(cmd, "@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@queryLeaf", SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var value = cmd.ExecuteScalar();
@@ -1952,7 +2192,7 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT id, path, lang, lines FROM files WHERE path = @path";
-        cmd.Parameters.AddWithValue("@path", filePath);
+        SqliteCommandPolicy.Add(cmd, "@path", filePath);
 
         string? lang = null;
         int totalLines = 0;
@@ -1987,7 +2227,7 @@ public partial class DbReader
                      s.kind COLLATE BINARY ASC,
                      s.name COLLATE BINARY ASC,
                      s.id ASC";
-        symCmd.Parameters.AddWithValue("@fileId", fileId);
+        SqliteCommandPolicy.Add(symCmd, "@fileId", fileId);
 
         var symbols = new List<OutlineSymbol>();
         using (var reader = symCmd.ExecuteTrackedReader())
@@ -2769,20 +3009,20 @@ public partial class DbReader
     private static void AddSymbolHotspotParameters(SqliteCommand command, SymbolHotspotRowsQuery query, int? limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
         if (limit.HasValue)
-            command.Parameters.AddWithValue("@limit", limit.Value);
+            SqliteCommandPolicy.Add(command, "@limit", limit.Value);
         if (lang != null)
-            command.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(command, "@lang", lang);
         else
         {
             for (int i = 0; i < query.GraphLanguages.Count; i++)
-                command.Parameters.AddWithValue($"@gl{i}", query.GraphLanguages[i]);
+                SqliteCommandPolicy.Add(command, $"@gl{i}", query.GraphLanguages[i]);
         }
         if (kind != null)
-            command.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(command, "@kind", kind);
         AddPathFilterParameters(command, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(command, visibilityFilters, excludeVisibilityFilters);
         for (int i = 0; i < query.HotspotFamilyLanguages.Count; i++)
-            command.Parameters.AddWithValue($"@hotspotFamilyLang{i}", query.HotspotFamilyLanguages[i]);
+            SqliteCommandPolicy.Add(command, $"@hotspotFamilyLang{i}", query.HotspotFamilyLanguages[i]);
     }
 
     private sealed record SymbolHotspotRowsQuery(string Sql, List<string> GraphLanguages, List<string> HotspotFamilyLanguages);
@@ -3131,7 +3371,7 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
-        cmd.Parameters.AddWithValue("@groupedPathSampleLimit", GroupedHotspotPathSampleLimit + 1);
+        SqliteCommandPolicy.Add(cmd, "@groupedPathSampleLimit", GroupedHotspotPathSampleLimit + 1);
 
         var results = new List<GroupedHotspotResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -3202,8 +3442,8 @@ public partial class DbReader
         AddSymbolHotspotParameters(cmd, query, limit: null, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
         for (var i = 0; i < results.Count; i++)
         {
-            cmd.Parameters.AddWithValue($"@detailName{i}", results[i].Symbol.Name);
-            cmd.Parameters.AddWithValue($"@detailKind{i}", results[i].Symbol.Kind);
+            SqliteCommandPolicy.Add(cmd, $"@detailName{i}", results[i].Symbol.Name);
+            SqliteCommandPolicy.Add(cmd, $"@detailKind{i}", results[i].Symbol.Kind);
         }
 
         var byGroup = results.ToDictionary(result => GetGroupedHotspotKey(result.Symbol.Name, result.Symbol.Kind), result => result, StringComparer.Ordinal);
@@ -3606,11 +3846,11 @@ public partial class DbReader
               )
               AND csharp_identifier_occurrence_count(peer_chunk.content, @symbolName) > 0
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@fileId", candidate.FileId);
-        cmd.Parameters.AddWithValue("@containerKind", candidate.ContainerKind);
-        cmd.Parameters.AddWithValue("@containerName", candidate.ContainerName);
-        cmd.Parameters.AddWithValue("@containerQualifiedName", candidate.ContainerQualifiedName ?? string.Empty);
-        cmd.Parameters.AddWithValue("@symbolName", candidate.Name);
+        SqliteCommandPolicy.Add(cmd, "@fileId", candidate.FileId);
+        SqliteCommandPolicy.Add(cmd, "@containerKind", candidate.ContainerKind);
+        SqliteCommandPolicy.Add(cmd, "@containerName", candidate.ContainerName);
+        SqliteCommandPolicy.Add(cmd, "@containerQualifiedName", candidate.ContainerQualifiedName ?? string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@symbolName", candidate.Name);
 
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead();
@@ -3631,7 +3871,7 @@ public partial class DbReader
             WHERE file_id = @fileId
             ORDER BY start_line, chunk_index
             """;
-        cmd.Parameters.AddWithValue("@fileId", fileId);
+        SqliteCommandPolicy.Add(cmd, "@fileId", fileId);
 
         var chunks = new List<UnusedCandidateChunk>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -3765,17 +4005,17 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         else
         {
             for (int i = 0; i < graphLangs.Count; i++)
-                cmd.Parameters.AddWithValue($"@gl{i}", graphLangs[i]);
+                SqliteCommandPolicy.Add(cmd, $"@gl{i}", graphLangs[i]);
         }
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
-        cmd.Parameters.AddWithValue("@provisionalBucketOrder", provisionalBucketOrder);
-        cmd.Parameters.AddWithValue("@limit", fetchLimit);
-        cmd.Parameters.AddWithValue("@offset", offset);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
+        SqliteCommandPolicy.Add(cmd, "@provisionalBucketOrder", provisionalBucketOrder);
+        SqliteCommandPolicy.Add(cmd, "@limit", fetchLimit);
+        SqliteCommandPolicy.Add(cmd, "@offset", offset);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
@@ -3808,11 +4048,16 @@ public partial class DbReader
     private UnusedSymbolResult CreateUnusedSymbolResult(UnusedCandidateSymbol candidate)
     {
         var kind = NormalizeUnusedSymbolKind(candidate);
-        var isReflectionOrConfigSuspect = candidate.IsReflectionOrConfigSuspect;
-        if (!isReflectionOrConfigSuspect && candidate.IsPublicOrExported)
-            isReflectionOrConfigSuspect = HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine);
+        var surfaceTags = BuildUnusedIntentionalSurfaceTags(candidate, kind);
+        if (!surfaceTags.Contains("reflection_or_config_suspect", StringComparer.Ordinal)
+            && candidate.IsPublicOrExported
+            && HasReflectionAttributeContext(kind, candidate.Path, candidate.StartLine))
+        {
+            AddUnusedSurfaceTag(surfaceTags, "reflection_or_config_suspect");
+        }
 
-        var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility);
+        var isIntentionalSurfaceSuspect = surfaceTags.Count > 0;
+        var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility);
         return new UnusedSymbolResult
         {
             Path = candidate.Path,
@@ -3830,7 +4075,7 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
-            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isReflectionOrConfigSuspect, candidate.Visibility),
+            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags),
         };
     }
 
@@ -3851,12 +4096,213 @@ public partial class DbReader
 
         if ((kind is "function" or "property")
             && !CSharpPropertyAccessorSignatureRegex.IsMatch(trimmed)
+            && !LooksLikeCSharpCallableSignature(trimmed)
             && CSharpFieldLikeSignatureRegex.IsMatch(trimmed))
         {
             return "field";
         }
 
         return kind;
+    }
+
+    private static bool LooksLikeCSharpCallableSignature(string signature)
+    {
+        var declarationEnd = FindCSharpDeclarationBoundary(signature);
+        var declaration = (declarationEnd >= 0 ? signature[..declarationEnd] : signature).TrimEnd();
+        for (var i = 0; i < declaration.Length; i++)
+        {
+            if (declaration[i] != '(')
+                continue;
+
+            var close = FindMatchingCSharpSignatureParen(declaration, i);
+            if (close < 0)
+                return false;
+
+            var next = SkipCSharpSignatureWhitespace(declaration, close + 1);
+            if (next >= declaration.Length || StartsWithCSharpWhereConstraint(declaration, next))
+                return true;
+
+            i = close;
+        }
+
+        return false;
+    }
+
+    private static int FindCSharpDeclarationBoundary(string signature)
+    {
+        var parenDepth = 0;
+        for (var i = 0; i < signature.Length; i++)
+        {
+            if (TrySkipCSharpSignatureLiteral(signature, ref i))
+                continue;
+
+            var ch = signature[i];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+
+            if (parenDepth == 0 && (ch == '{' || ch == ';' || ch == '='))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingCSharpSignatureParen(string text, int openIndex)
+    {
+        var depth = 0;
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            if (TrySkipCSharpSignatureLiteral(text, ref i))
+                continue;
+
+            if (text[i] == '(')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != ')')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool TrySkipCSharpSignatureLiteral(string text, ref int index)
+    {
+        if (text[index] == '\'' && TrySkipCSharpCharacterLiteral(text, ref index))
+            return true;
+
+        if (text[index] == '@' && index + 1 < text.Length && text[index + 1] == '"')
+        {
+            index++;
+            return TrySkipCSharpVerbatimStringLiteral(text, ref index);
+        }
+
+        if (text[index] != '"')
+            return false;
+
+        var quoteRunLength = CountCSharpQuoteRun(text, index);
+        if (quoteRunLength >= 3)
+            return TrySkipCSharpRawStringLiteral(text, ref index, quoteRunLength);
+
+        return TrySkipCSharpRegularStringLiteral(text, ref index);
+    }
+
+    private static int CountCSharpQuoteRun(string text, int start)
+    {
+        var index = start;
+        while (index < text.Length && text[index] == '"')
+            index++;
+        return index - start;
+    }
+
+    private static bool TrySkipCSharpCharacterLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '\'')
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpRegularStringLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '"')
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpVerbatimStringLiteral(string text, ref int index)
+    {
+        for (var i = index + 1; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            index = i;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpRawStringLiteral(string text, ref int index, int quoteRunLength)
+    {
+        for (var i = index + quoteRunLength; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+
+            if (CountCSharpQuoteRun(text, i) < quoteRunLength)
+                continue;
+
+            index = i + quoteRunLength - 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int SkipCSharpSignatureWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static bool StartsWithCSharpWhereConstraint(string text, int index)
+    {
+        const string whereKeyword = "where";
+        if (!text.AsSpan(index).StartsWith(whereKeyword, StringComparison.Ordinal))
+            return false;
+
+        var end = index + whereKeyword.Length;
+        return end >= text.Length || char.IsWhiteSpace(text[end]);
     }
 
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
@@ -3894,7 +4340,7 @@ public partial class DbReader
 
         var sql = $@"
             WITH unused_candidates AS (
-                SELECT f.path, f.lang, s.kind, s.name, s.line,
+                SELECT s.file_id, f.path, f.lang, s.kind, s.name, s.line,
                        {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                        {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
                        {GetSymbolColumnSql("signature")} AS signature,
@@ -3902,6 +4348,7 @@ public partial class DbReader
                        {GetSymbolColumnSql("return_type")} AS return_type,
                        {GetSymbolColumnSql("container_kind")} AS container_kind,
                        {GetSymbolColumnSql("container_name")} AS container_name,
+                       {GetSymbolColumnSql("container_qualified_name", GetSymbolColumnSql("container_name", "''"))} AS container_qualified_name,
                        CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
                        CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
                        {provisionalBucketOrderSql} AS provisional_bucket_order
@@ -3953,9 +4400,9 @@ public partial class DbReader
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += @"
             )
-            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                   return_type, container_kind, container_name, is_public_or_exported,
-                   is_reflection_or_config_suspect
+            SELECT file_id, path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                   return_type, container_kind, container_name, container_qualified_name,
+                   is_public_or_exported, is_reflection_or_config_suspect, provisional_bucket_order
             FROM unused_candidates
             WHERE provisional_bucket_order = @bucketOrder
             ORDER BY path, line, name
@@ -3963,19 +4410,19 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@bucketOrder", provisionalBucketOrder);
-        cmd.Parameters.AddWithValue("@limit", fetchLimit);
-        cmd.Parameters.AddWithValue("@offset", offset);
+        SqliteCommandPolicy.Add(cmd, "@bucketOrder", provisionalBucketOrder);
+        SqliteCommandPolicy.Add(cmd, "@limit", fetchLimit);
+        SqliteCommandPolicy.Add(cmd, "@offset", offset);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         else
         {
             var langList = graphLangs.ToList();
             for (int i = 0; i < langList.Count; i++)
-                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+                SqliteCommandPolicy.Add(cmd, $"@gl{i}", langList[i]);
         }
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
@@ -3983,38 +4430,27 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var path = reader.GetString(0);
-            var langValue = GetNullableString(reader, 1);
-            var rawKindValue = reader.GetString(2);
-            var signature = GetNullableString(reader, 7);
-            var kindValue = NormalizeUnusedSymbolKind(langValue, rawKindValue, signature);
-            var startLine = GetInt32OrFallback(reader, 5, 4);
-            var isPublicOrExported = reader.GetInt32(12) != 0;
-            var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
-            if (!isReflectionOrConfigSuspect && isPublicOrExported)
-                isReflectionOrConfigSuspect = HasReflectionAttributeContext(kindValue, path, startLine);
-
-            var visibility = GetNullableString(reader, 8);
-            var classification = ClassifyUnusedSymbol(isPublicOrExported, isReflectionOrConfigSuspect, visibility);
-            results.Add(new UnusedSymbolResult
+            var candidate = new UnusedCandidateSymbol
             {
-                Path = path,
-                Lang = langValue,
-                Kind = kindValue,
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = startLine,
-                EndLine = GetInt32OrFallback(reader, 6, 4),
-                Signature = signature,
-                Visibility = visibility,
-                ReturnType = GetNullableString(reader, 9),
-                ContainerKind = GetNullableString(reader, 10),
-                ContainerName = GetNullableString(reader, 11),
-                UnusedBucket = classification.Bucket,
-                UnusedConfidence = classification.Confidence,
-                UnusedReason = classification.Reason,
-                UnusedReasonTags = BuildUnusedReasonTags(isPublicOrExported, isReflectionOrConfigSuspect, visibility),
-            });
+                FileId = reader.GetInt64(0),
+                Path = reader.GetString(1),
+                Lang = GetNullableString(reader, 2),
+                Kind = reader.GetString(3),
+                Name = reader.GetString(4),
+                Line = reader.GetInt32(5),
+                StartLine = GetInt32OrFallback(reader, 6, 5),
+                EndLine = GetInt32OrFallback(reader, 7, 5),
+                Signature = GetNullableString(reader, 8),
+                Visibility = GetNullableString(reader, 9),
+                ReturnType = GetNullableString(reader, 10),
+                ContainerKind = GetNullableString(reader, 11),
+                ContainerName = GetNullableString(reader, 12),
+                ContainerQualifiedName = GetNullableString(reader, 13),
+                IsPublicOrExported = reader.GetInt32(14) != 0,
+                IsReflectionOrConfigSuspect = reader.GetInt32(15) != 0,
+                ProvisionalBucketOrder = reader.GetInt32(16),
+            };
+            results.Add(CreateUnusedSymbolResult(candidate));
         }
 
         return results;
@@ -4078,13 +4514,14 @@ public partial class DbReader
 
     private static IEnumerable<int> GetRelevantUnusedProvisionalBuckets(IReadOnlySet<string> targetBuckets)
     {
-        if (targetBuckets.Contains(UnusedBucketLikelyPrivate))
+        var wantsIntentionalSurface = targetBuckets.Contains(UnusedBucketReflectionOrConfig);
+        if (targetBuckets.Contains(UnusedBucketLikelyPrivate) || wantsIntentionalSurface)
             yield return 0;
-        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic))
+        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic) || wantsIntentionalSurface)
             yield return 1;
-        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || wantsIntentionalSurface)
             yield return 2;
-        if (targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+        if (wantsIntentionalSurface)
             yield return 3;
     }
 
@@ -4140,6 +4577,172 @@ public partial class DbReader
         "low" => 0,
         _ => -1,
     };
+
+    public UnusedCountResult CountUnusedSymbolsDetailed(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, string? bucketFilter = null, string? minConfidence = null)
+    {
+        if (!_hasReferencesTable)
+            return EmptyUnusedCountResult();
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+            return EmptyUnusedCountResult();
+        if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
+            return CountUnusedSymbolsDetailedWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+
+        return CountUnusedSymbolsDetailedWithSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+    }
+
+    private UnusedCountResult CountUnusedSymbolsDetailedWithSqlResolver(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        var count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var includesSql = false;
+        var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        for (var bucket = 0; bucket <= 3; bucket++)
+        {
+            var offset = 0;
+            while (true)
+            {
+                var batch = FetchUnusedCandidates(batchSize, bucket, offset, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var result in batch)
+                {
+                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+    }
+
+    private UnusedCountResult CountUnusedSymbolsDetailedWithoutSqlResolver(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        var count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var includesSql = false;
+        var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var fileContentByFileId = new Dictionary<long, string>();
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        for (var bucket = 0; bucket <= 3; bucket++)
+        {
+            var offset = 0;
+            while (true)
+            {
+                var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var candidate in batch)
+                {
+                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                        continue;
+
+                    var result = CreateUnusedSymbolResult(candidate);
+                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+    }
+
+    private static void AddUnusedCountResult(
+        UnusedSymbolResult result,
+        HashSet<string> paths,
+        Dictionary<string, int> bucketCounts,
+        Dictionary<string, int> confidenceCounts,
+        ref int count,
+        ref bool includesSql)
+    {
+        count++;
+        paths.Add(result.Path);
+        if (IsSqlLanguage(result.Lang))
+            includesSql = true;
+        IncrementUnusedCount(bucketCounts, result.UnusedBucket);
+        IncrementUnusedCount(confidenceCounts, result.UnusedConfidence);
+    }
+
+    private static void IncrementUnusedCount(Dictionary<string, int> counts, string key)
+    {
+        if (counts.TryGetValue(key, out var count))
+            counts[key] = count + 1;
+        else
+            counts[key] = 1;
+    }
+
+    private static UnusedCountResult CreateUnusedCountResult(
+        int count,
+        int fileCount,
+        bool includesSql,
+        Dictionary<string, int> bucketCounts,
+        Dictionary<string, int> confidenceCounts)
+        => new(
+            count,
+            fileCount,
+            includesSql,
+            OrderUnusedBucketCounts(bucketCounts),
+            OrderUnusedConfidenceCounts(confidenceCounts));
+
+    private static UnusedCountResult EmptyUnusedCountResult()
+        => CreateUnusedCountResult(0, 0, includesSql: false, new Dictionary<string, int>(StringComparer.Ordinal), new Dictionary<string, int>(StringComparer.Ordinal));
+
+    private static QueryCountResult ToQueryCountResult(UnusedCountResult result)
+        => new(result.Count, result.FileCount, result.IncludesSql);
+
+    private static Dictionary<string, int> OrderUnusedBucketCounts(Dictionary<string, int> counts)
+    {
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (counts.TryGetValue(bucket, out var count))
+                ordered[bucket] = count;
+        }
+
+        return ordered;
+    }
+
+    private static Dictionary<string, int> OrderUnusedConfidenceCounts(Dictionary<string, int> counts)
+    {
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var confidence in new[] { "medium", "low" })
+        {
+            if (counts.TryGetValue(confidence, out var count))
+                ordered[confidence] = count;
+        }
+
+        foreach (var pair in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!ordered.ContainsKey(pair.Key))
+                ordered[pair.Key] = pair.Value;
+        }
+
+        return ordered;
+    }
 
     public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, string? bucketFilter = null, string? minConfidence = null)
     {
@@ -4209,15 +4812,15 @@ public partial class DbReader
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         else
         {
             var langList = graphLangs.ToList();
             for (int i = 0; i < langList.Count; i++)
-                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+                SqliteCommandPolicy.Add(cmd, $"@gl{i}", langList[i]);
         }
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
@@ -4238,38 +4841,16 @@ public partial class DbReader
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountFilteredUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
 
-        var count = 0;
-        var paths = new HashSet<string>(StringComparer.Ordinal);
-        var includesSql = false;
-        const int batchSize = UnusedPublicOverfetchMaximum;
-        for (var bucket = 0; bucket <= 3; bucket++)
-        {
-            var offset = 0;
-            while (true)
-            {
-                var batch = FetchUnusedCandidates(batchSize, bucket, offset, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-                if (batch.Count == 0)
-                    break;
-
-                offset += batch.Count;
-                foreach (var result in batch)
-                {
-                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
-                        continue;
-
-                    count++;
-                    paths.Add(result.Path);
-                    if (IsSqlLanguage(result.Lang))
-                        includesSql = true;
-                }
-
-                if (batch.Count < batchSize)
-                    break;
-            }
-        }
-
-        return new QueryCountResult(count, paths.Count, includesSql);
+        return ToQueryCountResult(CountUnusedSymbolsDetailedWithSqlResolver(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            bucketFilter,
+            minConfidence));
     }
 
     private QueryCountResult CountFilteredUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
@@ -4277,40 +4858,16 @@ public partial class DbReader
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
         string? bucketFilter, string? minConfidence)
     {
-        var count = 0;
-        var paths = new HashSet<string>(StringComparer.Ordinal);
-        var fileContentByFileId = new Dictionary<long, string>();
-        const int batchSize = UnusedPublicOverfetchMaximum;
-        for (var bucket = 0; bucket <= 3; bucket++)
-        {
-            var offset = 0;
-            while (true)
-            {
-                var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
-                if (batch.Count == 0)
-                    break;
-
-                offset += batch.Count;
-                foreach (var candidate in batch)
-                {
-                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
-                        continue;
-
-                    var result = CreateUnusedSymbolResult(candidate);
-                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
-                        continue;
-
-                    count++;
-                    paths.Add(candidate.Path);
-                }
-
-                if (batch.Count < batchSize)
-                    break;
-            }
-        }
-
-        return new QueryCountResult(count, paths.Count);
+        return ToQueryCountResult(CountUnusedSymbolsDetailedWithoutSqlResolver(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            bucketFilter,
+            minConfidence));
     }
 
     private QueryCountResult CountUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
@@ -4368,7 +4925,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         return cmd.ExecuteScalar() != null;
     }
@@ -5209,26 +5766,190 @@ public partial class DbReader
         return line.IndexOf('[') >= 0 || line.IndexOf(']') >= 0;
     }
 
-    private static int CountChar(string text, char value)
+    private static List<string> BuildUnusedIntentionalSurfaceTags(UnusedCandidateSymbol candidate, string kind)
     {
-        var count = 0;
-        foreach (var ch in text)
+        var tags = new List<string>();
+        if (candidate.IsReflectionOrConfigSuspect)
+            AddUnusedSurfaceTag(tags, "reflection_or_config_suspect");
+        if (IsMarkdownHeadingSymbol(candidate, kind))
+            AddUnusedSurfaceTag(tags, "documentation_heading");
+        if (IsGeneratedSurface(candidate))
+            AddUnusedSurfaceTag(tags, "generated_surface");
+        if (IsSourceGeneratedJsonContext(candidate))
         {
-            if (ch == value)
-                count++;
+            AddUnusedSurfaceTag(tags, "serialization_contract");
+            AddUnusedSurfaceTag(tags, "source_generated_json_context");
         }
-
-        return count;
+        if (IsUnusedContractType(candidate, kind))
+            AddUnusedSurfaceTag(tags, "serialization_contract");
+        if (IsUnusedContractMember(candidate, kind))
+            AddUnusedSurfaceTag(tags, "contract_member");
+        if (IsConfigOrManifestSurface(candidate, kind))
+            AddUnusedSurfaceTag(tags, "config_or_metadata_surface");
+        if (IsTestHookName(candidate.Name))
+            AddUnusedSurfaceTag(tags, "test_hook");
+        if (IsExceptionMetadataProperty(candidate, kind))
+            AddUnusedSurfaceTag(tags, "exception_metadata");
+        if (IsConfigOrMetadataMember(candidate, kind))
+            AddUnusedSurfaceTag(tags, "config_or_metadata_member");
+        return tags;
     }
 
-    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    private static void AddUnusedSurfaceTag(List<string> tags, string tag)
     {
-        if (isReflectionOrConfigSuspect)
+        if (!tags.Contains(tag, StringComparer.Ordinal))
+            tags.Add(tag);
+    }
+
+    private static bool IsMarkdownHeadingSymbol(UnusedCandidateSymbol candidate, string kind)
+    {
+        return (string.Equals(candidate.Lang, "markdown", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate.Lang, "md", StringComparison.OrdinalIgnoreCase))
+            && (kind.Contains("heading", StringComparison.OrdinalIgnoreCase)
+                || kind.Contains("header", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsGeneratedSurface(UnusedCandidateSymbol candidate)
+        => ContainsAny(candidate.Path, UnusedGeneratedPathMarkers);
+
+    private static bool IsSourceGeneratedJsonContext(UnusedCandidateSymbol candidate)
+    {
+        return EndsWithAny(candidate.Name, ["JsonContext"])
+            || ContainsAny(candidate.Signature, ["JsonSerializerContext", "JsonSerializable", "JsonSourceGenerationOptions"]);
+    }
+
+    private static bool IsUnusedContractType(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsTypeLikeUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || IsRecordContractType(candidate)
+            || ContainsAny(candidate.Signature, ["DataContract", "Serializable", "MessagePackObject", "ProtoContract"]);
+    }
+
+    private static bool IsUnusedContractMember(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsDataMemberUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        return ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "DataMember", "XmlElement", "XmlAttribute"]);
+    }
+
+    private static bool IsConfigOrManifestSurface(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        if (!IsTypeLikeUnusedKind(kind) && !IsDataMemberUnusedKind(kind) && !IsFunctionLikeUnusedKind(kind))
+            return false;
+        if (EndsWithAny(candidate.Name, ["Options", "Settings", "Configuration", "Config", "Manifest", "Schema"])
+            || ContainsAny(candidate.Name, ["Configuration", "IOptions"])
+            || ContainsAny(candidate.Signature, ["IConfiguration", "ConfigurationSection", "IOptions", "Options<"]))
+        {
+            return true;
+        }
+
+        return IsDataMemberUnusedKind(kind)
+            && (ContainsAny(candidate.Path, ["/config/", "/configuration/", "/options/", "/settings/", "/manifest/", "/manifests/"])
+                || ContainsAny(candidate.Signature, ["IConfiguration", "ConfigurationSection", "IOptions", "Options<"]));
+    }
+
+    private static bool IsTestHookName(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name)
+            && (name.EndsWith("ForTests", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("ForTest", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("TestOnly", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsExceptionMetadataProperty(UnusedCandidateSymbol candidate, string kind)
+    {
+        return string.Equals(kind, "property", StringComparison.OrdinalIgnoreCase)
+            && UnusedExceptionMetadataNames.Contains(candidate.Name)
+            && (EndsWithAny(candidate.ContainerName, ["Exception"])
+                || ContainsAny(candidate.ContainerQualifiedName, ["Exception"])
+                || ContainsAny(candidate.Signature, ["Exception"]));
+    }
+
+    private static bool IsConfigOrMetadataMember(UnusedCandidateSymbol candidate, string kind)
+    {
+        if (!IsDataMemberUnusedKind(kind) || IsPrivateLikeVisibility(candidate.Visibility))
+            return false;
+        if (!ContainsAny(candidate.Name, UnusedConfigMemberTerms))
+            return false;
+
+        var hasContext = ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || ContainsAny(candidate.Path, ["/config/", "/configuration/", "/options/", "/settings/", "/manifest/", "/manifests/"])
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "DataMember", "Diagnostic", "Metadata", "IConfiguration", "IOptions", "Options<"]);
+        return hasContext;
+    }
+
+    private static bool IsTypeLikeUnusedKind(string kind)
+    {
+        return kind is "class" or "struct" or "record" or "interface" or "enum" or "type";
+    }
+
+    private static bool IsDataMemberUnusedKind(string kind)
+    {
+        return kind is "property" or "field" or "constant" or "enum_member";
+    }
+
+    private static bool IsFunctionLikeUnusedKind(string kind)
+    {
+        return kind is "function" or "method";
+    }
+
+    private static bool IsRecordContractType(UnusedCandidateSymbol candidate)
+    {
+        return ContainsCSharpRecordKeyword(candidate.Signature)
+            && EndsWithAny(candidate.Name, UnusedRecordContractSuffixes);
+    }
+
+    private static bool ContainsCSharpRecordKeyword(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var trimmed = signature.TrimStart();
+        return trimmed.StartsWith("record ", StringComparison.Ordinal)
+            || trimmed.StartsWith("record(", StringComparison.Ordinal)
+            || signature.Contains(" record ", StringComparison.Ordinal)
+            || signature.Contains(" record(", StringComparison.Ordinal);
+    }
+
+    private static bool EndsWithAny(string? value, IReadOnlyList<string> suffixes)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var suffix in suffixes)
+        {
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsAny(string? value, IReadOnlyList<string> fragments)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var fragment in fragments)
+        {
+            if (value.Contains(fragment, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isIntentionalSurfaceSuspect, string? visibility)
+    {
+        if (isIntentionalSurfaceSuspect)
         {
             return (
                 UnusedBucketReflectionOrConfig,
                 "low",
-                "public/exported symbol with config or attribute-driven reflection surface and no indexed references");
+                "symbol with attribute-driven reflection surface, serialization, config, metadata, test-hook, generated, documentation, or compatibility surface and no indexed references");
         }
 
         if (isPublicOrExported)
@@ -5253,11 +5974,16 @@ public partial class DbReader
             "non-public symbol with no indexed references");
     }
 
-    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    private static List<string> BuildUnusedReasonTags(bool isPublicOrExported, bool isIntentionalSurfaceSuspect, string? visibility, IReadOnlyList<string> surfaceTags)
     {
         var tags = new List<string> { "no_indexed_references" };
-        if (isReflectionOrConfigSuspect)
+        if (isIntentionalSurfaceSuspect)
+        {
+            tags.Add("intentional_surface_suspect");
             tags.Add("reflection_or_config_suspect");
+        }
+        foreach (var surfaceTag in surfaceTags)
+            AddUnusedSurfaceTag(tags, surfaceTag);
         if (isPublicOrExported)
             tags.Add("public_or_exported");
         else if (IsPrivateLikeVisibility(visibility))

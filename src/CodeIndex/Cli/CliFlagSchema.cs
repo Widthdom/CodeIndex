@@ -59,7 +59,7 @@ internal static class CliFlagSchema
     // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
     public static IReadOnlyList<string> AllCommands { get; } =
     [
-        "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
@@ -99,8 +99,8 @@ internal static class CliFlagSchema
 
     private static readonly string[] ExcludeFilterCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "files",
-        "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
+        "find", "map", "inspect", "validate", "deps", "impact", "unused", "hotspots",
     ];
 
     private static readonly string[] CountCommands =
@@ -116,7 +116,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] KindCommands =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "inspect", "unused", "hotspots", "validate",
+        "definition", "goto", "references", "callers", "callees", "symbols", "inspect", "outline", "unused", "hotspots", "validate",
     ];
     private static readonly string[] SeverityCommands = ["validate"];
     private static readonly string[] VisibilityCommands =
@@ -128,7 +128,7 @@ internal static class CliFlagSchema
     private static readonly string[] SymbolSortCommands = ["symbols"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
-    private static readonly string[] CursorCommands = ["search", "unused"];
+    private static readonly string[] CursorCommands = ["search", "outline", "unused"];
     private static readonly string[] AllResultCommands = ["goto", "find"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
@@ -194,7 +194,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] JsonCommands =
     [
-        "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
     ];
@@ -203,7 +203,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
+        "search", "audit", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -267,7 +267,9 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Exclude symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
             new() { Name = "--bucket", ValuePlaceholder = "<bucket>", Description = "Unused: return only one confidence bucket", Commands = Set(UnusedFilterCommands) },
+            new() { Name = "--confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: alias for --min-confidence", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--min-confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: return symbols at or above this confidence", Commands = Set(UnusedFilterCommands) },
+            new() { Name = "--actionable", Description = "Unused: preset for private medium-confidence cleanup candidates", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--all", Description = "goto: return all matching LSP locations; find: search all indexed files instead of requiring --path", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--sort", ValuePlaceholder = "<hotspot|references|size|complexity|path>", Description = "Symbols: order audit output by a ranking signal", Commands = Set(SymbolSortCommands) },
@@ -281,6 +283,9 @@ internal static class CliFlagSchema
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
             new() { Name = "--summary-only", Description = "Map/Diff: return only aggregate summary fields", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },
+            new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework/noise symbols in edge symbol samples", Commands = Set("deps") },
+            new() { Name = "--symbol", ValuePlaceholder = "<name>", Description = "Deps: keep only edges with an exact sampled symbol name", Commands = Set("deps") },
+            new() { Name = "--symbol-family", ValuePlaceholder = "<prefix>", Description = "Deps: keep only edges with a sampled symbol prefix/family", Commands = Set("deps") },
             new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--capability", ValuePlaceholder = "<graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>", Description = "Languages: filter by language capability or capability gap", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
@@ -297,7 +302,7 @@ internal static class CliFlagSchema
             new() { Name = "--duplicate-threshold", ValuePlaceholder = "<score>", Description = "Issue-drafts: explicit duplicate-preflight minimum score from 0 to 1", Commands = Set("search", "suggestions") },
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", Commands = Set("search") },
             new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", Commands = Set("search") },
-            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe or unused pagination cursor returned as next_cursor", Commands = Set(CursorCommands) },
+            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe, outline, or unused pagination cursor returned as next_cursor", Commands = Set(CursorCommands) },
             new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },
@@ -325,7 +330,8 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: drop matches from selected origins; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--result-kind", ValuePlaceholder = "<call_site|declaration|identifier|comment|string_literal>", Description = "Search: keep only projected result kinds; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet,query_name,recipe>", Description = "Search: project JSON/NDJSON result fields for audit pipelines", Commands = Set("search") },
-            new() { Name = "--results-only", Description = "Search recipes: emit result-only NDJSON without stream done records", Commands = Set("search") },
+            new() { Name = "--outline-fields", ValuePlaceholder = "<kind,name,path,line,signature,...>", Description = "Outline JSON: project symbol fields for audit pipelines", Commands = Set("outline") },
+            new() { Name = "--results-only", Description = "Search: emit result-only NDJSON without stream done records", Commands = Set("search") },
             new() { Name = "--first-per-file", Description = "Search: keep the first returned match for each file", Commands = Set("search") },
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search grouped output: representative matches per file", Commands = Set("search") },
@@ -363,7 +369,7 @@ internal static class CliFlagSchema
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", Commands = Set("status") },
-            new() { Name = "--explain", ValuePlaceholder = "<field>", Description = "Explain one status readiness field", Commands = Set("status") },
+            new() { Name = "--explain", ValuePlaceholder = "<field>", Description = "Explain one visible status field", Commands = Set("status") },
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },
             new() { Name = "--check-updates", Description = "Check whether a newer cdidx release is available", Commands = Set("status", "upgrade") },
             new() { Name = "--check-only", Description = "Upgrade: only report whether an upgrade is available", Commands = Set("upgrade") },

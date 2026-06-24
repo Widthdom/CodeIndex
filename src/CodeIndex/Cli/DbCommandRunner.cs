@@ -34,6 +34,12 @@ public static class DbCommandRunner
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFilesForTesting { get; set; }
     internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFileNamesForTesting { get; set; }
+    private static readonly AsyncLocal<Func<DateTimeOffset>?> ScopedUtcNowForTesting = new();
+    internal static Func<DateTimeOffset>? UtcNowForTesting
+    {
+        get => ScopedUtcNowForTesting.Value;
+        set => ScopedUtcNowForTesting.Value = value;
+    }
     internal static Action<string, string>? MaintenanceProgressForTesting
     {
         get => ScopedMaintenanceProgressForTesting.Value;
@@ -140,7 +146,7 @@ public static class DbCommandRunner
     internal static string CreateAutomaticCheckpoint(string dbPath)
     {
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
-        var name = AutoCheckpointPrefix + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        var name = AutoCheckpointPrefix + GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
         return CreateCheckpoint(fullDbPath, name).CheckpointPath;
     }
 
@@ -1092,7 +1098,7 @@ public static class DbCommandRunner
             CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
             CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
             CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
-            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}");
+            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={GetUtcNow():O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}");
             AtomicFileWriter.PublishDirectory(tempPath, checkpointPath);
         }
         catch
@@ -1566,12 +1572,15 @@ public static class DbCommandRunner
         => ConsoleUi.FormatBoundedValue(name, CheckpointNameDiagnosticTextLimit);
 
     private static string MakeTimestampCheckpointName()
-        => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        => GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string MakeRestorePathSuffix()
-        => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
+        => GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
             + "-"
             + Guid.NewGuid().ToString("N");
+
+    private static DateTimeOffset GetUtcNow()
+        => UtcNowForTesting?.Invoke() ?? DateTimeOffset.UtcNow;
 
     private static string GetCheckpointRoot(string fullDbPath)
         => fullDbPath + CheckpointsDirectorySuffix;
@@ -1688,48 +1697,17 @@ public static class DbCommandRunner
         out string fullPath,
         out string failureReason)
     {
-        fullPath = string.Empty;
-        failureReason = string.Empty;
-        try
-        {
-            fullPath = PathCasing.NormalizeBoundaryPath(path);
-            var normalizedRoot = PathCasing.NormalizeBoundaryPath(safeRoot);
-            if (string.Equals(fullPath, normalizedRoot, PathCasing.ComparisonFor(normalizedRoot))
-                || !PathCasing.IsPathEqualOrParent(normalizedRoot, fullPath))
-            {
-                failureReason = "target is outside the expected cleanup root";
-                return false;
-            }
-
-            if (!Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
-            {
-                failureReason = "target name does not match the expected temporary-directory prefix";
-                return false;
-            }
-
-            var longPath = LongPath.EnsureWindowsPrefix(fullPath);
-            if (Directory.Exists(longPath))
-            {
-                var attributes = File.GetAttributes(longPath);
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
-                {
-                    failureReason = "target is not a regular temporary directory";
-                    return false;
-                }
-            }
-            else if (File.Exists(longPath))
-            {
-                failureReason = "target is not a directory";
-                return false;
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
-        {
-            failureReason = "target path is invalid";
-            return false;
-        }
+        var options = new DirectoryCleanupBoundaryOptions(
+            expectedNamePrefix,
+            "target is outside the expected cleanup root",
+            "target name does not match the expected temporary-directory prefix",
+            "target is not a regular temporary directory");
+        return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+            path,
+            safeRoot,
+            options,
+            out fullPath,
+            out failureReason);
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)

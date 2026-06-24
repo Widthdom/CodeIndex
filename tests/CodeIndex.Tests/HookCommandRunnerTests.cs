@@ -397,6 +397,28 @@ public class HookCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void CreateStagedHookFileStream_OnPosix_CreatesPrivateFileUpFront_Issue3984()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_private_staged");
+        try
+        {
+            var stagedPath = Path.Combine(projectRoot, ".pre-commit.test.tmp");
+
+            using var stream = HookCommandRunner.CreateStagedHookFileStream(stagedPath);
+
+            Assert.True(stream.CanWrite);
+            AssertPrivateFileMode(stagedPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunIndexAndCaptureStreams(string[] args)
     {
         using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
@@ -424,6 +446,15 @@ public class HookCommandRunnerTests
 
     private static void AssertNoHookTempFiles(string hooksDir)
         => Assert.Empty(Directory.GetFiles(hooksDir, ".pre-commit.*.tmp"));
+
+    private static void AssertPrivateFileMode(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
+        Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
+    }
 
     private static string QuoteShellForTest(string value)
         => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -104,6 +105,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(JsonValueKind.Array, root.ValueKind);
             Assert.Equal(1, root.GetArrayLength());
             Assert.Equal("bom", root[0].GetProperty("kind").GetString());
+            Assert.Equal(FileIssue.OriginByteOrderMark, root[0].GetProperty("origin").GetString());
+            Assert.Equal(FileIssue.SeverityWarning, root[0].GetProperty("severity").GetString());
         }
         finally
         {
@@ -148,6 +151,56 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunValidate_FormatCountThenJsonKeepsCountShape_Issue3896()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_count_json_3896");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllBytes(
+                Path.Combine(projectRoot, "src", "bom.cs"),
+                [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes("class Bom {}\n")]);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(1, root.GetProperty("total_estimated").GetInt32());
+            Assert.False(root.TryGetProperty("issues", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunValidate_InvalidSeverityJsonReturnsStructuredError_Issue3896()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--severity", "invalid", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unsupported validate severity 'invalid'.", document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void RunValidate_KindFilterNarrowsIssues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_kind_filter");
@@ -179,6 +232,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("bom", json.GetProperty("issues")[0].GetProperty("kind").GetString());
+            Assert.Equal(FileIssue.OriginByteOrderMark, json.GetProperty("issues")[0].GetProperty("origin").GetString());
+            Assert.Equal(FileIssue.SeverityWarning, json.GetProperty("issues")[0].GetProperty("severity").GetString());
         }
         finally
         {
@@ -225,4 +280,66 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void RunValidate_ExcludeFiltersScopeIssues_Issue3897()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_exclude_filters");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "generated"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tests"));
+            WriteUtf8BomFile(Path.Combine(projectRoot, "src", "App.cs"), "class App {}\n");
+            WriteUtf8BomFile(Path.Combine(projectRoot, "src", "generated", "Generated.cs"), "class Generated {}\n");
+            WriteUtf8BomFile(Path.Combine(projectRoot, "tests", "AppTests.cs"), "class AppTests {}\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--json", "--exclude-tests", "--exclude-path", "generated"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var issues = root.GetProperty("issues");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal("src/App.cs", issues[0].GetProperty("path").GetString());
+            Assert.Equal("bom", issues[0].GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ValidateContent_SuppressesSolutionUtf8BomNoise_Issue3897()
+    {
+        var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF, 0x63, 0x6C, 0x61, 0x73, 0x73 };
+
+        var solutionIssues = FileIndexer.ValidateContent(
+            "CodeIndex.sln",
+            rawBytes,
+            "\uFEFFMicrosoft Visual Studio Solution File, Format Version 12.00\n",
+            "text");
+        var csharpIssues = FileIndexer.ValidateContent(
+            "src/Bom.cs",
+            rawBytes,
+            "\uFEFFclass Bom {}\n",
+            "csharp");
+
+        Assert.DoesNotContain(solutionIssues, issue => issue.Kind == "bom");
+        Assert.Contains(csharpIssues, issue => issue.Kind == "bom");
+    }
+
+    private static void WriteUtf8BomFile(string path, string content)
+        => File.WriteAllBytes(path, [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(content)]);
 }

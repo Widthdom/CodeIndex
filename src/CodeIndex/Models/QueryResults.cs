@@ -54,7 +54,22 @@ public sealed class SearchDiagnostic
 
 public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
 
-public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
+public readonly record struct QueryCountResult(
+    int Count,
+    int FileCount,
+    bool IncludesSql = false,
+    long? TotalBytes = null,
+    double? AverageBytes = null,
+    long? MaxBytes = null,
+    string? MaxBytesPath = null,
+    bool? BytesAuthoritative = null);
+
+public readonly record struct UnusedCountResult(
+    int Count,
+    int FileCount,
+    bool IncludesSql,
+    IReadOnlyDictionary<string, int> BucketCounts,
+    IReadOnlyDictionary<string, int> ConfidenceCounts);
 
 public readonly record struct SearchFileCountResult(string Path, int Count);
 
@@ -456,6 +471,14 @@ public sealed class LspLocation
 {
     public string Uri { get; set; } = string.Empty;
     public LspRange Range { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Kind { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Severity { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Source { get; set; }
 }
 
 public class ExactZeroHintResult

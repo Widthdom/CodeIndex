@@ -383,7 +383,8 @@ internal static class SymbolExtractionWorker
     private const string TestDelayMillisecondsOption = "--test-delay-ms";
     private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
-    internal static readonly JsonSerializerOptions JsonOptions = SymbolExtractionWorkerJsonContext.Default.Options;
+    internal static readonly JsonSerializerOptions JsonOptions =
+        WorkerProtocolJsonValidator.CreateSerializerOptions(SymbolExtractionWorkerJsonContext.Default.Options);
     internal static int? DelayMillisecondsForTesting { get; set; }
     internal static string? ConsoleStdoutForTesting { get; set; }
 

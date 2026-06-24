@@ -199,6 +199,9 @@ public class FileIndexer
         [".yml"] = "yaml",
         [".json"] = "json",
         [".toml"] = "toml",
+        [".config"] = "xml",
+        [".runsettings"] = "xml",
+        [".rules"] = "config",
         [".xaml"] = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
         [".axaml"] = "xml",    // Avalonia XAML / Avalonia XAML
         [".sln"] = "solution", // Visual Studio solution / Visual Studio ソリューション
@@ -381,6 +384,7 @@ public class FileIndexer
         ["packages.lock.json"] = "dependency_lock", // NuGet lockfile / NuGet lockfile
         [".editorconfig"] = "editorconfig",
         [".gitignore"] = "gitignore",
+        [".gitattributes"] = "gitattributes",
         [".dockerignore"] = "dockerignore",
     };
 
@@ -1447,52 +1451,29 @@ public class FileIndexer
     // skip 対象属性扱いにする。
     private static bool HasSkippedAttributes(string path)
     {
-        try
+        return FileSystemBoundary.TryGetAttributes(path, out var attributes) switch
         {
-            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
-            return HasSkippedAttributes(attributes);
-        }
-        catch (FileNotFoundException)
-        {
-            return true;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
+            FileSystemBoundaryProbeStatus.Found => HasSkippedAttributes(attributes),
+            FileSystemBoundaryProbeStatus.Missing => true,
+            _ => false,
+        };
     }
 
     private static bool IsReparsePoint(string path)
     {
-        try
-        {
-            return (File.GetAttributes(LongPath.EnsureWindowsPrefix(path)) & FileAttributes.ReparsePoint) != 0;
-        }
-        catch (FileNotFoundException)
-        {
-            return false;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
+        return FileSystemBoundary.TryGetAttributes(path, out var attributes) == FileSystemBoundaryProbeStatus.Found
+            && FileSystemBoundary.IsSymlinkOrReparsePoint(attributes);
     }
+
+    private static FileProbeStatus ToFileProbeStatus(FileSystemBoundaryProbeStatus status)
+        => status switch
+        {
+            FileSystemBoundaryProbeStatus.Missing => FileProbeStatus.Missing,
+            FileSystemBoundaryProbeStatus.PermissionDenied or FileSystemBoundaryProbeStatus.IoError => OperatingSystem.IsWindows()
+                ? FileProbeStatus.Supported
+                : FileProbeStatus.ProbeFailed,
+            _ => FileProbeStatus.ProbeFailed,
+        };
 
     private bool ShouldSkipDirectoryLink(string subDir, List<ScanError> errors, HashSet<string> danglingSymlinks)
     {
@@ -1612,33 +1593,11 @@ public class FileIndexer
         // File.GetAttributes は .NET 上で lstat 相当（symlink target を辿らない）なので、
         // Unix の stat() が target を辿る前に symlink policy を適用できる。Windows では
         // broad scan で OS 管理 cache を索引しないよう Hidden/System も引き続き弾く。
-        FileAttributes attributes;
-        try
-        {
-            attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(filePath));
-        }
-        catch (FileNotFoundException)
-        {
-            return FileProbeStatus.Missing;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return FileProbeStatus.Missing;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return OperatingSystem.IsWindows()
-                ? FileProbeStatus.Supported
-                : FileProbeStatus.ProbeFailed;
-        }
-        catch (IOException)
-        {
-            return OperatingSystem.IsWindows()
-                ? FileProbeStatus.Supported
-                : FileProbeStatus.ProbeFailed;
-        }
+        var probeStatus = FileSystemBoundary.TryGetAttributes(filePath, out var attributes);
+        if (probeStatus != FileSystemBoundaryProbeStatus.Found)
+            return ToFileProbeStatus(probeStatus);
 
-        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
             return GetFileSymlinkIndexability(filePath, symlinkPolicy, projectRoot);
 
         if (HasSkippedAttributes(attributes))
@@ -4091,6 +4050,8 @@ public class FileIndexer
             Message = utf16BigEndian
                 ? "UTF-16 BE BOM detected (decoded as UTF-16)"
                 : "UTF-16 LE BOM detected (decoded as UTF-16)",
+            Origin = FileIssue.OriginByteOrderMark,
+            Severity = FileIssue.SeverityWarning,
         });
     }
 
@@ -4188,7 +4149,7 @@ public class FileIndexer
     private static void AddRawByteContentIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
     {
         // BOM marker / BOMマーカー
-        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF && !ShouldSuppressUtf8BomIssue(relativePath))
         {
             issues.Add(new FileIssue
             {
@@ -4196,6 +4157,8 @@ public class FileIndexer
                 Kind = "bom",
                 Line = 1,
                 Message = "UTF-8 BOM marker detected",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
             });
         }
 
@@ -4213,6 +4176,9 @@ public class FileIndexer
 
         AddLineEndingIssues(issues, relativePath, rawBytes);
     }
+
+    private static bool ShouldSuppressUtf8BomIssue(string relativePath)
+        => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
 
     private static void AddLineEndingIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
     {
@@ -4541,7 +4507,7 @@ public class FileIndexer
 
         try
         {
-            using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(filePath));
+            using var stream = BoundedFile.OpenReadForPrefixProbe(filePath);
             if (!stream.CanRead)
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 

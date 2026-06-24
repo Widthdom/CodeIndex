@@ -109,8 +109,8 @@ public partial class McpServer : IDisposable
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
     private readonly TimeSpan? _keepAliveInterval;
-    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
-    private DateTimeOffset _lastRequestAt = DateTimeOffset.UtcNow;
+    private readonly DateTimeOffset _startedAt;
+    private DateTimeOffset _lastRequestAt;
     private DateTimeOffset? _lastDbCheckAt;
     private bool? _lastDbCheckOk;
     private string? _lastDbCheckError;
@@ -300,6 +300,8 @@ public partial class McpServer : IDisposable
         _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _startedAt = _timeProvider.GetUtcNow();
+        _lastRequestAt = _startedAt;
         _auditLog = auditLog;
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
@@ -745,6 +747,20 @@ public partial class McpServer : IDisposable
         }
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
+        if (tasks.All(static task => task.IsCompleted))
+        {
+            writeGate.Dispose();
+            normalFrameGate.Dispose();
+        }
+        else
+        {
+            // The bounded EOF drain can intentionally leave late request tasks running. Those
+            // tasks still own these gates until their finally blocks run, so disposing here would
+            // turn late completion into ObjectDisposedException (#3999).
+            // bounded EOF drain は late request task を残すことがある。finally が走るまで gate は
+            // その task が使うため、ここで dispose すると late completion が ObjectDisposedException
+            // になってしまう (#3999)。
+        }
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
@@ -896,7 +912,7 @@ public partial class McpServer : IDisposable
         {
             WriteMcpLogLine(BuildResponseWriteErrorLog("write operation was canceled"));
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
         {
             WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
         }
@@ -1147,9 +1163,11 @@ public partial class McpServer : IDisposable
         if (@params is not null)
             request["params"] = @params;
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
-        using var cancellationRegistration = timeoutCts.Token.Register(static state =>
+        using var timeoutScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.McpClientRequest,
+            TimeSpan.FromSeconds(10),
+            cancellationToken);
+        using var cancellationRegistration = timeoutScope.Token.Register(static state =>
         {
             var tuple = ((McpServer server, string key, TaskCompletionSource<JsonNode?> pending))state!;
             if (tuple.server._pendingClientRequests.TryRemove(tuple.key, out var _))
@@ -1158,7 +1176,7 @@ public partial class McpServer : IDisposable
 
         try
         {
-            await writer(request.ToJsonString(_jsonOptions), timeoutCts.Token).ConfigureAwait(false);
+            await writer(request.ToJsonString(_jsonOptions), timeoutScope.Token).ConfigureAwait(false);
             return await pending.Task.ConfigureAwait(false);
         }
         catch (InvalidOperationException)
@@ -1386,7 +1404,7 @@ public partial class McpServer : IDisposable
                 suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
                 retrySafe: false);
 
-        _lastRequestAt = DateTimeOffset.UtcNow;
+        _lastRequestAt = _timeProvider.GetUtcNow();
 
         // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
         // throw before the auth gate runs, otherwise a token-protected server would surface
@@ -1508,7 +1526,7 @@ public partial class McpServer : IDisposable
 
     private string BuildKeepAliveNotificationJson()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var notification = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -1542,7 +1560,7 @@ public partial class McpServer : IDisposable
 
     private JsonObject BuildHealthResult(HttpMcpTransport? httpTransport = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var dbOpen = ProbeDbHealth(now, out var dbError);
         var httpResponseCleanupDegraded = httpTransport?.ResponseCleanupDegraded ?? false;
         var httpRequestLogDegraded = httpTransport?.RequestLogDegraded ?? false;
@@ -1575,6 +1593,19 @@ public partial class McpServer : IDisposable
             result["http_concurrent_handler_rejection_count"] = httpTransport.ConcurrentHandlerLimitRejectionCount;
             result["http_request_queue_rejection_count"] = httpTransport.RequestQueueLimitRejectionCount;
             result["http_event_stream_rejection_count"] = httpTransport.EventStreamLimitRejectionCount;
+            result["http_event_stream_drop_count"] = httpTransport.EventStreamDropCount;
+            result["http_event_stream_write_failure_drop_count"] = httpTransport.EventStreamWriteFailureDropCount;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastEventStreamDropReason))
+                result["http_event_stream_last_drop_reason"] = httpTransport.LastEventStreamDropReason;
+            result["http_auth_denial_count"] = httpTransport.AuthDenialCount;
+            result["http_auth_denial_missing_count"] = httpTransport.AuthDenialMissingCount;
+            result["http_auth_denial_ambiguous_count"] = httpTransport.AuthDenialAmbiguousCount;
+            result["http_auth_denial_wrong_scheme_count"] = httpTransport.AuthDenialWrongSchemeCount;
+            result["http_auth_denial_malformed_token_count"] = httpTransport.AuthDenialMalformedTokenCount;
+            result["http_auth_denial_oversized_token_count"] = httpTransport.AuthDenialOversizedTokenCount;
+            result["http_auth_denial_wrong_token_count"] = httpTransport.AuthDenialWrongTokenCount;
+            if (!string.IsNullOrWhiteSpace(httpTransport.LastAuthDenialReason))
+                result["http_auth_denial_last_reason"] = httpTransport.LastAuthDenialReason;
             result["http_auth_required"] = httpTransport.RequiresBearerToken;
             result["http_auth_disabled"] = httpTransport.AuthDisabled;
             if (!string.IsNullOrWhiteSpace(httpTransport.AuthDisabledWarning))
@@ -1772,6 +1803,7 @@ public partial class McpServer : IDisposable
             extraData: new JsonObject
             {
                 ["reason"] = "timeout",
+                ["timeout_category"] = OperationTimeoutCategories.McpRequest,
                 ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
                 ["isolated_action_draining"] = isolatedActionDraining,
             });
@@ -1894,7 +1926,7 @@ public partial class McpServer : IDisposable
 
     private void RememberPendingRequestCancellation(string requestKey)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         PrunePendingRequestCancellations(now);
         if (_pendingRequestCancellations.Count < MaxPendingRequestCancellationCount)
             _pendingRequestCancellations[requestKey] = now;
@@ -1902,7 +1934,7 @@ public partial class McpServer : IDisposable
 
     private bool TryConsumePendingRequestCancellation(string requestKey)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         PrunePendingRequestCancellations(now);
         if (!_pendingRequestCancellations.TryGetValue(requestKey, out var cancelledAt))
             return false;
@@ -2847,7 +2879,7 @@ public partial class McpServer : IDisposable
             // Even malformed tool-call requests are audited so a misbehaving client cannot
             // hide its activity by sending invalid params on every call (#1562).
             // 不正な tools/call も audit する。不正引数でログから消えるのを防ぐため (#1562)。
-            TryEmitAudit("(missing)", id, args, missingNameResponse, DateTimeOffset.UtcNow, 0.0, errorType: "missing_tool_name");
+            TryEmitAudit("(missing)", id, args, missingNameResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "missing_tool_name");
             return missingNameResponse;
         }
         var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
@@ -2878,12 +2910,12 @@ public partial class McpServer : IDisposable
             // even though missing/unknown tools are captured (#1562 review).
             // オペレータ拒否された呼び出しも audit する。missing/unknown は記録されるのに
             // disabled だけ消えると、deny リストの効果を後から検証できなくなる。
-            TryEmitAudit(toolName, id, args, disabledResponse, DateTimeOffset.UtcNow, 0.0, errorType: "tool_disabled");
+            TryEmitAudit(toolName, id, args, disabledResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "tool_disabled");
             return disabledResponse;
         }
 
         Database.DbDebug.ResetContext();
-        var metricsStartedAt = DateTimeOffset.UtcNow;
+        var metricsStartedAt = _timeProvider.GetUtcNow();
         var metricsStopwatch = System.Diagnostics.Stopwatch.StartNew();
         string? metricsError = null;
         JsonNode response;
@@ -3752,6 +3784,7 @@ public partial class McpServer : IDisposable
         }
         _shutdownCts.Dispose();
         _concurrencyGate.Dispose();
+        _textWriterGate.Dispose();
         GC.SuppressFinalize(this);
     }
 

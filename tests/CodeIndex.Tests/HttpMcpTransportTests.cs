@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -41,6 +42,74 @@ public class HttpMcpTransportTests : IDisposable
         var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken: "abc,def"));
 
         Assert.Contains("commas", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_TimeoutDiagnosticsUseStableCategories_Issue3990()
+    {
+        Assert.Equal(
+            "timeout:http_response_write",
+            HttpMcpTransport.FormatTimeoutDiagnosticForTests(OperationTimeoutCategories.HttpResponseWrite));
+        Assert.Equal(
+            "timeout:sse_write",
+            HttpMcpTransport.FormatTimeoutDiagnosticForTests(OperationTimeoutCategories.SseWrite));
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseWriteTimeout_AbortsNonCooperativeWrite_Issue3990()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: true, hangFlush: false);
+        var abortCount = 0;
+
+        var ex = await Assert.ThrowsAnyAsync<TimeoutException>(() =>
+            HttpMcpTransport.WriteBytesWithTimeoutForTestsAsync(
+                stream,
+                [1, 2, 3],
+                TimeSpan.FromMilliseconds(25),
+                OperationTimeoutCategories.HttpResponseWrite,
+                () => abortCount++));
+
+        Assert.Contains("category=http_response_write", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, abortCount);
+        Assert.Equal(1, stream.WriteCalls);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseWriteCancellationPropagatesCallerToken_Issue3928()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: true, hangFlush: false);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+        var abortCount = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            HttpMcpTransport.WriteBytesWithTimeoutForTestsAsync(
+                stream,
+                [1, 2, 3],
+                TimeSpan.FromSeconds(5),
+                OperationTimeoutCategories.HttpResponseWrite,
+                () => abortCount++,
+                cts.Token));
+
+        Assert.Equal(0, abortCount);
+        Assert.Equal(1, stream.WriteCalls);
+    }
+
+    [Fact]
+    public async Task HttpTransport_SseFlushTimeout_AbortsNonCooperativeFlush_Issue3990()
+    {
+        using var stream = new NonCancellableHangingStream(hangWrite: false, hangFlush: true);
+        var abortCount = 0;
+
+        var ex = await Assert.ThrowsAnyAsync<TimeoutException>(() =>
+            HttpMcpTransport.FlushWithTimeoutForTestsAsync(
+                stream,
+                TimeSpan.FromMilliseconds(25),
+                OperationTimeoutCategories.SseWrite,
+                () => abortCount++));
+
+        Assert.Contains("category=sse_write", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, abortCount);
+        Assert.Equal(1, stream.FlushCalls);
     }
 
     [Fact]
@@ -152,6 +221,15 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(0, root.GetProperty("http_concurrent_handler_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_request_queue_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_event_stream_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_event_stream_drop_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_missing_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_ambiguous_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_wrong_scheme_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_malformed_token_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_oversized_token_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_auth_denial_wrong_token_count").GetInt64());
         Assert.False(root.GetProperty("http_auth_required").GetBoolean());
         Assert.True(root.GetProperty("http_auth_disabled").GetBoolean());
         Assert.Equal(
@@ -182,6 +260,31 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(1, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
         Assert.Equal("test abort cleanup:io_error:IOException", root.GetProperty("http_response_abort_cleanup_last_error").GetString());
         Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", root.GetProperty("http_response_close_cleanup_last_error").GetString());
+    }
+
+    [Fact]
+    public async Task HttpTransport_Healthz_ReportsEventStreamDropReasons_Issue3966()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        harness.SetKeepAlive(
+            TimeSpan.FromMilliseconds(1),
+            () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes + 1));
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.EventStreamDropCount > 0, "event stream drop counter");
+
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
+        Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
     }
 
     [Fact]
@@ -974,6 +1077,30 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_OutOfBandSseWriteTimeout_LogsStableDiagnostic_Issue3990()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            requestLogger: records.Enqueue,
+            eventStreamWriteTimeout: TimeSpan.FromMilliseconds(10));
+        harness.BeforeEventStreamWriteForTests = token => Task.Delay(Timeout.InfiniteTimeSpan, token);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
+
+        using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":3990,"method":"initialize","params":{}}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await WaitUntilAsync(() => !harness.HasEventStreams, "the timed-out event stream to be removed");
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 2);
+        var eventRecord = Assert.Single(snapshot.Where(record => record.Method == "GET" && record.Path == "/events"));
+        Assert.Equal("timeout:sse_write", eventRecord.Diagnostic);
+    }
+
+    [Fact]
     public async Task HttpTransport_IndexWithProgressToken_EmitsProgressOnEventsStreamAndReturnsResult()
     {
         var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_progress_{Guid.NewGuid():N}");
@@ -1257,6 +1384,83 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_Healthz_ReportsAuthDenialClassesWithoutChangingWireResponse_Issue3966()
+    {
+        const string token = "s3cret-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+
+        using (var request = CreatePostRequest())
+        {
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", new[] { $"Bearer {token}", $"Bearer {token}" });
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", "Basic abc");
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token);
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.TryAddWithoutValidation(
+                "Authorization",
+                "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using (var request = CreatePostRequest())
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrong-token");
+            await AssertUnauthorizedAsync(client, request);
+        }
+
+        using var healthRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(harness.Endpoint), "healthz"));
+        healthRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var healthResponse = await client.SendAsync(healthRequest);
+
+        Assert.Equal(HttpStatusCode.OK, healthResponse.StatusCode);
+        var body = await healthResponse.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal(6, root.GetProperty("http_auth_denial_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_missing_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_ambiguous_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_wrong_scheme_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_malformed_token_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_oversized_token_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("http_auth_denial_wrong_token_count").GetInt64());
+        Assert.Equal(HttpMcpTransport.AuthDenialWrongToken, root.GetProperty("http_auth_denial_last_reason").GetString());
+
+        HttpRequestMessage CreatePostRequest()
+            => new(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+            };
+
+        static async Task AssertUnauthorizedAsync(HttpClient client, HttpRequestMessage request)
+        {
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+            Assert.Equal("Missing or invalid bearer token.\n", await response.Content.ReadAsStringAsync());
+        }
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestLogger_DetailedAuthOutcomeRequiresUnsafeDebug_Issue3469()
     {
         using var env = EnvironmentVariableScope.Capture(McpServer.DebugEnvironmentVariable);
@@ -1518,9 +1722,17 @@ public class HttpMcpTransportTests : IDisposable
 
         public int EventStreamCount => _transport.EventStreamCount;
 
+        public long EventStreamDropCount => _transport.EventStreamDropCount;
+
         public long RequestLogDroppedCount => _transport.RequestLogDroppedCount;
 
         public long RequestLogQueueFullDropCount => _transport.RequestLogQueueFullDropCount;
+
+        public Func<CancellationToken, Task>? BeforeEventStreamWriteForTests
+        {
+            get => _transport.BeforeEventStreamWriteForTests;
+            set => _transport.BeforeEventStreamWriteForTests = value;
+        }
 
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
@@ -1542,7 +1754,8 @@ public class HttpMcpTransportTests : IDisposable
             int? maxRequestBodyBytes = null,
             int? maxResponseBodyBytes = null,
             int? maxQueuedRequests = null,
-            int? requestLogQueueCapacity = null)
+            int? requestLogQueueCapacity = null,
+            TimeSpan? eventStreamWriteTimeout = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
             var transport = new HttpMcpTransport(
@@ -1554,7 +1767,8 @@ public class HttpMcpTransportTests : IDisposable
                 maxRequestBodyBytes: maxRequestBodyBytes,
                 maxResponseBodyBytes: maxResponseBodyBytes,
                 maxQueuedRequests: maxQueuedRequests,
-                requestLogQueueCapacity: requestLogQueueCapacity);
+                requestLogQueueCapacity: requestLogQueueCapacity,
+                eventStreamWriteTimeout: eventStreamWriteTimeout);
             var server = authenticator is null
                 ? new McpServer(dbPath, ConsoleUi.LoadVersion())
                 : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);
@@ -1626,6 +1840,64 @@ public class HttpMcpTransportTests : IDisposable
         {
             length = 0;
             return false;
+        }
+    }
+
+    private sealed class NonCancellableHangingStream(bool hangWrite, bool hangFlush) : Stream
+    {
+        private readonly TaskCompletionSource _writeBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _flushBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int WriteCalls { get; private set; }
+        public int FlushCalls { get; private set; }
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+            FlushCalls++;
+            if (hangFlush)
+                _flushBlocker.Task.GetAwaiter().GetResult();
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            FlushCalls++;
+            return hangFlush ? _flushBlocker.Task : Task.CompletedTask;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            WriteCalls++;
+            if (hangWrite)
+                _writeBlocker.Task.GetAwaiter().GetResult();
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            WriteCalls++;
+            return hangWrite ? new ValueTask(_writeBlocker.Task) : ValueTask.CompletedTask;
         }
     }
 }

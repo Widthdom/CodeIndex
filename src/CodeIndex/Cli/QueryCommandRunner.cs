@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
@@ -37,12 +38,15 @@ public static partial class QueryCommandRunner
     internal const int MaxStatusSymbolKindNameLength = 64;
     private const int MaxSearchProjectionFieldsCsvLength = 256;
     private const int MaxSearchProjectionFieldsCsvEntries = 16;
+    private const int MaxOutlineProjectionFieldsCsvLength = 256;
+    private const int MaxOutlineProjectionFieldsCsvEntries = 16;
     private const int DefaultSearchGroupedPerFileLimit = 3;
     private const int MaxSearchGroupedPerFileLimit = 20;
     private const int MaxSearchNextStepLimit = 10;
     private const int MaxSearchJsonByteLimit = 16 * 1024 * 1024;
     private const int MaxIssueDraftEvidenceItems = 5;
     private const int MaxIssueDraftEvidenceSnippetLength = 512;
+    private const string BareTokenAuthAuditHint = "Bare `token` searches are intentionally broad. For credential/auth-token review, run `cdidx search --recipe auth-token-audit`; use `cdidx search --recipe broad-token-audit` only when parser, LSP, or cancellation token domains are intentional.";
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -61,6 +65,28 @@ public static partial class QueryCommandRunner
     private static readonly JsonDocumentOptions BatchJsonDocumentOptions = new()
     {
         MaxDepth = BatchMaxJsonDepth,
+    };
+    private static readonly HashSet<string> DependencyNoiseSymbols = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Array",
+        "Console",
+        "DateTime",
+        "Dictionary",
+        "Directory",
+        "Enumerable",
+        "File",
+        "IEnumerable",
+        "List",
+        "Math",
+        "Path",
+        "Read",
+        "ReadLine",
+        "Regex",
+        "String",
+        "StringBuilder",
+        "Task",
+        "Write",
+        "WriteLine",
     };
 
     [ThreadStatic]
@@ -159,6 +185,7 @@ public static partial class QueryCommandRunner
         "--alias",
         "--kind",
         "--bucket",
+        "--confidence",
         "--min-confidence",
         "--severity",
         "--visibility",
@@ -214,6 +241,7 @@ public static partial class QueryCommandRunner
         "--total-limit",
         "--max-json-bytes",
         "--search-fields",
+        "--outline-fields",
         "--focus-line",
         "--focus-column",
         "--focus-length",
@@ -228,14 +256,14 @@ public static partial class QueryCommandRunner
         "--sections",
         "--fields",
     ];
-    private sealed record StatusReadinessField(
+    private sealed record StatusFieldExplanation(
         string FieldName,
         string Label,
         string ReadyText,
         string DegradedText,
         string Remediation);
 
-    private static readonly StatusReadinessField[] StatusReadinessFields =
+    private static readonly StatusFieldExplanation[] StatusReadinessFields =
     [
         new(
             "graph_table_available",
@@ -299,6 +327,65 @@ public static partial class QueryCommandRunner
             "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use."),
     ];
 
+    private static readonly StatusFieldExplanation[] StatusExplainFields =
+        StatusReadinessFields.Concat(
+        [
+            new(
+                "git_head",
+                "Runtime Git HEAD",
+                "the current workspace Git HEAD commit was resolved at status time.",
+                "the field is absent outside a Git checkout or when Git HEAD cannot be resolved.",
+                "Run inside a Git workspace or pass a database tied to a Git workspace to compare index stamps."),
+            new(
+                "git_is_dirty",
+                "Runtime Git dirty state",
+                "`true` means git status reported uncommitted changes, including untracked files; `false` means no changes were reported.",
+                "the field is absent outside a Git checkout or when dirty-state detection is unavailable.",
+                "Run `git status` in the workspace to inspect uncommitted changes directly."),
+            new(
+                "indexed_head_commit",
+                "Legacy full-scan HEAD stamp",
+                "the index records the Git HEAD from the most recent successful full scan for legacy compatibility.",
+                "this full-scan-only stamp can differ from `indexed_head_sha` after incremental indexing and may be absent in legacy or non-Git indexes.",
+                "Prefer `indexed_head_sha` for current freshness checks; rebuild or run `cdidx index <projectPath>` when only this legacy stamp is available."),
+            new(
+                "worktree_head_changed",
+                "Worktree HEAD drift",
+                "`false` means the runtime HEAD matches the latest index HEAD stamp; `true` means the checkout moved since the index stamp.",
+                "the field is absent when neither `indexed_head_sha` nor the legacy `indexed_head_commit` can be compared with runtime HEAD.",
+                "Run `cdidx index <projectPath>` to refresh the index for the current checkout."),
+            new(
+                "indexed_head_sha",
+                "Latest index HEAD stamp",
+                "the index records the Git HEAD from the last successful index run, including incremental updates.",
+                "the field is absent in legacy indexes, non-Git workspaces, or when the index run could not resolve HEAD.",
+                "Use this field before `indexed_head_commit` when auditing freshness after incremental indexing."),
+            new(
+                "indexed_head_branch",
+                "Latest index branch stamp",
+                "the index records the branch short name captured with `indexed_head_sha`.",
+                "the field is absent for detached HEAD, legacy indexes, non-Git workspaces, or unresolved branch names.",
+                "Use it as context for `indexed_head_sha`; rerun `cdidx index <projectPath>` after switching branches."),
+            new(
+                "indexed_head_timestamp",
+                "Latest index HEAD timestamp",
+                "the index records when `indexed_head_sha` and `indexed_head_branch` were stamped.",
+                "the field is absent in legacy indexes or when the index run could not persist the timestamp.",
+                "Rerun `cdidx index <projectPath>` to refresh the timestamp with the current checkout."),
+            new(
+                "commits_ahead_of_indexed_head",
+                "Commits ahead of indexed HEAD",
+                "`0` means runtime HEAD is not ahead of `indexed_head_sha`; positive values mean the checkout advanced after indexing.",
+                "the field is absent when Git comparison is unavailable or history is not comparable.",
+                "Run `cdidx index <projectPath>` when the value is positive before trusting freshness-sensitive results."),
+            new(
+                "path_case_sensitive",
+                "Filesystem case sensitivity",
+                "`true` means the indexed workspace path comparison is case-sensitive; `false` means case-insensitive.",
+                "the field is absent on legacy indexes that predate the workspace case-sensitivity stamp.",
+                "Run `cdidx index <projectPath>` with a current cdidx binary to stamp filesystem case sensitivity."),
+        ]).ToArray();
+
     private static readonly HashSet<string> FlagOnlyOptions =
     [
         "--json",
@@ -322,6 +409,7 @@ public static partial class QueryCommandRunner
         "--quiet",
         "-q",
         "--silent",
+        "--actionable",
         "--by-bucket",
         "--all",
         "--summary-only",
@@ -451,6 +539,14 @@ public static partial class QueryCommandRunner
                 "--cursor for search must be a search pagination cursor returned by recipe search.",
                 GetUsageLineOrThrow("search"),
                 "Use `--cursor <next_cursor>` only with `--recipe`; `unused:<offset>` cursors are for `cdidx unused`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.OutlineCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for search must be a search pagination cursor returned by recipe search.",
+                GetUsageLineOrThrow("search"),
+                "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
         if (options.AuditScopeExplicit && options.RecipeName == null)
@@ -954,7 +1050,11 @@ public static partial class QueryCommandRunner
                     {
                         var pathHint = BuildSearchPathGlobHint(reader, options);
                         if (!options.ResultsOnly)
-                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload => AddSearchPathHint(payload, pathHint)).ToJsonString(ndjsonOptions));
+                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload =>
+                            {
+                                AddSearchPathHint(payload, pathHint);
+                                AddBareTokenSearchHint(payload, options);
+                            }).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -1490,7 +1590,7 @@ public static partial class QueryCommandRunner
         foreach (var result in results.Take(MaxSearchNextStepLimit))
         {
             var line = result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine;
-            result.NextSteps =
+            List<SearchCommandHint> nextSteps =
             [
                 new SearchCommandHint
                 {
@@ -1503,6 +1603,15 @@ public static partial class QueryCommandRunner
                     Purpose = "read a bounded source excerpt around this search hit",
                 },
             ];
+            if (IsBareTokenSearch(options))
+            {
+                nextSteps.Add(new SearchCommandHint
+                {
+                    Command = "cdidx search --recipe auth-token-audit --exclude-tests",
+                    Purpose = "narrow bare token search to credential and auth-token contexts",
+                });
+            }
+            result.NextSteps = nextSteps;
             result.NextStepsTruncated = truncated;
         }
     }
@@ -1592,6 +1701,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
                 Console.WriteLine($"    {query.Description}");
                 Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
+                if (query.BroadCatchTaxonomy is not null)
+                {
+                    Console.WriteLine($"    broad catch boundaries: {string.Join(", ", query.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
+                    Console.WriteLine($"    broad catch diagnostics: {string.Join(", ", query.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
+                }
             }
         }
 
@@ -1804,6 +1918,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine(queryResult.Description);
                 Console.WriteLine($"labels: {string.Join(", ", queryResult.RecommendedLabels)}");
                 Console.WriteLine($"false positives: {queryResult.FalsePositiveGuidance}");
+                if (queryResult.BroadCatchTaxonomy is not null)
+                {
+                    Console.WriteLine($"broad catch boundaries: {string.Join(", ", queryResult.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
+                    Console.WriteLine($"broad catch diagnostics: {string.Join(", ", queryResult.BroadCatchTaxonomy.DiagnosticBehaviors.Select(behavior => behavior.Name))}");
+                }
                 Console.WriteLine($"results: {queryResult.Count}");
                 foreach (var result in queryResult.Results)
                 {
@@ -2079,6 +2198,8 @@ public static partial class QueryCommandRunner
                 $"Ad hoc search for `{options.Query}`.",
                 BuildAdHocIssueDraftLabels(options),
                 "Review the evidence paths and surrounding code before filing.",
+                [],
+                [],
                 exact,
                 SearchAuditRecipes.DefaultQuerySeverity,
                 [],
@@ -2086,6 +2207,7 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 [],
+                null,
                 rows.Count,
                 rows.Count,
                 rows.Count,
@@ -2135,6 +2257,7 @@ public static partial class QueryCommandRunner
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(resultLimit),
@@ -2149,10 +2272,11 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
@@ -2164,6 +2288,8 @@ public static partial class QueryCommandRunner
                 recipeQuery.Description,
                 recipeQuery.RecommendedLabels,
                 recipeQuery.FalsePositiveGuidance,
+                [.. recipeQuery.RiskEvidence],
+                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
                 exact,
                 recipeQuery.Severity,
                 [.. recipeQuery.PathPatterns],
@@ -2171,6 +2297,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 rows.Count,
                 rows.Count + minimumOmitted,
@@ -2201,6 +2328,7 @@ public static partial class QueryCommandRunner
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 FetchLimitForSearchEnvelope(resultLimit),
@@ -2215,10 +2343,11 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
@@ -2229,11 +2358,14 @@ public static partial class QueryCommandRunner
                 recipeQuery.Query,
                 recipeQuery.Description,
                 recipeQuery.Severity,
+                [.. recipeQuery.RiskEvidence],
+                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
                 [.. recipeQuery.PathPatterns],
                 [.. recipeQuery.ExcludePaths],
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 rows.Count,
                 rows.Count + minimumOmitted,
@@ -2247,6 +2379,7 @@ public static partial class QueryCommandRunner
                     row.Result.Path,
                     row.Result.Lang,
                     row.Result.Visibility,
+                    [.. recipeQuery.RiskEvidence],
                     row.Result.StartLine,
                     row.Result.EndLine,
                     row.Compact.MatchLines,
@@ -2273,6 +2406,7 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 int.MaxValue,
@@ -2287,10 +2421,11 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -2333,6 +2468,7 @@ public static partial class QueryCommandRunner
         {
             var exact = userExact || recipeQuery.ExactSubstring;
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 int.MaxValue,
@@ -2347,10 +2483,11 @@ public static partial class QueryCommandRunner
                 false,
                 !options.NoVisibilityRank,
                 cursor: options.SearchCursor,
-                guardFilters: options.GuardFilters,
+                guardFilters: guardFilters,
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             foreach (var path in rows.Select(row => row.Result.Path))
                 paths.Add(path);
@@ -2369,6 +2506,19 @@ public static partial class QueryCommandRunner
 
         fileCount = paths.Count;
         return queryResults;
+    }
+
+    private static IReadOnlyList<SearchGuardFilter> BuildSearchRecipeGuardFilters(QueryCommandOptions options, SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.GuardFilters.Count == 0)
+            return options.GuardFilters;
+        if (options.GuardFilters.Count == 0)
+            return recipeQuery.GuardFilters;
+
+        var guardFilters = new List<SearchGuardFilter>(recipeQuery.GuardFilters.Count + options.GuardFilters.Count);
+        guardFilters.AddRange(recipeQuery.GuardFilters);
+        guardFilters.AddRange(options.GuardFilters);
+        return guardFilters;
     }
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
@@ -2584,6 +2734,58 @@ public static partial class QueryCommandRunner
 
         return queryResults;
     }
+
+    private static List<SearchResult> ApplySearchRecipeFileRejectQueries(
+        DbReader reader,
+        List<SearchResult> results,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery)
+    {
+        if (recipeQuery.RejectFileQueries.Count == 0 || results.Count == 0)
+            return results;
+
+        var rejectedPaths = new Dictionary<string, bool>(StringComparer.Ordinal);
+        return results
+            .Where(result => !ShouldRejectSearchRecipeFile(reader, result.Path, options, recipeQuery, rejectedPaths))
+            .ToList();
+    }
+
+    private static bool ShouldRejectSearchRecipeFile(
+        DbReader reader,
+        string path,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        Dictionary<string, bool> rejectedPaths)
+    {
+        if (rejectedPaths.TryGetValue(path, out var rejected))
+            return rejected;
+
+        foreach (var rejectQuery in recipeQuery.RejectFileQueries)
+        {
+            var matches = reader.Search(
+                rejectQuery,
+                1,
+                options.Lang,
+                rawQuery: false,
+                pathPatterns: [path],
+                excludePathPatterns: null,
+                excludeTests: false,
+                deduplicate: true,
+                since: options.Since,
+                exact: true,
+                prefix: false,
+                visibilityRank: false);
+            if (matches.Count == 0)
+                continue;
+
+            rejectedPaths[path] = true;
+            return true;
+        }
+
+        rejectedPaths[path] = false;
+        return false;
+    }
+
     private static SearchIssueDraftJsonResult ToSearchIssueDraft(
         SearchAuditRecipe recipe,
         SearchRecipeQueryResultJsonResult queryResult,
@@ -2632,6 +2834,7 @@ public static partial class QueryCommandRunner
                 queryResult.Query,
                 queryResult.Description,
                 queryResult.FalsePositiveGuidance,
+                queryResult.RiskEvidence,
                 queryResult.ExactSubstring,
                 queryResult.Count,
                 queryResult.ResultLimit,
@@ -2686,6 +2889,7 @@ public static partial class QueryCommandRunner
                 queryResult.Query,
                 queryResult.Description,
                 queryResult.FalsePositiveGuidance,
+                queryResult.RiskEvidence,
                 queryResult.ExactSubstring,
                 queryResult.Count,
                 queryResult.ResultLimit,
@@ -2886,6 +3090,19 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
+        if (queryResult.RiskEvidence.Count > 0)
+        {
+            sb.AppendLine("## Risk evidence");
+            foreach (var riskEvidence in queryResult.RiskEvidence)
+                sb.AppendLine($"- {riskEvidence}");
+            sb.AppendLine();
+        }
+
+        if (queryResult.BroadCatchTaxonomy is not null)
+        {
+            AppendSearchIssueDraftBroadCatchTaxonomy(sb, queryResult.BroadCatchTaxonomy);
+            sb.AppendLine();
+        }
         sb.AppendLine("## Replay command");
         sb.AppendLine("```sh");
         sb.AppendLine(BuildSearchRecipeReplayCommand(recipe, options, queryResult.Name));
@@ -2920,6 +3137,20 @@ public static partial class QueryCommandRunner
             sb.AppendLine(item.Snippet);
             sb.AppendLine("```");
         }
+    }
+
+    private static void AppendSearchIssueDraftBroadCatchTaxonomy(StringBuilder sb, SearchRecipeBroadCatchTaxonomyJsonResult taxonomy)
+    {
+        sb.AppendLine("## Broad-catch taxonomy");
+        sb.AppendLine(taxonomy.TriageGuidance);
+        sb.AppendLine();
+        sb.AppendLine("### Boundary categories");
+        foreach (var category in taxonomy.BoundaryCategories)
+            sb.AppendLine($"- `{category.Name}`: {category.Description} Expected diagnostic behavior: {category.ExpectedDiagnosticBehavior}");
+        sb.AppendLine();
+        sb.AppendLine("### Diagnostic behavior categories");
+        foreach (var behavior in taxonomy.DiagnosticBehaviors)
+            sb.AppendLine($"- `{behavior.Name}`: {behavior.Description}");
     }
 
     private static void AppendSearchIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
@@ -3038,6 +3269,9 @@ public static partial class QueryCommandRunner
     private static string FormatUnusedCursor(int offset)
         => string.Create(CultureInfo.InvariantCulture, $"unused:{offset}");
 
+    private static string FormatOutlineCursor(int offset)
+        => string.Create(CultureInfo.InvariantCulture, $"outline:{offset}");
+
     private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
     {
         cursor = default;
@@ -3066,6 +3300,16 @@ public static partial class QueryCommandRunner
     {
         offset = 0;
         const string prefix = "unused:";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
+            && offset >= 0;
+    }
+
+    private static bool TryParseOutlineCursor(string value, out int offset)
+    {
+        offset = 0;
+        const string prefix = "outline:";
         if (!value.StartsWith(prefix, StringComparison.Ordinal))
             return false;
         return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
@@ -3205,13 +3449,25 @@ public static partial class QueryCommandRunner
             query.Description,
             query.RecommendedLabels,
             query.FalsePositiveGuidance,
+            [.. query.RiskEvidence],
+            ToSearchRecipeGuardFilterJsonResults(query.GuardFilters),
             query.Severity,
             [.. query.PathPatterns],
             [.. query.ExcludePaths],
             [.. query.MatchOrigins],
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
+            query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
+
+    private static List<SearchRecipeGuardFilterJsonResult> ToSearchRecipeGuardFilterJsonResults(IReadOnlyList<SearchGuardFilter> guardFilters)
+        => guardFilters
+            .Select(filter => new SearchRecipeGuardFilterJsonResult(
+                filter.Role == SearchGuardRole.Require ? "require" : "reject",
+                filter.Direction == SearchGuardDirection.Before ? "before" : "after",
+                filter.Query,
+                BuildSearchGuardReplayOptionName(filter)))
+            .ToList();
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
         List<SearchResult> results,
@@ -3266,6 +3522,8 @@ public static partial class QueryCommandRunner
             compact.ResultKinds = BuildSearchResultKinds(result, compact, displayQuery);
             if (!ApplySearchResultKindFilters(compact, facetFilters))
                 continue;
+            if (recipeQuery is { RiskEvidence.Count: > 0 })
+                compact.RiskEvidence = [.. recipeQuery.RiskEvidence];
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
             {
@@ -3563,40 +3821,138 @@ public static partial class QueryCommandRunner
     private static string SearchFacetKey(int line, int column, int length)
         => $"{line}:{column}:{length}";
 
+    private readonly record struct SearchLocationSpan(int Line, int Column, int Length);
+
+    private static bool TryGetSearchLocationSpan(SearchMatchFacet facet, out SearchLocationSpan span)
+    {
+        if (facet.Line <= 0 || facet.Column <= 0)
+        {
+            span = default;
+            return false;
+        }
+
+        span = new SearchLocationSpan(facet.Line, facet.Column, Math.Max(1, facet.Length));
+        return true;
+    }
+
+    private static bool TryGetPrimarySearchLocation(SearchDisplayRow row, out SearchLocationSpan span)
+    {
+        var focusLine = row.Compact.FocusLine.GetValueOrDefault();
+        var focusColumn = row.Compact.FocusColumn.GetValueOrDefault();
+        if (focusLine > 0)
+        {
+            var focusedFacet = row.Compact.MatchFacets
+                .Where(facet => facet.Line == focusLine && facet.Column > 0)
+                .OrderBy(facet => focusColumn > 0 ? Math.Abs(facet.Column - focusColumn) : 0)
+                .ThenBy(facet => facet.Column)
+                .ThenByDescending(facet => facet.Length)
+                .FirstOrDefault();
+            if (focusedFacet != null && TryGetSearchLocationSpan(focusedFacet, out span))
+                return true;
+
+            if (row.Compact.MatchLines.Contains(focusLine))
+            {
+                span = new SearchLocationSpan(focusLine, Math.Max(1, focusColumn), 1);
+                return true;
+            }
+        }
+
+        foreach (var facet in row.Compact.MatchFacets)
+        {
+            if (TryGetSearchLocationSpan(facet, out span))
+                return true;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+        {
+            if (line > 0)
+            {
+                span = new SearchLocationSpan(line, 1, 1);
+                return true;
+            }
+        }
+
+        span = default;
+        return false;
+    }
+
+    private static IEnumerable<SearchLocationSpan> GetSearchLocationSpans(SearchDisplayRow row, bool includeAllMatches)
+    {
+        if (includeAllMatches)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var emitted = false;
+            foreach (var facet in row.Compact.MatchFacets)
+            {
+                if (!TryGetSearchLocationSpan(facet, out var span))
+                    continue;
+                if (!seen.Add(SearchFacetKey(span.Line, span.Column, span.Length)))
+                    continue;
+
+                emitted = true;
+                yield return span;
+            }
+
+            if (emitted)
+                yield break;
+
+            foreach (var line in row.Compact.MatchLines)
+            {
+                if (line <= 0)
+                    continue;
+                var span = new SearchLocationSpan(line, 1, 1);
+                if (!seen.Add(SearchFacetKey(span.Line, span.Column, span.Length)))
+                    continue;
+
+                emitted = true;
+                yield return span;
+            }
+
+            if (emitted)
+                yield break;
+        }
+
+        if (TryGetPrimarySearchLocation(row, out var primary))
+            yield return primary;
+    }
+
     private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
             yield return new FormattedLocation(row.Result.Path, row.Result.StartLine, null, $"search match: {query}");
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return new FormattedLocation(row.Result.Path, line, null, $"search match: {query}");
+        foreach (var span in spans)
+            yield return new FormattedLocation(row.Result.Path, span.Line, span.Column, $"search match: {query}");
     }
 
     private static IEnumerable<LspLocation> ToSearchLspLocations(SearchDisplayRow row, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
             yield return ToLspLocation(row.Result);
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return BuildLspLocation(row.Result.Path, line, 1, line + 1, 1);
+        foreach (var span in spans)
+            yield return BuildLspLocation(row.Result.Path, span.Line, span.Column, span.Line, span.Column + span.Length);
     }
 
     private static IEnumerable<(string Path, int Line, int Column, string Message)> ToSearchQuickfixItems(SearchDisplayRow row, string query, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
             yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}");
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return (row.Result.Path, line, 1, $"search match: {query}");
+        foreach (var span in spans)
+            yield return (row.Result.Path, span.Line, span.Column, $"search match: {query}");
     }
 
     private static IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> ToSearchSarifItems(SearchDisplayRow row, string query, bool useMatchLines)
@@ -3700,10 +4056,18 @@ public static partial class QueryCommandRunner
         => BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
 
     private static LspLocation ToLspLocation(FileFindResult result)
-        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + 1);
+        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + Math.Max(1, result.Length));
 
     private static LspLocation ToLspLocation(FileIssue result)
-        => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
+    {
+        var line = Math.Max(1, result.Line);
+        var location = BuildLspLocation(result.Path, line, 1, line, 2);
+        location.Kind = result.Kind;
+        location.Message = result.Message;
+        location.Severity = string.IsNullOrWhiteSpace(result.Severity) ? FileIssue.SeverityWarning : result.Severity;
+        location.Source = "cdidx validate";
+        return location;
+    }
 
     private static LspLocation ToLspLocation(SymbolResult result)
     {
@@ -3783,11 +4147,11 @@ public static partial class QueryCommandRunner
     }
 
     private static void WriteFormattedCount(int count, JsonSerializerOptions jsonOptions)
-        => Console.WriteLine(new JsonObject
+        => CommandOutputWriter.WriteJsonNode(new JsonObject
         {
             ["count"] = count,
             ["total_estimated"] = count,
-        }.ToJsonString(jsonOptions));
+        }, jsonOptions);
 
     private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
     {
@@ -3893,11 +4257,19 @@ public static partial class QueryCommandRunner
         {
             var result = row.Result;
             var compact = row.Compact;
+            var line = result.StartLine;
+            var column = 1;
+            if (TryGetPrimarySearchLocation(row, out var span))
+            {
+                line = span.Line;
+                column = span.Column;
+            }
+
             var values = new[]
             {
                 result.Path,
-                result.StartLine.ToString(CultureInfo.InvariantCulture),
-                "1",
+                line.ToString(CultureInfo.InvariantCulture),
+                column.ToString(CultureInfo.InvariantCulture),
                 $"search match: {options.Query}",
                 options.Query ?? string.Empty,
                 string.Empty,
@@ -4155,10 +4527,7 @@ public static partial class QueryCommandRunner
                 }
                 foreach (var r in results)
                 {
-                    if (exact)
-                        WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult, exactSignal, jsonOptions);
-                    else
-                        Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult));
+                    WriteDefinitionJsonResult(r, options, exact ? exactSignal : null, jsonOptions);
                 }
             }
             else
@@ -4894,6 +5263,61 @@ public static partial class QueryCommandRunner
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
     }
 
+    private static void WriteDefinitionJsonResult(DefinitionResult result, QueryCommandOptions options, ExactQuerySignal? exactSignal, JsonSerializerOptions jsonOptions)
+    {
+        var payload = JsonSerializer.SerializeToNode(result, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult)!.AsObject();
+        ApplyBodyModeDefinitionContentPolicy(payload, options);
+        if (exactSignal.HasValue)
+            AddExactJsonFields(payload, exactSignal.Value);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void ApplyBodyModeDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)
+    {
+        if (!options.IncludeBody)
+            return;
+
+        OmitDefinitionContent(payload, "body_content_field");
+    }
+
+    private static void ApplyInspectDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)
+    {
+        if (!payload.TryGetPropertyValue("definitions", out var definitionsNode) || definitionsNode is not JsonArray definitions)
+            return;
+
+        var reason = options.IncludeBody ? "body_content_field" : "inspect_body_not_requested";
+        foreach (var definition in definitions.OfType<JsonObject>())
+        {
+            OmitDefinitionContent(definition, reason);
+            if (!options.IncludeBody)
+                OmitDefinitionBodyContent(definition);
+        }
+    }
+
+    private static void OmitDefinitionContent(JsonObject definition, string reason)
+    {
+        if (!definition.Remove("content"))
+            return;
+
+        definition["content_omitted"] = true;
+        definition["content_omitted_reason"] = reason;
+    }
+
+    private static void OmitDefinitionBodyContent(JsonObject definition)
+    {
+        definition.Remove("body_content");
+        definition.Remove("body_content_start_line");
+        definition.Remove("body_content_end_line");
+        definition.Remove("body_content_next_start_line");
+        definition.Remove("body_content_truncated");
+        definition.Remove("body_requested_start_line");
+        definition.Remove("body_requested_end_line");
+        definition.Remove("body_effective_start_line");
+        definition.Remove("body_effective_end_line");
+        definition.Remove("body_content_truncation_reasons");
+        definition.Remove("body_content_recovery");
+    }
+
     private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath)
     {
         foreach (var result in results)
@@ -5185,17 +5609,21 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountListFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
-                if (counts.Count == 0)
+                if (options.Json)
                 {
-                    Console.WriteLine(options.Json
-                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
-                        : "0");
-                    return CommandExitCodes.Success;
+                    var payload = BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options);
+                    if (options.RawBytes)
+                        AddFileCountBytesJsonFields(payload, counts);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
-
-                Console.WriteLine(options.Json
-                    ? BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.Count, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
-                    : $"{counts.Count}");
+                else
+                    Console.WriteLine(options.RawBytes ? FormatFileCountBytesSummary(counts) : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
 
@@ -5243,6 +5671,29 @@ public static partial class QueryCommandRunner
         });
     }
 
+    private static void AddFileCountBytesJsonFields(JsonObject payload, QueryCountResult counts)
+    {
+        payload["total_bytes"] = counts.TotalBytes ?? 0;
+        payload["average_bytes"] = counts.AverageBytes ?? 0;
+        payload["max_bytes"] = counts.MaxBytes ?? 0;
+        payload["max_bytes_path"] = counts.MaxBytesPath;
+        payload["bytes_authoritative"] = counts.BytesAuthoritative ?? true;
+    }
+
+    private static string FormatFileCountBytesSummary(QueryCountResult counts)
+    {
+        var totalBytes = counts.TotalBytes ?? 0;
+        var averageBytes = counts.AverageBytes ?? 0;
+        var maxBytes = counts.MaxBytes ?? 0;
+        var maxPath = string.IsNullOrEmpty(counts.MaxBytesPath)
+            ? "none"
+            : counts.MaxBytesPath;
+        var authority = (counts.BytesAuthoritative ?? true) ? "true" : "false";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{counts.Count} files, {totalBytes} bytes total, average {averageBytes:0.##} bytes, max {maxBytes} bytes ({maxPath}), bytes_authoritative: {authority}");
+    }
+
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("excerpt", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: true);
@@ -5270,32 +5721,50 @@ public static partial class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("excerpt", options))
             return CommandExitCodes.UsageError;
-        if (options.FocusColumn == null && (options.FocusLine.HasValue || cmdArgs.Any(arg => arg == "--focus-length" || arg.StartsWith("--focus-length=", StringComparison.Ordinal))))
+        var focusLengthSpecified = cmdArgs.Any(arg => arg == "--focus-length" || arg.StartsWith("--focus-length=", StringComparison.Ordinal));
+        if (options.FocusColumn == null && (options.FocusLine.HasValue || focusLengthSpecified))
         {
+            var focusError = options.FocusLine.HasValue && focusLengthSpecified
+                ? "--focus-line and --focus-length require --focus-column."
+                : options.FocusLine.HasValue
+                    ? "--focus-line requires --focus-column."
+                    : "--focus-length requires --focus-column.";
             WriteValidationError(
-                "--focus-line and --focus-length require --focus-column.",
+                focusError,
                 "Add `--focus-column <n>` so excerpt knows which token to keep visible inside the clamped line.");
             return CommandExitCodes.UsageError;
         }
 
-        if (options.StartLine == null)
+        var filePathArgument = options.Query;
+        var startLine = options.StartLine;
+        var endLine = options.EndLine;
+        if (startLine == null
+            && TryParseExcerptLocationArgument(options.Query, out var parsedPath, out var parsedStartLine, out var parsedEndLine))
+        {
+            filePathArgument = parsedPath;
+            startLine = parsedStartLine;
+            endLine ??= parsedEndLine;
+        }
+
+        if (startLine == null)
         {
             WriteValidationError(
                 "excerpt requires --start <line>",
-                "Add a starting line number, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
+                "Add a starting line number, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20` or `cdidx excerpt src/CodeIndex/Program.cs:20`.");
             return CommandExitCodes.UsageError;
         }
 
-        var endLine = options.EndLine ?? options.StartLine.Value;
-        if (endLine < options.StartLine.Value)
+        var startLineValue = startLine.Value;
+        var endLineValue = endLine ?? startLineValue;
+        if (endLineValue < startLineValue)
         {
             WriteValidationError(
-                $"--start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).",
+                $"--start ({startLineValue}) must be less than or equal to --end ({endLineValue}).",
                 "Use `--start` less than or equal to `--end`, or omit `--end` to read a single line.");
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
+        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, filePathArgument, options.DbPathExplicit);
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.FocusLine.HasValue)
@@ -5303,8 +5772,8 @@ public static partial class QueryCommandRunner
                 var file = reader.GetFileByPath(filePath);
                 if (file != null)
                 {
-                    var requestedStart = Math.Max(1, options.StartLine.Value - options.ContextBefore);
-                    var requestedEnd = Math.Min(file.Lines, endLine + options.ContextAfter);
+                    var requestedStart = Math.Max(1, startLineValue - options.ContextBefore);
+                    var requestedEnd = Math.Min(file.Lines, endLineValue + options.ContextAfter);
                     if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
                     {
                         CommandErrorWriter.WriteStderr($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
@@ -5316,11 +5785,11 @@ public static partial class QueryCommandRunner
             {
                 var focusLineLength = reader.GetExcerptFocusLineLength(
                     filePath,
-                    options.StartLine.Value,
-                    endLine,
+                    startLineValue,
+                    endLineValue,
                     options.ContextBefore,
                     options.ContextAfter,
-                    options.FocusLine ?? options.StartLine.Value);
+                    options.FocusLine ?? startLineValue);
                 if (focusLineLength.HasValue && options.FocusColumn.Value > focusLineLength.Value)
                 {
                     CommandErrorWriter.WriteStderr($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
@@ -5330,12 +5799,12 @@ public static partial class QueryCommandRunner
 
             var excerpt = reader.GetExcerpt(
                 filePath,
-                options.StartLine.Value,
-                endLine,
+                startLineValue,
+                endLineValue,
                 options.ContextBefore,
                 options.ContextAfter,
                 options.MaxLineWidth,
-                options.FocusLine ?? options.StartLine.Value,
+                options.FocusLine ?? startLineValue,
                 options.FocusColumn,
                 options.FocusLength);
             if (excerpt == null)
@@ -5362,6 +5831,48 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static bool TryParseExcerptLocationArgument(
+        string value,
+        out string path,
+        out int startLine,
+        out int? endLine)
+    {
+        path = string.Empty;
+        startLine = 0;
+        endLine = null;
+
+        var separator = value.LastIndexOf(':');
+        if (separator <= 0 || separator == value.Length - 1)
+            return false;
+
+        var range = value[(separator + 1)..];
+        var dash = range.IndexOf('-');
+        if (dash < 0)
+        {
+            if (!TryParsePositiveLine(range, out startLine))
+                return false;
+
+            path = value[..separator];
+            return true;
+        }
+
+        if (dash == 0 || dash == range.Length - 1 || range.IndexOf('-', dash + 1) >= 0)
+            return false;
+
+        if (!TryParsePositiveLine(range[..dash], out startLine)
+            || !TryParsePositiveLine(range[(dash + 1)..], out var parsedEndLine))
+        {
+            return false;
+        }
+
+        path = value[..separator];
+        endLine = parsedEndLine;
+        return true;
+    }
+
+    private static bool TryParsePositiveLine(string value, out int line)
+        => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out line) && line > 0;
 
     private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(FileExcerptResult excerpt)
     {
@@ -5524,7 +6035,7 @@ public static partial class QueryCommandRunner
                 {
                     return ex is RegexMatchTimeoutException timeout
                         ? WriteFindRegexTimeoutError(timeout, jsonOptions, options.Json)
-                        : WriteFindInvalidRegexError(ex);
+                        : WriteFindInvalidRegexError(ex, jsonOptions, options.Json);
                 }
                 if (counts.Count == 0)
                 {
@@ -5576,7 +6087,7 @@ public static partial class QueryCommandRunner
             }
             catch (ArgumentException ex) when (options.Regex)
             {
-                return WriteFindInvalidRegexError(ex);
+                return WriteFindInvalidRegexError(ex, jsonOptions, options.Json);
             }
             catch (RegexMatchTimeoutException ex) when (options.Regex)
             {
@@ -5588,6 +6099,13 @@ public static partial class QueryCommandRunner
                 var candidateFileCount = findResults.Scan.CandidateFiles;
                 if (options.Json)
                 {
+                    if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        CommandOutputWriter.WriteJson(
+                            new List<FileFindResult>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult);
+                        return ZeroResultExitCode(options);
+                    }
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
                         return ZeroResultExitCode(options);
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
@@ -5644,6 +6162,13 @@ public static partial class QueryCommandRunner
                     WriteSarif(results.Select(r => (r.Path, r.Line, r.Column, $"find match: {options.Query}", "find")), jsonOptions);
                     return CommandExitCodes.Success;
                 }
+                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    CommandOutputWriter.WriteJson(
+                        results,
+                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                     Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileFindResult));
             }
@@ -5663,31 +6188,30 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static int WriteFindInvalidRegexError(Exception ex)
-    {
-        CommandErrorWriter.WriteStderr($"Error: invalid regular expression: {ex.Message}");
-        return CommandExitCodes.UsageError;
-    }
+    private static int WriteFindInvalidRegexError(Exception ex, JsonSerializerOptions jsonOptions, bool json)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            $"invalid regular expression: {ex.Message}",
+            CommandExitCodes.UsageError,
+            "fix the pattern passed with --regex, or omit --regex to run a literal text search.",
+            errorCode: CommandErrorCodes.UsageError,
+            category: "invalid_regex");
 
     internal static int WriteFindRegexTimeoutError(RegexMatchTimeoutException ex, JsonSerializerOptions jsonOptions, bool json)
     {
-        var timeout = FormatRegexMatchTimeout(ex.MatchTimeout);
         return CommandErrorWriter.WriteJsonOrHuman(
             json,
             jsonOptions,
-            $"regular expression timed out after {timeout} while scanning indexed file contents.",
+            RegexTimeoutPolicy.FormatFindTimeout(ex),
             CommandExitCodes.RuntimeError,
-            hint: "Simplify the pattern, narrow the scan with --path/--lang, or omit --regex for literal text.",
+            hint: RegexTimeoutPolicy.FindTimeoutHint,
             errorCode: CommandErrorCodes.RegexMatchTimeout,
-            category: "regex_timeout");
+            category: RegexTimeoutPolicy.RegexTimeoutCategory);
     }
 
-    internal static string FormatRegexMatchTimeout(TimeSpan timeout)
-    {
-        if (timeout.TotalMilliseconds < 1000)
-            return timeout.TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture) + "ms";
-        return timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + "s";
-    }
+    internal static string FormatRegexMatchTimeout(TimeSpan timeout) =>
+        RegexTimeoutPolicy.FormatDuration(timeout);
 
     private static string? ValidateFindArgs(string[] args)
     {
@@ -5981,22 +6505,12 @@ public static partial class QueryCommandRunner
         }
 
         var keep = new HashSet<string>(RepoMapSummaryJsonProperties, StringComparer.Ordinal);
-        if (MapSectionEnabled(options, "languages"))
-            keep.Add("languages");
-        if (MapSectionEnabled(options, "tree"))
-            keep.Add("modules");
-        if (MapSectionEnabled(options, "hotspots"))
-        {
-            keep.Add("topFiles");
-            keep.Add("symbolRichFiles");
-            keep.Add("referenceRichFiles");
-            keep.Add("entrypoints");
-        }
-        if (MapSectionEnabled(options, "metrics"))
-            keep.Add("largestFiles");
+        foreach (var section in options.MapSections)
+            AddRepoMapSectionJsonProperties(keep, section);
 
         KeepRepoMapJsonProperties(payload, keep);
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
+        payload["section_properties"] = BuildRepoMapSectionProperties(options.MapSections);
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
         if (options.Compact && compactTruncation != null)
@@ -6023,10 +6537,41 @@ public static partial class QueryCommandRunner
         "graph_table_available",
     };
 
+    private static readonly IReadOnlyDictionary<string, string[]> RepoMapSectionJsonProperties = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    {
+        ["languages"] = ["languages"],
+        ["tree"] = ["modules"],
+        ["hotspots"] = ["top_files", "symbol_rich_files", "reference_rich_files", "entrypoints"],
+        ["metrics"] = ["largest_files"],
+    };
+
     private static void KeepRepoMapJsonProperties(JsonObject payload, IReadOnlySet<string> keep)
     {
         foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
             payload.Remove(propertyName);
+    }
+
+    private static void AddRepoMapSectionJsonProperties(HashSet<string> keep, string section)
+    {
+        if (!RepoMapSectionJsonProperties.TryGetValue(section, out var properties))
+            return;
+
+        foreach (var property in properties)
+            keep.Add(property);
+    }
+
+    private static JsonObject BuildRepoMapSectionProperties(IEnumerable<string> sections)
+    {
+        var payload = new JsonObject();
+        foreach (var section in sections)
+        {
+            if (!RepoMapSectionJsonProperties.TryGetValue(section, out var properties))
+                continue;
+
+            payload[section] = new JsonArray(properties.Select(property => JsonValue.Create(property)).ToArray<JsonNode?>());
+        }
+
+        return payload;
     }
 
     private static int GetCompactSectionLimit(QueryCommandOptions options)
@@ -6071,10 +6616,200 @@ public static partial class QueryCommandRunner
     }
 
     private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)
+        => ApplyOutlineSymbolLimit(outline, sectionLimit);
+
+    private static JsonObject ApplyOutlineSymbolLimit(OutlineResult outline, int sectionLimit)
     {
         var sections = new JsonObject();
         TruncateCompactSection(outline.Symbols, sectionLimit, sections, "symbols");
         return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static bool HasOutlineJsonControls(QueryCommandOptions options, IReadOnlyList<string> kindFilters)
+        => options.OutlineFieldsExplicit
+           || kindFilters.Count > 0
+           || options.LimitExplicit
+           || options.OutlineCursorOffset.HasValue;
+
+    private static List<string> BuildOutlineKindFilters(string? rawKind)
+    {
+        if (string.IsNullOrWhiteSpace(rawKind))
+            return [];
+
+        return rawKind
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(kind => kind.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static List<OutlineSymbol> ApplyOutlineKindFilters(IReadOnlyList<OutlineSymbol> symbols, IReadOnlyList<string> kindFilters)
+    {
+        if (kindFilters.Count == 0)
+            return symbols.ToList();
+
+        var filterSet = kindFilters.ToHashSet(StringComparer.Ordinal);
+        return symbols.Where(symbol => filterSet.Contains(symbol.Kind.ToLowerInvariant())).ToList();
+    }
+
+    private static List<OutlineSymbol> ApplyOutlineHumanPaging(IReadOnlyList<OutlineSymbol> symbols, QueryCommandOptions options)
+    {
+        if (!options.LimitExplicit && !options.OutlineCursorOffset.HasValue)
+            return symbols.ToList();
+
+        var offset = Math.Min(options.OutlineCursorOffset ?? 0, symbols.Count);
+        return symbols.Skip(offset).Take(options.Limit).ToList();
+    }
+
+    private static JsonObject BuildOutlineJsonPayload(
+        OutlineResult outline,
+        IReadOnlyList<OutlineSymbol> filteredSymbols,
+        IReadOnlyList<string> kindFilters,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        bool compact)
+    {
+        var totalMatchingSymbols = filteredSymbols.Count;
+        var offset = Math.Min(options.OutlineCursorOffset ?? 0, totalMatchingSymbols);
+        var remainingSymbols = offset == 0
+            ? filteredSymbols.ToList()
+            : filteredSymbols.Skip(offset).ToList();
+
+        if (compact)
+        {
+            var compactLimit = GetCompactSectionLimit(options);
+            var compactOutline = BuildOutlineView(outline, remainingSymbols, totalMatchingSymbols);
+            var compactTruncation = ApplyOutlineCompactCaps(compactOutline, compactLimit);
+            var payload = JsonSerializer.SerializeToNode(compactOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+            AddOutlinePagingJsonFields(payload, kindFilters, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
+            ApplyOutlineFieldSelection(payload, compactOutline.Symbols, options, jsonOptions);
+            AddCompactJsonFields(payload, compactLimit, compactTruncation);
+            return payload;
+        }
+
+        var shouldPage = options.LimitExplicit || options.OutlineCursorOffset.HasValue;
+        var pageSymbols = shouldPage
+            ? remainingSymbols.Take(options.Limit).ToList()
+            : remainingSymbols;
+        var pagedOutline = BuildOutlineView(outline, pageSymbols, totalMatchingSymbols);
+        var pagedPayload = JsonSerializer.SerializeToNode(pagedOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+        AddOutlinePagingJsonFields(pagedPayload, kindFilters, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
+        ApplyOutlineFieldSelection(pagedPayload, pageSymbols, options, jsonOptions);
+        return pagedPayload;
+    }
+
+    private static OutlineResult BuildOutlineView(OutlineResult outline, List<OutlineSymbol> symbols, int symbolCount)
+        => new()
+        {
+            Path = outline.Path,
+            Lang = outline.Lang,
+            TotalLines = outline.TotalLines,
+            SymbolCount = symbolCount,
+            Symbols = symbols,
+        };
+
+    private static void AddOutlinePagingJsonFields(
+        JsonObject payload,
+        IReadOnlyList<string> kindFilters,
+        int totalSymbolCount,
+        int offset,
+        int returnedSymbolCount,
+        JsonSerializerOptions jsonOptions)
+    {
+        var nextOffset = offset + returnedSymbolCount;
+        var hasMore = nextOffset < totalSymbolCount;
+        payload["total_symbol_count"] = totalSymbolCount;
+        payload["returned_symbol_count"] = returnedSymbolCount;
+        payload["cursor_offset"] = offset;
+        payload["next_cursor"] = hasMore ? JsonValue.Create(FormatOutlineCursor(nextOffset)) : null;
+        payload["has_more"] = hasMore;
+        if (kindFilters.Count > 0)
+            payload["kind_filter"] = JsonSerializer.SerializeToNode(kindFilters.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+    }
+
+    private static void ApplyOutlineFieldSelection(
+        JsonObject payload,
+        IReadOnlyList<OutlineSymbol> symbols,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        if (!options.OutlineFieldsExplicit)
+            return;
+
+        if (options.OutlineFields == null)
+        {
+            payload["selected_fields"] = JsonSerializer.SerializeToNode(new List<string> { "all" }, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+            return;
+        }
+
+        payload["selected_fields"] = JsonSerializer.SerializeToNode(options.OutlineFields, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        var projectedSymbols = new JsonArray();
+        foreach (var symbol in symbols)
+            projectedSymbols.Add(BuildProjectedOutlineSymbol(symbol, options.OutlineFields));
+        payload["symbols"] = projectedSymbols;
+    }
+
+    private static JsonObject BuildProjectedOutlineSymbol(OutlineSymbol symbol, IReadOnlyList<string> fields)
+    {
+        var payload = new JsonObject();
+        foreach (var field in fields)
+        {
+            switch (field)
+            {
+                case "kind":
+                    payload["kind"] = symbol.Kind;
+                    break;
+                case "name":
+                    payload["name"] = symbol.Name;
+                    break;
+                case "display_name":
+                    payload["display_name"] = symbol.DisplayName;
+                    break;
+                case "path":
+                    payload["path"] = symbol.Path;
+                    break;
+                case "line":
+                    payload["line"] = symbol.Line;
+                    break;
+                case "start_line":
+                    payload["start_line"] = symbol.StartLine;
+                    break;
+                case "end_line":
+                    payload["end_line"] = symbol.EndLine;
+                    break;
+                case "depth":
+                    payload["depth"] = symbol.Depth;
+                    break;
+                case "body_start_line":
+                    payload["body_start_line"] = symbol.BodyStartLine;
+                    break;
+                case "body_end_line":
+                    payload["body_end_line"] = symbol.BodyEndLine;
+                    break;
+                case "signature":
+                    payload["signature"] = symbol.Signature;
+                    break;
+                case "signature_truncated":
+                    payload["signature_truncated"] = symbol.SignatureTruncated;
+                    break;
+                case "signature_original_length":
+                    payload["signature_original_length"] = symbol.SignatureOriginalLength;
+                    break;
+                case "container_kind":
+                    payload["container_kind"] = symbol.ContainerKind;
+                    break;
+                case "container_name":
+                    payload["container_name"] = symbol.ContainerName;
+                    break;
+                case "visibility":
+                    payload["visibility"] = symbol.Visibility;
+                    break;
+                case "return_type":
+                    payload["return_type"] = symbol.ReturnType;
+                    break;
+            }
+        }
+        return payload;
     }
 
     private static JsonObject BuildCompactTruncationMetadata(int sectionLimit, JsonObject sections)
@@ -6206,13 +6941,15 @@ public static partial class QueryCommandRunner
 
     private static void AddInspectBodyModeJsonFields(JsonObject payload, QueryCommandOptions options, SymbolAnalysisResult analysis)
     {
-        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
-        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
-        var nextStartLine = analysis.Definitions
-            .Where(definition => definition.BodyContentNextStartLine.HasValue)
-            .Select(definition => definition.BodyContentNextStartLine!.Value)
-            .DefaultIfEmpty()
-            .Min();
+        var bodyContentPresent = options.IncludeBody && analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = options.IncludeBody && analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        var nextStartLine = options.IncludeBody
+            ? analysis.Definitions
+                .Where(definition => definition.BodyContentNextStartLine.HasValue)
+                .Select(definition => definition.BodyContentNextStartLine!.Value)
+                .DefaultIfEmpty()
+                .Min()
+            : 0;
 
         var bodyMode = new JsonObject
         {
@@ -6329,19 +7066,33 @@ public static partial class QueryCommandRunner
             var inspectQuery = pathLineInspectMode
                 ? $"{inspectPath}:{options.StartLine!.Value}"
                 : options.Query!;
-            var analysis = reader.AnalyzeSymbol(
-                inspectQuery,
-                inspectLimit,
-                options.Lang,
-                options.IncludeBody,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
-                exact,
-                options.MaxLineWidth,
-                options.BodyStartLine,
-                options.BodyLines,
-                kind: options.Kind);
+            var analysis = pathLineInspectMode
+                ? reader.AnalyzeFileLine(
+                    inspectPath!,
+                    options.StartLine!.Value,
+                    inspectLimit,
+                    options.Lang,
+                    options.IncludeBody,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    options.MaxLineWidth,
+                    options.BodyStartLine,
+                    options.BodyLines,
+                    kind: options.Kind)
+                : reader.AnalyzeSymbol(
+                    inspectQuery,
+                    inspectLimit,
+                    options.Lang,
+                    options.IncludeBody,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    exact,
+                    options.MaxLineWidth,
+                    options.BodyStartLine,
+                    options.BodyLines,
+                    kind: options.Kind);
             var sourceExcerpt = BuildInspectSourceExcerpt(reader, options, analysis, inspectPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -6380,6 +7131,7 @@ public static partial class QueryCommandRunner
                     payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
                 }
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
+                ApplyInspectDefinitionContentPolicy(payload, options);
                 AddInspectBodyModeJsonFields(payload, options, analysis);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
@@ -6513,8 +7265,18 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "outline"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidOutlineKindFilterError(options))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("outline", options))
             return CommandExitCodes.UsageError;
+        if (options.SearchCursor.HasValue || options.UnusedCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "outline --cursor must use an outline pagination cursor.",
+                GetUsageLineOrThrow("outline"),
+                "Use the `next_cursor` value returned by `cdidx outline <path> --json --limit <n>`.");
+            return CommandExitCodes.UsageError;
+        }
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
         return WithDb(options, jsonOptions, reader =>
@@ -6529,33 +7291,39 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.NotFound;
             }
 
+            var kindFilters = BuildOutlineKindFilters(options.Kind);
+            var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);
             if (options.Json)
             {
                 if (options.Compact)
                 {
-                    var compactLimit = GetCompactSectionLimit(options);
-                    var compactTruncation = ApplyOutlineCompactCaps(outline, compactLimit);
-                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-                    AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: true);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else if (HasOutlineJsonControls(options, kindFilters))
+                {
+                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: false);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
             }
             else
             {
                 var outlineContent = reader.GetExcerpt(filePath, 1, outline.TotalLines)?.Content;
 
-                Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
+                Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {filteredSymbols.Count} symbols)");
                 Console.WriteLine();
-                var duplicateNames = outline.Symbols
+                var duplicateNames = filteredSymbols
                     .GroupBy(sym => sym.Name, StringComparer.Ordinal)
                     .Where(group => group.Count() > 1)
                     .Select(group => group.Key)
                     .ToHashSet(StringComparer.Ordinal);
-                foreach (var sym in outline.Symbols)
+                var displaySymbols = ApplyOutlineHumanPaging(filteredSymbols, options);
+                foreach (var sym in displaySymbols)
                 {
                     // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
                     var indent = sym.Depth > 0 ? new string(' ', 4 * sym.Depth) : "";
@@ -6709,7 +7477,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("status", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("status")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "status"))
+        if (TryWriteParseError(options, "status", jsonOptions))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
@@ -6742,7 +7510,7 @@ public static partial class QueryCommandRunner
         if (options.StatusExplainField != null)
         {
             if (options.Json)
-                return WriteStatusReadinessExplanationJson(options.StatusExplainField);
+                return WriteStatusReadinessExplanationJson(options.StatusExplainField, jsonOptions);
             return WriteStatusReadinessExplanation(options.StatusExplainField);
         }
 
@@ -7671,10 +8439,16 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 var zeroSqlGraphSignal = baseSqlGraphSignal;
+                var zeroSymbolFilter = ApplyDependencySymbolFilters([], options).Summary;
+                if (depsFormat is OutputFormatJsonGraph)
+                {
+                    WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
+                    return ZeroResultExitCode(options);
+                }
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal));
+                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal)).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter)).ToJsonString(jsonOptions));
                 else
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
@@ -7685,27 +8459,60 @@ public static partial class QueryCommandRunner
             }
 
             List<List<string>> cycles = [];
-            var outputEdges = options.DependencyCycles
-                ? FilterCycleEdges(cycleCandidates, out cycles).Take(options.Limit).ToList()
-                : results;
+            List<FileDependencyResult> outputEdges;
+            DependencySymbolFilterResult symbolFilter;
             if (options.DependencyCycles)
+            {
+                symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
+                outputEdges = FilterCycleEdges(symbolFilter.Edges, out cycles).Take(options.Limit).ToList();
                 cycles = cycles.Take(options.Limit).ToList();
+            }
+            else
+            {
+                symbolFilter = ApplyDependencySymbolFilters(results, options);
+                outputEdges = symbolFilter.Edges;
+            }
             var sqlGraphSignalPaths = options.DependencyCycles
                 ? cycles.Count > 0
                     ? cycles.SelectMany(static cycle => cycle)
-                    : cycleCandidates.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
-                : results.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
+                    : symbolFilter.Edges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
+                : outputEdges.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
             var sqlGraphSignal = NarrowSqlGraphContractSignalByPaths(
                 reader,
                 baseSqlGraphSignal,
                 sqlGraphSignalPaths,
                 options.Lang);
+            if (!options.DependencyCycles && outputEdges.Count == 0)
+            {
+                if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
+                {
+                    WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                }
+                else if (options.Json)
+                {
+                    Console.WriteLine(BuildJsonZeroResultPayload(
+                        reader,
+                        jsonOptions,
+                        resultsKey: "edges",
+                        graphTableAvailable: true,
+                        degraded: !sqlGraphSignal.Ready,
+                        queryOptions: options,
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary)).ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
+                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                }
+                return ZeroResultExitCode(options);
+            }
             if (options.DependencyCycles && cycles.Count == 0)
             {
                 if (options.Json)
                 {
                     var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
-                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
+                    AddFreshnessHint(payload, reader);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -7718,7 +8525,7 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions);
+                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
                 return CommandExitCodes.Success;
             }
 
@@ -7726,13 +8533,14 @@ public static partial class QueryCommandRunner
             {
                 var payload = new JsonObject
                 {
-                    ["count"] = options.DependencyCycles ? cycles.Count : results.Count,
+                    ["count"] = options.DependencyCycles ? cycles.Count : outputEdges.Count,
                 };
                 if (options.DependencyCycles)
                     payload["cycles"] = BuildDependencyCyclesJson(cycles);
                 else
-                    payload["edges"] = JsonSerializer.SerializeToNode(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
-                AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
+                AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
+                AddFreshnessHint(payload, reader);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -7746,12 +8554,12 @@ public static partial class QueryCommandRunner
                     return CommandExitCodes.Success;
                 }
 
-                foreach (var r in results)
+                foreach (var r in outputEdges)
                 {
                     var syms = r.Symbols.Length > 60 ? r.Symbols[..57] + "..." : r.Symbols;
                     Console.WriteLine($"{r.SourcePath,-45} -> {r.TargetPath,-45} ({r.ReferenceCount} refs: {syms})");
                 }
-                CommandErrorWriter.WriteStderr($"({results.Count} dependency edges)");
+                CommandErrorWriter.WriteStderr($"({outputEdges.Count} dependency edges)");
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
@@ -7907,7 +8715,140 @@ public static partial class QueryCommandRunner
         return array;
     }
 
-    private static void WriteDependencyGraph(IReadOnlyList<FileDependencyResult> edges, string format, JsonSerializerOptions jsonOptions)
+    private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
+    {
+        var applied = options.DependencySuppressNoise || options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
+        if (!applied)
+        {
+            var unchangedSymbolCount = edges.Sum(edge => SplitDependencySymbols(edge.Symbols).Count);
+            return new DependencySymbolFilterResult(
+                edges.ToList(),
+                new DependencySymbolFilterSummary(
+                    Applied: false,
+                    SuppressNoise: false,
+                    Symbols: [],
+                    SymbolFamilies: [],
+                    EdgesBefore: edges.Count,
+                    EdgesAfter: edges.Count,
+                    SymbolsBefore: unchangedSymbolCount,
+                    SymbolsAfter: unchangedSymbolCount));
+        }
+
+        var filteredEdges = new List<FileDependencyResult>(edges.Count);
+        var symbolsBefore = 0;
+        var symbolsAfter = 0;
+        foreach (var edge in edges)
+        {
+            var symbols = SplitDependencySymbols(edge.Symbols);
+            symbolsBefore += symbols.Count;
+            var keptSymbols = symbols
+                .Where(symbol => KeepDependencySymbol(symbol, options))
+                .ToList();
+            symbolsAfter += keptSymbols.Count;
+            if (keptSymbols.Count == 0)
+                continue;
+            filteredEdges.Add(CopyDependencyEdge(edge, string.Join(",", keptSymbols)));
+        }
+
+        return new DependencySymbolFilterResult(
+            filteredEdges,
+            new DependencySymbolFilterSummary(
+                Applied: true,
+                SuppressNoise: options.DependencySuppressNoise,
+                Symbols: options.DependencySymbols.ToArray(),
+                SymbolFamilies: options.DependencySymbolFamilies.ToArray(),
+                EdgesBefore: edges.Count,
+                EdgesAfter: filteredEdges.Count,
+                SymbolsBefore: symbolsBefore,
+                SymbolsAfter: symbolsAfter));
+    }
+
+    private static bool KeepDependencySymbol(string symbol, QueryCommandOptions options)
+    {
+        if (options.DependencySuppressNoise && DependencyNoiseSymbols.Contains(symbol))
+            return false;
+
+        var hasNameFilters = options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
+        if (!hasNameFilters)
+            return true;
+
+        return options.DependencySymbols.Contains(symbol, StringComparer.Ordinal)
+               || options.DependencySymbolFamilies.Any(family => symbol.StartsWith(family, StringComparison.Ordinal));
+    }
+
+    private static List<string> SplitDependencySymbols(string symbols)
+        => symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private static FileDependencyResult CopyDependencyEdge(FileDependencyResult edge, string symbols)
+        => new()
+        {
+            ResultKind = edge.ResultKind,
+            SourcePath = edge.SourcePath,
+            TargetPath = edge.TargetPath,
+            SourceDb = edge.SourceDb,
+            TargetDb = edge.TargetDb,
+            ReferenceCount = edge.ReferenceCount,
+            Symbols = symbols,
+        };
+
+    private static void AddDependencySchemaJsonFields(
+        JsonObject payload,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        SqlGraphContractSignal sqlGraphSignal,
+        DependencySymbolFilterSummary symbolFilter)
+    {
+        payload["api_version"] = JsonOutputContract.ApiVersion;
+        payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddDependencySymbolFilterJsonFields(payload, symbolFilter, jsonOptions);
+    }
+
+    private static void AddDependencySymbolFilterJsonFields(JsonObject payload, DependencySymbolFilterSummary symbolFilter, JsonSerializerOptions jsonOptions)
+    {
+        if (!symbolFilter.Applied)
+            return;
+
+        var filter = new JsonObject
+        {
+            ["suppress_noise"] = symbolFilter.SuppressNoise,
+            ["edges_before"] = symbolFilter.EdgesBefore,
+            ["edges_after"] = symbolFilter.EdgesAfter,
+            ["edges_removed"] = symbolFilter.EdgesBefore - symbolFilter.EdgesAfter,
+            ["symbols_before"] = symbolFilter.SymbolsBefore,
+            ["symbols_after"] = symbolFilter.SymbolsAfter,
+            ["symbols_removed"] = symbolFilter.SymbolsBefore - symbolFilter.SymbolsAfter,
+        };
+        if (symbolFilter.Symbols.Count > 0)
+            filter["symbol"] = JsonSerializer.SerializeToNode(symbolFilter.Symbols.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (symbolFilter.SymbolFamilies.Count > 0)
+            filter["symbol_family"] = JsonSerializer.SerializeToNode(symbolFilter.SymbolFamilies.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        payload["symbol_filter"] = filter;
+    }
+
+    private static JsonArray BuildDependencySymbolsJson(string symbols)
+        => new(SplitDependencySymbols(symbols).Select(symbol => JsonValue.Create(symbol)).ToArray<JsonNode?>());
+
+    private sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
+
+    private sealed record DependencySymbolFilterSummary(
+        bool Applied,
+        bool SuppressNoise,
+        IReadOnlyList<string> Symbols,
+        IReadOnlyList<string> SymbolFamilies,
+        int EdgesBefore,
+        int EdgesAfter,
+        int SymbolsBefore,
+        int SymbolsAfter);
+
+    private static void WriteDependencyGraph(
+        IReadOnlyList<FileDependencyResult> edges,
+        string format,
+        JsonSerializerOptions jsonOptions,
+        DbReader reader,
+        QueryCommandOptions options,
+        SqlGraphContractSignal sqlGraphSignal,
+        DependencySymbolFilterSummary symbolFilter)
     {
         switch (format)
         {
@@ -7927,12 +8868,18 @@ public static partial class QueryCommandRunner
                 Console.WriteLine("</graph></graphml>");
                 break;
             case OutputFormatJsonGraph:
-                WriteDependencyJsonGraph(edges, jsonOptions);
+                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter);
                 break;
         }
     }
 
-    private static void WriteDependencyJsonGraph(IReadOnlyList<FileDependencyResult> edges, JsonSerializerOptions jsonOptions)
+    private static void WriteDependencyJsonGraph(
+        IReadOnlyList<FileDependencyResult> edges,
+        JsonSerializerOptions jsonOptions,
+        DbReader reader,
+        QueryCommandOptions options,
+        SqlGraphContractSignal sqlGraphSignal,
+        DependencySymbolFilterSummary symbolFilter)
     {
         var seenNodes = new HashSet<string>(StringComparer.Ordinal);
         var nodes = new List<string>();
@@ -7944,65 +8891,20 @@ public static partial class QueryCommandRunner
                 nodes.Add(edge.TargetPath);
         }
 
-        var writer = Console.Out;
-        if (!jsonOptions.WriteIndented)
+        var payload = new JsonObject
         {
-            writer.Write("{\"nodes\":[");
-            for (var i = 0; i < nodes.Count; i++)
+            ["nodes"] = new JsonArray(nodes.Select(node => (JsonNode?)new JsonObject { ["id"] = node }).ToArray()),
+            ["edges"] = new JsonArray(edges.Select(edge => (JsonNode?)new JsonObject
             {
-                if (i > 0)
-                    writer.Write(',');
-                writer.Write("{\"id\":");
-                writer.Write(JsonSerializer.Serialize(nodes[i], jsonOptions));
-                writer.Write('}');
-            }
-
-            writer.Write("],\"edges\":[");
-            for (var i = 0; i < edges.Count; i++)
-            {
-                if (i > 0)
-                    writer.Write(',');
-                var edge = edges[i];
-                writer.Write("{\"source\":");
-                writer.Write(JsonSerializer.Serialize(edge.SourcePath, jsonOptions));
-                writer.Write(",\"target\":");
-                writer.Write(JsonSerializer.Serialize(edge.TargetPath, jsonOptions));
-                writer.Write(",\"reference_count\":");
-                writer.Write(edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
-                writer.Write('}');
-            }
-
-            writer.WriteLine("]}");
-            return;
-        }
-
-        writer.WriteLine("{");
-        writer.WriteLine("  \"nodes\": [");
-        for (var i = 0; i < nodes.Count; i++)
-        {
-            writer.Write("    { \"id\": ");
-            writer.Write(JsonSerializer.Serialize(nodes[i], jsonOptions));
-            writer.Write(" }");
-            writer.WriteLine(i + 1 < nodes.Count ? "," : string.Empty);
-        }
-
-        writer.WriteLine("  ],");
-        writer.WriteLine("  \"edges\": [");
-        for (var i = 0; i < edges.Count; i++)
-        {
-            var edge = edges[i];
-            writer.Write("    { \"source\": ");
-            writer.Write(JsonSerializer.Serialize(edge.SourcePath, jsonOptions));
-            writer.Write(", \"target\": ");
-            writer.Write(JsonSerializer.Serialize(edge.TargetPath, jsonOptions));
-            writer.Write(", \"reference_count\": ");
-            writer.Write(edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
-            writer.Write(" }");
-            writer.WriteLine(i + 1 < edges.Count ? "," : string.Empty);
-        }
-
-        writer.WriteLine("  ]");
-        writer.WriteLine("}");
+                ["source"] = edge.SourcePath,
+                ["target"] = edge.TargetPath,
+                ["reference_count"] = edge.ReferenceCount,
+                ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
+            }).ToArray()),
+        };
+        AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
+        AddFreshnessHint(payload, reader);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
@@ -8141,7 +9043,7 @@ public static partial class QueryCommandRunner
         if (options.Lang != null)
         {
             cmd.CommandText += " AND src.lang = @lang AND dst.lang = @lang";
-            cmd.Parameters.AddWithValue("@lang", options.Lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", options.Lang);
         }
         AddCrossDatabasePathFilters(cmd, "src", options.PathPatterns, include: !reverse);
         AddCrossDatabasePathFilters(cmd, "dst", options.PathPatterns, include: reverse);
@@ -8182,8 +9084,8 @@ public static partial class QueryCommandRunner
             GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
             ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
             LIMIT @limit";
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
         using var reader = cmd.ExecuteReader();
@@ -8769,6 +9671,14 @@ public static partial class QueryCommandRunner
                 "Use the `next_cursor` value from `cdidx unused --json`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.OutlineCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                GetUsageLineOrThrow("unused"),
+                "`outline:<offset>` cursors are for `cdidx outline <path>`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.UnusedCursorOffset.HasValue && options.CountOnly)
         {
             WriteUsageError(
@@ -8793,29 +9703,29 @@ public static partial class QueryCommandRunner
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests));
             if (options.CountOnly)
             {
-                var countSummary = reader.CountUnusedSymbols(
-                    options.Kind,
-                    options.Lang,
-                    unusedScope.PathPatterns,
-                    unusedScope.ExcludePaths,
-                    unusedScope.ExcludeTests,
-                    visibilityFilters: unusedScope.VisibilityFilters,
-                    excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
-                    bucketFilter: options.UnusedBucket,
-                    minConfidence: options.MinUnusedConfidence);
-                var effectiveSqlGraphSignal = countSummary.Count == 0
-                    ? zeroResultSqlGraphSignal
-                    : NarrowSqlGraphContractSignal(
-                        baseSqlGraphSignal,
-                        countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                 if (options.Json)
                 {
+                    var countSummary = reader.CountUnusedSymbolsDetailed(
+                        options.Kind,
+                        options.Lang,
+                        unusedScope.PathPatterns,
+                        unusedScope.ExcludePaths,
+                        unusedScope.ExcludeTests,
+                        visibilityFilters: unusedScope.VisibilityFilters,
+                        excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
+                        bucketFilter: options.UnusedBucket,
+                        minConfidence: options.MinUnusedConfidence);
+                    var effectiveSqlGraphSignal = countSummary.Count == 0
+                        ? zeroResultSqlGraphSignal
+                        : NarrowSqlGraphContractSignal(
+                            baseSqlGraphSignal,
+                            countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                     var payload = new JsonObject
                     {
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
-                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
-                        ["summary"] = BuildUnusedSummaryJson(Array.Empty<UnusedSymbolResult>(), jsonOptions),
+                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.BucketCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+                        ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions),
                         ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
@@ -8833,6 +9743,21 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
+                    var countSummary = reader.CountUnusedSymbols(
+                        options.Kind,
+                        options.Lang,
+                        unusedScope.PathPatterns,
+                        unusedScope.ExcludePaths,
+                        unusedScope.ExcludeTests,
+                        visibilityFilters: unusedScope.VisibilityFilters,
+                        excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
+                        bucketFilter: options.UnusedBucket,
+                        minConfidence: options.MinUnusedConfidence);
+                    var effectiveSqlGraphSignal = countSummary.Count == 0
+                        ? zeroResultSqlGraphSignal
+                        : NarrowSqlGraphContractSignal(
+                            baseSqlGraphSignal,
+                            countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                     Console.WriteLine($"{countSummary.Count}");
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
@@ -9024,6 +9949,19 @@ public static partial class QueryCommandRunner
         };
     }
 
+    internal static JsonObject BuildUnusedCountSummaryJson(UnusedCountResult result, JsonSerializerOptions jsonOptions)
+    {
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        return new JsonObject
+        {
+            ["by_bucket"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.BucketCounts), context.DictionaryStringInt32),
+            ["by_confidence"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ConfidenceCounts), context.DictionaryStringInt32),
+        };
+    }
+
+    private static Dictionary<string, int> ToUnusedCountDictionary(IReadOnlyDictionary<string, int> counts)
+        => counts.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
     private static int GetUnusedFetchLimit(int pageLimit, int pageOffset)
     {
         var requested = (long)Math.Max(pageLimit, 1) + Math.Max(pageOffset, 0) + 1;
@@ -9093,7 +10031,7 @@ public static partial class QueryCommandRunner
         "likely_unused_private" => "Private symbols with no indexed references; usually the highest-signal unused candidates.",
         "maybe_unused_nonpublic" => "Internal, protected, or otherwise non-public symbols with no indexed references; review call paths and framework entry points before removal.",
         "public_or_exported_no_refs" => "Public or exported symbols with no indexed references; may still be external API surface.",
-        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, attributes, config, or binding conventions.",
+        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, serialization, contracts, config, metadata, generated code, documentation headings, test hooks, or binding conventions.",
         _ => "Unknown unused-symbol bucket.",
     };
 
@@ -9176,7 +10114,7 @@ public static partial class QueryCommandRunner
         "likely_unused_private" => "Likely unused private",
         "maybe_unused_nonpublic" => "Maybe unused non-public",
         "public_or_exported_no_refs" => "Public/exported with no refs",
-        "reflection_or_config_suspect" => "Reflection/config suspects",
+        "reflection_or_config_suspect" => "Intentional-surface suspects",
         _ => bucket,
     };
 
@@ -9208,17 +10146,19 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("validate", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("validate")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "validate"))
+        if (TryWriteParseError(options, "validate", jsonOptions))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("validate", options))
             return CommandExitCodes.UsageError;
         if (options.Severity != null && !AllValidValidateSeverities.Contains(options.Severity, StringComparer.Ordinal))
         {
-            CommandErrorWriter.Write(
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
                 $"unsupported validate severity '{options.Severity}'.",
+                CommandExitCodes.UsageError,
                 "use one of: info, warning, error.",
                 "cdidx validate [--severity <info|warning|error>]");
-            return CommandExitCodes.UsageError;
         }
 
         return WithDb(options, jsonOptions, reader =>
@@ -9226,8 +10166,19 @@ public static partial class QueryCommandRunner
             var issueLimit = HasOption(cmdArgs, "--limit") || HasOption(cmdArgs, "--top")
                 ? options.Limit
                 : (int?)null;
-            var issues = reader.GetIssues(options.Kind, options.PathPatterns, issueLimit, options.Severity);
+            var issues = reader.GetIssues(
+                options.Kind,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                issueLimit,
+                options.Severity);
             var issuesAvailable = reader._hasIssuesTable;
+            if (options.CountOnly || options.OutputFormat == OutputFormatCount)
+            {
+                WriteFormattedCount(issues.Count, jsonOptions);
+                return CommandExitCodes.Success;
+            }
             if (issues.Count == 0)
             {
                 if (options.Json)
@@ -9318,7 +10269,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("languages", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("languages")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "languages"))
+        if (TryWriteParseError(options, "languages", jsonOptions))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("languages", options))
             return CommandExitCodes.UsageError;
@@ -9629,6 +10580,7 @@ public static partial class QueryCommandRunner
         var visibilityFilters = new List<string>();
         var excludeVisibilityFilters = new List<string>();
         bool excludeTests = false;
+        bool unusedActionable = false;
         bool includeGenerated = false;
         DateTime? since = null;
         bool noDedup = false;
@@ -9659,6 +10611,8 @@ public static partial class QueryCommandRunner
         var excludeOrigins = new List<string>();
         var resultKinds = new List<string>();
         List<string>? searchFields = null;
+        List<string>? outlineFields = null;
+        bool outlineFieldsExplicit = false;
         bool firstPerFile = false;
         bool resultsOnly = false;
         bool nextSteps = false;
@@ -9688,6 +10642,9 @@ public static partial class QueryCommandRunner
         List<string>? mapSections = null;
         bool mapSummaryOnly = false;
         bool dependencyCycles = false;
+        bool dependencySuppressNoise = false;
+        var dependencySymbols = new List<string>();
+        var dependencySymbolFamilies = new List<string>();
         string? recipeName = null;
         var includeRecipeQueries = new List<string>();
         var excludeRecipeQueries = new List<string>();
@@ -9705,6 +10662,7 @@ public static partial class QueryCommandRunner
         var issueLabels = new List<string>();
         SearchCursor? searchCursor = null;
         int? unusedCursorOffset = null;
+        int? outlineCursorOffset = null;
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
@@ -9733,6 +10691,23 @@ public static partial class QueryCommandRunner
             }
 
             guardFilters.Add(new SearchGuardFilter(role, direction, value));
+        }
+
+        void AddDependencySymbolFilter(string optionName, string value, List<string> target)
+        {
+            var trimmed = value.Trim();
+            if (trimmed.Length == 0)
+            {
+                AddParseError($"Error: {optionName} value cannot be empty.");
+                return;
+            }
+            if (trimmed.Length > QueryLimits.MaxQueryLength)
+            {
+                AddParseError($"Error: {optionName} value too long (max {QueryLimits.MaxQueryLength} characters).");
+                return;
+            }
+            if (!target.Contains(trimmed, StringComparer.Ordinal))
+                target.Add(trimmed);
         }
 
         void AddIssueDraftLabels(string rawLabels)
@@ -10188,8 +11163,10 @@ public static partial class QueryCommandRunner
                             searchCursor = parsedCursor;
                         else if (TryParseUnusedCursor(cursorValue!, out var parsedUnusedCursorOffset))
                             unusedCursorOffset = parsedUnusedCursorOffset;
+                        else if (TryParseOutlineCursor(cursorValue!, out var parsedOutlineCursorOffset))
+                            outlineCursorOffset = parsedOutlineCursorOffset;
                         else
-                            AddParseError("Error: --cursor must be a search pagination cursor or an unused pagination cursor returned as `next_cursor`.");
+                            AddParseError("Error: --cursor must be a search, unused, or outline pagination cursor returned as `next_cursor`.");
                     }
                     else
                     {
@@ -10291,8 +11268,10 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(unusedBucketError!);
                     break;
+                case "--confidence":
                 case "--min-confidence":
-                    if (TryReadStringOptionValue(args, ref i, "--min-confidence", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var minUnusedConfidenceValue, out var minUnusedConfidenceError))
+                    var confidenceFlag = normalizedArg;
+                    if (TryReadStringOptionValue(args, ref i, confidenceFlag, inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var minUnusedConfidenceValue, out var minUnusedConfidenceError))
                     {
                         WarnIfDuplicateSingleValueOption("--min-confidence", minUnusedConfidenceValue!);
                         minUnusedConfidence = minUnusedConfidenceValue?.ToLowerInvariant();
@@ -10410,6 +11389,21 @@ public static partial class QueryCommandRunner
                     break;
                 case "--cycles":
                     dependencyCycles = true;
+                    break;
+                case "--suppress-noise":
+                    dependencySuppressNoise = true;
+                    break;
+                case "--symbol":
+                    if (TryReadStringOptionValue(args, ref i, "--symbol", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dependencySymbolValue, out var dependencySymbolError))
+                        AddDependencySymbolFilter("--symbol", dependencySymbolValue!, dependencySymbols);
+                    else
+                        AddParseError(dependencySymbolError!);
+                    break;
+                case "--symbol-family":
+                    if (TryReadStringOptionValue(args, ref i, "--symbol-family", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dependencySymbolFamilyValue, out var dependencySymbolFamilyError))
+                        AddDependencySymbolFilter("--symbol-family", dependencySymbolFamilyValue!, dependencySymbolFamilies);
+                    else
+                        AddParseError(dependencySymbolFamilyError!);
                     break;
                 case "--strict-not-found":
                     strictNotFound = true;
@@ -10617,6 +11611,20 @@ public static partial class QueryCommandRunner
                         AddParseError("Error: --check is not supported by this command.");
                     }
                     break;
+                case "--outline-fields":
+                    if (TryReadStringOptionValue(args, ref i, "--outline-fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var outlineFieldsValue, out var outlineFieldsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--outline-fields", outlineFieldsValue!);
+                        outlineFields = ParseOutlineProjectionFields(outlineFieldsValue!, AddParseError);
+                        outlineFieldsExplicit = true;
+                        json = true;
+                        outputFormat = OutputFormatJson;
+                    }
+                    else
+                    {
+                        AddParseError(outlineFieldsError!);
+                    }
+                    break;
                 case "--stale-after":
                     if (allowStatusCheck)
                     {
@@ -10731,6 +11739,9 @@ public static partial class QueryCommandRunner
                     break;
                 case "--exclude-fixtures":
                     excludeFixtures = true;
+                    break;
+                case "--actionable":
+                    unusedActionable = true;
                     break;
                 case "--include-generated":
                     includeGenerated = true;
@@ -10918,6 +11929,15 @@ public static partial class QueryCommandRunner
             }
         }
 
+        if (unusedActionable)
+        {
+            unusedBucket ??= "likely_unused_private";
+            minUnusedConfidence ??= "medium";
+            if (visibilityFilters.Count == 0)
+                visibilityFilters.Add("private");
+            excludeTests = true;
+        }
+
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
         var resolvedDbPath = dbResolution.DbPath;
 
@@ -10980,6 +12000,7 @@ public static partial class QueryCommandRunner
             Kind = kind,
             UnusedBucket = unusedBucket,
             MinUnusedConfidence = minUnusedConfidence,
+            UnusedActionable = unusedActionable,
             Severity = severity,
             Query = query,
             RawFts = rawFts,
@@ -11038,6 +12059,8 @@ public static partial class QueryCommandRunner
             ExcludeOrigins = excludeOrigins,
             ResultKinds = resultKinds,
             SearchFields = searchFields,
+            OutlineFields = outlineFields,
+            OutlineFieldsExplicit = outlineFieldsExplicit,
             FirstPerFile = firstPerFile,
             ResultsOnly = resultsOnly,
             NextSteps = nextSteps,
@@ -11061,6 +12084,9 @@ public static partial class QueryCommandRunner
             MapSections = mapSections,
             MapSummaryOnly = mapSummaryOnly,
             DependencyCycles = dependencyCycles,
+            DependencySuppressNoise = dependencySuppressNoise,
+            DependencySymbols = dependencySymbols,
+            DependencySymbolFamilies = dependencySymbolFamilies,
             RecipeName = recipeName,
             IncludeRecipeQueries = includeRecipeQueries,
             ExcludeRecipeQueries = excludeRecipeQueries,
@@ -11077,6 +12103,7 @@ public static partial class QueryCommandRunner
             IssueLabels = issueLabels,
             SearchCursor = searchCursor,
             UnusedCursorOffset = unusedCursorOffset,
+            OutlineCursorOffset = outlineCursorOffset,
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
@@ -11328,6 +12355,74 @@ public static partial class QueryCommandRunner
         if (fields.Count == 0)
             addParseError("Error: --search-fields requires at least one field name.");
         return fields;
+    }
+
+    private static List<string>? ParseOutlineProjectionFields(string rawValue, Action<string> addParseError)
+    {
+        var fields = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var all = false;
+        if (!ValidateCsvBounds("--outline-fields", rawValue, MaxOutlineProjectionFieldsCsvLength, MaxOutlineProjectionFieldsCsvEntries, addParseError))
+            return fields;
+
+        void AddField(string field)
+        {
+            if (seen.Add(field))
+                fields.Add(field);
+        }
+
+        foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var field = rawField.ToLowerInvariant().Replace('-', '_');
+            switch (field)
+            {
+                case "all":
+                    all = true;
+                    continue;
+                case "kind":
+                case "name":
+                case "display_name":
+                case "path":
+                case "line":
+                case "start_line":
+                case "end_line":
+                case "depth":
+                case "body_start_line":
+                case "body_end_line":
+                case "signature":
+                case "signature_truncated":
+                case "signature_original_length":
+                case "container_kind":
+                case "container_name":
+                case "visibility":
+                case "return_type":
+                    AddField(field);
+                    break;
+                case "range":
+                case "lines":
+                    AddField("start_line");
+                    AddField("end_line");
+                    break;
+                case "body":
+                case "body_range":
+                    AddField("body_start_line");
+                    AddField("body_end_line");
+                    break;
+                case "container":
+                    AddField("container_kind");
+                    AddField("container_name");
+                    break;
+                default:
+                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, or aliases range, lines, body, body_range, container.");
+                    continue;
+            }
+        }
+
+        if (all && fields.Count > 0)
+            addParseError("Error: --outline-fields all cannot be combined with specific field names.");
+        if (!all && fields.Count == 0)
+            addParseError("Error: --outline-fields requires at least one field name.");
+        return all ? null : fields;
     }
 
     private static void AddSearchMatchOrigins(string optionName, string rawValue, List<string> origins, Action<string> addParseError)
@@ -12215,26 +13310,55 @@ public static partial class QueryCommandRunner
     }
 
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName)
+        => TryWriteParseError(options, commandName, jsonOptions: null);
+
+    private static bool TryWriteParseError(QueryCommandOptions options, string commandName, JsonSerializerOptions? jsonOptions)
     {
         var dbPathError = BuildExplicitDbPathParseError(options);
         if (options.ParseError == null && dbPathError == null)
             return false;
 
         var primaryError = options.ParseError ?? dbPathError!;
-        CommandErrorWriter.Write(
-            StripErrorPrefix(primaryError),
-            primaryError == dbPathError && options.ParseError == null
-                ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
-                : "fix the invalid or missing option value, then rerun with the command shape below.",
-            GetUsageLineOrThrow(commandName),
-            ExtractErrorCode(primaryError));
+        var primaryHint = primaryError == dbPathError && options.ParseError == null
+            ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
+            : "fix the invalid or missing option value, then rerun with the command shape below.";
+        WriteParseError(primaryError, primaryHint, commandName, options, jsonOptions);
         if (options.ParseError != null && dbPathError != null)
-            CommandErrorWriter.Write(
-                StripErrorPrefix(dbPathError),
+            WriteParseError(
+                dbPathError,
                 "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
-                GetUsageLineOrThrow(commandName),
-                ExtractErrorCode(dbPathError));
+                commandName,
+                options,
+                jsonOptions);
         return true;
+    }
+
+    private static void WriteParseError(
+        string error,
+        string hint,
+        string commandName,
+        QueryCommandOptions options,
+        JsonSerializerOptions? jsonOptions)
+    {
+        if (options.Json && jsonOptions != null)
+        {
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                StripErrorPrefix(error),
+                CommandExitCodes.UsageError,
+                hint,
+                GetUsageLineOrThrow(commandName),
+                ExtractErrorCode(error),
+                category: "usage");
+            return;
+        }
+
+        CommandErrorWriter.Write(
+            StripErrorPrefix(error),
+            hint,
+            GetUsageLineOrThrow(commandName),
+            ExtractErrorCode(error));
     }
 
     private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
@@ -12281,6 +13405,7 @@ public static partial class QueryCommandRunner
         "namespace",
         "object",
         "operator",
+        "package",
         "procedure",
         "property",
         "protocol",
@@ -12350,6 +13475,36 @@ public static partial class QueryCommandRunner
         return false;
     }
 
+    private static bool TryWriteInvalidOutlineKindFilterError(QueryCommandOptions options)
+    {
+        if (options.Kind == null)
+            return false;
+
+        var kinds = BuildOutlineKindFilters(options.Kind);
+        if (kinds.Count == 0)
+        {
+            CommandErrorWriter.Write(
+                $"invalid --kind value `{ConsoleUi.FormatBoundedValue(options.Kind)}`.",
+                $"use one or more of: {string.Join(", ", KnownSymbolKindFilters)}.",
+                GetUsageLineOrThrow("outline"));
+            return true;
+        }
+
+        foreach (var kind in kinds)
+        {
+            if (KnownSymbolKindFilters.Contains(kind))
+                continue;
+
+            CommandErrorWriter.Write(
+                $"invalid --kind value `{ConsoleUi.FormatBoundedValue(kind)}`.",
+                $"use one or more of: {string.Join(", ", KnownSymbolKindFilters)}.",
+                GetUsageLineOrThrow("outline"));
+            return true;
+        }
+
+        return false;
+    }
+
     internal static bool IsKnownUnusedBucket(string value)
         => OrderedUnusedBuckets.Contains(value, StringComparer.Ordinal);
 
@@ -12407,6 +13562,14 @@ public static partial class QueryCommandRunner
                 && commandName != "files"
                 && commandName != "symbols")
             {
+                if (commandName == "outline")
+                {
+                    CommandErrorWriter.Write(
+                        "--json=<format> is not supported by outline because outline emits one JSON object.",
+                        "use plain `--json`; add `--limit <n>` to cap symbols and read the paging metadata (`returned_symbol_count`, `total_symbol_count`, `next_cursor`).",
+                        GetUsageLineOrThrow(commandName));
+                    return true;
+                }
                 if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
@@ -12762,6 +13925,9 @@ public static partial class QueryCommandRunner
         if (alternativeHint != null)
             CommandErrorWriter.WriteStderr($"Hint: {alternativeHint}");
 
+        if (IsBareTokenSearch(options))
+            CommandErrorWriter.WriteStderr($"Hint: {BareTokenAuthAuditHint}");
+
         var staleAfter = ResolveStaleAfter(options, CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable));
         if (staleAfter.Error != null)
         {
@@ -12776,6 +13942,22 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.WriteStderr($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
     }
+
+    private static bool IsBareTokenSearch(QueryCommandOptions options)
+        => options.RecipeName == null
+           && options.NamedSearchQueries.Count == 0
+           && string.Equals(options.Query?.Trim(), "token", StringComparison.OrdinalIgnoreCase);
+
+    private static SearchQueryHint? BuildBareTokenSearchHint(QueryCommandOptions options)
+        => IsBareTokenSearch(options)
+            ? new SearchQueryHint
+            {
+                Reason = "bare_token_query_auth_noise",
+                SuggestedAction = BareTokenAuthAuditHint,
+                Flag = "--recipe",
+                McpArgument = "recipe",
+            }
+            : null;
 
     private static SearchQueryHint? BuildSearchPathGlobHint(DbReader reader, QueryCommandOptions options)
     {
@@ -12829,6 +14011,13 @@ public static partial class QueryCommandRunner
             payload["path_filter_hint"] = BuildSearchQueryHintJson(pathHint);
     }
 
+    private static void AddBareTokenSearchHint(JsonObject payload, QueryCommandOptions options)
+    {
+        var hint = BuildBareTokenSearchHint(options);
+        if (hint != null)
+            payload["token_domain_hint"] = BuildSearchQueryHintJson(hint);
+    }
+
     private static void WriteExactSubstringHintIfNeeded(SearchQueryHint? hint)
     {
         if (hint == null)
@@ -12868,6 +14057,8 @@ public static partial class QueryCommandRunner
             yield return $"bucket: {options.UnusedBucket}";
         if (options.MinUnusedConfidence != null)
             yield return $"min-confidence: {options.MinUnusedConfidence}";
+        if (options.UnusedActionable)
+            yield return "actionable: true";
         if (options.RankMode != ReferenceRankMode.Weighted)
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
@@ -12924,6 +14115,8 @@ public static partial class QueryCommandRunner
             query["bucket"] = options.UnusedBucket;
         if (options.MinUnusedConfidence != null)
             query["min_confidence"] = options.MinUnusedConfidence;
+        if (options.UnusedActionable)
+            query["actionable"] = true;
         if (options.AuditScopeExplicit)
             query["audit_scope"] = options.AuditScope;
         if (options.VisibilityFilters.Count > 0)
@@ -12967,6 +14160,14 @@ public static partial class QueryCommandRunner
             query["dedup"] = false;
         if (options.RawKinds)
             query["raw_kinds"] = true;
+        if (options.DependencyCycles)
+            query["cycles"] = true;
+        if (options.DependencySuppressNoise)
+            query["suppress_noise"] = true;
+        if (options.DependencySymbols.Count > 0)
+            query["symbol"] = JsonSerializer.SerializeToNode(options.DependencySymbols, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.DependencySymbolFamilies.Count > 0)
+            query["symbol_family"] = JsonSerializer.SerializeToNode(options.DependencySymbolFamilies, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.FocusLine.HasValue)
             query["focus_line"] = options.FocusLine.Value;
         if (options.FocusColumn.HasValue)
@@ -13252,11 +14453,11 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanation(string fieldName)
     {
-        var field = FindStatusReadinessField(fieldName);
+        var field = FindStatusFieldExplanation(fieldName);
         if (field == null)
         {
-            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
-            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            CommandErrorWriter.WriteStderr($"Error: unknown status field `{fieldName}`.");
+            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.");
             return CommandExitCodes.UsageError;
         }
 
@@ -13268,18 +14469,21 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int WriteStatusReadinessExplanationJson(string fieldName)
+    private static int WriteStatusReadinessExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
     {
-        var field = FindStatusReadinessField(fieldName);
+        var field = FindStatusFieldExplanation(fieldName);
         if (field == null)
-        {
-            CommandErrorWriter.WriteStderr($"Error: unknown status readiness field `{fieldName}`.");
-            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
-            return CommandExitCodes.UsageError;
-        }
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                $"unknown status field `{fieldName}`.",
+                CommandExitCodes.UsageError,
+                $"use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.",
+                errorCode: CommandErrorCodes.UsageError,
+                category: "usage");
 
         var knownFields = new JsonArray();
-        foreach (var knownField in StatusReadinessFields)
+        foreach (var knownField in StatusExplainFields)
             knownFields.Add(knownField.FieldName);
 
         var payload = new JsonObject
@@ -13292,12 +14496,12 @@ public static partial class QueryCommandRunner
             ["remediation"] = field.Remediation,
             ["known_fields"] = knownFields,
         };
-        Console.WriteLine(payload.ToJsonString());
+        CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
         return CommandExitCodes.Success;
     }
 
-    private static StatusReadinessField? FindStatusReadinessField(string fieldName)
-        => StatusReadinessFields.FirstOrDefault(
+    private static StatusFieldExplanation? FindStatusFieldExplanation(string fieldName)
+        => StatusExplainFields.FirstOrDefault(
             field => string.Equals(field.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)
                      || string.Equals(field.Label, fieldName, StringComparison.OrdinalIgnoreCase));
 
@@ -13889,7 +15093,7 @@ public static partial class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "dependency", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
@@ -14374,9 +15578,11 @@ public static partial class QueryCommandRunner
         ["--repo"] = "pass a GitHub repository in owner/name form for `--open-issues github`, e.g. `--repo Widthdom/CodeIndex`.",
         ["--issue-title"] = "pass an issue title hint for ad hoc search issue-drafts, e.g. `--issue-title \"Thread.Yield audit\"`.",
         ["--issue-label"] = "pass an issue label hint for search issue-drafts, e.g. `--issue-label audit`; repeat or comma-separate values.",
-        ["--cursor"] = "pass the `next_cursor` returned by a prior recipe search response; use it with one selected recipe query.",
-        ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--cursor"] = "pass the `next_cursor` returned by a prior paged response, such as a recipe search cursor, `outline:<offset>`, or `unused:<offset>`.",
+        ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/outline/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--outline-fields"] = "pass outline symbol field names such as `name,line,signature`, or `all` for the full symbol payload.",
         ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
+        ["--confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--visibility"] = "pass one or more of public, protected, internal, private, e.g. `--visibility public,internal`.",
         ["--exclude-visibility"] = "pass one or more of public, protected, internal, private to exclude, e.g. `--exclude-visibility private`.",
@@ -14739,6 +15945,7 @@ public sealed class QueryCommandOptions
     public string? Kind { get; init; }
     public string? UnusedBucket { get; init; }
     public string? MinUnusedConfidence { get; init; }
+    public bool UnusedActionable { get; init; }
     public string? Severity { get; init; }
     public List<string> VisibilityFilters { get; init; } = [];
     public List<string> ExcludeVisibilityFilters { get; init; } = [];
@@ -14797,6 +16004,8 @@ public sealed class QueryCommandOptions
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
     public List<string>? SearchFields { get; init; }
+    public List<string>? OutlineFields { get; init; }
+    public bool OutlineFieldsExplicit { get; init; }
     public bool FirstPerFile { get; init; }
     public bool ResultsOnly { get; init; }
     public bool NextSteps { get; init; }
@@ -14820,6 +16029,9 @@ public sealed class QueryCommandOptions
     public List<string>? MapSections { get; init; }
     public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
+    public bool DependencySuppressNoise { get; init; }
+    public List<string> DependencySymbols { get; init; } = [];
+    public List<string> DependencySymbolFamilies { get; init; } = [];
     public string? RecipeName { get; init; }
     public List<string> IncludeRecipeQueries { get; init; } = [];
     public List<string> ExcludeRecipeQueries { get; init; } = [];
@@ -14836,6 +16048,7 @@ public sealed class QueryCommandOptions
     public List<string> IssueLabels { get; init; } = [];
     public SearchCursor? SearchCursor { get; init; }
     public int? UnusedCursorOffset { get; init; }
+    public int? OutlineCursorOffset { get; init; }
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];

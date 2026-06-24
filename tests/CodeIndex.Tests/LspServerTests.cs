@@ -63,6 +63,16 @@ public class LspServerTests
     }
 
     [Fact]
+    public void ClearSensitivePayloadBufferForTests_ClampsUsedBytesToBufferLength_Issue3989()
+    {
+        var buffer = new byte[] { 1, 2, 3 };
+
+        LspServer.ClearSensitivePayloadBufferForTests(buffer, usedBytes: 99);
+
+        Assert.Equal(new byte[] { 0, 0, 0 }, buffer);
+    }
+
+    [Fact]
     public void TryReadMessage_AcceptsHeaderLineAtMaxLength()
     {
         const string payload = "{}";

@@ -211,6 +211,62 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_SectionsHotspotsJson_MapsSectionToReturnedProperties_Issue3938()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_hotspots_section");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < QueryCommandRunner.DefaultCompactSectionLimit + 2; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/module{i}/App{i}.cs",
+                    "csharp",
+                    $"namespace Module{i}; public class App{i} {{ public static void Main() {{ }} public void Run() {{ }} }}\n");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--sections", "hotspots", "--compact", "--limit", "2", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var mappedProperties = json
+                .GetProperty("section_properties")
+                .GetProperty("hotspots")
+                .EnumerateArray()
+                .Select(item => item.GetString())
+                .ToArray();
+            var truncationProperties = json
+                .GetProperty("truncation")
+                .GetProperty("sections")
+                .EnumerateObject()
+                .Select(property => property.Name)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["hotspots"], json.GetProperty("sections").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(["top_files", "symbol_rich_files", "reference_rich_files", "entrypoints"], mappedProperties);
+            Assert.True(json.TryGetProperty("top_files", out _));
+            Assert.True(json.TryGetProperty("symbol_rich_files", out _));
+            Assert.True(json.TryGetProperty("reference_rich_files", out _));
+            Assert.True(json.TryGetProperty("entrypoints", out _));
+            Assert.False(json.TryGetProperty("languages", out _));
+            Assert.False(json.TryGetProperty("modules", out _));
+            Assert.False(json.TryGetProperty("largest_files", out _));
+            Assert.Equal(
+                mappedProperties.OrderBy(property => property, StringComparer.Ordinal),
+                truncationProperties.OrderBy(property => property, StringComparer.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_WithJsonIncludesWorkspaceMetadataForProjectDb()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map");

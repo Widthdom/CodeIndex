@@ -51,6 +51,9 @@ public static partial class ReferenceExtractor
         if (language == "solution")
             return ExtractSolutionReferences(fileId, lines);
 
+        if (language is "dependency_manifest" or "dependency_lock")
+            return DependencyPackageExtractor.ExtractReferences(fileId, content, lines, path, language);
+
         var swiftTypeAliases = language == "swift"
             ? SwiftReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;
@@ -2030,6 +2033,11 @@ public static partial class ReferenceExtractor
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
+                }
+                if (language == "csharp"
+                    && CSharpReferenceExtractor.ShouldSuppressQualifiedCommonMemberCall(preparedLine, normalizedName, callIndex))
+                {
+                    return false;
                 }
                 if (IsIgnoredCallName(language, name))
                 {

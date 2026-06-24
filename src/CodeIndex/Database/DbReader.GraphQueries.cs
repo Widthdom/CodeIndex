@@ -192,27 +192,27 @@ public partial class DbReader
             callersQueryParam = NameFold.Fold(query) ?? query;
         else
             callersQueryParam = query;
-        cmd.Parameters.AddWithValue("@query", callersQueryParam);
-        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@query", callersQueryParam);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
                 ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
                 : cssScssVariableAlias;
-            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
-        cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
-        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@offset", Math.Max(0, offset));
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
 
         var results = new List<CallerResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -336,23 +336,23 @@ public partial class DbReader
             : _foldReady
                 ? NameFold.Fold(query) ?? query
                 : query;
-        cmd.Parameters.AddWithValue("@query", value);
-        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@query", value);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
                 ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
                 : cssScssVariableAlias;
-            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
@@ -447,21 +447,21 @@ public partial class DbReader
             : _foldReady
                 ? NameFold.Fold(query) ?? query
                 : query;
-        cmd.Parameters.AddWithValue("@query", value);
-        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@query", value);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
                 ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
                 : cssScssVariableAlias;
-            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
@@ -589,30 +589,30 @@ public partial class DbReader
             calleesQueryParam = NameFold.Fold(query) ?? query;
         else
             calleesQueryParam = query;
-        cmd.Parameters.AddWithValue("@query", calleesQueryParam);
-        cmd.Parameters.AddWithValue("@aliasQuery", query);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        SqliteCommandPolicy.Add(cmd, "@query", calleesQueryParam);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
                 ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
                 : cssScssVariableAlias;
-            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
-        cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
-        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@offset", Math.Max(0, offset));
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
 
         var results = new List<CalleeResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -724,26 +724,26 @@ public partial class DbReader
             : _foldReady
                 ? NameFold.Fold(query) ?? query
                 : query;
-        cmd.Parameters.AddWithValue("@query", value);
-        cmd.Parameters.AddWithValue("@aliasQuery", query);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        SqliteCommandPolicy.Add(cmd, "@query", value);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
                 ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
                 : cssScssVariableAlias;
-            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
@@ -829,24 +829,24 @@ public partial class DbReader
             : _foldReady
                 ? NameFold.Fold(query) ?? query
                 : query;
-        cmd.Parameters.AddWithValue("@query", value);
-        cmd.Parameters.AddWithValue("@aliasQuery", query);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        SqliteCommandPolicy.Add(cmd, "@query", value);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        SqliteCommandPolicy.Add(cmd, "@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
                 ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
                 : cssScssVariableAlias;
-            cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
+            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
         if (referenceKind != null)
-            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
@@ -934,15 +934,15 @@ public partial class DbReader
                                          WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @leafNameFolded THEN 4
                                          ELSE 5
                                      END LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", normalizedSymbolName);
-        cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
-        cmd.Parameters.AddWithValue("@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
-        cmd.Parameters.AddWithValue("@leafName", leafName);
-        cmd.Parameters.AddWithValue("@leafNameFolded", NameFold.Fold(leafName) ?? leafName);
-        cmd.Parameters.AddWithValue("@segmentCount", segmentCount);
-        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@name", normalizedSymbolName);
+        SqliteCommandPolicy.Add(cmd, "@normalizedName", normalizedName);
+        SqliteCommandPolicy.Add(cmd, "@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        SqliteCommandPolicy.Add(cmd, "@leafName", leafName);
+        SqliteCommandPolicy.Add(cmd, "@leafNameFolded", NameFold.Fold(leafName) ?? leafName);
+        SqliteCommandPolicy.Add(cmd, "@segmentCount", segmentCount);
+        SqliteCommandPolicy.Add(cmd, "@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
-            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
+            SqliteCommandPolicy.Add(cmd, "@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead() ? reader.GetString(0) : symbolName;
     }
@@ -1034,25 +1034,25 @@ public partial class DbReader
         sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@symbolName", symbolName);
-        cmd.Parameters.AddWithValue("@aliasQuery", symbolName);
+        SqliteCommandPolicy.Add(cmd, "@symbolName", symbolName);
+        SqliteCommandPolicy.Add(cmd, "@aliasQuery", symbolName);
         AddQualifiedGraphQueryParameters(cmd, symbolName, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
-        cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
+        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
+        SqliteCommandPolicy.Add(cmd, "@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
-            cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
+            SqliteCommandPolicy.Add(cmd, "@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
         for (var i = 0; i < polymorphicCSharpSymbolNames.Count; i++)
         {
             if (_foldReady)
-                cmd.Parameters.AddWithValue($"@polymorphicSymbolNameFolded{i}", NameFold.Fold(polymorphicCSharpSymbolNames[i]) ?? polymorphicCSharpSymbolNames[i]);
+                SqliteCommandPolicy.Add(cmd, $"@polymorphicSymbolNameFolded{i}", NameFold.Fold(polymorphicCSharpSymbolNames[i]) ?? polymorphicCSharpSymbolNames[i]);
             else
-                cmd.Parameters.AddWithValue($"@polymorphicSymbolName{i}", polymorphicCSharpSymbolNames[i]);
+                SqliteCommandPolicy.Add(cmd, $"@polymorphicSymbolName{i}", polymorphicCSharpSymbolNames[i]);
         }
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@offset", offset);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@offset", offset);
 
         var results = new List<CallerResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -1662,12 +1662,12 @@ public partial class DbReader
                      f.path,
                      s.line
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", name);
+        SqliteCommandPolicy.Add(cmd, "@name", name);
         if (_foldReady && _symbolColumns.Contains("name_folded"))
-            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(name) ?? name);
-        cmd.Parameters.AddWithValue("@kind", (object?)kind ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@lang", (object?)lang ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@preferredPath", (object?)preferredPath ?? DBNull.Value);
+            SqliteCommandPolicy.Add(cmd, "@nameFolded", NameFold.Fold(name) ?? name);
+        SqliteCommandPolicy.AddNullableText(cmd, "@kind", kind);
+        SqliteCommandPolicy.AddNullableText(cmd, "@lang", lang);
+        SqliteCommandPolicy.AddNullableText(cmd, "@preferredPath", preferredPath);
 
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
@@ -1983,19 +1983,19 @@ public partial class DbReader
                    END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
-        cmd.Parameters.AddWithValue("@resolvedNameNormalized", normalizedName);
-        cmd.Parameters.AddWithValue("@resolvedNameNormalizedFolded", NameFold.Fold(normalizedName) ?? normalizedName);
-        cmd.Parameters.AddWithValue("@resolvedNameLeaf", leafName);
-        cmd.Parameters.AddWithValue("@resolvedNameLeafFolded", NameFold.Fold(leafName) ?? leafName);
-        cmd.Parameters.AddWithValue("@resolvedNameSegmentCount", segmentCount);
-        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
+        SqliteCommandPolicy.Add(cmd, "@resolvedName", resolvedName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameNormalized", normalizedName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameNormalizedFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameLeaf", leafName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameLeafFolded", NameFold.Fold(leafName) ?? leafName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameSegmentCount", segmentCount);
+        SqliteCommandPolicy.Add(cmd, "@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
-            cmd.Parameters.AddWithValue("@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
+            SqliteCommandPolicy.Add(cmd, "@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", 50);
+        SqliteCommandPolicy.Add(cmd, "@limit", 50);
 
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -2087,9 +2087,9 @@ public partial class DbReader
                     OR s.container_name = @containerName
                   )
             ORDER BY s.name";
-        cmd.Parameters.AddWithValue("@targetPath", definition.Path);
-        cmd.Parameters.AddWithValue("@containerName", definition.Name);
-        cmd.Parameters.AddWithValue("@containerKind", definition.Kind);
+        SqliteCommandPolicy.Add(cmd, "@targetPath", definition.Path);
+        SqliteCommandPolicy.Add(cmd, "@containerName", definition.Name);
+        SqliteCommandPolicy.Add(cmd, "@containerKind", definition.Kind);
 
         var results = new List<string>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -2183,10 +2183,10 @@ public partial class DbReader
             GROUP BY source_file_id, source_path, target_path
             ORDER BY reference_count DESC, source_path, target_path";
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        SqliteCommandPolicy.Add(cmd, "@impactTargetPath", definition.Path);
         for (int i = 0; i < fallbackNames.Count; i++)
-            cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
+            SqliteCommandPolicy.Add(cmd, $"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var candidates = new List<(long SourceFileId, bool HasMetadataRef, FileDependencyResult Edge)>();
@@ -2336,7 +2336,7 @@ public partial class DbReader
         if (lang != null)
         {
             sql += " AND f.lang = @metadataAmbigLangFilter";
-            cmd.Parameters.AddWithValue("@metadataAmbigLangFilter", lang);
+            SqliteCommandPolicy.Add(cmd, "@metadataAmbigLangFilter", lang);
         }
         // Path / exclude-path parameters share the same glob-aware LIKE
         // translation as the rest of the reader. Plain text keeps substring
@@ -2355,7 +2355,7 @@ public partial class DbReader
             for (int i = 0; i < pathPatterns.Count; i++)
             {
                 ors.Add($"f.path LIKE @metadataAmbigPath{i} ESCAPE '\\'");
-                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", BuildPathLikePattern(pathPatterns[i]));
+                SqliteCommandPolicy.Add(cmd, $"@metadataAmbigPath{i}", BuildPathLikePattern(pathPatterns[i]));
             }
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
@@ -2364,14 +2364,14 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
             {
                 sql += $" AND f.path NOT LIKE @metadataAmbigExcludePath{i} ESCAPE '\\'";
-                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
+                SqliteCommandPolicy.Add(cmd, $"@metadataAmbigExcludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
             }
         }
         if (excludeTests)
             sql += $" AND NOT {TestPathCondition}";
         sql += ")";
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
+        SqliteCommandPolicy.Add(cmd, "@metadataAmbigName", definition.Name);
         var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
         // Require exactly one authoritative metadata target named `definition.Name`.
         // `count == 0` is also unsafe for the bypass — if no class-like symbol with
@@ -2396,7 +2396,7 @@ public partial class DbReader
                    " + GetSymbolColumnSql("return_type") + @" AS return_type
             FROM symbols s
             WHERE s.file_id = @fileId";
-        cmd.Parameters.AddWithValue("@fileId", fileId);
+        SqliteCommandPolicy.Add(cmd, "@fileId", fileId);
 
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -2438,8 +2438,8 @@ public partial class DbReader
               AND r.symbol_name = @typeName
               AND r.reference_kind IN {ImpactAnchorReferenceKindsSql}
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@fileId", fileId);
-        cmd.Parameters.AddWithValue("@typeName", typeName);
+        SqliteCommandPolicy.Add(cmd, "@fileId", fileId);
+        SqliteCommandPolicy.Add(cmd, "@typeName", typeName);
         return cmd.ExecuteScalar() != null;
     }
 

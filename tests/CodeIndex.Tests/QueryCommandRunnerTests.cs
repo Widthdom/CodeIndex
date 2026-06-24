@@ -95,6 +95,34 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_ExplainUnknownJsonReturnsStructuredError_Issue3896()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--json", "--explain", "invalid"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unknown status field `invalid`.", document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void RunLanguages_InvalidCapabilityJsonReturnsStructuredError_Issue3896()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(
+            ["--capability", "invalid", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("unsupported --capability value 'invalid'", document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void ParseArgs_AllowsZeroMaxLineWidth()
     {
         var options = QueryCommandRunner.ParseArgs(["RunSearch", "--max-line-width", "0"], jsonDefault: false, allowNamedQuery: true);
@@ -827,6 +855,77 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_JsonSummaryReportsEmptyInput_Issue3906()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_empty_summary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                string.Empty,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(lines);
+            using var summaryDocument = lines[0];
+            var summary = summaryDocument.RootElement;
+            Assert.Equal("1", summary.GetProperty("api_version").GetString());
+            Assert.Equal("batch", summary.GetProperty("command").GetString());
+            Assert.Equal(0, summary.GetProperty("input_lines_read").GetInt32());
+            Assert.Equal(0, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
+            Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, summary.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryReportsProcessedCommandsAndFailures_Issue3906()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_counts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var input = """
+            ["status","--json"]
+            []
+            ["unknown"]
+
+            """;
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("batch line 2 must be a non-empty JSON string array", stderr);
+            Assert.Contains("batch only supports query commands", stderr);
+            Assert.Equal(2, lines.Count);
+            using var statusDocument = lines[0];
+            using var summaryDocument = lines[1];
+            Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
+            var summary = summaryDocument.RootElement;
+            Assert.Equal(3, summary.GetProperty("input_lines_read").GetInt32());
+            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(1, summary.GetProperty("line_errors").GetInt32());
+            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, summary.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
@@ -895,10 +994,12 @@ public partial class QueryCommandRunnerTests
                 () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("invalid_batch_json: JsonException", stderr, StringComparison.Ordinal);
-            Assert.DoesNotContain(secret, stderr, StringComparison.Ordinal);
-            Assert.DoesNotContain("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("not valid JSON", stdout, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -999,8 +1100,10 @@ public partial class QueryCommandRunnerTests
                 () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("invalid_batch_json: JsonException", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString());
         }
         finally
         {
@@ -1307,6 +1410,8 @@ public partial class QueryCommandRunnerTests
     [InlineData("T-SQL", "sql")]
     [InlineData("transact-sql", "sql")]
     [InlineData("transact sql", "sql")]
+    [InlineData("dependency_manifest", "dependency_manifest")]
+    [InlineData("dependency-lock", "dependency_lock")]
     public void ParseArgs_NormalizesLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
@@ -2348,6 +2453,79 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonReportsDependencyPackageSymbolExtraction_Issue3899()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var manifest = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "dependency_manifest");
+        var lockfile = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "dependency_lock");
+
+        Assert.True(manifest.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(manifest.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(manifest.GetProperty("graph_queries").GetBoolean());
+        Assert.DoesNotContain("missing-symbols", manifest.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        Assert.Contains("Directory.Packages.props", manifest.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+
+        Assert.True(lockfile.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(lockfile.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(lockfile.GetProperty("graph_queries").GetBoolean());
+        Assert.DoesNotContain("missing-symbols", lockfile.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        Assert.Contains("packages.lock.json", lockfile.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+    }
+
+    [Fact]
+    public void RunSymbolsAndReferences_AcceptDependencyPackageKinds_Issue3899()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_dependency_package_kinds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "Directory.Packages.props",
+                "dependency_manifest",
+                """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Serilog" Version="3.1.1" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            using (var db = new DbContext(dbPath))
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                new DbWriter(db.Connection).MarkGraphReady();
+                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Serilog' AND reference_kind = 'dependency'";
+                Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+            }
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "dependency_manifest", "--kind", "package", "--count"],
+                _jsonOptions));
+            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Serilog", "--db", dbPath, "--lang", "dependency_manifest", "--kind", "dependency", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal("1", symbolsStdout.Trim());
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+            Assert.Equal("1", referencesStdout.Trim());
+            Assert.Equal(string.Empty, referencesStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
     {
         // Pin the #215 surface: `cdidx languages --json` must report html with
@@ -2663,8 +2841,6 @@ public partial class QueryCommandRunnerTests
     [InlineData("validate", "--exact")]
     [InlineData("validate", "--count")]
     [InlineData("validate", "--lang", "javascript")]
-    [InlineData("validate", "--exclude-path", "src/")]
-    [InlineData("validate", "--exclude-tests")]
     public void QueryEntrypoints_UnsupportedOptionsReturnUsageError(string command, string flag, string? value = null)
     {
         var args = value == null
@@ -3686,7 +3862,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(6, property.GetProperty("end_line").GetInt32());
             Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
             Assert.Equal(6, definitionJson.GetProperty("end_line").GetInt32());
-            Assert.Contains("=> 42;", definitionJson.GetProperty("content").GetString());
+            Assert.False(definitionJson.TryGetProperty("content", out _));
+            Assert.True(definitionJson.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definitionJson.GetProperty("content_omitted_reason").GetString());
+            Assert.Contains("=> 42;", definitionJson.GetProperty("body_content").GetString());
         }
         finally
         {
@@ -3823,8 +4002,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(10, property.GetProperty("end_line").GetInt32());
             Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
             Assert.Equal(10, definitionJson.GetProperty("end_line").GetInt32());
-            Assert.Contains("> 15 => 2,", definitionJson.GetProperty("content").GetString());
-            Assert.Contains("_ => 1", definitionJson.GetProperty("content").GetString());
+            Assert.False(definitionJson.TryGetProperty("content", out _));
+            Assert.True(definitionJson.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("body_content_field", definitionJson.GetProperty("content_omitted_reason").GetString());
+            Assert.Contains("> 15 => 2,", definitionJson.GetProperty("body_content").GetString());
+            Assert.Contains("_ => 1", definitionJson.GetProperty("body_content").GetString());
         }
         finally
         {
@@ -4128,9 +4310,102 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", json.GetProperty("api_version").GetString());
+            Assert.Equal("sql", json.GetProperty("query_context").GetProperty("lang").GetString());
+            Assert.True(json.TryGetProperty("indexed_file_count", out _));
+            Assert.True(json.TryGetProperty("freshness_available", out _));
             Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
             Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
             Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
+            Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_JsonFiltersNoiseSymbolsAndAddsMetadata_Issue3943()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_symbol_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertFileWithReferences(dbPath, "src/Caller.cs", ["Regex", "Path", "Write", "Domain.Alpha"]);
+            InsertFileWithReference(dbPath, "src/NoiseCaller.cs", "Regex");
+            InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Regex", "Path", "Write", "Domain.Alpha"]);
+            MarkDependencyGraphReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                [
+                    "--db", dbPath,
+                    "--json",
+                    "--limit", "10",
+                    "--lang", "csharp",
+                    "--suppress-noise",
+                    "--symbol", "Domain.Alpha",
+                    "--symbol-family", "Domain."
+                ],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var edge = Assert.Single(json.GetProperty("edges").EnumerateArray());
+            var queryContext = json.GetProperty("query_context");
+            var symbolFilter = json.GetProperty("symbol_filter");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", json.GetProperty("api_version").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
+            Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
+            Assert.Equal(4, edge.GetProperty("reference_count").GetInt32());
+            Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
+            Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
+            Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
+            Assert.Equal("Domain.", queryContext.GetProperty("symbol_family")[0].GetString());
+            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+            Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+            Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
+            Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
+            Assert.Equal(5, symbolFilter.GetProperty("symbols_before").GetInt32());
+            Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
+            Assert.Equal(4, symbolFilter.GetProperty("symbols_removed").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_CyclesApplySymbolFilters_Issue3943()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycles_symbol_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/A.cs", ["A"], ["B"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/B.cs", ["B"], ["A"]);
+            MarkDependencyGraphReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--symbol", "NoSuchSymbol", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbolFilter = json.GetProperty("symbol_filter");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+            Assert.Equal("NoSuchSymbol", json.GetProperty("query_context").GetProperty("symbol")[0].GetString());
+            Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
         }
         finally
         {

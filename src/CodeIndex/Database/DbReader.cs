@@ -790,7 +790,7 @@ public partial class DbReader : IDisposable
                         AND s2.family_key IS NOT NULL
                   )
                 LIMIT 1)";
-        cmd.Parameters.AddWithValue("@lang", lang);
+        SqliteCommandPolicy.Add(cmd, "@lang", lang);
         var raw = cmd.ExecuteScalar();
         return raw is long l ? l != 0 : raw is int i && i != 0;
     }
@@ -927,7 +927,7 @@ public partial class DbReader : IDisposable
             FROM files
             WHERE lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hfl{i}"))})";
         for (int i = 0; i < hotspotFamilyLangs.Count; i++)
-            cmd.Parameters.AddWithValue($"@hfl{i}", hotspotFamilyLangs[i]);
+            SqliteCommandPolicy.Add(cmd, $"@hfl{i}", hotspotFamilyLangs[i]);
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
@@ -976,7 +976,7 @@ public partial class DbReader : IDisposable
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", key);
+            SqliteCommandPolicy.Add(cmd, "@key", key);
             return cmd.ExecuteScalar() as string;
         }
         catch (SqliteException)
@@ -1142,7 +1142,7 @@ public partial class DbReader : IDisposable
 
         cmd.CommandText = sql;
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         return cmd.ExecuteScalar() != null;
     }
@@ -1291,7 +1291,7 @@ public partial class DbReader : IDisposable
 
         cmd.CommandText = sql;
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", NormalizeQueryLanguage(lang));
+            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return cmd.ExecuteScalar() != null;
@@ -1449,9 +1449,12 @@ public partial class DbReader : IDisposable
     private static IReadOnlyDictionary<string, string> BuildQueryLanguageAliases()
     {
         var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var languageExtensions = FileIndexer.GetLanguageExtensions();
 
-        foreach (var (pattern, lang) in FileIndexer.GetLanguageExtensions())
+        foreach (var (pattern, lang) in languageExtensions)
             AddQueryLanguageAlias(aliases, pattern, lang);
+        foreach (var lang in languageExtensions.Values.Distinct(StringComparer.OrdinalIgnoreCase))
+            AddQueryLanguageAlias(aliases, lang, lang);
 
         AddQueryLanguageAlias(aliases, "c#", "csharp");
         AddQueryLanguageAlias(aliases, "blazor", "csharp");
@@ -1516,7 +1519,7 @@ public partial class DbReader : IDisposable
         {
             var parameterName = $"@{parameterPrefix}{i}";
             parameterNames.Add(parameterName);
-            cmd.Parameters.AddWithValue(parameterName, supportedLanguages[i]);
+            SqliteCommandPolicy.Add(cmd, parameterName, supportedLanguages[i]);
         }
 
         return $"{fileAlias}.lang IN ({string.Join(", ", parameterNames)})";
@@ -1549,7 +1552,7 @@ public partial class DbReader : IDisposable
         {
             var parameterName = $"@sqlPath{i}";
             placeholders.Add(parameterName);
-            cmd.Parameters.AddWithValue(parameterName, distinctPaths[i]);
+            SqliteCommandPolicy.Add(cmd, parameterName, distinctPaths[i]);
         }
 
         cmd.CommandText = $"""
@@ -1559,7 +1562,7 @@ public partial class DbReader : IDisposable
               AND path IN ({string.Join(", ", placeholders)})
             LIMIT 1
             """;
-        cmd.Parameters.AddWithValue("@sqlPathLang", lang);
+        SqliteCommandPolicy.Add(cmd, "@sqlPathLang", lang);
         return cmd.ExecuteScalar() != null;
     }
 
@@ -1616,14 +1619,14 @@ public partial class DbReader : IDisposable
 
         cmd.CommandText = sql;
         if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+            SqliteCommandPolicy.Add(cmd, "@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@offset", offset);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@offset", offset);
 
         var results = new List<FileResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -1668,9 +1671,8 @@ public partial class DbReader : IDisposable
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
-            SELECT COUNT(*), COUNT(DISTINCT path)
-            FROM (
-                SELECT f.path AS path
+            WITH filtered_files AS (
+                SELECT f.path AS path, COALESCE(f.size, 0) AS size
                 FROM files f
                 WHERE 1=1";
 
@@ -1681,18 +1683,48 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += ")";
+        sql += @"
+            )
+            SELECT COUNT(*),
+                   COUNT(DISTINCT path),
+                   COALESCE(SUM(size), 0),
+                   COALESCE(AVG(size), 0),
+                   COALESCE(MAX(size), 0),
+                   (SELECT path FROM filtered_files ORDER BY size DESC, path LIMIT 1)
+            FROM filtered_files";
 
         cmd.CommandText = sql;
         if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+            SqliteCommandPolicy.Add(cmd, "@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value);
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        return ExecuteCountSummary(cmd);
+        return ExecuteFileCountSummary(cmd);
+    }
+
+    private static QueryCountResult ExecuteFileCountSummary(SqliteCommand cmd)
+    {
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return new QueryCountResult(0, 0, BytesAuthoritative: true);
+
+        var count = reader.GetInt32(0);
+        var fileCount = reader.GetInt32(1);
+        var totalBytes = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+        var averageBytes = reader.IsDBNull(3) ? 0 : reader.GetDouble(3);
+        var maxBytes = reader.IsDBNull(4) ? 0 : reader.GetInt64(4);
+        var maxBytesPath = reader.IsDBNull(5) ? null : reader.GetString(5);
+        return new QueryCountResult(
+            count,
+            fileCount,
+            TotalBytes: totalBytes,
+            AverageBytes: averageBytes,
+            MaxBytes: maxBytes,
+            MaxBytesPath: maxBytesPath,
+            BytesAuthoritative: true);
     }
 
 
@@ -1843,6 +1875,8 @@ public partial class DbReader : IDisposable
     public List<Models.FileIssue> GetIssues(
         string? kind = null,
         IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
         int? limit = null,
         string? severity = null)
     {
@@ -1859,30 +1893,19 @@ public partial class DbReader : IDisposable
             sql += " AND i.kind = @kind";
         if (severity != null)
             sql += " AND " + severityColumn + " = @severity";
-        if (pathPatterns is { Count: > 0 })
-        {
-            // OR multiple path filters / 複数パスフィルタを OR で結合
-            var ors = new List<string>(pathPatterns.Count);
-            for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
-            sql += " AND (" + string.Join(" OR ", ors) + ")";
-        }
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " ORDER BY f.path, i.line";
         if (limit.HasValue)
             sql += " LIMIT @limit";
 
         cmd.CommandText = sql;
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (severity != null)
-            cmd.Parameters.AddWithValue("@severity", severity);
-        if (pathPatterns is { Count: > 0 })
-        {
-            for (int i = 0; i < pathPatterns.Count; i++)
-                cmd.Parameters.AddWithValue($"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
-        }
+            SqliteCommandPolicy.Add(cmd, "@severity", severity);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (limit.HasValue)
-            cmd.Parameters.AddWithValue("@limit", limit.Value);
+            SqliteCommandPolicy.Add(cmd, "@limit", limit.Value);
 
         var results = new List<Models.FileIssue>();
         using var reader = cmd.ExecuteTrackedReader();

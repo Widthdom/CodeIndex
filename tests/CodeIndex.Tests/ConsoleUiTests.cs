@@ -87,6 +87,20 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void StopSpinner_DoesNotUseThreadSleep_Issue3963()
+    {
+        var method = typeof(ConsoleUi).GetMethod(
+            nameof(ConsoleUi.StopSpinner),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            [typeof(CancellationTokenSource)],
+            modifiers: null);
+
+        Assert.NotNull(method);
+        Assert.False(CallsThreadSleep(method));
+    }
+
+    [Fact]
     public void PrintUsage_WithBanner_IncludesAsciiArt()
     {
         var output = CaptureFullUsageOutput();
@@ -112,6 +126,74 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintCommandUsage_SearchIncludesAuditOutputControlFlags_Issue3893()
+    {
+        using var capture = ConsoleCapture.Start(captureOut: true);
+
+        Assert.True(ConsoleUi.PrintCommandUsage("search"));
+
+        var output = capture.Out!.ToString()!;
+        foreach (var flag in new[]
+        {
+            "--unique",
+            "--count-by",
+            "--origin",
+            "--match-origin",
+            "--exclude-origin",
+            "--result-kind",
+            "--search-fields",
+            "--results-only",
+            "--first-per-file",
+            "--sample",
+            "--per-file-limit",
+            "--max-json-bytes",
+            "--next-steps",
+        })
+        {
+            Assert.Contains(flag, output);
+        }
+    }
+
+    [Fact]
+    public void PrintCommandUsage_InspectSplitsQueryAndLinePathModes_Issue3916()
+    {
+        using var capture = ConsoleCapture.Start(captureOut: true);
+
+        Assert.True(ConsoleUi.PrintCommandUsage("inspect"));
+
+        var output = capture.Out!.ToString()!;
+        var usageLines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.TrimStart().StartsWith("cdidx inspect", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Contains(usageLines, line => line.Contains("--path <glob>", StringComparison.Ordinal));
+        Assert.Contains(usageLines, line => line.Contains("--path <file> --line <line>", StringComparison.Ordinal));
+        Assert.DoesNotContain(usageLines, line =>
+            line.Contains("--path <glob>", StringComparison.Ordinal)
+            && line.Contains("--path <file>", StringComparison.Ordinal));
+        Assert.Contains("In query mode --path is a glob filter", output);
+    }
+
+    [Fact]
+    public void PrintCommandUsage_DocumentsJsonLineAndBatchContracts_Issue3916()
+    {
+        var (_, referencesStdout, _) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("references");
+            return 0;
+        });
+        var (_, batchStdout, _) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("batch");
+            return 0;
+        });
+
+        Assert.Contains("JSON Lines", referencesStdout);
+        Assert.Contains("one JSON object per result", referencesStdout);
+        Assert.Contains("stdin is JSON Lines", batchStdout);
+        Assert.Contains("invalid lines emit per-line JSON errors", batchStdout);
+    }
+
+    [Fact]
     public void PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
@@ -130,10 +212,11 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callers <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callees <query>|--query <query>|-- <query>", output);
-        Assert.Contains("cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--results-only] [--search-fields <fields>] [--max-json-bytes <n>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--total-limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--count-by <path|file|symbol|origin>] [--unique <path|file|symbol|origin>] [--group-by <file|symbol|origin>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>]", output);
+        AssertSearchUsageFragments(output);
         Assert.Contains("cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
-        Assert.Contains("cdidx inspect <query>|--query <query>|-- <query>|--path <file> --line <line> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--line <line>|--start-line <line>] [--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name]", output);
+        Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name]", output);
+        Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--body-only] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
         Assert.Contains("--snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)", output);
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
@@ -162,7 +245,7 @@ public class ConsoleUiTests
         Assert.Contains("--optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
         Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
-        Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]", output);
+        Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]", output);
         Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
         Assert.Contains("--focus-line <line>        find/excerpt: focus a specific line", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]", output);
@@ -285,7 +368,7 @@ public class ConsoleUiTests
     {
         var output = CaptureFullUsageOutput(showBanner: false);
 
-        Assert.Contains("cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--results-only] [--search-fields <fields>] [--max-json-bytes <n>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--total-limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--count-by <path|file|symbol|origin>] [--unique <path|file|symbol|origin>] [--group-by <file|symbol|origin>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>]", output);
+        AssertSearchUsageFragments(output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
@@ -2058,6 +2141,37 @@ public class ConsoleUiTests
         return false;
     }
 
+    private static bool CallsThreadSleep(MethodInfo method)
+    {
+        var body = method.GetMethodBody();
+        var il = body?.GetILAsByteArray();
+        if (il == null)
+            return false;
+
+        var module = method.Module;
+        for (var i = 0; i < il.Length;)
+        {
+            var opCode = ReadOpCode(il, ref i);
+            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt) && i + 4 <= il.Length)
+            {
+                var token = BitConverter.ToInt32(il, i);
+                i += 4;
+                if (module.ResolveMember(token) is MethodInfo called
+                    && called.DeclaringType == typeof(Thread)
+                    && string.Equals(called.Name, nameof(Thread.Sleep), StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            i += OperandByteCount(opCode, il, i);
+        }
+
+        return false;
+    }
+
     private static OpCode ReadOpCode(byte[] il, ref int offset)
     {
         var first = il[offset++];
@@ -2100,6 +2214,44 @@ public class ConsoleUiTests
         using var capture = ConsoleCapture.Start(captureOut: true);
         ConsoleUi.PrintUsageBrief(showBanner);
         return capture.Out!.ToString()!;
+    }
+
+    private static void AssertSearchUsageFragments(string output)
+    {
+        foreach (var fragment in new[]
+        {
+            "cdidx search <query>|--query <query>|-- <query>",
+            "--recipe <name|name/query>",
+            "--list-recipes",
+            "--named-query <name>=<query>",
+            "[--include-query <name>]",
+            "[--exclude-query <name>]",
+            "[--audit-scope <source|all>]",
+            "[--show-excluded]",
+            "[--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>]",
+            "[--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]",
+            "[--total-limit <n>]",
+            "[--exclude-comments]",
+            "[--exclude-strings]",
+            "[--exclude-fixtures]",
+            "[--group-by <file|symbol|origin>]",
+            "[--unique <path|file|symbol|origin>]",
+            "[--count-by <path|file|symbol|origin>]",
+            "[--origin <origin>]",
+            "[--match-origin <origin>]",
+            "[--exclude-origin <origin>]",
+            "[--result-kind <kind>]",
+            "[--search-fields <fields>]",
+            "[--results-only]",
+            "[--first-per-file]",
+            "[--sample <n>]",
+            "[--per-file-limit <n>]",
+            "[--max-json-bytes <n>]",
+            "[--next-steps]",
+        })
+        {
+            Assert.Contains(fragment, output);
+        }
     }
 
     private static string ExtractBetween(string text, string startMarker, string endMarker)

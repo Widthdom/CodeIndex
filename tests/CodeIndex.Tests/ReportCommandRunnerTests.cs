@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using CodeIndex;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -246,6 +247,41 @@ public class ReportCommandRunnerTests
             TryDeleteDirectory(workDir);
         }
     }
+
+    [Fact]
+    public void BuildBundle_InjectedTimeControlsMetadataAndArchiveEntries_Issue3963()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, TimeSpan.Zero);
+            var options = ReportCommandRunner.ParseArgs([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+            ]);
+
+            var bundle = ReportCommandRunner.BuildBundle(options, "test", fixedTime);
+
+            var metadata = Encoding.UTF8.GetString(bundle.Files.Single(file => file.Name == "metadata.json").Bytes);
+            var env = Encoding.UTF8.GetString(bundle.Files.Single(file => file.Name == "env.txt").Bytes);
+            using var metadataJson = JsonDocument.Parse(metadata);
+            Assert.Equal(fixedTime.ToString("O"), metadataJson.RootElement.GetProperty("generated_at_utc").GetString());
+            Assert.Contains($"generated-at-utc: {fixedTime:O}", env, StringComparison.Ordinal);
+
+            ReportCommandRunner.WriteBundle(output, bundle);
+
+            var entryTimes = ReadTarGzEntryModificationTimes(output);
+            Assert.NotEmpty(entryTimes);
+            Assert.All(entryTimes.Values, modificationTime => Assert.Equal(fixedTime, modificationTime));
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
 
     [Fact]
     public void WriteBundle_RelativeOutputUsesInitialFullPathWhenCurrentDirectoryChanges_Issue3147()
@@ -703,6 +739,31 @@ public class ReportCommandRunnerTests
             var lines = ReportCommandRunner.ReadLogFileTailLines(path, 2);
 
             Assert.Equal(new[] { "line-2", "line-3" }, lines);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void OpenReadForTailWindow_IgnoresGrowthAfterCapturedLength_Issue3994()
+    {
+        var workDir = CreateWorkDir();
+        var path = Path.Combine(workDir, "stderr-20260623.log");
+        try
+        {
+            File.WriteAllText(path, "line-1\nline-2\n");
+
+            using var stream = BoundedFile.OpenReadForTailWindow(path, ReportCommandRunner.MaxLogFileTailBytes, out var bytesTruncated);
+            File.AppendAllText(path, "line-3-should-not-appear\n");
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+
+            var text = reader.ReadToEnd();
+
+            Assert.False(bytesTruncated);
+            Assert.Contains("line-2", text);
+            Assert.DoesNotContain("line-3-should-not-appear", text);
         }
         finally
         {
@@ -1257,6 +1318,20 @@ public class ReportCommandRunnerTests
             if (entry.EntryType != TarEntryType.RegularFile)
                 continue;
             entries[entry.Name] = entry.Mode;
+        }
+        return entries;
+    }
+
+    private static Dictionary<string, DateTimeOffset> ReadTarGzEntryModificationTimes(string path)
+    {
+        var entries = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        using var fileStream = File.OpenRead(path);
+        using var gz = new GZipStream(fileStream, CompressionMode.Decompress);
+        using var tar = new TarReader(gz);
+        while (tar.GetNextEntry() is { } entry)
+        {
+            if (entry.EntryType == TarEntryType.RegularFile)
+                entries[entry.Name] = entry.ModificationTime;
         }
         return entries;
     }

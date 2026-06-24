@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using CodeIndex.Security;
 
 namespace CodeIndex.Mcp;
 
@@ -50,10 +51,13 @@ internal static class McpAuthenticationLimits
     internal const int MaxTokenCharacters = 4096;
     internal const int Sha256HashBytes = 32;
     private const int StackTokenUtf8ByteThreshold = 1024;
-    internal const string OversizedTokenFailureReason = "auth token mismatch";
+    internal const string OversizedTokenFailureReason = "auth token oversized";
 
     internal static bool IsTokenOversized(string? token)
         => token is { Length: > MaxTokenCharacters };
+
+    internal static bool IsTokenOversized(ReadOnlySpan<char> token)
+        => token.Length > MaxTokenCharacters;
 
     internal static bool IsTokenShapeValid(ReadOnlySpan<char> token)
     {
@@ -99,9 +103,12 @@ internal static class McpAuthenticationLimits
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            SensitiveBufferPolicy.ReturnSensitiveTokenBuffer(rented);
         }
     }
+
+    internal static void HashTokenUtf8ForTests(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination) =>
+        HashTokenUtf8(token, utf8Buffer, destination);
 
     private static void HashTokenUtf8(ReadOnlySpan<char> token, Span<byte> utf8Buffer, Span<byte> destination)
     {
@@ -112,7 +119,7 @@ internal static class McpAuthenticationLimits
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(utf8Buffer[..bytesWritten]);
+            SensitiveBufferPolicy.ClearSensitiveBytes(utf8Buffer[..bytesWritten]);
         }
     }
 }

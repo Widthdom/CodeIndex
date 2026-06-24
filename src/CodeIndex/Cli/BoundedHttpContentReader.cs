@@ -1,4 +1,5 @@
 using System.Buffers;
+using CodeIndex.Security;
 
 namespace CodeIndex.Cli;
 
@@ -90,20 +91,12 @@ internal static class BoundedHttpContentReader
         }
         finally
         {
-            ClearSensitiveCopyBuffer(buffer);
-            ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
+            SensitiveBufferPolicy.ReturnSensitiveCopyBuffer(buffer);
         }
     }
 
     internal static void ClearSensitiveCopyBufferForTests(byte[] buffer) =>
-        ClearSensitiveCopyBuffer(buffer);
-
-    private static void ClearSensitiveCopyBuffer(byte[] buffer)
-    {
-        if (buffer.Length == 0)
-            return;
-        Array.Clear(buffer, 0, buffer.Length);
-    }
+        SensitiveBufferPolicy.ClearWholeSensitiveBuffer(buffer);
 
     private static void ThrowIfContentLengthExceedsLimit(HttpContent content, long maxBytes)
     {
