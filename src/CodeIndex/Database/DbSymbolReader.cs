@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Database;
 
