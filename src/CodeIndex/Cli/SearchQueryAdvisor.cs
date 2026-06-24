@@ -19,9 +19,8 @@ internal static class SearchQueryAdvisor
             return false;
 
         var trimmed = query.Trim();
-        var hintProbe = TryUnwrapSingleDoubleQuotedPhrase(trimmed, out var phrase)
-            ? phrase
-            : trimmed;
+        var singleQuotedPhrase = TryUnwrapSingleDoubleQuotedPhrase(trimmed, out var phrase);
+        var hintProbe = singleQuotedPhrase ? phrase : trimmed;
         if (!hintProbe.Any(char.IsLetterOrDigit))
             return false;
 
@@ -33,14 +32,17 @@ internal static class SearchQueryAdvisor
         if (punctuationCount >= 2)
             return true;
 
-        return tokens.Any(IsStandaloneOperatorToken) || LooksLikeMultiTokenCodePhrase(tokens);
+        if (tokens.Any(IsStandaloneOperatorToken))
+            return true;
+
+        return !singleQuotedPhrase && LooksLikeMultiTokenCodePhrase(tokens);
     }
 
     private static bool LooksLikeMultiTokenCodePhrase(string[] tokens)
-        => tokens.Length >= 3 && tokens.Any(IsCommonCodeKeyword) && tokens.Any(IsIdentifierLikeToken);
+        => tokens.Length >= 2 && tokens.Any(IsCommonCodeKeyword) && tokens.Any(IsIdentifierLikeToken);
 
     private static bool IsCommonCodeKeyword(string token)
-        => token.ToLowerInvariant() is "await" or "catch" or "class" or "const" or "def" or "else" or "for" or "function"
+        => token.ToLowerInvariant() is "async" or "await" or "catch" or "class" or "const" or "def" or "else" or "for" or "function"
             or "if" or "import" or "let" or "new" or "public" or "private" or "protected" or "return"
             or "static" or "throw" or "try" or "using" or "var" or "void" or "while";
 

@@ -245,7 +245,7 @@ public class ConsoleUiTests
         Assert.Contains("--optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
         Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
-        Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]", output);
+        Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--no-semantic-tokens] [--verbose]", output);
         Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
         Assert.Contains("--focus-line <line>        find/excerpt: focus a specific line", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]", output);
@@ -2222,11 +2222,12 @@ public class ConsoleUiTests
         {
             "cdidx search <query>|--query <query>|-- <query>",
             "--recipe <name|name/query>",
-            "--list-recipes",
+            "--list-recipes [--query <filter>]",
             "--named-query <name>=<query>",
             "[--include-query <name>]",
             "[--exclude-query <name>]",
             "[--audit-scope <source|all>]",
+            "[--source-only]",
             "[--show-excluded]",
             "[--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>]",
             "[--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]",
@@ -2241,7 +2242,7 @@ public class ConsoleUiTests
             "[--match-origin <origin>]",
             "[--exclude-origin <origin>]",
             "[--result-kind <kind>]",
-            "[--search-fields <fields>]",
+            "[--search-fields <csv>]",
             "[--results-only]",
             "[--first-per-file]",
             "[--sample <n>]",

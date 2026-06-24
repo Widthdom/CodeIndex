@@ -1137,6 +1137,40 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_SourceOnlyAppliesProductionScopeToAdHocSearch_Issue3978()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_source_only_3978");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { void Run() { SourceOnlyNeedle(); } }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "public class AppTests { void Run() { SourceOnlyNeedle(); } }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "SourceOnlyNeedle\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["SourceOnlyNeedle", "--db", dbPath, "--source-only", "--count", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var queryContext = root.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal("source", queryContext.GetProperty("audit_scope").GetString());
+            Assert.Contains(queryContext.GetProperty("path").EnumerateArray(), path => path.GetString() == "src/**");
+            Assert.Contains(queryContext.GetProperty("exclude_path").EnumerateArray(), path => path.GetString() == "README.md");
+            Assert.Contains(queryContext.GetProperty("exclude_path").EnumerateArray(), path => path.GetString() == ".github/**");
+            Assert.True(queryContext.GetProperty("exclude_tests").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ListRecipesJsonIncludesBuiltInAuditMetadata_Issue3144()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -1306,6 +1340,59 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ListRecipesQueryFiltersChildQueries_Issue3975()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--query", "sqlite", "--json"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipes = root.GetProperty("recipes").EnumerateArray().ToList();
+        var dotnetRecipe = Assert.Single(recipes, recipe => recipe.GetProperty("name").GetString() == "dotnet-risk-patterns");
+        var dogfoodRecipe = Assert.Single(recipes, recipe => recipe.GetProperty("name").GetString() == "dogfood-risk-patterns");
+        var dotnetQueryNames = dotnetRecipe.GetProperty("queries")
+            .EnumerateArray()
+            .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
+            .ToList();
+        var dogfoodQueryNames = dogfoodRecipe.GetProperty("queries")
+            .EnumerateArray()
+            .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(2, root.GetProperty("count").GetInt32());
+        Assert.Equal(root.GetProperty("count").GetInt32(), recipes.Count);
+        Assert.Contains("sqlite-addwithvalue", dotnetQueryNames);
+        Assert.All(dotnetQueryNames, name => Assert.Contains("sqlite", name, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(["pragma-command"], dogfoodQueryNames);
+    }
+
+    [Fact]
+    public void RunSearch_ListRecipesQueryCombinesRecipeAndChildFields_Issue3975()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--query", "dotnet sqlite", "--json"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipe = Assert.Single(root.GetProperty("recipes").EnumerateArray());
+        var queryNames = recipe.GetProperty("queries")
+            .EnumerateArray()
+            .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, root.GetProperty("count").GetInt32());
+        Assert.Equal("dotnet-risk-patterns", recipe.GetProperty("name").GetString());
+        Assert.Contains("sqlite-addwithvalue", queryNames);
+        Assert.All(queryNames, name => Assert.Contains("sqlite", name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RunSearch_BuiltInRecipeSnapshotCoversNamesScopesAndQueries_Issue3692()
     {
         using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
@@ -1467,6 +1554,53 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("Available recipes:", stderr);
         foreach (var recipeName in new[] { "risky-code", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "broad-token-audit" })
             Assert.Contains(recipeName, stderr);
+    }
+
+    [Fact]
+    public void RunSearch_UnknownRecipeQuerySuggestsAcrossRecipeGroups_Issue3975()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/raw-sql", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unknown recipe query 'raw-sql' for recipe 'risky-code'", stderr);
+        Assert.Contains("Suggestions across all recipes:", stderr);
+        Assert.Contains("dotnet-risk-patterns/sqlite-addwithvalue", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_GuardLimitErrorIncludesCandidateStats_Issue3940()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_guard_stats_3940");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 201; i++)
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/guard-budget-{i:0000}.cs", "csharp", "public void Run() { GuardStatsNeedle(); }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GuardStatsNeedle", "--db", dbPath, "--require-before", "MissingGuardMarker", "--guard-window", "1", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("guarded search inspected the maximum", stderr);
+            Assert.Contains("Candidate files sampled before refusal:", stderr);
+            Assert.Contains("src/guard-budget-", stderr);
+            Assert.Contains("Candidate languages sampled before refusal:", stderr);
+            Assert.Contains("csharp", stderr);
+            Assert.Contains("--count", stderr);
+            Assert.Contains("--count-by path", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -5299,6 +5433,40 @@ jobs:
             Assert.Equal("src/Sample.cs", relativeDocument.RootElement.GetProperty("path").GetString());
             Assert.Equal(relativeDocument.RootElement.GetProperty("path").GetString(), absoluteDocument.RootElement.GetProperty("path").GetString());
             Assert.Equal(relativeDocument.RootElement.GetProperty("content").GetString(), absoluteDocument.RootElement.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonNoSemanticTokensOmitsSemanticPayload_Issue3942()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_no_semantic_tokens_3942");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json", "--no-semantic-tokens"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("start_line").GetInt32());
+            Assert.Equal(3, json.GetProperty("end_line").GetInt32());
+            Assert.Contains("public class Sample", json.GetProperty("content").GetString());
+            Assert.False(json.TryGetProperty("semantic_tokens", out _));
+            Assert.True(json.TryGetProperty("content_line_spans", out _));
         }
         finally
         {
