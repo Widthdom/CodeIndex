@@ -11,6 +11,29 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void FetchLimitForSearchEnvelope_ClampsHugeInternalLimit_Issue3964()
+    {
+        Assert.Equal(1, QueryCommandRunner.FetchLimitForSearchEnvelopeForTests(0));
+        Assert.Equal(200, QueryCommandRunner.FetchLimitForSearchEnvelopeForTests(1));
+        Assert.Equal(QueryCommandRunner.MaxQueryResultLimit, QueryCommandRunner.FetchLimitForSearchEnvelopeForTests(int.MaxValue));
+    }
+
+    [Fact]
+    public void GetUnusedFetchLimit_ClampsDeepCursorFetch_Issue3964()
+    {
+        Assert.Equal(21, QueryCommandRunner.GetUnusedFetchLimitForTests(20, 0));
+        Assert.Equal(
+            QueryCommandRunner.MaxUnusedPaginationFetchLimit,
+            QueryCommandRunner.GetUnusedFetchLimitForTests(QueryCommandRunner.MaxQueryResultLimit, int.MaxValue));
+        Assert.True(QueryCommandRunner.IsUnusedCursorOffsetWithinFetchCapForTests(
+            QueryCommandRunner.MaxQueryResultLimit,
+            QueryCommandRunner.MaxUnusedPaginationOffset));
+        Assert.False(QueryCommandRunner.IsUnusedCursorOffsetWithinFetchCapForTests(
+            QueryCommandRunner.MaxQueryResultLimit,
+            QueryCommandRunner.MaxUnusedPaginationOffset + 1));
+    }
+
+    [Fact]
     public void RunSearch_GroupByFileCountStreamsFileCounts_Issue3741()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_file_count");

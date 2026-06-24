@@ -80,6 +80,19 @@ public class BoundedHttpContentReaderTests
     }
 
     [Fact]
+    public async Task ReadAsByteArrayAsync_DoesNotPreallocateHugeDeclaredLength_Issue3964()
+    {
+        using var content = new DeclaredLengthContent([], int.MaxValue);
+
+        var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
+            content,
+            maxBytes: int.MaxValue,
+            CancellationToken.None);
+
+        Assert.Empty(bytes);
+    }
+
+    [Fact]
     public void ClearSensitiveCopyBufferForTests_ClearsWholePooledBuffer_Issue3799()
     {
         var buffer = Enumerable.Range(1, BoundedHttpContentReader.PooledCopyBufferSize)
@@ -121,6 +134,31 @@ public class BoundedHttpContentReaderTests
         {
             length = 0;
             return false;
+        }
+    }
+
+    private sealed class DeclaredLengthContent : HttpContent
+    {
+        private readonly byte[] _payload;
+        private readonly long _declaredLength;
+
+        internal DeclaredLengthContent(byte[] payload, long declaredLength)
+        {
+            _payload = payload;
+            _declaredLength = declaredLength;
+            Headers.ContentLength = declaredLength;
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => stream.WriteAsync(_payload, 0, _payload.Length);
+
+        protected override Task<Stream> CreateContentReadStreamAsync()
+            => Task.FromResult<Stream>(new MemoryStream(_payload, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _declaredLength;
+            return true;
         }
     }
 }

@@ -12,6 +12,7 @@ namespace CodeIndex.Mcp;
 /// </summary>
 internal sealed class RateLimiter
 {
+    internal const long MaxDiagnosticIntervalMilliseconds = int.MaxValue;
     private readonly object _gate = new();
     private readonly Dictionary<RateLimiterBucketKey, TokenBucket> _buckets = new();
     private readonly RateLimiterOptions _options;
@@ -156,13 +157,16 @@ internal sealed class RateLimiter
             return 0;
         try
         {
-            return (long)Math.Ceiling((nextPruneAt - now).TotalMilliseconds);
+            return CapDiagnosticMilliseconds((nextPruneAt - now).TotalMilliseconds);
         }
         catch (ArgumentOutOfRangeException)
         {
-            return long.MaxValue;
+            return MaxDiagnosticIntervalMilliseconds;
         }
     }
+
+    internal static long ComputeNextPruneInMillisecondsForTests(DateTimeOffset now, DateTimeOffset nextPruneAt) =>
+        ComputeNextPruneInMilliseconds(now, nextPruneAt);
 
     private static long ComputeElapsedMilliseconds(DateTimeOffset now, DateTimeOffset since)
     {
@@ -170,12 +174,24 @@ internal sealed class RateLimiter
             return 0;
         try
         {
-            return (long)Math.Ceiling((now - since).TotalMilliseconds);
+            return CapDiagnosticMilliseconds((now - since).TotalMilliseconds);
         }
         catch (ArgumentOutOfRangeException)
         {
-            return long.MaxValue;
+            return MaxDiagnosticIntervalMilliseconds;
         }
+    }
+
+    internal static long ComputeElapsedMillisecondsForTests(DateTimeOffset now, DateTimeOffset since) =>
+        ComputeElapsedMilliseconds(now, since);
+
+    private static long CapDiagnosticMilliseconds(double milliseconds)
+    {
+        if (milliseconds <= 0)
+            return 0;
+        if (milliseconds >= MaxDiagnosticIntervalMilliseconds)
+            return MaxDiagnosticIntervalMilliseconds;
+        return (long)Math.Ceiling(milliseconds);
     }
 
     private sealed class TokenBucket

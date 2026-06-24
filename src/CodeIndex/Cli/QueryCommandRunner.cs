@@ -127,11 +127,15 @@ public static partial class QueryCommandRunner
     internal const int ExactZeroHintSampleLimit = 5;
     private const int SearchOriginFilterMinCandidates = 200;
     private const int SearchOriginFilterOverFetchFactor = 50;
-    private const int SearchOriginFilterMaxCandidates = 10_000;
+    internal const int MaxQueryResultLimit = 10_000;
+    private const int SearchOriginFilterMaxCandidates = MaxQueryResultLimit;
     private const int SearchOriginFilterMaxPages = 50;
     private const int SearchEnvelopeMinCandidates = 200;
     private const int SearchEnvelopeOverFetchFactor = 50;
-    private const int SearchEnvelopeMaxCandidates = 10_000;
+    private const int SearchEnvelopeMaxCandidates = MaxQueryResultLimit;
+    private const int MaxUnusedPaginationPages = 10;
+    internal const int MaxUnusedPaginationFetchLimit = MaxQueryResultLimit * MaxUnusedPaginationPages + 1;
+    internal const int MaxUnusedPaginationOffset = MaxUnusedPaginationFetchLimit - MaxQueryResultLimit - 1;
     private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
     private const string HotspotsGroupedByNameKind = "name_kind";
     private const string HotspotsGroupedBySymbol = "symbol";
@@ -2816,16 +2820,16 @@ public static partial class QueryCommandRunner
 
     private static int FetchLimitForSearchEnvelope(int limit)
     {
-        if (limit >= int.MaxValue)
-            return int.MaxValue;
         if (limit <= 0)
             return 1;
 
         var requested = (long)limit + 1;
         var overFetched = requested * SearchEnvelopeOverFetchFactor;
         var candidateLimit = Math.Max(SearchEnvelopeMinCandidates, Math.Max(requested, overFetched));
-        return (int)Math.Min(SearchEnvelopeMaxCandidates, Math.Min(int.MaxValue, candidateLimit));
+        return (int)Math.Min(SearchEnvelopeMaxCandidates, candidateLimit);
     }
+
+    internal static int FetchLimitForSearchEnvelopeForTests(int limit) => FetchLimitForSearchEnvelope(limit);
 
     private static bool TrimSearchRowsToRequestedLimit(List<SearchDisplayRow> rows, int limit)
     {
@@ -9914,6 +9918,15 @@ public static partial class QueryCommandRunner
             }
 
             var pageOffset = options.UnusedCursorOffset ?? 0;
+            if (!IsUnusedCursorOffsetWithinFetchCap(options.Limit, pageOffset))
+            {
+                WriteUsageError(
+                    $"unused --cursor offset must be less than or equal to {MaxUnusedPaginationOffset.ToString(CultureInfo.InvariantCulture)}, got {pageOffset.ToString(CultureInfo.InvariantCulture)}.",
+                    GetUsageLineOrThrow("unused"),
+                    "Restart unused pagination without --cursor, or narrow the query filters before paginating again.");
+                return CommandExitCodes.UsageError;
+            }
+
             var fetchLimit = GetUnusedFetchLimit(options.Limit, pageOffset);
             var fetchedResults = reader.GetUnusedSymbols(
                 fetchLimit,
@@ -9930,8 +9943,9 @@ public static partial class QueryCommandRunner
                 .Skip(pageOffset)
                 .Take(options.Limit)
                 .ToList();
-            var nextCursor = fetchedResults.Count > pageOffset + options.Limit
-                ? FormatUnusedCursor(pageOffset + options.Limit)
+            var nextOffset = pageOffset + options.Limit;
+            var nextCursor = fetchedResults.Count > nextOffset && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
+                ? FormatUnusedCursor(nextOffset)
                 : null;
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
@@ -10113,8 +10127,22 @@ public static partial class QueryCommandRunner
     private static int GetUnusedFetchLimit(int pageLimit, int pageOffset)
     {
         var requested = (long)Math.Max(pageLimit, 1) + Math.Max(pageOffset, 0) + 1;
-        return requested > int.MaxValue ? int.MaxValue : (int)requested;
+        return (int)Math.Min(MaxUnusedPaginationFetchLimit, requested);
     }
+
+    internal static int GetUnusedFetchLimitForTests(int pageLimit, int pageOffset) => GetUnusedFetchLimit(pageLimit, pageOffset);
+
+    private static bool IsUnusedCursorOffsetWithinFetchCap(int pageLimit, int pageOffset)
+    {
+        if (pageOffset < 0)
+            return false;
+
+        var requested = (long)Math.Max(pageLimit, 1) + pageOffset + 1;
+        return requested <= MaxUnusedPaginationFetchLimit;
+    }
+
+    internal static bool IsUnusedCursorOffsetWithinFetchCapForTests(int pageLimit, int pageOffset) =>
+        IsUnusedCursorOffsetWithinFetchCap(pageLimit, pageOffset);
 
     internal static JsonObject BuildUnusedRepresentativeSymbolsJson(IEnumerable<UnusedSymbolResult> results)
     {
@@ -15712,8 +15740,8 @@ public static partial class QueryCommandRunner
     internal static readonly IReadOnlyDictionary<string, int> NumericFlagUpperBounds =
         new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            ["--limit"] = 10_000,
-            ["--max-results"] = 10_000,
+            ["--limit"] = MaxQueryResultLimit,
+            ["--max-results"] = MaxQueryResultLimit,
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
             ["--slow-query-ms"] = 3_600_000,

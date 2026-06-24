@@ -26,6 +26,13 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class McpServerTests : IDisposable
 {
+    [Fact]
+    public void FetchLimitForEnvelope_ClampsHugeInternalLimit_Issue3964()
+    {
+        Assert.Equal(1, McpServer.FetchLimitForEnvelopeForTests(0));
+        Assert.Equal(McpServer.MaxMcpEnvelopeFetchLimit, McpServer.FetchLimitForEnvelopeForTests(int.MaxValue));
+    }
+
     private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)
