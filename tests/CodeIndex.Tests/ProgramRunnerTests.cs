@@ -4051,11 +4051,18 @@ exit 7
     }
 
     [Fact]
-    public void IsTrimmedJsonUnavailable_RecognizesReflectionDisabledMessage()
+    public void IsTrimmedJsonUnavailable_UsesReflectionStateAndSystemTextJsonSource()
     {
-        var ex = new InvalidOperationException(JsonOutputFailure.ReflectionDisabledMessage);
+        var ex = new InvalidOperationException("localized or future provider text")
+        {
+            Source = "System.Text.Json",
+        };
 
-        Assert.True(JsonOutputFailure.IsTrimmedJsonUnavailable(ex));
+        Assert.True(JsonOutputFailure.IsTrimmedJsonUnavailable(ex, reflectionEnabledByDefault: false));
+        Assert.False(JsonOutputFailure.IsTrimmedJsonUnavailable(ex, reflectionEnabledByDefault: true));
+        Assert.False(JsonOutputFailure.IsTrimmedJsonUnavailable(
+            new InvalidOperationException("localized or future provider text") { Source = "Other.Json" },
+            reflectionEnabledByDefault: false));
     }
 
     [Fact]
@@ -4189,7 +4196,7 @@ exit 7
     private sealed class ThrowingResolver : IJsonTypeInfoResolver
     {
         public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options) =>
-            throw new InvalidOperationException(JsonOutputFailure.ReflectionDisabledMessage);
+            throw new InvalidOperationException("unexpected reflection resolver access");
     }
 
     private sealed class TrackingStreamWriter : StreamWriter

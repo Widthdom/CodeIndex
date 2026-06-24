@@ -735,7 +735,7 @@ public class LegacySchemaMigrationTests : IDisposable
         {
             calls++;
             Assert.Equal($"PRAGMA synchronous={DbContext.DefaultSynchronousMode}", sql);
-            throw CreateSqliteException("Safety level may not be changed inside a transaction", 1);
+            throw CreateSqliteException("localized provider text", 1);
         });
 
         Assert.Equal(1, calls);
@@ -746,9 +746,9 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         var ex = Assert.Throws<SqliteException>(() =>
             DbContext.ExecuteSynchronousPragmaWithFallback(_ =>
-                throw CreateSqliteException("no such table: missing", 1)));
+                throw CreateSqliteException("unable to open database file", 14)));
 
-        Assert.Contains("no such table", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unable to open", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

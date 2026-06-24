@@ -297,6 +297,7 @@ public class DbReaderTests : IDisposable
     {
         var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.Search(query, rawQuery: true));
 
+        Assert.Equal(FtsQuerySyntaxErrorKind.ColumnQualifier, ex.Kind);
         Assert.Contains(expectedQualifier, ex.Message);
         Assert.Contains("'content' column", ex.Message);
     }
@@ -322,6 +323,7 @@ public class DbReaderTests : IDisposable
     {
         var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.CountSearchResults("rowid:authenticate", rawQuery: true));
 
+        Assert.Equal(FtsQuerySyntaxErrorKind.ColumnQualifier, ex.Kind);
         Assert.Contains("rowid:", ex.Message);
         Assert.Contains("'content' column", ex.Message);
     }

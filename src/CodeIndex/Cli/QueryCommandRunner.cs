@@ -13225,7 +13225,7 @@ public static partial class QueryCommandRunner
         catch (FtsQuerySyntaxException ex)
         {
             CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
-            if (ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
+            if (ex.Kind == FtsQuerySyntaxErrorKind.ColumnQualifier)
             {
                 CommandErrorWriter.WriteStderr("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
             }
