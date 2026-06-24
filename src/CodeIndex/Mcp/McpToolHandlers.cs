@@ -5970,12 +5970,15 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
+        var fileTargets = files.Select(filePath => CSharpStaticInterfacePrepass.FileTarget.Create(
+            projectPath,
+            filePath,
+            scanResult.FileLanguages.TryGetValue(filePath, out var language) ? language : null)).ToArray();
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
             writer,
             indexer,
-            projectPath,
-            files,
+            fileTargets,
             cancellationToken: requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
@@ -5989,13 +5992,18 @@ public partial class McpServer
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
 
-        foreach (var filePath in files)
+        foreach (var target in fileTargets)
         {
+            var filePath = target.FilePath;
             var fileBatchMarked = false;
             try
             {
                 requestToken.ThrowIfCancellationRequested();
-                var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, requestToken);
+                var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                    filePath,
+                    target.RelativePath,
+                    target.Language,
+                    requestToken);
                 var record = loaded.Record;
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
