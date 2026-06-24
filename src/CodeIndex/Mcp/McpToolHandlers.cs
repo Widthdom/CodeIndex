@@ -5975,10 +5975,13 @@ public partial class McpServer
             filePath,
             FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
+        var csharpPrepassTargets = fileTargets
+            .Where(static target => target.Language == "csharp")
+            .ToArray();
         var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
             writer,
             indexer,
-            fileTargets,
+            csharpPrepassTargets,
             cancellationToken: requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
