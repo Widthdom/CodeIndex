@@ -2598,12 +2598,12 @@ public class DbContext : IDisposable
             {
                 transaction = _connection.BeginTransaction(deferred: false);
             }
-            catch (SqliteException ex) when (IsNestedTransactionError(ex))
+            catch (SqliteException ex) when (IsBeginTransactionSqliteError(ex))
             {
                 RunReadMigrationStepsInsideExternalTransaction();
                 return;
             }
-            catch (InvalidOperationException ex) when (IsNestedTransactionError(ex))
+            catch (InvalidOperationException)
             {
                 RunReadMigrationStepsInsideExternalTransaction();
                 return;
@@ -2688,12 +2688,8 @@ public class DbContext : IDisposable
         }
     }
 
-    private static bool IsNestedTransactionError(SqliteException exception) =>
-        exception.SqliteErrorCode == 1 &&
-        exception.Message.Contains("cannot start a transaction within a transaction", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsNestedTransactionError(InvalidOperationException exception) =>
-        exception.Message.Contains("does not support nested transactions", StringComparison.OrdinalIgnoreCase);
+    private static bool IsBeginTransactionSqliteError(SqliteException exception) =>
+        exception.SqliteErrorCode == 1;
 
     private void RecordMigrationFailure(string description, SqliteException exception)
     {
@@ -3106,9 +3102,8 @@ internal static class DbColumnEnsurer
 
     private static bool IsDuplicateColumnAddError(SqliteException exception)
     {
-        // SQLite reports duplicate-column ADD COLUMN as SQLITE_ERROR (1). Keep the
-        // message fallback for older providers that may not surface the numeric code.
-        return exception.SqliteErrorCode == 1 ||
-               exception.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase);
+        // SQLite reports duplicate-column ADD COLUMN as SQLITE_ERROR (1); callers
+        // confirm the column exists before treating it as a recovered race.
+        return exception.SqliteErrorCode == 1;
     }
 }

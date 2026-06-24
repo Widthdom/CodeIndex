@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Database;
 
@@ -4945,7 +4946,7 @@ public partial class DbReader
         {
             excerpt = GetExcerpt(path, excerptStart, startLine + UnusedAttributeContextWindow);
         }
-        catch (SqliteException ex) when (IsMissingChunksTableError(ex))
+        catch (SqliteException ex) when (IsMissingChunksTableUnavailable(ex))
         {
             return false;
         }
@@ -4991,9 +4992,14 @@ public partial class DbReader
         return null;
     }
 
-    private static bool IsMissingChunksTableError(SqliteException ex) =>
-        ex.SqliteErrorCode == 1
-        && ex.Message.Contains("no such table: chunks", StringComparison.OrdinalIgnoreCase);
+    private bool IsMissingChunksTableUnavailable(SqliteException ex)
+    {
+        if (ex.SqliteErrorCode != 1)
+            return false;
+
+        _schemaCache?.Refresh();
+        return !HasTable("chunks");
+    }
 
     private static List<string> GetAdjacentAttributeBlock(string[] lines, string[] sanitizedLines, bool[] triviaMask, int anchorIndex)
     {

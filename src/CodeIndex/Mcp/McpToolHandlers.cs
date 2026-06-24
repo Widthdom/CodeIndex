@@ -1131,20 +1131,28 @@ public partial class McpServer
     private const int SearchEnvelopeMinCandidates = 200;
     private const int SearchEnvelopeOverFetchFactor = 50;
     private const int SearchEnvelopeMaxCandidates = 10_000;
+    internal const int MaxMcpEnvelopeFetchLimit = MaxLimit + 1;
 
-    private static int FetchLimitForEnvelope(int limit) => limit >= int.MaxValue ? int.MaxValue : limit + 1;
+    private static int FetchLimitForEnvelope(int limit)
+    {
+        if (limit <= 0)
+            return 1;
+
+        var requested = (long)limit + 1;
+        return (int)Math.Min(MaxMcpEnvelopeFetchLimit, requested);
+    }
+
+    internal static int FetchLimitForEnvelopeForTests(int limit) => FetchLimitForEnvelope(limit);
 
     private static int FetchLimitForSearchRecipeEnvelope(int limit)
     {
-        if (limit >= int.MaxValue)
-            return int.MaxValue;
         if (limit <= 0)
             return 1;
 
         var requested = (long)limit + 1;
         var overFetched = requested * SearchEnvelopeOverFetchFactor;
         var candidateLimit = Math.Max(SearchEnvelopeMinCandidates, Math.Max(requested, overFetched));
-        return (int)Math.Min(SearchEnvelopeMaxCandidates, Math.Min(int.MaxValue, candidateLimit));
+        return (int)Math.Min(SearchEnvelopeMaxCandidates, candidateLimit);
     }
 
     private static bool TrimToRequestedLimit<T>(List<T> results, int limit)
@@ -4628,7 +4636,7 @@ public partial class McpServer
             MaxBatchQueryResponseByteLimit,
             "MCP batch_query response byte limit");
 
-    private int EstimateJsonUtf8Bytes(JsonNode node, int maxBytes = int.MaxValue)
+    private int EstimateJsonUtf8Bytes(JsonNode node, int maxBytes = MaxBatchQueryResponseByteLimit)
     {
         _ = TryMeasureJsonUtf8BytesWithinLimit(node, _jsonOptions, maxBytes, out var bytesWritten);
         return bytesWritten;
@@ -5572,14 +5580,14 @@ public partial class McpServer
 
     private static JsonObject CaptureMcpIndexMemorySample(string stage, Stopwatch stopwatch)
     {
-        using var process = Process.GetCurrentProcess();
+        var snapshot = ProcessMemorySnapshot.Capture();
         return new JsonObject
         {
             ["stage"] = stage,
             ["elapsed_ms"] = stopwatch.ElapsedMilliseconds,
-            ["managed_bytes"] = GC.GetTotalMemory(forceFullCollection: false),
-            ["working_set_bytes"] = process.WorkingSet64,
-            ["private_bytes"] = process.PrivateMemorySize64,
+            ["managed_bytes"] = snapshot.HeapBytes,
+            ["working_set_bytes"] = snapshot.WorkingSetBytes,
+            ["private_bytes"] = snapshot.PrivateBytes,
         };
     }
 

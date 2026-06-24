@@ -4233,6 +4233,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_ExcludeTestsFiltersSourceAndTargetEdges_Issue3895()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_exclude_tests_targets");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertFileWithReferences(dbPath, "src/Caller.cs", ["ProductionTarget", "TestTarget", "ToolTestTarget"]);
+            InsertFileWithReference(dbPath, "tests/TestCaller.cs", "ProductionTarget");
+            InsertFileWithReference(dbPath, "tools/CodeIndex.TestTelemetry/ToolCaller.cs", "ProductionTarget");
+            InsertFileWithSymbol(dbPath, "src/ProductionTarget.cs", "ProductionTarget");
+            InsertFileWithSymbol(dbPath, "tests/TestTarget.cs", "TestTarget");
+            InsertFileWithSymbol(dbPath, "tools/CodeIndex.TestTelemetry/Program.cs", "ToolTestTarget");
+            MarkDependencyGraphReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--exclude-tests", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
+            Assert.Equal("src/ProductionTarget.cs", edge.GetProperty("target_path").GetString());
+            Assert.DoesNotContain("tests/", stdout);
+            Assert.DoesNotContain("CodeIndex.TestTelemetry", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_zero_sql_graph_contract");

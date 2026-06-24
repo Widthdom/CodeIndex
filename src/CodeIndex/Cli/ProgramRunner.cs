@@ -131,7 +131,7 @@ internal static partial class ProgramRunner
         // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
         // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
         var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
-        if (configResult.Failed && !IsConfigShowCommand(args))
+        if (configResult.Failed && !IsConfigShowCommand(args) && !IsValidateConfigCommand(args))
         {
             return CommandErrorWriter.Write(
                 StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
@@ -262,6 +262,26 @@ internal static partial class ProgramRunner
         return commandIndex + 1 < args.Count
                && string.Equals(args[commandIndex], "config", StringComparison.Ordinal)
                && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal);
+    }
+
+    private static bool IsValidateConfigCommand(IReadOnlyList<string> args)
+    {
+        var commandIndex = 0;
+        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
+        {
+            var option = args[commandIndex];
+            var optionName = option.Split('=', 2)[0];
+            commandIndex++;
+            if (!option.Contains('=', StringComparison.Ordinal)
+                && TopLevelValueOptionNames.Contains(optionName)
+                && commandIndex < args.Count)
+            {
+                commandIndex++;
+            }
+        }
+
+        return commandIndex < args.Count
+               && string.Equals(args[commandIndex], "validate-config", StringComparison.Ordinal);
     }
 
     private static int RunTestExtractor(string[] args, JsonSerializerOptions jsonOptions)

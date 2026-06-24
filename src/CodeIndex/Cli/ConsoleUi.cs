@@ -107,7 +107,7 @@ public static class ConsoleUi
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
-        ("validate-config", "cdidx validate-config"),
+        ("validate-config", "cdidx validate-config [--json]"),
         ("doctor", "cdidx doctor [--json] [--redact-paths] [--env-inventory]"),
         ("db", "cdidx db integrity|--integrity-check [--db <path>] [--json]"),
         ("db", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),

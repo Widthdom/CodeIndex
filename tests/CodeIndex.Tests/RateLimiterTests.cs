@@ -265,6 +265,17 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void DiagnosticMilliseconds_ClampHugeIntervals_Issue3964()
+    {
+        Assert.Equal(
+            RateLimiter.MaxDiagnosticIntervalMilliseconds,
+            RateLimiter.ComputeNextPruneInMillisecondsForTests(DateTimeOffset.MinValue, DateTimeOffset.MaxValue));
+        Assert.Equal(
+            RateLimiter.MaxDiagnosticIntervalMilliseconds,
+            RateLimiter.ComputeElapsedMillisecondsForTests(DateTimeOffset.MaxValue, DateTimeOffset.MinValue));
+    }
+
+    [Fact]
     public void FromEnvironment_NoVars_ReturnsDisabled()
     {
         var opts = RateLimiterOptions.FromEnvironment(_ => null, _ => { });

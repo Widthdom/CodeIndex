@@ -247,9 +247,9 @@ public partial class DbReader
                 raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
             }
         }
-        catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
+        catch (SqliteException ex) when (rawQuery && IsRawFtsSqliteSyntaxError(ex))
         {
-            throw new FtsQuerySyntaxException(ex.Message, ex);
+            throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
@@ -562,9 +562,9 @@ public partial class DbReader
                 keptFiles.Add(path);
             }
         }
-        catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
+        catch (SqliteException ex) when (rawQuery && IsRawFtsSqliteSyntaxError(ex))
         {
-            throw new FtsQuerySyntaxException(ex.Message, ex);
+            throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
         return new QueryCountResult(count, keptFiles.Count);
@@ -669,9 +669,9 @@ public partial class DbReader
                 countsByPath[path] = countsByPath.TryGetValue(path, out var count) ? count + 1 : 1;
             }
         }
-        catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
+        catch (SqliteException ex) when (rawQuery && IsRawFtsSqliteSyntaxError(ex))
         {
-            throw new FtsQuerySyntaxException(ex.Message, ex);
+            throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
         return countsByPath
@@ -1301,13 +1301,17 @@ public partial class DbReader
     private static bool IsFtsIdentifierPart(char ch)
         => char.IsLetterOrDigit(ch) || ch == '_';
 
-    private static bool IsFtsQuerySyntaxError(SqliteException ex)
+    private bool IsRawFtsSqliteSyntaxError(SqliteException ex)
     {
-        var message = ex.Message;
-        return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("no such column", StringComparison.OrdinalIgnoreCase);
+        if (ex.SqliteErrorCode != 1)
+            return false;
+
+        _schemaCache?.Refresh();
+        return HasTable("fts_chunks") && HasTable("chunks") && HasTable("files");
     }
+
+    private static FtsQuerySyntaxException CreateRawFtsSqliteSyntaxException(SqliteException ex) =>
+        new("raw FTS5 query was rejected by SQLite.", ex);
 
     private static void ValidateRawFtsColumns(string query)
     {
@@ -1364,7 +1368,8 @@ public partial class DbReader
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (columns.Length > MaxRawFtsColumnListCount)
             throw new FtsQuerySyntaxException(
-                $"raw FTS5 column list has too many columns ({columns.Length}); maximum is {MaxRawFtsColumnListCount}. The fts_chunks index only exposes the 'content' column.");
+                $"raw FTS5 column list has too many columns ({columns.Length}); maximum is {MaxRawFtsColumnListCount}. The fts_chunks index only exposes the 'content' column.",
+                FtsQuerySyntaxErrorKind.ColumnQualifier);
         foreach (var column in columns)
             ValidateRawFtsColumn(column);
     }
@@ -1374,13 +1379,15 @@ public partial class DbReader
         const string validColumn = "content";
         if (column.Length > MaxRawFtsColumnTokenLength)
             throw new FtsQuerySyntaxException(
-                $"raw FTS5 column qualifier is too long ({column.Length} characters); maximum is {MaxRawFtsColumnTokenLength}. The fts_chunks index only exposes the '{validColumn}' column.");
+                $"raw FTS5 column qualifier is too long ({column.Length} characters); maximum is {MaxRawFtsColumnTokenLength}. The fts_chunks index only exposes the '{validColumn}' column.",
+                FtsQuerySyntaxErrorKind.ColumnQualifier);
         if (string.Equals(column, validColumn, StringComparison.OrdinalIgnoreCase))
             return;
 
         throw new FtsQuerySyntaxException(
             $"unknown FTS5 column qualifier '{column}:'. The fts_chunks index only exposes the '{validColumn}' column; use '{validColumn}:' or drop the qualifier.",
-            new ArgumentException("Unknown FTS5 column qualifier.", nameof(column)));
+            new ArgumentException("Unknown FTS5 column qualifier.", nameof(column)),
+            FtsQuerySyntaxErrorKind.ColumnQualifier);
     }
 
     private static bool IsFtsColumnIdentifierChar(char ch)

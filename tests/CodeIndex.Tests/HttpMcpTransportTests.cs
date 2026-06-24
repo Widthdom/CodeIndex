@@ -45,6 +45,19 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_DisposeAsync_DisposesOwnedSemaphoreGates_Issue3985()
+    {
+        var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        await harness.DisposeAsync();
+
+        Assert.True(harness.OwnedSemaphoreGatesDisposed);
+    }
+
+    [Fact]
     public void HttpTransport_TimeoutDiagnosticsUseStableCategories_Issue3990()
     {
         Assert.Equal(
@@ -1719,6 +1732,8 @@ public class HttpMcpTransportTests : IDisposable
         public string Endpoint { get; }
 
         public bool HasEventStreams => _transport.HasEventStreams;
+
+        public bool OwnedSemaphoreGatesDisposed => _transport.OwnedSemaphoreGatesDisposedForTests;
 
         public int EventStreamCount => _transport.EventStreamCount;
 

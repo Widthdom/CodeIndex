@@ -44,6 +44,7 @@ The test project mirrors the production areas closely.
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunnerTests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
   CLI parsing, command execution, and installer behavior. Query command coverage is split by command family with partial `QueryCommandRunnerTests` classes so shared console and fixture helpers stay centralized. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, while `InstallScriptTests.cs` runs focused bash snippets against `install.sh` in library mode to lock in release-installer regressions without performing real network installs.
+  `InstallScriptTests.RunInstallerSnippet` enforces a bounded timeout and kills the snippet process tree on timeout, so installer regressions fail with captured output instead of hanging the suite.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
@@ -65,7 +66,7 @@ The test project mirrors the production areas closely.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
 - `GitHelperTests.cs`
-  Git-specific behavior, including worktrees, commit-based updates, and cancellation of git subprocesses. Cancellation wall-clock assertions should stay below the fake git scripts' natural 5-second completion while leaving room for macOS CI scheduling and process-cleanup overhead.
+  Git-specific behavior, including worktrees, commit-based updates, and cancellation of git subprocesses. Timeout and cancellation wall-clock assertions should stay below the fake git scripts' natural completion while leaving room for macOS CI scheduling and process-cleanup overhead.
 - `WorkspaceMetadataEnricherTests.cs`
   Workspace freshness and git metadata enrichment behavior.
 - `SuggestionStoreTests.cs`
@@ -258,6 +259,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunnerTests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
   CLI の引数解析、コマンド実行、installer 挙動のテスト。Query command coverage は command family ごとの partial `QueryCommandRunnerTests` class に分割し、共有 console / fixture helper は一箇所に保ちます。`ProgramCliTests.cs` はグローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱い、`InstallScriptTests.cs` は `install.sh` を library mode で source した bash snippet を実行して、実ネットワーク install を行わずに release installer の回帰を固定する。
+  `InstallScriptTests.RunInstallerSnippet` は bounded timeout を強制し、timeout 時は snippet の process tree を kill するため、installer 回帰は suite を hang させずに captured output 付きで失敗します。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
@@ -279,7 +281,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
 - `GitHelperTests.cs`
-  worktree や commit ベース更新、git subprocess の cancellation を含む Git まわりのテスト。Cancellation の wall-clock assertion は fake git script が自然完了する 5 秒未満に保ちつつ、macOS CI の scheduling や process cleanup の遅れを許容する余裕を持たせます。
+  worktree や commit ベース更新、git subprocess の cancellation を含む Git まわりのテスト。Timeout と cancellation の wall-clock assertion は fake git script の自然完了より短く保ちつつ、macOS CI の scheduling や process cleanup の遅れを許容する余裕を持たせます。
 - `WorkspaceMetadataEnricherTests.cs`
   ワークスペース鮮度と git メタデータ付与のテスト。
 - `SuggestionStoreTests.cs`

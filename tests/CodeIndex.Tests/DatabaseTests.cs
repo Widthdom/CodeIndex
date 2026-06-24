@@ -979,6 +979,21 @@ public class DatabaseTests : IDisposable
         Assert.Equal("incremental", guidance.AutoVacuumModeName);
     }
 
+    [Fact]
+    public void MaintenanceGuidance_OverflowEstimateReportsUnknown_Issue3964()
+    {
+        var guidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            PageCount: long.MaxValue,
+            FreelistCount: long.MaxValue,
+            PageSize: 4096,
+            WalSizeBytes: 0,
+            DbSizeBytes: null,
+            AutoVacuumMode: 2));
+
+        Assert.Equal("vacuum_recommended", guidance.FreelistState);
+        Assert.Null(guidance.EstimatedBytesReclaimable);
+    }
+
     private static int GetTransactionDepth(DbWriter writer)
     {
         var field = typeof(DbWriter).GetField("_transactionDepth", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)

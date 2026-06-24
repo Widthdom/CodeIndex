@@ -57,8 +57,7 @@ internal static class DbPragmaPolicy
     }
 
     internal static bool IsSafetyLevelTransactionError(SqliteException ex) =>
-        ex.SqliteErrorCode == 1 &&
-        ex.Message.Contains("Safety level may not be changed inside a transaction", StringComparison.OrdinalIgnoreCase);
+        ex.SqliteErrorCode == 1;
 
     internal static int ReadBusyTimeoutMs(string environmentVariable)
         => ReadNonNegativeIntEnvironment(

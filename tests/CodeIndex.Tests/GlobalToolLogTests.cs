@@ -170,6 +170,50 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_PruneOldFiles_DeleteFailureReportsDiagnosticAndContinues_Issue3962()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_prune_diag_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var diagnostics = new List<PrivateLogFileDiagnostic>();
+        try
+        {
+            var timestamp = DateTime.UtcNow.AddHours(-1);
+            for (var i = 0; i < 3; i++)
+            {
+                var path = Path.Combine(directory, $"stderr-{i:D4}.log");
+                File.WriteAllText(path, "x");
+                File.SetLastWriteTimeUtc(path, timestamp);
+            }
+
+            PrivateLogFile.PruneOldFiles(
+                directory,
+                "stderr-*.log",
+                retainedFileCount: 1,
+                diagnostics.Add,
+                path =>
+                {
+                    if (string.Equals(Path.GetFileName(path), "stderr-0000.log", StringComparison.Ordinal))
+                        throw new IOException("delete denied");
+                    File.Delete(path);
+                });
+
+            Assert.True(File.Exists(Path.Combine(directory, "stderr-0000.log")));
+            Assert.False(File.Exists(Path.Combine(directory, "stderr-0001.log")));
+            Assert.True(File.Exists(Path.Combine(directory, "stderr-0002.log")));
+            var diagnostic = Assert.Single(diagnostics);
+            Assert.Equal("prune_old_file_delete", diagnostic.Operation);
+            Assert.Equal("io_error", diagnostic.Reason);
+            Assert.Equal("stderr-0000.log", diagnostic.Target);
+            Assert.DoesNotContain(directory, diagnostic.Target, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void PrivateLogFile_TryRotateSlots_ReplacesExistingSlotsAtomicallyWherePossible()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_rotate_{Guid.NewGuid():N}");

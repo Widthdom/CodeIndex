@@ -30,6 +30,9 @@ internal static class IndexWatchRunner
     private const int PollIntervalMs = 50;
     private const string WatchDiagnosticTruncationMarker = "...[truncated]";
 
+    internal static bool DeleteSpoolFileForTesting(string? spoolPath, Action<string>? deleteOverride = null)
+        => DeleteSpoolFile(spoolPath, deleteOverride);
+
     public static int Run(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
@@ -447,16 +450,36 @@ internal static class IndexWatchRunner
         return wroteAny;
     }
 
-    private static void DeleteSpoolFile(string? spoolPath)
+    private static bool DeleteSpoolFile(string? spoolPath, Action<string>? deleteOverride = null)
     {
         if (string.IsNullOrWhiteSpace(spoolPath))
-            return;
+            return false;
+
+        return AtomicFileWriter.TryDeleteFile(
+            spoolPath,
+            ex => ReportSpoolCleanupFailure(spoolPath, ex),
+            deleteOverride);
+    }
+
+    private static void ReportSpoolCleanupFailure(string spoolPath, Exception exception)
+    {
+        var target = FormatSpoolCleanupTarget(spoolPath);
+        var reason = CommandErrorWriter.FormatSanitizedException(exception);
+        GlobalToolLog.Error($"watch_spool_cleanup_failed target={target} reason={reason}");
+        CommandErrorWriter.WriteStderr(
+            $"Warning [watch_spool_cleanup_failed]: failed to delete watch spool file {target} ({reason}).");
+    }
+
+    private static string FormatSpoolCleanupTarget(string path)
+    {
         try
         {
-            File.Delete(spoolPath);
+            var target = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            return ConsoleUi.FormatBoundedValue(string.IsNullOrWhiteSpace(target) ? "<spool>" : target);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
         {
+            return "<invalid>";
         }
     }
 

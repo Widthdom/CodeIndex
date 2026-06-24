@@ -121,6 +121,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private string? _lastAuthDenialReason;
     private string? _lastRequestLogDropReason;
     private bool _disposed;
+    private bool _ownedSemaphoreGatesDisposed;
 
     /// <summary>
     /// Build an HTTP transport bound to the supplied loopback prefix. If <paramref name="bearerToken"/>
@@ -246,6 +247,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal bool AuthDisabled => !RequiresBearerToken;
 
     internal string? AuthDisabledWarning => AuthDisabled ? LoopbackAuthDisabledWarning : null;
+
+    internal bool OwnedSemaphoreGatesDisposedForTests => Volatile.Read(ref _ownedSemaphoreGatesDisposed);
 
     internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
@@ -1540,6 +1543,26 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 // request log は best-effort。shutdown を無期限に待たせない。
             }
         }
+        if (acceptLoopCompleted && await WaitForOwnedSemaphoreGatesIdleAsync().ConfigureAwait(false))
+        {
+            _queueSlots.Dispose();
+            _handlerSemaphore.Dispose();
+            Volatile.Write(ref _ownedSemaphoreGatesDisposed, true);
+        }
+    }
+
+    private async Task<bool> WaitForOwnedSemaphoreGatesIdleAsync()
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(DisposeAcceptLoopTimeout);
+        while (_queueSlots.CurrentCount != _maxQueuedRequests
+            || _handlerSemaphore.CurrentCount != _maxConcurrentHandlers)
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                return false;
+            await Task.Delay(10).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     private void MarkRejected(PendingRequest request, string reason)

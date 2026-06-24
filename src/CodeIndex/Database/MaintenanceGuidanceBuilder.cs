@@ -112,7 +112,7 @@ internal static class MaintenanceGuidanceBuilder
         if (!pages.HasValue || !pageSize.HasValue || pages.Value < 0 || pageSize.Value <= 0)
             return null;
         if (pages.Value > long.MaxValue / pageSize.Value)
-            return long.MaxValue;
+            return null;
         return pages.Value * pageSize.Value;
     }
 

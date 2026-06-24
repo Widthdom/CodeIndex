@@ -249,7 +249,7 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
-    public void BuildBundle_InjectedTimeControlsMetadataAndArchiveEntries_Issue3963()
+    public void BuildBundle_InjectedTimeControlsMetadataButArchiveEntriesStayStable_Issue3963_Issue3987()
     {
         var workDir = CreateWorkDir();
         try
@@ -274,7 +274,10 @@ public class ReportCommandRunnerTests
 
             var entryTimes = ReadTarGzEntryModificationTimes(output);
             Assert.NotEmpty(entryTimes);
-            Assert.All(entryTimes.Values, modificationTime => Assert.Equal(fixedTime, modificationTime));
+            Assert.All(
+                entryTimes.Values,
+                modificationTime => Assert.Equal(ReportCommandRunner.BundleEntryModificationTime, modificationTime));
+            Assert.DoesNotContain(fixedTime, entryTimes.Values);
         }
         finally
         {
