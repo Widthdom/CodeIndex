@@ -26,6 +26,7 @@ affected:
 - Limited scan-time language reuse to content-independent detections so C/C++ header detection still inspects file content when needed.
 - Passed only scan-confirmed C# files into the C# static-interface prepass for full-scan and MCP indexing, avoiding an extra prepass walk over unrelated languages.
 - Skipped scan-confirmed non-C# targets during update-mode C# static-interface workspace expansion while still preserving deleted contract detection for unscanned paths.
+- Reused full-scan generated-code suppression decisions between extraction and write phases, avoiding duplicate pattern checks per indexed file.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -40,4 +41,5 @@ affected:
 - scan 時点の language 再利用は content に依存しない判定だけに限定し、C/C++ header 判定では必要に応じて file content を確認するようにしました。
 - full-scan と MCP index の C# static-interface prepass には scan で確認済みの C# ファイルだけを渡し、関連しない言語を prepass で余分に走査しないようにしました。
 - update mode の C# static-interface workspace 拡張では、scan 済みの非 C# target を prepass から除外しつつ、scan されない削除済み contract の検出は維持しました。
+- full-scan の generated-code suppression 判定を extraction phase と write phase で再利用し、index 対象ファイルごとの重複 pattern check を避けました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

@@ -1231,7 +1231,17 @@ public static partial class IndexCommandRunner
                                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
                                         generatedSuppressionIssue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks, symbols, references, issues),
+                                        FullScanFileWorkItem.Precomputed(
+                                            filePath,
+                                            displayRelativePath,
+                                            record,
+                                            warning,
+                                            chunks,
+                                            symbols,
+                                            references,
+                                            issues,
+                                            generatedSuppressionIssue,
+                                            generatedSuppressionChecked: true),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1302,8 +1312,32 @@ public static partial class IndexCommandRunner
                             }
                             extractionResults.Add(
                                 parallelizeExtraction
-                                    ? FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks!, symbols!, references!, issues!)
-                                    : FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, hasOversizeLine, warning, chunks, symbols, references, issues),
+                                    ? FullScanFileWorkItem.Precomputed(
+                                        filePath,
+                                        displayRelativePath,
+                                        record,
+                                        warning,
+                                        chunks!,
+                                        symbols!,
+                                        references!,
+                                        issues!,
+                                        generatedSuppressionIssue,
+                                        generatedSuppressionChecked: true)
+                                    : FullScanFileWorkItem.Success(
+                                        filePath,
+                                        displayRelativePath,
+                                        record,
+                                        content,
+                                        rawBytes,
+                                        loaded.Inspection,
+                                        hasOversizeLine,
+                                        warning,
+                                        chunks,
+                                        symbols,
+                                        references,
+                                        issues,
+                                        generatedSuppressionIssue,
+                                        generatedSuppressionChecked: true),
                                 extractionCancellationToken);
                         }
                         catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
@@ -1500,7 +1534,9 @@ public static partial class IndexCommandRunner
                             item.Content!,
                             item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!))
                         : ReassignChunkFileIds(item.Chunks, fileId);
-                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                    var generatedSuppressionIssue = item.GeneratedSuppressionChecked
+                        ? item.GeneratedSuppressionIssue
+                        : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
                         writer.InsertChunks(chunks, cancellationToken);
