@@ -3150,6 +3150,35 @@ public sealed class Caller
     }
 
     [Theory]
+    [InlineData("utf8", 3)]
+    [InlineData("utf8-bom", 5)]
+    [InlineData("utf16-le", 7)]
+    [InlineData("utf16-be", 11)]
+    public void RawByteChunksMayContainCSharpStaticInterfaceContract_ContractTokensAcrossChunkBoundaries_ReturnsTrue(
+        string encodingName,
+        int chunkSize)
+    {
+        const string content = """
+        public interface IFixture<T>
+        {
+            static abstract T Create();
+        }
+        """;
+
+        var bytes = EncodeCSharpPrepassContent(content, encodingName);
+
+        Assert.True(CSharpStaticInterfacePrepass.RawByteChunksMayContainCSharpStaticInterfaceContract(ChunkBytes(bytes, chunkSize)));
+    }
+
+    [Fact]
+    public void RawByteChunksMayContainCSharpStaticInterfaceContract_MissingContractTokens_ReturnsFalse()
+    {
+        var bytes = Encoding.UTF8.GetBytes("public interface IFixture { static int Count => 0; }");
+
+        Assert.False(CSharpStaticInterfacePrepass.RawByteChunksMayContainCSharpStaticInterfaceContract(ChunkBytes(bytes, 4)));
+    }
+
+    [Theory]
     [InlineData("public class C { public static void Run() { } }")]
     [InlineData("public interface IFixture { void Run(); }")]
     [InlineData("public interface IFixture { static int Count => 0; }")]
@@ -3172,6 +3201,12 @@ public sealed class Caller
             _ => throw new ArgumentOutOfRangeException(nameof(encodingName), encodingName, null),
         };
         return encoding.GetPreamble().Concat(encoding.GetBytes(content)).ToArray();
+    }
+
+    private static IEnumerable<byte[]> ChunkBytes(byte[] bytes, int chunkSize)
+    {
+        for (var offset = 0; offset < bytes.Length; offset += chunkSize)
+            yield return bytes.Skip(offset).Take(Math.Min(chunkSize, bytes.Length - offset)).ToArray();
     }
 
     [Fact]

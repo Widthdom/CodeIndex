@@ -1,3 +1,4 @@
+using System.Buffers;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -126,6 +127,90 @@ internal static class CSharpStaticInterfacePrepass
                && ContainsAsciiTokenInCommonEncodings(span, CSharpStaticKeywordBytes)
                && (ContainsAsciiTokenInCommonEncodings(span, CSharpAbstractKeywordBytes)
                    || ContainsAsciiTokenInCommonEncodings(span, CSharpVirtualKeywordBytes));
+    }
+
+    internal static RawByteContractProbe CreateRawByteContractProbe() => new();
+
+    internal static bool RawByteChunksMayContainCSharpStaticInterfaceContract(IEnumerable<byte[]> chunks)
+    {
+        var probe = CreateRawByteContractProbe();
+        foreach (var chunk in chunks)
+        {
+            if (probe.AppendAndCheck(chunk))
+                return true;
+        }
+
+        return probe.MayContainContractCandidate;
+    }
+
+    internal sealed class RawByteContractProbe
+    {
+        private const int MaxTokenSearchBytes = 18; // "interface" encoded as UTF-16.
+        private const int TailBytes = MaxTokenSearchBytes - 1;
+
+        private readonly byte[] _tail = new byte[TailBytes];
+        private int _tailLength;
+        private bool _hasInterface;
+        private bool _hasStatic;
+        private bool _hasAbstract;
+        private bool _hasVirtual;
+
+        internal bool MayContainContractCandidate => _hasInterface && _hasStatic && (_hasAbstract || _hasVirtual);
+
+        internal bool AppendAndCheck(ReadOnlySpan<byte> bytes)
+        {
+            Append(bytes);
+            return MayContainContractCandidate;
+        }
+
+        internal void Append(ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.Length == 0 || MayContainContractCandidate)
+                return;
+
+            if (_tailLength == 0)
+            {
+                Scan(bytes);
+                CaptureTail(bytes);
+                return;
+            }
+
+            var combinedLength = _tailLength + bytes.Length;
+            var rented = ArrayPool<byte>.Shared.Rent(combinedLength);
+            try
+            {
+                _tail.AsSpan(0, _tailLength).CopyTo(rented);
+                bytes.CopyTo(rented.AsSpan(_tailLength));
+                var combined = rented.AsSpan(0, combinedLength);
+                Scan(combined);
+                CaptureTail(combined);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+
+        private void Scan(ReadOnlySpan<byte> bytes)
+        {
+            if (!_hasInterface)
+                _hasInterface = ContainsAsciiTokenInCommonEncodings(bytes, CSharpInterfaceKeywordBytes);
+            if (!_hasStatic)
+                _hasStatic = ContainsAsciiTokenInCommonEncodings(bytes, CSharpStaticKeywordBytes);
+            if (!_hasAbstract)
+                _hasAbstract = ContainsAsciiTokenInCommonEncodings(bytes, CSharpAbstractKeywordBytes);
+            if (!_hasVirtual)
+                _hasVirtual = ContainsAsciiTokenInCommonEncodings(bytes, CSharpVirtualKeywordBytes);
+        }
+
+        private void CaptureTail(ReadOnlySpan<byte> bytes)
+        {
+            _tailLength = Math.Min(TailBytes, bytes.Length);
+            if (_tailLength == 0)
+                return;
+
+            bytes[^_tailLength..].CopyTo(_tail);
+        }
     }
 
     private static bool ContainsAsciiTokenInCommonEncodings(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> token)
