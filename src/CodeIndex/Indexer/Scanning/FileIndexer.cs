@@ -3433,8 +3433,11 @@ public partial class FileIndexer
 
     internal const string GeneratedCodeExtractionSkippedIssueKind = "generated_code_extraction_skipped";
 
+    internal bool IsGeneratedCodeExtractionSuppressed(string relativePath)
+        => _generatedCodePatterns.TryMatch(relativePath, out _);
+
     internal FileIssue? BuildGeneratedCodeExtractionSkippedIssue(string relativePath)
-        => _generatedCodePatterns.TryMatch(relativePath, out _)
+        => IsGeneratedCodeExtractionSuppressed(relativePath)
             ? new FileIssue
             {
                 Path = relativePath,

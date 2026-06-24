@@ -45,7 +45,7 @@ internal static class CSharpStaticInterfacePrepass
             try
             {
                 reportCurrentFile?.Invoke(relativePath);
-                if (indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null)
+                if (indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath))
                     continue;
 
                 if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
