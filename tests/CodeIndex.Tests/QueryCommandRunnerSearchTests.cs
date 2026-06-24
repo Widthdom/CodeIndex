@@ -151,6 +151,67 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_GitHubActionsRunBlocksClassifyAsCode_Issue3917()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_yaml_run_origin_3917");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                ".github/workflows/release.yml",
+                "yaml",
+                """
+                name: release
+                jobs:
+                  publish:
+                    steps:
+                      - name: verify release asset
+                        run: |
+                          code="$(curl -fsSL --connect-timeout 10 "$url" || true)"
+                      - name: folded script
+                        run: >
+                          wget --quiet https://example.invalid/package
+                      - name: prose
+                        notes: |
+                          "DocNeedle --help" is documentation, not a workflow script.
+                """);
+
+            var (curlExitCode, curlStdout, curlStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["curl", "--db", dbPath, "--path", ".github/**", "--json=array"],
+                _jsonOptions));
+            var (wgetExitCode, wgetStdout, wgetStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["wget", "--db", dbPath, "--path", ".github/**", "--json=array"],
+                _jsonOptions));
+            var (docsExitCode, docsStdout, docsStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["DocNeedle", "--db", dbPath, "--path", ".github/**", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, curlExitCode);
+            Assert.Equal(string.Empty, curlStderr);
+            Assert.Equal(CommandExitCodes.Success, wgetExitCode);
+            Assert.Equal(string.Empty, wgetStderr);
+            Assert.Equal(CommandExitCodes.Success, docsExitCode);
+            Assert.Equal(string.Empty, docsStderr);
+
+            Assert.Contains("code", SingleMatchOrigins(curlStdout));
+            Assert.Contains("code", SingleMatchOrigins(wgetStdout));
+            Assert.Contains("help_text", SingleMatchOrigins(docsStdout));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static string[] SingleMatchOrigins(string stdout)
+        {
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            return row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()!).ToArray();
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExcludeCommentsSuppressesCommentOnlyMatches_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_comments");

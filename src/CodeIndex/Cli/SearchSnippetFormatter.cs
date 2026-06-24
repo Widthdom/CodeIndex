@@ -143,8 +143,10 @@ public static class SearchSnippetFormatter
         if (matchScan.LineCount == 0 || matchScan.MatchIndexes.Count == 0)
             return facets;
 
+        var snippetLines = ReadSnippetLines(result.Content, 0, matchScan.LineCount - 1, normalizeCSharpVerbatimNames).ToList();
+        var lineContext = snippetLines.ToDictionary(line => result.StartLine + line.Index, line => line.Text);
         var matchSet = matchScan.MatchIndexes.ToHashSet();
-        foreach (var snippetLine in ReadSnippetLines(result.Content, 0, matchScan.LineCount - 1, normalizeCSharpVerbatimNames))
+        foreach (var snippetLine in snippetLines)
         {
             if (!matchSet.Contains(snippetLine.Index))
                 continue;
@@ -166,7 +168,8 @@ public static class SearchSnippetFormatter
                     snippetLine.Text,
                     column: 1,
                     length: 1,
-                    result.EnclosingSymbolKind));
+                    result.EnclosingSymbolKind,
+                    lineContext));
                 continue;
             }
 
@@ -179,7 +182,8 @@ public static class SearchSnippetFormatter
                     snippetLine.Text,
                     occurrence.Column,
                     occurrence.Length,
-                    result.EnclosingSymbolKind));
+                    result.EnclosingSymbolKind,
+                    lineContext));
             }
         }
 

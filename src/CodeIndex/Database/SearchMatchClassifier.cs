@@ -16,9 +16,10 @@ internal static class SearchMatchClassifier
         string text,
         int column,
         int length,
-        string? enclosingSymbolKind = null)
+        string? enclosingSymbolKind = null,
+        IReadOnlyDictionary<int, string>? lineContext = null)
     {
-        var origin = ClassifyOrigin(path, lang, text, column);
+        var origin = ClassifyOrigin(path, lang, line, text, column, lineContext);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
         var testFixture = (testFile || testSymbol) && IsStringLikeOrigin(origin);
@@ -91,7 +92,13 @@ internal static class SearchMatchClassifier
                baseName.EndsWith("Tests", StringComparison.Ordinal);
     }
 
-    private static string ClassifyOrigin(string path, string? lang, string text, int column)
+    private static string ClassifyOrigin(
+        string path,
+        string? lang,
+        int line,
+        string text,
+        int column,
+        IReadOnlyDictionary<int, string>? lineContext)
     {
         if (text.Length == 0)
             return Code;
@@ -100,6 +107,9 @@ internal static class SearchMatchClassifier
         var normalizedLang = lang?.ToLowerInvariant();
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
             return ClassifyCSharp(path, text, index);
+
+        if (IsInsideGitHubActionsRunBlock(path, normalizedLang, line, text, lineContext))
+            return Code;
 
         if (LooksLikeWholeLineComment(normalizedLang, text) ||
             IsInsideLineCommentSpan(normalizedLang, text, index) ||
@@ -242,6 +252,90 @@ internal static class SearchMatchClassifier
         return fileName is "ConsoleUi.cs" or "ProgramRunner.cs" or "CliFlagSchema.cs" ||
                text.Contains("Usage:", StringComparison.Ordinal) ||
                text.Contains("--", StringComparison.Ordinal);
+    }
+
+    private static bool IsInsideGitHubActionsRunBlock(
+        string path,
+        string? lang,
+        int line,
+        string text,
+        IReadOnlyDictionary<int, string>? lineContext)
+    {
+        if (lineContext is null || lang != "yaml" || !IsGitHubWorkflowPath(path))
+            return false;
+
+        var currentIndent = CountLeadingSpaces(text);
+        if (currentIndent == 0)
+            return false;
+
+        for (var candidateLine = line - 1; candidateLine >= 1; candidateLine--)
+        {
+            if (!lineContext.TryGetValue(candidateLine, out var candidateText))
+                break;
+
+            if (string.IsNullOrWhiteSpace(candidateText))
+                continue;
+
+            var candidateIndent = CountLeadingSpaces(candidateText);
+            if (candidateIndent >= currentIndent)
+                continue;
+
+            var trimmed = candidateText.TrimStart();
+            if (IsYamlRunBlockScalar(trimmed))
+                return true;
+
+            if (LooksLikeYamlMappingKey(trimmed))
+                return false;
+        }
+
+        return false;
+    }
+
+    private static bool IsGitHubWorkflowPath(string path)
+    {
+        var slashPath = path.Replace('\\', '/');
+        return slashPath.StartsWith(".github/workflows/", StringComparison.OrdinalIgnoreCase) &&
+               (slashPath.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) ||
+                slashPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsYamlRunBlockScalar(string trimmed)
+    {
+        if (!trimmed.StartsWith("run:", StringComparison.Ordinal))
+            return false;
+
+        var value = trimmed["run:".Length..].TrimStart();
+        if (value.Length == 0 || value[0] is not ('|' or '>'))
+            return false;
+
+        if (value.Length == 1)
+            return true;
+
+        return value[1] is '-' or '+' or ' ' or '#';
+    }
+
+    private static bool LooksLikeYamlMappingKey(string trimmed)
+    {
+        var colonIndex = trimmed.IndexOf(':', StringComparison.Ordinal);
+        if (colonIndex <= 0)
+            return false;
+
+        for (var i = 0; i < colonIndex; i++)
+        {
+            var ch = trimmed[i];
+            if (!char.IsLetterOrDigit(ch) && ch is not '_' and not '-')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static int CountLeadingSpaces(string text)
+    {
+        var count = 0;
+        while (count < text.Length && text[count] == ' ')
+            count++;
+        return count;
     }
 
     private static bool LooksLikeWholeLineComment(string? lang, string text)
