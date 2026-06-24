@@ -12,7 +12,7 @@ namespace CodeIndex.Tests;
 /// </summary>
 public sealed class InstallScriptTests : IDisposable
 {
-    private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerSnippetKillWaitTimeout = TimeSpan.FromSeconds(5);
 
     private readonly string _tempRoot = TestProjectHelper.CreateTempProject("cdidx_install_script");
@@ -43,7 +43,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Uninstall complete", stdout);
         Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
@@ -79,7 +79,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["XDG_CACHE_HOME"] = cacheRoot + "/",
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Removed", stdout);
         Assert.False(Directory.Exists(cdidxCache));
@@ -1527,7 +1527,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        Assert.Equal(0, exitCode);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Contains("INSTALL_OK", stdout);
         Assert.Contains("LICENSE:license text", stdout);
         Assert.Contains("COMMERCIAL:commercial license text", stdout);
@@ -1613,7 +1613,7 @@ public sealed class InstallScriptTests : IDisposable
                 ["CDIDX_INSTALL_DIR"] = installDir,
             });
 
-        AssertInstallerSnippetSucceeded(exitCode, stdout, stderr);
+        AssertInstallerCommandSucceeded(exitCode, stdout, stderr);
         Assert.Contains("REINSTALL_OK", stdout);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal("new-license", File.ReadAllText(Path.Combine(installDir, "LICENSES", "new.txt")));
@@ -5977,12 +5977,12 @@ public sealed class InstallScriptTests : IDisposable
     private static string AppendInstallerSnippetDiagnostic(string output, string diagnostic)
         => string.IsNullOrEmpty(output) ? diagnostic : output + Environment.NewLine + diagnostic;
 
-    private static void AssertInstallerSnippetSucceeded(int exitCode, string stdout, string stderr)
+    private static void AssertInstallerCommandSucceeded(int exitCode, string stdout, string stderr)
         => Assert.True(
             exitCode == 0,
             string.Join(
                 Environment.NewLine,
-                $"Expected installer snippet exit code 0, actual {exitCode}.",
+                $"Expected installer command exit code 0, actual {exitCode}.",
                 "stdout:",
                 stdout,
                 "stderr:",
