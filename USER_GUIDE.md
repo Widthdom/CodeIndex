@@ -1061,10 +1061,18 @@ Recipe and named-query JSON include per-query counts, `top_files`, and
 when a single selected recipe query is truncated. Add `--show-excluded` to a
 recipe run when you need the effective path scope and exclusion diagnostics in
 JSON output.
-Recipe runs support text output, `--json` / `--format json`, `--format compact`,
-and `--format issue-drafts`; `--list-recipes` supports text or JSON. Other
-search export formats and `--json=array` are rejected for recipe modes because
-recipe output is grouped by query or list metadata.
+Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
+NDJSON row streams with `--json=ndjson` or `--results-only`, count-only output
+with `--format count`, compact summaries with `--format compact`, and
+`--format issue-drafts`; `--list-recipes` supports text, JSON, or
+`--format compact`. Recipe row streams can be projected with `--search-fields`
+including `query_name` and `recipe`, bounded across child queries with
+`--total-limit`, and byte-bounded with `--max-json-bytes` for NDJSON only.
+Recipe count aggregations support `--count-by path|file|symbol|origin`,
+`--group-by file|symbol|origin --count`, and
+`--unique path|file|symbol|origin`.
+Other search export formats and `--json=array` are rejected for recipe modes
+because recipe output is grouped by query or list metadata.
 Recipe JSON and compact output apply `--limit` per query, include a `summary`
 with emitted/truncated counts, and mark truncated child queries with
 `next_cursor`; rerun a single child query as
@@ -1087,9 +1095,9 @@ metadata, Markdown bodies, and duplicate-preflight metadata. `--open-issues <pat
 the payload still includes `duplicate_preflight.checked: false`. Use
 `--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` to
 tune duplicate preflight strictness; the JSON summary reports `confidence` and
-`minimum_score`. Draft bodies include evidence paths and recipe metadata but not
-source snippets. These drafts are triage aids; review duplicate guidance and
-current open issues before filing.
+`minimum_score`. Draft bodies include evidence paths, representative source
+snippets, omitted-result metadata, and recipe metadata. These drafts are triage
+aids; review duplicate guidance and current open issues before filing.
 
 ### Debugging queries
 
@@ -1470,10 +1478,10 @@ same source location.
 | `--origin <origin>` / `--match-origin <origin>` | `search` | Keep only matches from selected origins such as `code`, `comment`, `string_literal`, `regex_literal`, or `help_text`; repeat or comma-separate values |
 | `--exclude-origin <origin>` | `search` | Drop matches from selected origins while keeping other origins in the same result; repeat or comma-separate values |
 | `--result-kind <kind>` | `search` | Keep only projected result kinds such as `call_site`, `declaration`, `identifier`, `comment`, or `string_literal` |
-| `--unique <path\|symbol\|origin>` / `--count-by <path\|symbol\|origin>` | `search` | Emit unique aggregation rows or count aggregation rows for broad audits |
+| `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | Emit unique aggregation rows or count aggregation rows for broad audits, including recipe runs |
 | `--format grouped` / `--per-file-limit <n>` | `search` | Return file-grouped JSON with bounded representative matches per file |
-| `--search-fields <fields>` / `--results-only` | `search` | Project compact JSON fields and emit result-only NDJSON for shell pipelines |
-| `--first-per-file` / `--sample <n>` / `--max-json-bytes <n>` | `search` | Bound broad audit output by file, deterministic sample size, or NDJSON byte budget |
+| `--search-fields <fields>` / `--results-only` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe`, and emit result-only NDJSON for shell pipelines |
+| `--first-per-file` / `--sample <n>` / `--total-limit <n>` / `--max-json-bytes <n>` | `search` | Bound broad audit output by file, deterministic sample size, recipe total rows, or NDJSON byte budget |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
@@ -3701,8 +3709,14 @@ recipe query が truncated された場合に `next_cursor` も返します。`-
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
 を返します。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
-recipe run が対応する形式は text output、`--json` / `--format json`、`--format compact`、
-`--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
+recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
+`--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の
+count-only output、`--format compact` の compact summary、`--format issue-drafts` です。
+`--list-recipes` は text、JSON、`--format compact` に対応します。recipe row stream は
+`query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
+child query 全体の emitted row 数を制限でき、NDJSON の場合だけ `--max-json-bytes` で
+byte 数を制限できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
+`--group-by file|symbol|origin --count`、`--unique path|file|symbol|origin` に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
 recipe の JSON/compact output は `--limit` を query ごとに適用し、emitted/truncated
@@ -3726,8 +3740,8 @@ duplicate-preflight metadata を持つ issue draft object を出力します。
 のような open issue JSON list を受け取り、未指定の場合も payload には
 `duplicate_preflight.checked: false` が含まれます。duplicate preflight の厳しさは
 `--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` で調整でき、
-JSON summary には `confidence` と `minimum_score` が出力されます。draft body は evidence path と
-recipe metadata を含みますが、source snippet は含めません。これらの draft は triage aid なので、
+JSON summary には `confidence` と `minimum_score` が出力されます。draft body は evidence path、
+代表的な source snippet、omitted-result metadata、recipe metadata を含みます。これらの draft は triage aid なので、
 起票前に duplicate guidance と現在の open issue を確認してください。
 
 ### クエリのデバッグ
@@ -4105,10 +4119,10 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--origin <origin>` / `--match-origin <origin>` | `search` | `code`、`comment`、`string_literal`、`regex_literal`、`help_text` など、選択した origin の一致だけを保持する。繰り返し指定とカンマ区切りに対応 |
 | `--exclude-origin <origin>` | `search` | 選択した origin の一致を除外し、同じ結果内の他 origin の一致は保持する。繰り返し指定とカンマ区切りに対応 |
 | `--result-kind <kind>` | `search` | `call_site`、`declaration`、`identifier`、`comment`、`string_literal` など、projection された result kind だけを保持する |
-| `--unique <path\|symbol\|origin>` / `--count-by <path\|symbol\|origin>` | `search` | 広い audit 向けに unique aggregation row または count aggregation row を出力する |
+| `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | 広い audit や recipe run 向けに unique aggregation row または count aggregation row を出力する |
 | `--format grouped` / `--per-file-limit <n>` | `search` | file ごとに grouped JSON を返し、各 file の代表 match 数を制限する |
-| `--search-fields <fields>` / `--results-only` | `search` | compact JSON field を projection し、shell pipeline 向けの result-only NDJSON を出力する |
-| `--first-per-file` / `--sample <n>` / `--max-json-bytes <n>` | `search` | file 単位、決定的 sample 数、NDJSON byte budget で広い audit 出力を制限する |
+| `--search-fields <fields>` / `--results-only` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection し、shell pipeline 向けの result-only NDJSON を出力する |
+| `--first-per-file` / `--sample <n>` / `--total-limit <n>` / `--max-json-bytes <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数、NDJSON byte budget で広い audit 出力を制限する |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |

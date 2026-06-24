@@ -874,7 +874,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, recipeExitCode);
             Assert.Equal(CommandExitCodes.UsageError, namedExitCode);
             Assert.Contains("--group-by is not supported with --list-recipes", listStderr, StringComparison.Ordinal);
-            Assert.Contains("--group-by is not supported with --recipe", recipeStderr, StringComparison.Ordinal);
+            Assert.Contains("search --recipe --group-by requires --count", recipeStderr, StringComparison.Ordinal);
             Assert.Contains("--group-by is not supported with --named-query", namedStderr, StringComparison.Ordinal);
         }
         finally
@@ -2179,7 +2179,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("count")]
     [InlineData("csv")]
     public void RunSearch_ListRecipesRejectsUnsupportedFormattedOutputs_Issue3144(string format)
     {
@@ -2189,7 +2188,29 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--format count/compact/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes", stderr);
+        Assert.Contains("--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_ListRecipesCompactFormatEmitsSummary_Issue3957()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--format", "compact"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "risky-code");
+
+        Assert.True(root.GetProperty("count").GetInt32() >= 1);
+        Assert.True(recipe.GetProperty("query_count").GetInt32() >= 1);
+        Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
+        Assert.False(recipe.TryGetProperty("queries", out _));
     }
 
     [Fact]
@@ -2267,8 +2288,280 @@ public partial class QueryCommandRunnerTests
             Assert.True(root.GetProperty("scope").GetProperty("exclude_tests").GetBoolean());
             Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
             Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
+            Assert.Equal(1, unboundedJsonParse.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(1, unboundedJsonParse.GetProperty("minimum_matched_count").GetInt32());
+            Assert.Equal(0, unboundedJsonParse.GetProperty("omitted_count").GetInt32());
             Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());
             Assert.Equal("src/app.cs", unboundedJsonParse.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeCountFormatReportsMatchedAndOmittedCounts_Issue3941()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_count_format");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                        logger.LogWarning(ex.Message);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                """
+                public sealed class B
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/comments.cs",
+                "csharp",
+                """
+                public sealed class Comments
+                {
+                    // ex.Message should not be counted when the caller asks for code origins.
+                    private const string Diagnostic = "ex.Message";
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--origin", "code"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+
+            Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
+            Assert.Equal(1, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("file_count").GetInt32());
+            Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
+            Assert.Equal(2, query.GetProperty("count").GetInt32());
+            Assert.Equal(2, query.GetProperty("matched_count").GetInt32());
+            Assert.Equal(0, query.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(2, query.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(2, query.GetProperty("file_count").GetInt32());
+            Assert.False(query.GetProperty("truncated").GetBoolean());
+            Assert.Equal(2, query.GetProperty("top_files").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeResultsOnlyProjectionIncludesQueryName_Issue3957()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_projection");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--results-only", "--search-fields", "path,line,query_name,recipe", "--limit", "10"],
+                _jsonOptions));
+            var (ndjsonExitCode, ndjsonStdout, ndjsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json=ndjson", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.Success, ndjsonExitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(string.Empty, ndjsonStderr);
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+            var ndjsonRow = Assert.Single(ParseJsonLines(ndjsonStdout)).RootElement;
+
+            Assert.Equal("src/app.cs", row.GetProperty("path").GetString());
+            Assert.Equal("raw-diagnostic-echo", row.GetProperty("query_name").GetString());
+            Assert.Equal("risky-code", row.GetProperty("recipe").GetString());
+            Assert.True(row.GetProperty("line").GetInt32() > 0);
+            Assert.Equal("raw-diagnostic-echo", ndjsonRow.GetProperty("query_name").GetString());
+            Assert.Equal("risky-code", ndjsonRow.GetProperty("recipe").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeAggregationGroupsByChildQuery_Issue3957()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_aggregation");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                "public sealed class A { public void Run(Exception ex) { Console.WriteLine(ex.Message); } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                "public sealed class B { public void Run(Exception ex) { Console.WriteLine(ex.Message); } }");
+
+            var (countByExitCode, countByStdout, countByStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--count-by", "file", "--json"],
+                _jsonOptions));
+            var (groupByExitCode, groupByStdout, groupByStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--group-by", "file", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countByExitCode);
+            Assert.Equal(CommandExitCodes.Success, groupByExitCode);
+            Assert.Equal(string.Empty, countByStderr);
+            Assert.Equal(string.Empty, groupByStderr);
+            using var countByDocument = ParseJsonOutput(countByStdout);
+            using var groupByDocument = ParseJsonOutput(groupByStdout);
+            var countByRoot = countByDocument.RootElement;
+            var groupByRoot = groupByDocument.RootElement;
+            var query = Assert.Single(countByRoot.GetProperty("queries").EnumerateArray());
+
+            Assert.Equal("count_by", countByRoot.GetProperty("mode").GetString());
+            Assert.Equal("group_by", groupByRoot.GetProperty("mode").GetString());
+            Assert.Equal("file", countByRoot.GetProperty("group_by").GetString());
+            Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
+            Assert.Equal(2, query.GetProperty("count").GetInt32());
+            Assert.Equal(2, query.GetProperty("groups").GetArrayLength());
+            Assert.Contains(query.GetProperty("groups").EnumerateArray(), group => group.GetProperty("file").GetString() == "src/a.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeTotalLimitCapsAcrossChildQueries_Issue3904()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_total_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System;
+                using System.Threading;
+
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                        Thread.Sleep(10);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--json", "--limit", "10", "--total-limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var emittedRows = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Sum(query => query.GetProperty("results").GetArrayLength());
+            var threadSleep = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(query => query.GetProperty("name").GetString() == "thread-sleep");
+
+            Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, emittedRows);
+            Assert.Equal(1, root.GetProperty("summary").GetProperty("total_limit").GetInt32());
+            Assert.Equal(0, threadSleep.GetProperty("result_limit").GetInt32());
+            Assert.True(threadSleep.GetProperty("minimum_omitted_result_count").GetInt32() >= 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MaxJsonBytesRejectsCompactOutput_Issue3904()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["token", "--format", "compact", "--max-json-bytes", "1024"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--max-json-bytes is only supported with NDJSON search output", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_NdjsonByteCapMarksDoneFalseWhenInterrupted_Issue3904()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_byte_cap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/token.cs",
+                "csharp",
+                "public sealed class TokenStore { private string token = \"secret\"; }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["token", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var done = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.False(done.GetProperty("done").GetBoolean());
+            Assert.True(done.GetProperty("interrupted").GetBoolean());
+            Assert.Equal(0, done.GetProperty("count").GetInt32());
         }
         finally
         {
@@ -3255,7 +3548,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("count")]
     [InlineData("csv")]
     public void RunSearch_RecipeRejectsUnsupportedFormattedOutputs_Issue3144(string format)
     {
@@ -3265,7 +3557,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--format count/csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
+        Assert.Contains("--format csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
     }
 
     [Fact]
@@ -3372,6 +3664,139 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
             Assert.Equal(3145, match.GetProperty("number").GetInt32());
             Assert.Equal("title_exact", match.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIssueDraftsWarnForMissingRepositoryLabels_Issue3926()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_labels");
+        var handler = new IssueDraftRepositoryLabelsHandler();
+        var httpClient = new HttpClient(handler);
+        IssueDuplicatePreflight.s_httpClientOverride = httpClient;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/reporter.cs",
+                "csharp",
+                """
+                public sealed class Reporter
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        System.Console.Error.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "5",
+                    "--open-issues", "github",
+                    "--repo", "Widthdom/CodeIndex"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var missingLabels = draft
+                .GetProperty("missing_labels")
+                .EnumerateArray()
+                .Select(label => label.GetString())
+                .ToList();
+
+            Assert.Equal(["audit"], missingLabels);
+            Assert.Equal(
+                "Repository label validation against github:Widthdom/CodeIndex found missing label(s): audit.",
+                draft.GetProperty("label_warning").GetString());
+            Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/repos/Widthdom/CodeIndex/issues?state=open&per_page=100&page=1");
+            Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1");
+        }
+        finally
+        {
+            IssueDuplicatePreflight.s_httpClientOverride = null;
+            httpClient.Dispose();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIssueDraftsIncludeRepresentativeEvidenceAndOmittedCounts_Issue3950()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        System.Console.Error.WriteLine(ex.Message);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                """
+                public sealed class B
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        _ = ex.Message;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "1",
+                    "--snippet-lines", "3"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var evidence = Assert.Single(draft.GetProperty("evidence").EnumerateArray());
+            var source = draft.GetProperty("source");
+            var body = draft.GetProperty("body").GetString();
+
+            Assert.StartsWith("src/", evidence.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.True(evidence.GetProperty("line").GetInt32() > 0);
+            Assert.Contains("ex.Message", evidence.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, source.GetProperty("result_limit").GetInt32());
+            Assert.Equal(1, source.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(1, source.GetProperty("minimum_omitted_result_count").GetInt32());
+            Assert.True(source.GetProperty("truncated").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(source.GetProperty("next_cursor").GetString()));
+            Assert.Contains("## Representative evidence", body, StringComparison.Ordinal);
+            Assert.Contains("ex.Message", body, StringComparison.Ordinal);
+            Assert.Contains("## Omitted results", body, StringComparison.Ordinal);
+            Assert.Contains("minimum_omitted_result_count: `1`", body, StringComparison.Ordinal);
+            Assert.Contains("## Replay command", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("public sealed class", body, StringComparison.Ordinal);
         }
         finally
         {
@@ -7904,7 +8329,7 @@ jobs:
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             var done = Assert.Single(lines);
             using var document = JsonDocument.Parse(done);
-            Assert.True(document.RootElement.GetProperty("done").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("done").GetBoolean());
             Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -8059,5 +8484,27 @@ jobs:
         if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))
             return arg;
         return "'" + arg.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private sealed class IssueDraftRepositoryLabelsHandler : HttpMessageHandler
+    {
+        internal List<string> RequestUris { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestUris.Add(request.RequestUri!.ToString());
+            var json = request.RequestUri.AbsolutePath.EndsWith("/labels", StringComparison.Ordinal)
+                ? """
+                  [
+                    {"name":"security"},
+                    {"name":"bug"}
+                  ]
+                  """
+                : "[]";
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
     }
 }
