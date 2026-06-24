@@ -174,6 +174,67 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_GitHubActionsRunBlocksClassifyAsCode_Issue3917()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_yaml_run_origin_3917");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                ".github/workflows/release.yml",
+                "yaml",
+                """
+                name: release
+                jobs:
+                  publish:
+                    steps:
+                      - name: verify release asset
+                        run: |
+                          code="$(curl -fsSL --connect-timeout 10 "$url" || true)"
+                      - name: folded script
+                        run: >
+                          wget --quiet https://example.invalid/package
+                      - name: prose
+                        notes: |
+                          "DocNeedle --help" is documentation, not a workflow script.
+                """);
+
+            var (curlExitCode, curlStdout, curlStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["curl", "--db", dbPath, "--path", ".github/**", "--json=array"],
+                _jsonOptions));
+            var (wgetExitCode, wgetStdout, wgetStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["wget", "--db", dbPath, "--path", ".github/**", "--json=array"],
+                _jsonOptions));
+            var (docsExitCode, docsStdout, docsStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["DocNeedle", "--db", dbPath, "--path", ".github/**", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, curlExitCode);
+            Assert.Equal(string.Empty, curlStderr);
+            Assert.Equal(CommandExitCodes.Success, wgetExitCode);
+            Assert.Equal(string.Empty, wgetStderr);
+            Assert.Equal(CommandExitCodes.Success, docsExitCode);
+            Assert.Equal(string.Empty, docsStderr);
+
+            Assert.Contains("code", SingleMatchOrigins(curlStdout));
+            Assert.Contains("code", SingleMatchOrigins(wgetStdout));
+            Assert.Contains("help_text", SingleMatchOrigins(docsStdout));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static string[] SingleMatchOrigins(string stdout)
+        {
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            return row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()!).ToArray();
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExcludeCommentsSuppressesCommentOnlyMatches_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_comments");
@@ -1244,6 +1305,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "raw-diagnostic-echo");
+        var fileReadAllTextQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "file-read-all-text");
         var tokenQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1304,6 +1369,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("DiagnosticRedactor", StringComparison.Ordinal));
+        Assert.Contains(fileReadAllTextQuery.GetProperty("exclude_origins").EnumerateArray(), origin => origin.GetString() == "help_text");
         Assert.Equal("catch", emptyCatchQuery.GetProperty("query").GetString());
         Assert.False(emptyCatchQuery.GetProperty("exact_substring").GetBoolean());
         Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
@@ -1374,6 +1440,58 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "parser-token");
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "cancellation-token");
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "lsp-token");
+    }
+
+    [Fact]
+    public void RunSearch_RiskyCodeRecipeExcludesHelpTextByDefault_Issue3918()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_help_text_origin_3918");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                """
+                using System.IO;
+
+                public static class App
+                {
+                    public static string Load(string path) => File.ReadAllText(path);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/ConsoleUi.cs",
+                "csharp",
+                """
+                namespace CodeIndex.Cli;
+
+                public static class ConsoleUi
+                {
+                    public const string Example = "cdidx search --query File.ReadAllText --exact-substring";
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/file-read-all-text", "--db", dbPath, "--format", "compact", "--limit", "10"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var queryResult = Assert.Single(root.GetProperty("queries").EnumerateArray());
+            var result = Assert.Single(queryResult.GetProperty("results").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(queryResult.GetProperty("exclude_origins").EnumerateArray(), origin => origin.GetString() == "help_text");
+            Assert.Equal("src/App.cs", result.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -1448,6 +1566,8 @@ public partial class QueryCommandRunnerTests
             "DEVELOPER_GUIDE.md",
             "TESTING_GUIDE.md",
             "AGENT_GUIDE.md",
+            ".agent_harness/**",
+            ".claude/**",
             ".codex/**",
             ".github/**"
         };

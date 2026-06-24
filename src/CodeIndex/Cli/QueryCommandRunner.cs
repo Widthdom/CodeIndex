@@ -5755,12 +5755,13 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedExtraPositionals("files", options))
             return CommandExitCodes.UsageError;
+        var filesScope = BuildFilesScopeFilters(options);
 
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountListFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+                var counts = reader.CountListFiles(options.Query, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since);
                 if (options.Json)
                 {
                     var payload = BuildCountJsonPayload(
@@ -5779,7 +5780,7 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, orderBySize: options.RawBytes);
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since, orderBySize: options.RawBytes);
             if (results.Count == 0)
             {
                 if (options.Json)
@@ -5821,6 +5822,28 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private sealed record FileListScopeFilters(
+        IReadOnlyList<string> PathPatterns,
+        IReadOnlyList<string> ExcludePaths,
+        bool ExcludeTests);
+
+    private static FileListScopeFilters BuildFilesScopeFilters(QueryCommandOptions options)
+    {
+        if (!options.ExcludeTests || options.PathPatterns.Count > 0)
+        {
+            return new(
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests);
+        }
+
+        var pathPatterns = new List<string>(options.PathPatterns);
+        AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
+        var excludePaths = new List<string>(options.ExcludePaths);
+        AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
+        return new(pathPatterns, excludePaths, ExcludeTests: true);
     }
 
     private static void AddFileCountBytesJsonFields(JsonObject payload, QueryCountResult counts)
@@ -10027,17 +10050,19 @@ public static partial class QueryCommandRunner
     private static readonly string[] UnusedSourceAuditExcludePaths =
     [
         "*.md",
-        "docs/*",
-        "doc/*",
+        "docs/**",
+        "doc/**",
         "CHANGELOG.md",
-        "changelog.d/*",
+        "changelog.d/**",
         "README.md",
         "USER_GUIDE.md",
         "DEVELOPER_GUIDE.md",
         "TESTING_GUIDE.md",
         "AGENT_GUIDE.md",
-        ".codex/*",
-        ".github/*",
+        ".agent_harness/**",
+        ".claude/**",
+        ".codex/**",
+        ".github/**",
     ];
 
     private static readonly string[] UnusedSourceAuditVisibilityFilters =
@@ -10056,8 +10081,10 @@ public static partial class QueryCommandRunner
 
     private static UnusedAuditScopeFilters BuildUnusedAuditScopeFilters(QueryCommandOptions options)
     {
-        if (!options.AuditScopeExplicit
-            || !string.Equals(options.AuditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+        var shouldApplySourceDefaults =
+            string.Equals(options.AuditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase) &&
+            (options.AuditScopeExplicit || (options.ExcludeTests && options.PathPatterns.Count == 0));
+        if (!shouldApplySourceDefaults)
         {
             return new(
                 options.PathPatterns,
@@ -10068,13 +10095,16 @@ public static partial class QueryCommandRunner
                 AppliedSourceDefaults: false);
         }
 
+        var pathPatterns = new List<string>(options.PathPatterns);
+        if (pathPatterns.Count == 0)
+            AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
         var excludePaths = new List<string>(options.ExcludePaths);
         AddDistinct(excludePaths, UnusedSourceAuditExcludePaths);
         var visibilityFilters = options.VisibilityFilters.Count > 0
             ? options.VisibilityFilters
             : [.. UnusedSourceAuditVisibilityFilters];
         return new(
-            options.PathPatterns,
+            pathPatterns,
             excludePaths,
             ExcludeTests: true,
             visibilityFilters,
@@ -10263,6 +10293,8 @@ public static partial class QueryCommandRunner
         var context = CliJsonSerializerContextFactory.Create(jsonOptions);
         if (!options.ExcludeTests && unusedScope.ExcludeTests)
             query["effective_exclude_tests"] = true;
+        if (!options.PathPatterns.SequenceEqual(unusedScope.PathPatterns, StringComparer.Ordinal))
+            query["effective_path"] = JsonSerializer.SerializeToNode(unusedScope.PathPatterns.ToList(), context.ListString);
         if (!options.ExcludePaths.SequenceEqual(unusedScope.ExcludePaths, StringComparer.Ordinal))
             query["effective_exclude_path"] = JsonSerializer.SerializeToNode(unusedScope.ExcludePaths.ToList(), context.ListString);
         if (options.VisibilityFilters.Count == 0 && unusedScope.VisibilityFilters.Count > 0)
