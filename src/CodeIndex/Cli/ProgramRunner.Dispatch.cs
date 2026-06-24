@@ -128,8 +128,20 @@ internal static partial class ProgramRunner
     {
         if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
-            if (!ConsoleUi.PrintCommandUsage(args[0]))
-                ConsoleUi.PrintUsage(showBanner: true);
+            var helpCommand = ResolveSubcommandHelpName(args);
+            if (!ConsoleUi.PrintCommandUsage(helpCommand))
+            {
+                if (IsProjectPathArg(args[0]))
+                    ConsoleUi.PrintUsage(showBanner: true);
+                else
+                {
+                    exitCode = ShowError(args, $"Unknown command: {args[0]}", context.JsonOptions);
+                    GlobalToolLog.Info($"command_complete exit_code={exitCode} subcommand_help_unknown=true");
+                    EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, exitCode);
+                    return true;
+                }
+            }
+
             exitCode = CommandExitCodes.Success;
             GlobalToolLog.Info($"command_complete exit_code={exitCode} subcommand_help=true");
             EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, exitCode);
@@ -137,6 +149,58 @@ internal static partial class ProgramRunner
         }
 
         exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static string ResolveSubcommandHelpName(string[] args)
+    {
+        if (args.Length > 2
+            && string.Equals(args[0], "db", StringComparison.Ordinal)
+            && TryGetHelpSubcommand(args.AsSpan(1), out var dbSubcommand))
+        {
+            return dbSubcommand switch
+            {
+                "integrity" or "--integrity-check" => "db-integrity",
+                "schema" => "db-schema",
+                "prune" => "db-prune",
+                "checkpoint" => "db-checkpoint",
+                "checkpoints" => "db-checkpoints",
+                "restore" => "db-restore",
+                "restore-backups" => "db-restore-backups",
+                _ => "db",
+            };
+        }
+
+        if (args.Length > 2
+            && string.Equals(args[0], "hooks", StringComparison.Ordinal)
+            && TryGetHelpSubcommand(args.AsSpan(1), out var hooksSubcommand))
+        {
+            return hooksSubcommand switch
+            {
+                "install" => "hooks-install",
+                "uninstall" => "hooks-uninstall",
+                "status" => "hooks-status",
+                _ => "hooks",
+            };
+        }
+
+        return args[0];
+    }
+
+    private static bool TryGetHelpSubcommand(ReadOnlySpan<string> args, out string subcommand)
+    {
+        foreach (var arg in args)
+        {
+            if (arg is "--help" or "-h")
+                break;
+            if (arg.StartsWith("-", StringComparison.Ordinal) && arg != "--integrity-check")
+                continue;
+
+            subcommand = arg;
+            return true;
+        }
+
+        subcommand = string.Empty;
         return false;
     }
 
@@ -233,6 +297,7 @@ internal static partial class ProgramRunner
             "definition" => a => QueryCommandRunner.RunDefinition(a, context.JsonOptions),
             "goto" => a => QueryCommandRunner.RunGoto(a, context.JsonOptions),
             "references" => a => QueryCommandRunner.RunReferences(a, context.JsonOptions),
+            "refs" => a => QueryCommandRunner.RunReferences(a, context.JsonOptions),
             "callers" => a => QueryCommandRunner.RunCallers(a, context.JsonOptions),
             "callees" => a => QueryCommandRunner.RunCallees(a, context.JsonOptions),
             "symbols" => a => QueryCommandRunner.RunSymbols(a, context.JsonOptions),
@@ -243,6 +308,7 @@ internal static partial class ProgramRunner
             "inspect" => a => QueryCommandRunner.RunInspect(a, context.JsonOptions),
             "outline" => a => QueryCommandRunner.RunOutline(a, context.JsonOptions),
             "status" => a => QueryCommandRunner.RunStatus(a, context.JsonOptions, context.AppVersion, context.CancellationToken),
+            "stats" => a => QueryCommandRunner.RunStatus(a, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "validate" => a => QueryCommandRunner.RunValidate(a, context.JsonOptions),
             "languages" => a => QueryCommandRunner.RunLanguages(a, context.JsonOptions),
             "impact" => a => QueryCommandRunner.RunImpact(a, context.JsonOptions),
@@ -263,11 +329,14 @@ internal static partial class ProgramRunner
         {
             "upgrade" => RunUpgrade(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "index" => IndexCommandRunner.Run(subArgs, context.JsonOptions),
+            "recipes" => RunRecipesAlias(subArgs, context),
+            "audit" => RunAuditAlias(subArgs, context),
             "export" => ExportImportCommandRunner.RunExport(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
             "import" => ExportImportCommandRunner.RunImport(subArgs, context.JsonOptions, context.CancellationToken),
             "diff" => DiffCommandRunner.Run(subArgs, context.JsonOptions, context.CancellationToken),
             "hooks" => HookCommandRunner.Run(subArgs, context.JsonOptions),
             "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, context.JsonOptions),
+            "fold" => IndexCommandRunner.RunBackfillFold(subArgs, context.JsonOptions),
             "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, context.JsonOptions),
             "vacuum" => QueryCommandRunner.RunVacuum(subArgs, context.JsonOptions, context.CancellationToken),
             "validate-config" => CdidxConfigFile.RunValidate(subArgs, context.JsonOptions),
@@ -285,8 +354,35 @@ internal static partial class ProgramRunner
             "test-extractor" => RunTestExtractor(subArgs, context.JsonOptions),
             _ when IsProjectPathArg(commandName)
                 => IndexCommandRunner.Run(originalArgs, context.JsonOptions),
-            _ => ShowError(originalArgs, $"Unknown command: {commandName}")
+            _ => ShowError(originalArgs, $"Unknown command: {commandName}", context.JsonOptions)
         };
+
+    private static int RunRecipesAlias(string[] subArgs, CommandRunContext context)
+    {
+        var searchArgs = new string[subArgs.Length + 1];
+        searchArgs[0] = "--list-recipes";
+        Array.Copy(subArgs, 0, searchArgs, 1, subArgs.Length);
+        return QueryCommandRunner.RunSearch(searchArgs, context.JsonOptions, context.CancellationToken);
+    }
+
+    private static int RunAuditAlias(string[] subArgs, CommandRunContext context)
+    {
+        if (subArgs.Length == 0 || subArgs[0].StartsWith("-", StringComparison.Ordinal))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                ContainsJsonOutputFlag(subArgs),
+                context.JsonOptions,
+                "audit requires a recipe name.",
+                CommandExitCodes.UsageError,
+                "pass a recipe name after `cdidx audit`, or run `cdidx recipes` to list built-in recipes.");
+        }
+
+        var searchArgs = new string[subArgs.Length + 1];
+        searchArgs[0] = "--recipe";
+        searchArgs[1] = subArgs[0];
+        Array.Copy(subArgs, 1, searchArgs, 2, subArgs.Length - 1);
+        return QueryCommandRunner.RunSearch(searchArgs, context.JsonOptions, context.CancellationToken);
+    }
 
     internal static bool IsProjectPathArg(string arg)
     {

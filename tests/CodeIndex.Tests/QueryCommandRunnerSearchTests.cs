@@ -4988,7 +4988,47 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-line and --focus-length require --focus-column", stderr);
+            Assert.Contains("--focus-line requires --focus-column", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusLengthWithoutFocusColumnReturnsSpecificUsageError_Issue3916()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["dist/data.txt", "--start", "1", "--focus-length", "6"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--focus-length requires --focus-column", stderr);
+    }
+
+    [Fact]
+    public void RunExcerpt_AcceptsPathStartEndLocationArgument_Issue3916()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_location_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md:2-3", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("README.md", root.GetProperty("path").GetString());
+            Assert.Equal(2, root.GetProperty("start_line").GetInt32());
+            Assert.Equal(3, root.GetProperty("end_line").GetInt32());
+            Assert.Contains("line two", root.GetProperty("content").GetString(), StringComparison.Ordinal);
+            Assert.Contains("line three", root.GetProperty("content").GetString(), StringComparison.Ordinal);
         }
         finally
         {

@@ -4403,8 +4403,18 @@ internal static partial class ProgramRunner
         return message.StartsWith(prefix, StringComparison.Ordinal) ? message[prefix.Length..] : message;
     }
 
-    private static int ShowError(string[] args, string message)
+    private static int ShowError(string[] args, string message, JsonSerializerOptions jsonOptions)
     {
+        if (ContainsJsonOutputFlag(args))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                message,
+                CommandExitCodes.UsageError,
+                "run `cdidx --help` to list available commands.");
+        }
+
         CommandErrorWriter.WriteStderr($"Error: {message}");
 
         var input = args[0];

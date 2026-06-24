@@ -4932,32 +4932,50 @@ public static partial class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("excerpt", options))
             return CommandExitCodes.UsageError;
-        if (options.FocusColumn == null && (options.FocusLine.HasValue || cmdArgs.Any(arg => arg == "--focus-length" || arg.StartsWith("--focus-length=", StringComparison.Ordinal))))
+        var focusLengthSpecified = cmdArgs.Any(arg => arg == "--focus-length" || arg.StartsWith("--focus-length=", StringComparison.Ordinal));
+        if (options.FocusColumn == null && (options.FocusLine.HasValue || focusLengthSpecified))
         {
+            var focusError = options.FocusLine.HasValue && focusLengthSpecified
+                ? "--focus-line and --focus-length require --focus-column."
+                : options.FocusLine.HasValue
+                    ? "--focus-line requires --focus-column."
+                    : "--focus-length requires --focus-column.";
             WriteValidationError(
-                "--focus-line and --focus-length require --focus-column.",
+                focusError,
                 "Add `--focus-column <n>` so excerpt knows which token to keep visible inside the clamped line.");
             return CommandExitCodes.UsageError;
         }
 
-        if (options.StartLine == null)
+        var filePathArgument = options.Query;
+        var startLine = options.StartLine;
+        var endLine = options.EndLine;
+        if (startLine == null
+            && TryParseExcerptLocationArgument(options.Query, out var parsedPath, out var parsedStartLine, out var parsedEndLine))
+        {
+            filePathArgument = parsedPath;
+            startLine = parsedStartLine;
+            endLine ??= parsedEndLine;
+        }
+
+        if (startLine == null)
         {
             WriteValidationError(
                 "excerpt requires --start <line>",
-                "Add a starting line number, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
+                "Add a starting line number, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20` or `cdidx excerpt src/CodeIndex/Program.cs:20`.");
             return CommandExitCodes.UsageError;
         }
 
-        var endLine = options.EndLine ?? options.StartLine.Value;
-        if (endLine < options.StartLine.Value)
+        var startLineValue = startLine.Value;
+        var endLineValue = endLine ?? startLineValue;
+        if (endLineValue < startLineValue)
         {
             WriteValidationError(
-                $"--start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).",
+                $"--start ({startLineValue}) must be less than or equal to --end ({endLineValue}).",
                 "Use `--start` less than or equal to `--end`, or omit `--end` to read a single line.");
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
+        var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, filePathArgument, options.DbPathExplicit);
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.FocusLine.HasValue)
@@ -4965,8 +4983,8 @@ public static partial class QueryCommandRunner
                 var file = reader.GetFileByPath(filePath);
                 if (file != null)
                 {
-                    var requestedStart = Math.Max(1, options.StartLine.Value - options.ContextBefore);
-                    var requestedEnd = Math.Min(file.Lines, endLine + options.ContextAfter);
+                    var requestedStart = Math.Max(1, startLineValue - options.ContextBefore);
+                    var requestedEnd = Math.Min(file.Lines, endLineValue + options.ContextAfter);
                     if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
                     {
                         CommandErrorWriter.WriteStderr($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
@@ -4978,11 +4996,11 @@ public static partial class QueryCommandRunner
             {
                 var focusLineLength = reader.GetExcerptFocusLineLength(
                     filePath,
-                    options.StartLine.Value,
-                    endLine,
+                    startLineValue,
+                    endLineValue,
                     options.ContextBefore,
                     options.ContextAfter,
-                    options.FocusLine ?? options.StartLine.Value);
+                    options.FocusLine ?? startLineValue);
                 if (focusLineLength.HasValue && options.FocusColumn.Value > focusLineLength.Value)
                 {
                     CommandErrorWriter.WriteStderr($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
@@ -4992,12 +5010,12 @@ public static partial class QueryCommandRunner
 
             var excerpt = reader.GetExcerpt(
                 filePath,
-                options.StartLine.Value,
-                endLine,
+                startLineValue,
+                endLineValue,
                 options.ContextBefore,
                 options.ContextAfter,
                 options.MaxLineWidth,
-                options.FocusLine ?? options.StartLine.Value,
+                options.FocusLine ?? startLineValue,
                 options.FocusColumn,
                 options.FocusLength);
             if (excerpt == null)
@@ -5024,6 +5042,48 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static bool TryParseExcerptLocationArgument(
+        string value,
+        out string path,
+        out int startLine,
+        out int? endLine)
+    {
+        path = string.Empty;
+        startLine = 0;
+        endLine = null;
+
+        var separator = value.LastIndexOf(':');
+        if (separator <= 0 || separator == value.Length - 1)
+            return false;
+
+        var range = value[(separator + 1)..];
+        var dash = range.IndexOf('-');
+        if (dash < 0)
+        {
+            if (!TryParsePositiveLine(range, out startLine))
+                return false;
+
+            path = value[..separator];
+            return true;
+        }
+
+        if (dash == 0 || dash == range.Length - 1 || range.IndexOf('-', dash + 1) >= 0)
+            return false;
+
+        if (!TryParsePositiveLine(range[..dash], out startLine)
+            || !TryParsePositiveLine(range[(dash + 1)..], out var parsedEndLine))
+        {
+            return false;
+        }
+
+        path = value[..separator];
+        endLine = parsedEndLine;
+        return true;
+    }
+
+    private static bool TryParsePositiveLine(string value, out int line)
+        => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out line) && line > 0;
 
     private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(FileExcerptResult excerpt)
     {

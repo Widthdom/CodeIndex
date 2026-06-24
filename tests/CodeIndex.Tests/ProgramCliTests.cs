@@ -308,7 +308,7 @@ public class ProgramCliTests
     [InlineData("inspect", "cdidx inspect <query>")]
     [InlineData("definition", "cdidx definition <query>")]
     [InlineData("find", "cdidx find <query>")]
-    [InlineData("excerpt", "cdidx excerpt <path>")]
+    [InlineData("excerpt", "cdidx excerpt <path[:line|:start-end]>")]
     [InlineData("hotspots", "cdidx hotspots")]
     [InlineData("deps", "cdidx deps")]
     [InlineData("map", "cdidx map")]
@@ -328,10 +328,11 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
-        if (command is "mcp" or "completions")
+        if (command is "mcp" or "completions" or "references" or "backfill-fold" or "excerpt" or "inspect" or "status")
         {
             Assert.Contains("Notes:", stdout);
-            Assert.Contains("--json is not supported", stdout);
+            if (command is "mcp" or "completions")
+                Assert.Contains("--json is not supported", stdout);
         }
         else
         {

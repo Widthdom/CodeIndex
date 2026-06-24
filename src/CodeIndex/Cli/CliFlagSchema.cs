@@ -59,7 +59,7 @@ internal static class CliFlagSchema
     // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
     public static IReadOnlyList<string> AllCommands { get; } =
     [
-        "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
@@ -99,7 +99,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] ExcludeFilterCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "files",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
         "find", "map", "inspect", "validate", "deps", "impact", "unused", "hotspots",
     ];
 
@@ -194,7 +194,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] JsonCommands =
     [
-        "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
     ];
@@ -203,7 +203,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
+        "search", "audit", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =

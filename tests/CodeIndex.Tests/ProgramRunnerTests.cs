@@ -115,6 +115,85 @@ public class ProgramRunnerTests
         Assert.False(ProgramRunner.ContainsJsonOutputFlag(["search", "--", "--json"]));
     }
 
+    [Theory]
+    [InlineData("recipes", "cdidx recipes")]
+    [InlineData("audit", "cdidx audit")]
+    public void Run_SearchAuditAliasHelp_PrintsCommandUsage_Issue3893(string command, string expectedUsage)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [command, "--help"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains(expectedUsage, stdout);
+        Assert.DoesNotContain("Build or update the index for a project", stdout);
+        Assert.Empty(stderr);
+    }
+
+    [Fact]
+    public void RunRecipesAlias_ListsRecipeJsonObject_Issue3893()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.True(document.RootElement.TryGetProperty("recipes", out _));
+        Assert.True(document.RootElement.TryGetProperty("count", out _));
+    }
+
+    [Theory]
+    [InlineData("refs", "cdidx references")]
+    [InlineData("stats", "cdidx status")]
+    [InlineData("fold", "cdidx backfill-fold")]
+    public void Run_LegacyAliasHelp_PrintsCommandUsage_Issue3916(string command, string expectedUsage)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [command, "--help"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains(expectedUsage, stdout);
+        Assert.DoesNotContain("Build or update the index for a project", stdout);
+        Assert.Empty(stderr);
+    }
+
+    [Theory]
+    [InlineData("db", "checkpoint", "cdidx db checkpoint", "creates a filesystem snapshot")]
+    [InlineData("hooks", "install", "cdidx hooks install", ".git/hooks/pre-commit")]
+    public void Run_NestedCommandHelp_PrintsSpecificUsage_Issue3916(
+        string command,
+        string subcommand,
+        string expectedUsage,
+        string expectedNote)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [command, subcommand, "--help"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains(expectedUsage, stdout);
+        Assert.Contains(expectedNote, stdout);
+        Assert.Empty(stderr);
+    }
+
+    [Fact]
+    public void Run_UnknownCommandHelpJson_ReturnsJsonUsageError_Issue3916()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["no-such-command", "--help", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("Unknown command: no-such-command", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Build or update the index for a project", stdout);
+    }
+
     [Fact]
     public void RunLanguages_PrettyJson_IndentsOutput_Issue2996()
     {
