@@ -1037,6 +1037,26 @@ public partial class FileIndexer
     internal LanguageDetectionResult TryDetectLanguageForIndexing(string filePath, string? content = null)
         => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot);
 
+    internal static string? GetReusableDetectedLanguage(
+        string filePath,
+        IReadOnlyDictionary<string, string>? detectedLanguages)
+    {
+        if (detectedLanguages == null || !detectedLanguages.TryGetValue(filePath, out var language))
+            return null;
+
+        return CanReuseDetectedLanguageWithoutContent(filePath, language)
+            ? language
+            : null;
+    }
+
+    internal static bool CanReuseDetectedLanguageWithoutContent(string filePath, string? language)
+    {
+        if (string.IsNullOrEmpty(language))
+            return false;
+
+        return !string.Equals(Path.GetExtension(filePath), ".h", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
         => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null);
 

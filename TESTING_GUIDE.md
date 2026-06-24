@@ -39,7 +39,7 @@ The test project mirrors the production areas closely.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
-  File scanning, language detection, scan-result language reuse, content loading/canonicalization, checksum, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
+  File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
 - `LegacySchemaMigrationTests.cs`

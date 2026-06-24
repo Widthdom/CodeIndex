@@ -5973,7 +5973,7 @@ public partial class McpServer
         var fileTargets = files.Select(filePath => CSharpStaticInterfacePrepass.FileTarget.Create(
             projectPath,
             filePath,
-            scanResult.FileLanguages.TryGetValue(filePath, out var language) ? language : null)).ToArray();
+            FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
             writer,

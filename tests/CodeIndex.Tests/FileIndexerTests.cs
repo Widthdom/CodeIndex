@@ -1280,6 +1280,52 @@ public partial class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void GetReusableDetectedLanguage_ExtensionlessScript_ReusesScanResultLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "script");
+            File.WriteAllText(path, "#!/usr/bin/env python\nprint('hi')\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var scanResult = indexer.ScanFilesDetailed();
+
+            Assert.Equal("python", FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetReusableDetectedLanguage_CHeaderReturnsNullToPreserveContentDetection()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "widget.h");
+            File.WriteAllText(path, "template <typename T>\nclass Widget {};\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var scanResult = indexer.ScanFilesDetailed();
+            var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "widget.h", knownLanguage);
+
+            Assert.Equal("c", scanResult.FileLanguages[path]);
+            Assert.Null(knownLanguage);
+            Assert.Equal("cpp", loaded.Record.Lang);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Theory]
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。

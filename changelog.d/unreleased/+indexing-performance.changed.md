@@ -23,6 +23,7 @@ affected:
 - Reused scan-time language data when update mode expands the C# static-interface workspace, reducing repeated language probes on expanded update sets.
 - Reused update-mode language probes for stat-based unchanged-file checks, removing another redundant probe on each index target.
 - Reused dry-run language probes while building candidate records, reducing duplicate detection work in large dry-run previews.
+- Limited scan-time language reuse to content-independent detections so C/C++ header detection still inspects file content when needed.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -34,4 +35,5 @@ affected:
 - update mode が C# static-interface workspace を拡張するときも scan 時点の言語情報を再利用し、拡張された更新対象で language probe を繰り返さないようにしました。
 - update mode の language probe を stat-based unchanged-file 判定にも再利用し、index 対象ごとの追加 probe を削りました。
 - dry-run の candidate record 構築でも language probe を再利用し、大規模 dry-run preview での重複検出処理を減らしました。
+- scan 時点の language 再利用は content に依存しない判定だけに限定し、C/C++ header 判定では必要に応じて file content を確認するようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

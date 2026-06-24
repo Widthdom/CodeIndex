@@ -628,8 +628,8 @@ public static partial class IndexCommandRunner
                     }
 
                     string? knownLanguage = null;
-                    if (scannedUpdateLanguages != null && scannedUpdateLanguages.TryGetValue(absPath, out var scannedLanguage))
-                        knownLanguage = scannedLanguage;
+                    if (scannedUpdateLanguages != null)
+                        knownLanguage = FileIndexer.GetReusableDetectedLanguage(absPath, scannedUpdateLanguages);
 
                     var loaded = indexer.BuildLoadedRecordWithRawBytes(
                         absPath,

@@ -123,7 +123,10 @@ public static partial class IndexCommandRunner
                 continue;
             }
 
-            var probe = ProbeDryRunFile(dryIndexer, f, displayRelativePath);
+            var knownLanguage = authoritativeFullScan
+                ? FileIndexer.GetReusableDetectedLanguage(f, dryScanMetadata.FileLanguages)
+                : null;
+            var probe = ProbeDryRunFile(dryIndexer, f, displayRelativePath, knownLanguage);
             if (!probe.Supported)
             {
                 if (probe.UnknownExtension)
@@ -567,7 +570,8 @@ public static partial class IndexCommandRunner
     private static DryRunFileProbe ProbeDryRunFile(
         FileIndexer indexer,
         string absolutePath,
-        string relativePath)
+        string relativePath,
+        string? knownLanguage)
     {
         var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
         if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
@@ -575,20 +579,28 @@ public static partial class IndexCommandRunner
         if (indexability != FileIndexer.FileProbeStatus.Supported)
             return DryRunFileProbe.FromUnsupported();
 
-        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-        if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-            return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
-        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
-            return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
-                ? DryRunFileProbe.FromUnsupported()
-                : DryRunFileProbe.FromUnknownExtension();
+        string? reusableLanguage = knownLanguage;
+        if (reusableLanguage == null)
+        {
+            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
+            if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
+            if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
+                    ? DryRunFileProbe.FromUnsupported()
+                    : DryRunFileProbe.FromUnknownExtension();
+
+            reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
+                ? detection.Language
+                : null;
+        }
 
         try
         {
             var loaded = indexer.BuildLoadedRecordWithRawBytes(
                 absolutePath,
                 relativePath,
-                detection.Language);
+                reusableLanguage);
             var record = loaded.Record;
             return new DryRunFileProbe(
                 true,
@@ -756,9 +768,18 @@ public static partial class IndexCommandRunner
         IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> AttributePrunedDirectories,
-        IReadOnlyList<string> NestedRepositories)
+        IReadOnlyList<string> NestedRepositories,
+        IReadOnlyDictionary<string, string> FileLanguages)
     {
-        public static DryRunScanMetadata Empty { get; } = new(false, [], [], [], [], [], []);
+        public static DryRunScanMetadata Empty { get; } = new(
+            false,
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
         public static DryRunScanMetadata FromScanResult(FileIndexer.ScanFilesResult scanResult)
             => new(
@@ -768,7 +789,8 @@ public static partial class IndexCommandRunner
                 scanResult.ProbeFailedFilePaths,
                 scanResult.ListedDirectories,
                 scanResult.AttributePrunedDirectories,
-                scanResult.NestedRepositories);
+                scanResult.NestedRepositories,
+                scanResult.FileLanguages);
     }
 
     private readonly record struct DryRunFileProbe(
