@@ -702,7 +702,7 @@ public sealed class InstallScriptTests : IDisposable
 
             mkdir -p "{{installDir}}"
             cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
@@ -1457,7 +1457,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
@@ -1559,7 +1559,7 @@ public sealed class InstallScriptTests : IDisposable
             $$"""
             mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
             cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.24.6"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
@@ -1570,7 +1570,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
-            #!/usr/bin/env bash
+            #!/bin/sh
             echo "cdidx v1.24.6"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
