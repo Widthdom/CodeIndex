@@ -269,10 +269,19 @@ jobs:
             Write-Host "Skipping XPlat Code Coverage outside ubuntu-latest/net8.0 so platform/framework matrix lanes run only the test suite."
           }
 
+          function Invoke-TestRun {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$LogPath
+            )
+
+            dotnet @testArgs 2>&1 | Tee-Object -FilePath $LogPath
+            return $LASTEXITCODE
+          }
+
           New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
           $firstLogPath = Join-Path "./TestResults" "test-output-first.txt"
-          dotnet @testArgs 2>&1 | Tee-Object -FilePath $firstLogPath
-          $firstExitCode = $LASTEXITCODE
+          $firstExitCode = Invoke-TestRun -LogPath $firstLogPath
           if ($firstExitCode -eq 0) {
             exit 0
           }
@@ -286,8 +295,7 @@ jobs:
 
           Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
           $retryLogPath = Join-Path "./TestResults" "test-output-retry.txt"
-          dotnet @testArgs 2>&1 | Tee-Object -FilePath $retryLogPath
-          $retryExitCode = $LASTEXITCODE
+          $retryExitCode = Invoke-TestRun -LogPath $retryLogPath
           if ($retryExitCode -eq 0) {
             "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
               Set-Content -Encoding UTF8 ./TestResults/flaky-retry.txt
