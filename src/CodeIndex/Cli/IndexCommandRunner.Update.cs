@@ -594,7 +594,7 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var statReusableLanguage = TryDetectStatReusableLanguage(indexer, absPath);
+                    var statReusableLanguage = GetStatReusableLanguage(absPath, detection);
                     var statMatchedId = TryGetUnchangedFileIdFromStat(
                         writer,
                         projectRoot,

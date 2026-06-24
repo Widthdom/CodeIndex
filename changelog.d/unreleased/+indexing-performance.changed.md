@@ -20,6 +20,7 @@ affected:
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
 - Reused scan-time language data when update mode expands the C# static-interface workspace, reducing repeated language probes on expanded update sets.
+- Reused update-mode language probes for stat-based unchanged-file checks, removing another redundant probe on each index target.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -29,4 +30,5 @@ affected:
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。
 - update mode が C# static-interface workspace を拡張するときも scan 時点の言語情報を再利用し、拡張された更新対象で language probe を繰り返さないようにしました。
+- update mode の language probe を stat-based unchanged-file 判定にも再利用し、index 対象ごとの追加 probe を削りました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

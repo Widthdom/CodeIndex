@@ -1120,12 +1120,13 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static string? TryDetectStatReusableLanguage(FileIndexer indexer, string absolutePath)
+    private static string? GetStatReusableLanguage(
+        string absolutePath,
+        FileIndexer.LanguageDetectionResult detection)
     {
         if (string.Equals(Path.GetExtension(absolutePath), ".h", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         return detection.Status == FileIndexer.FileProbeStatus.Supported
             ? detection.Language
             : null;
