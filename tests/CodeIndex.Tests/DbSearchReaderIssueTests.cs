@@ -73,6 +73,8 @@ public sealed class DbSearchReaderIssueTests : IDisposable
 
         Assert.Equal(200, ex.CandidateLimit);
         Assert.Contains("guarded search inspected the maximum", ex.Message);
+        Assert.Contains(ex.CandidatePreviewPaths, path => path.Contains("src/guard-budget-", StringComparison.Ordinal));
+        Assert.Contains(ex.CandidatePreviewLanguages, lang => lang.Contains("csharp", StringComparison.Ordinal));
     }
 
     [Fact]

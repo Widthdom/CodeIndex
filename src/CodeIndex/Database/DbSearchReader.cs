@@ -210,6 +210,8 @@ public partial class DbReader
         var guardLineWindowCache = hasGuardFilters ? new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>() : null;
         var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;
         var guardCandidateLimitReached = false;
+        var guardCandidatePathCounts = hasGuardFilters ? new Dictionary<string, int>(StringComparer.Ordinal) : null;
+        var guardCandidateLanguageCounts = hasGuardFilters ? new Dictionary<string, int>(StringComparer.Ordinal) : null;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
@@ -240,6 +242,8 @@ public partial class DbReader
                     continue;
                 }
 
+                TrackGuardCandidate(guardCandidatePathCounts!, result.Path);
+                TrackGuardCandidate(guardCandidateLanguageCounts!, result.Lang ?? "?");
                 raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
             }
         }
@@ -250,7 +254,12 @@ public partial class DbReader
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
-            throw new SearchGuardCandidateLimitException(guardedCandidateLimit, guardedRequestedLimit, cursor?.Offset ?? 0);
+            throw new SearchGuardCandidateLimitException(
+                guardedCandidateLimit,
+                guardedRequestedLimit,
+                cursor?.Offset ?? 0,
+                FormatTopGuardCandidateCounts(guardCandidatePathCounts!),
+                FormatTopGuardCandidateCounts(guardCandidateLanguageCounts!));
 
         var pagedResults = hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
         if (guardCandidateLimitReached && pagedResults.Count > 0)
@@ -265,6 +274,22 @@ public partial class DbReader
         AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
         return pagedResults;
     }
+
+    private static void TrackGuardCandidate(Dictionary<string, int> counts, string key)
+    {
+        if (counts.TryGetValue(key, out var count))
+            counts[key] = count + 1;
+        else
+            counts[key] = 1;
+    }
+
+    private static List<string> FormatTopGuardCandidateCounts(Dictionary<string, int> counts)
+        => counts
+            .OrderByDescending(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Take(5)
+            .Select(pair => $"{pair.Key} ({pair.Value})")
+            .ToList();
 
     private static int GetGuardedSearchCandidateLimit(int limit, SearchCursor? cursor)
     {

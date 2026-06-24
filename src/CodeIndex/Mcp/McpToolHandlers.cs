@@ -1724,7 +1724,15 @@ public partial class McpServer
     }
 
     private static string FormatSearchGuardCandidateLimitDetail(SearchGuardCandidateLimitException ex)
-        => $"inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}).";
+    {
+        var detail = $"inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}).";
+        if (ex.CandidatePreviewPaths.Count > 0)
+            detail += $" Candidate files sampled before refusal: {string.Join(", ", ex.CandidatePreviewPaths)}.";
+        if (ex.CandidatePreviewLanguages.Count > 0)
+            detail += $" Candidate languages sampled before refusal: {string.Join(", ", ex.CandidatePreviewLanguages)}.";
+        detail += " Use count/count-by style search without guard filters to size the broad query before retrying.";
+        return detail;
+    }
 
     private static BoundedMcpText FormatMcpCaughtExceptionDiagnostic(Exception ex)
         => McpBoundedText.ForDisplay(CommandErrorWriter.FormatSanitizedException(ex));

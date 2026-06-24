@@ -426,6 +426,8 @@ public static partial class QueryCommandRunner
         "--first-per-file",
         "--results-only",
         "--next-steps",
+        "--source-only",
+        "--no-semantic-tokens",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -480,7 +482,12 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true, allowIssueDraftsFormat: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            allowIssueDraftsFormat: true,
+            applySearchSourceDefaults: true);
         if (TryWriteUnsupportedOptionError("search", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
@@ -546,12 +553,12 @@ public static partial class QueryCommandRunner
                 "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
-        if (options.AuditScopeExplicit && options.RecipeName == null)
+        if (options.AuditScopeExplicit && options.RecipeName == null && options.ListRecipes)
         {
             WriteUsageError(
-                "--audit-scope is only supported with `cdidx search --recipe <name>`.",
+                "--audit-scope cannot be combined with `cdidx search --list-recipes`.",
                 GetUsageLineOrThrow("search"),
-                "Use `--audit-scope source` for the production-code default or `--audit-scope all` when intentionally auditing docs, tests, and recipe definitions.");
+                "Use `--query <text>` with --list-recipes to filter recipe discovery, or run an ad hoc search with `--source-only`.");
             return CommandExitCodes.UsageError;
         }
         if (options.ShowExcluded && options.RecipeName == null)
@@ -637,12 +644,12 @@ public static partial class QueryCommandRunner
         }
         if (options.ListRecipes)
         {
-            if (options.Query != null || options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
+            if (options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
-                    "--list-recipes cannot be combined with a query, --recipe, --named-query, or extra positional arguments.",
+                    "--list-recipes cannot be combined with --recipe, --named-query, or extra positional arguments.",
                     GetUsageLineOrThrow("search"),
-                    "Run `cdidx search --list-recipes` to list built-in audit recipes.");
+                    "Run `cdidx search --list-recipes --query <text>` to filter built-in audit recipes by recipe, query, label, severity, path, or search text.");
                 return CommandExitCodes.UsageError;
             }
             if (options.OutputFormat is not OutputFormatText and not OutputFormatJson)
@@ -1570,7 +1577,8 @@ public static partial class QueryCommandRunner
     private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         var recipes = SearchAuditRecipes.All
-            .Select(recipe => ToSearchRecipeListItem(recipe))
+            .Select(recipe => ToFilteredSearchRecipeListItem(recipe, options.Query))
+            .OfType<SearchRecipeListItemJsonResult>()
             .ToList();
         if (options.Json)
         {
@@ -1606,6 +1614,20 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
+    private static SearchRecipeListItemJsonResult? ToFilteredSearchRecipeListItem(SearchAuditRecipe recipe, string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+            return ToSearchRecipeListItem(recipe);
+
+        var recipeMatches = SearchRecipeMatchesFilter(recipe, filter);
+        var queries = recipe.Queries
+            .Where(query => recipeMatches || SearchRecipeQueryMatchesFilter(recipe, query, filter))
+            .ToList();
+        return recipeMatches || queries.Count > 0
+            ? ToSearchRecipeListItem(recipe, queries)
+            : null;
+    }
+
     private static bool TryResolveSearchRecipeSelection(
         QueryCommandOptions options,
         out SearchRecipeSelection selection,
@@ -1637,7 +1659,11 @@ public static partial class QueryCommandRunner
         if (!SearchAuditRecipes.TryGet(recipeName, out var recipe))
         {
             var available = string.Join(", ", SearchAuditRecipes.All.Select(r => r.Name));
-            error = $"unknown search recipe '{recipeName}'. Available recipes: {available}.";
+            var suggestions = BuildRecipeSelectorSuggestions(recipeSelector);
+            var suggestionText = suggestions.Count > 0
+                ? $" Did you mean: {string.Join(", ", suggestions)}?"
+                : string.Empty;
+            error = $"unknown search recipe '{recipeName}'. Available recipes: {available}.{suggestionText}";
             return false;
         }
 
@@ -1650,7 +1676,11 @@ public static partial class QueryCommandRunner
         }
         if (directQueryName != null && !queryByName.ContainsKey(directQueryName))
         {
-            error = $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.";
+            var suggestions = BuildRecipeSelectorSuggestions(directQueryName);
+            var suggestionText = suggestions.Count > 0
+                ? $" Suggestions across all recipes: {string.Join(", ", suggestions)}."
+                : string.Empty;
+            error = $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.{suggestionText}";
             return false;
         }
 
@@ -1710,6 +1740,122 @@ public static partial class QueryCommandRunner
 
         error = null;
         return true;
+    }
+
+    private static List<string> BuildRecipeSelectorSuggestions(string rawSelector)
+    {
+        var tokens = NormalizeDiscoveryTokens(rawSelector);
+        if (tokens.Count == 0)
+            return [];
+
+        return SearchAuditRecipes.All
+            .SelectMany(recipe => recipe.Queries.Select(query => new
+            {
+                Selector = $"{recipe.Name}/{query.Name}",
+                Score = ScoreRecipeSelectorSuggestion(tokens, recipe, query),
+            }))
+            .Where(item => item.Score > 0)
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Selector, StringComparer.Ordinal)
+            .Take(3)
+            .Select(item => item.Selector)
+            .ToList();
+    }
+
+    private static int ScoreRecipeSelectorSuggestion(IReadOnlyList<string> tokens, SearchAuditRecipe recipe, SearchAuditRecipeQuery query)
+    {
+        var haystack = NormalizeDiscoveryText(string.Join(' ', BuildRecipeQuerySearchFields(recipe, query)));
+        var score = 0;
+        foreach (var token in tokens)
+        {
+            if (haystack.Contains(token, StringComparison.Ordinal))
+                score += token == "sql" && haystack.Contains("sqlite", StringComparison.Ordinal) ? 80 : 25;
+        }
+
+        var normalizedSelector = NormalizeDiscoveryText($"{recipe.Name} {query.Name}");
+        var normalizedRaw = string.Join(' ', tokens);
+        if (normalizedSelector.Contains(normalizedRaw, StringComparison.Ordinal))
+            score += 100;
+        return score;
+    }
+
+    private static bool SearchRecipeMatchesFilter(SearchAuditRecipe recipe, string filter)
+        => DiscoveryFilterMatches(filter,
+            recipe.Name,
+            recipe.Description,
+            recipe.DefaultScope,
+            string.Join(' ', recipe.RecommendedLabels),
+            string.Join(' ', recipe.DefaultPathPatterns),
+            string.Join(' ', recipe.DefaultExcludePaths));
+
+    private static bool SearchRecipeQueryMatchesFilter(SearchAuditRecipe recipe, SearchAuditRecipeQuery query, string filter)
+        => DiscoveryFilterMatches(filter, BuildRecipeQuerySearchFields(recipe, query));
+
+    private static IEnumerable<string> BuildRecipeQuerySearchFields(SearchAuditRecipe? recipe, SearchAuditRecipeQuery query)
+    {
+        if (recipe != null)
+        {
+            yield return recipe.Name;
+            yield return recipe.Description;
+            yield return recipe.DefaultScope;
+        }
+
+        yield return query.Name;
+        yield return query.Query;
+        yield return query.Description;
+        yield return query.FalsePositiveGuidance;
+        yield return query.Severity;
+        foreach (var label in query.RecommendedLabels)
+            yield return label;
+        foreach (var path in query.PathPatterns)
+            yield return path;
+        foreach (var path in query.ExcludePaths)
+            yield return path;
+        foreach (var origin in query.MatchOrigins)
+            yield return origin;
+        foreach (var origin in query.ExcludeOrigins)
+            yield return origin;
+        foreach (var kind in query.ResultKinds)
+            yield return kind;
+    }
+
+    private static bool DiscoveryFilterMatches(string filter, params string[] fields)
+        => DiscoveryFilterMatches(filter, (IEnumerable<string>)fields);
+
+    private static bool DiscoveryFilterMatches(string filter, IEnumerable<string> fields)
+    {
+        var tokens = NormalizeDiscoveryTokens(filter);
+        if (tokens.Count == 0)
+            return true;
+        var haystack = NormalizeDiscoveryText(string.Join(' ', fields));
+        return tokens.All(token => haystack.Contains(token, StringComparison.Ordinal));
+    }
+
+    private static List<string> NormalizeDiscoveryTokens(string value)
+        => NormalizeDiscoveryText(value)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static string NormalizeDiscoveryText(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        var previousWasSpace = true;
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+                previousWasSpace = false;
+            }
+            else if (!previousWasSpace)
+            {
+                builder.Append(' ');
+                previousWasSpace = true;
+            }
+        }
+
+        return builder.ToString().Trim();
     }
 
     private sealed record SearchRecipeSelection(
@@ -3295,8 +3441,9 @@ public static partial class QueryCommandRunner
     {
         if (hint == null)
             return;
-        foreach (var result in results)
-            result.ExactSubstringHint = hint;
+        var first = results.FirstOrDefault();
+        if (first != null)
+            first.ExactSubstringHint = hint;
     }
 
     private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, DbReader? reader = null)
@@ -5138,7 +5285,8 @@ public static partial class QueryCommandRunner
             if (options.Json)
             {
                 ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath);
-                excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
+                if (!options.NoSemanticTokens)
+                    excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
             }
 
             if (options.Json)
@@ -9860,7 +10008,8 @@ public static partial class QueryCommandRunner
         bool allowIssueDraftsFormat = false,
         bool validateDefaultLimit = true,
         bool validateDefaultSnippetLines = true,
-        bool validateDefaultMaxLineWidth = true)
+        bool validateDefaultMaxLineWidth = true,
+        bool applySearchSourceDefaults = false)
     {
         string? dbPath = null;
         string? dataDir = null;
@@ -9989,6 +10138,8 @@ public static partial class QueryCommandRunner
         var languageLookups = new List<string>();
         var languageExtensionLookups = new List<string>();
         var languageAliasLookups = new List<string>();
+        bool sourceOnly = false;
+        bool noSemanticTokens = false;
         ProjectFilterRootResolution? projectFilterRootResolution = null;
 
         void AddParseError(string error)
@@ -10371,6 +10522,11 @@ public static partial class QueryCommandRunner
                     break;
                 case "--list-recipes":
                     listRecipes = true;
+                    break;
+                case "--source-only":
+                    sourceOnly = true;
+                    auditScope = SearchAuditRecipes.DefaultAuditScope;
+                    auditScopeExplicit = true;
                     break;
                 case "--open-issues":
                     if (TryReadStringOptionValue(args, ref i, "--open-issues", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var openIssuesValue, out var openIssuesError))
@@ -11039,6 +11195,9 @@ public static partial class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--no-semantic-tokens":
+                    noSemanticTokens = true;
+                    break;
                 case "--exclude-comments":
                     excludeComments = true;
                     break;
@@ -11273,6 +11432,18 @@ public static partial class QueryCommandRunner
             AddParseError($"Error: duplicate --named-query name '{ConsoleUi.FormatBoundedValue(duplicateNamedQuery.Key)}'. Use unique names so grouped results are unambiguous.");
         if (duplicateConfidenceExplicit && duplicateThresholdExplicit)
             AddParseError("Error: --duplicate-confidence and --duplicate-threshold cannot be combined; use the preset or the explicit score threshold.");
+        if (parseErrors == null
+            && applySearchSourceDefaults
+            && auditScopeExplicit
+            && recipeName == null
+            && !listRecipes
+            && string.Equals(auditScope, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            if (pathPatterns.Count == 0)
+                AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
+            AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
+            excludeTests = true;
+        }
 
         if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);
@@ -11416,6 +11587,8 @@ public static partial class QueryCommandRunner
             LanguageLookups = languageLookups,
             LanguageExtensionLookups = languageExtensionLookups,
             LanguageAliasLookups = languageAliasLookups,
+            SourceOnly = sourceOnly,
+            NoSemanticTokens = noSemanticTokens,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
@@ -12363,7 +12536,12 @@ public static partial class QueryCommandRunner
         catch (SearchGuardCandidateLimitException ex)
         {
             CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
+            if (ex.CandidatePreviewPaths.Count > 0)
+                CommandErrorWriter.WriteStderr($"Candidate files sampled before refusal: {string.Join(", ", ex.CandidatePreviewPaths)}.");
+            if (ex.CandidatePreviewLanguages.Count > 0)
+                CommandErrorWriter.WriteStderr($"Candidate languages sampled before refusal: {string.Join(", ", ex.CandidatePreviewLanguages)}.");
             CommandErrorWriter.WriteStderr("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
+            CommandErrorWriter.WriteStderr("Hint: use `--count`, `--count-by path`, or `--format count` without guard filters to size the broad query before adding require/reject guards.");
             return CommandExitCodes.UsageError;
         }
         catch (SearchQueryLimitException ex)
@@ -15351,6 +15529,8 @@ public sealed class QueryCommandOptions
     public List<string> LanguageLookups { get; init; } = [];
     public List<string> LanguageExtensionLookups { get; init; } = [];
     public List<string> LanguageAliasLookups { get; init; } = [];
+    public bool SourceOnly { get; init; }
+    public bool NoSemanticTokens { get; init; }
     public string? ParseError { get; init; }
 }
 

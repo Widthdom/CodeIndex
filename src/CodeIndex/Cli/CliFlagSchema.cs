@@ -162,7 +162,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
     private static readonly string[] InspectFieldCommands = ["inspect"];
-    private static readonly string[] InspectSourceExcerptCommands = ["inspect"];
+    private static readonly string[] InspectSourceExcerptCommands = ["inspect", "excerpt"];
 
     private static readonly string[] MaxLineWidthCommands =
     [
@@ -293,7 +293,8 @@ internal static class CliFlagSchema
             new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
-            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search recipes/Unused: use production source defaults or include all indexed paths", Commands = Set("search", "unused") },
+            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search/Unused: use production source defaults or include all indexed paths", Commands = Set("search", "unused") },
+            new() { Name = "--source-only", Description = "Search: alias for --audit-scope source on ad hoc and named searches", Commands = Set("search") },
             new() { Name = "--show-excluded", Description = "Search recipes: include effective scope and exclusion diagnostics in recipe output", Commands = Set("search") },
             new() { Name = "--named-query", ValuePlaceholder = "<name>=<query>", Description = "Search: add one named ad hoc batch query", Commands = Set("search") },
             new() { Name = "--open-issues", ValuePlaceholder = "<path|github|github:owner/name>", Description = "Preflight issue drafts against open issue JSON or GitHub open issues", Commands = Set("search", "suggestions") },
@@ -348,8 +349,8 @@ internal static class CliFlagSchema
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
             new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
-            new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect: include one source line as source_excerpt", Commands = Set(InspectSourceExcerptCommands) },
-            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Inspect: source_excerpt context lines before and after", Commands = Set(InspectSourceExcerptCommands) },
+            new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect/excerpt: include one source line as source_excerpt or excerpt window", Commands = Set(InspectSourceExcerptCommands) },
+            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Inspect/excerpt: context lines before and after", Commands = Set(InspectSourceExcerptCommands) },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },
@@ -359,6 +360,7 @@ internal static class CliFlagSchema
             new() { Name = "--focus-line", ValuePlaceholder = "<line>", Description = "Focused line to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-column", ValuePlaceholder = "<n>", Description = "Focused column to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-length", ValuePlaceholder = "<n>", Description = "Focused span width when clamping", Commands = Set("excerpt") },
+            new() { Name = "--no-semantic-tokens", Description = "Excerpt JSON: omit semantic_tokens to keep payloads compact", Commands = Set("excerpt") },
             new() { Name = "--max-hops", ValuePlaceholder = "<n>", Description = "Impact: max BFS hops", Commands = Set("impact") },
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },

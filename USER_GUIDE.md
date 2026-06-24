@@ -970,10 +970,12 @@ cdidx search "計算" --prefix                            # widen every token to
 cdidx search "content:auth*" --fts                      # raw FTS5 syntax; `content:` is the only valid column qualifier, and NEAR distance is capped at 100
 cdidx search "Run();" --exact-substring                 # case-sensitive exact substring, no FTS5
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
+cdidx search "ExecuteReader" --source-only --json=array # apply production-source defaults outside recipe mode
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
 cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # require a guard earlier on the same line
 cdidx search --list-recipes                             # show reusable audit recipes
+cdidx search --list-recipes --query sqlite              # filter recipe discovery by recipe/query text, labels, severity, or paths
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe bounded-read-evidence --json      # show positive evidence for bounded file-read helper paths
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
@@ -1017,8 +1019,9 @@ origin category, and source line.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
-return a validation error. Narrow with more specific query text, `--lang`,
-`--path`, `--exclude-tests`, or a smaller MCP cursor offset.
+return a validation error with the guard budget, sampled candidate files and
+languages, and count/count-by fallback hints. Narrow with more specific query
+text, `--lang`, `--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow` / `guardScope`.
@@ -1034,6 +1037,8 @@ Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
 recommended labels, query text, exact-match mode, false-positive guidance,
 guard filters, risk evidence, and query-specific audit taxonomy metadata.
+Add `--query <filter>` to narrow discovery by recipe/query names, query text,
+labels, severity, path metadata, or descriptions.
 Built-in recipe queries may also include `risk_evidence`, a short set of
 positive and negative evidence facets that explain why a hit is risky or likely
 bounded/safe. Recipe run JSON repeats those facets on each matching result so
@@ -1263,6 +1268,7 @@ For large files, `outline --json` supports `--kind <kind[,kind]>`, `--limit` / `
 ```bash
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
 ```
 
 ### Find a substring inside a known file
@@ -1274,7 +1280,7 @@ cdidx find "guard" --all --count --json
 ```
 
 `find` fills the gap between repo-wide `search` and line-number-based `excerpt`: when you already know the target file, it returns matching line numbers, columns, and short surrounding context from the indexed file without falling back to raw-text tools. The query text is capped at 1,000 characters, matching `search`.
-Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-wide indexed-file scan with safety caps. `--all` and `--path` are mutually exclusive. Count JSON includes scan summary fields such as `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, `candidate_file_limit`, and `line_scan_limit`; human count output writes the scan summary to stderr.
+Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-wide indexed-file scan with safety caps. `--all` and `--path` are mutually exclusive. Plain `find` is a literal substring scan that ignores case; add `--exact` when case-sensitive byte-for-byte matching matters, such as distinguishing `TODO` from `todo`. Count JSON includes scan summary fields such as `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, `candidate_file_limit`, and `line_scan_limit`; human count output writes the scan summary to stderr.
 
 ### List files
 
@@ -1429,8 +1435,8 @@ same source location.
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
-| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect` | Add a bounded `source_excerpt` to inspect output. Use `--path <file> --line <line>` without a symbol query for a file/line excerpt. |
-| `--context <n>` / `--before <n>` / `--after <n>` | `inspect` | Add symmetric or one-sided context lines to the `source_excerpt` window. |
+| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect`, `excerpt` | Add a bounded `source_excerpt` to inspect output, or use `--line` as an `excerpt` shorthand for `--start <line> --end <line>`. Use `inspect --path <file> --line <line>` without a symbol query for a file/line excerpt. |
+| `--context <n>` / `--before <n>` / `--after <n>` | `inspect`, `excerpt` | Add symmetric or one-sided context lines to the `source_excerpt` or `excerpt` window. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -1449,12 +1455,13 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
-| `--audit-scope <source\|all>` | `search --recipe <name>` | Choose recipe path scope. `source` is the default and suppresses tests, docs, changelog text, and recipe definitions using recipe metadata; `all` intentionally searches every indexed path unless other filters exclude it. JSON recipe output reports the effective scope, path filters, and exclusions. |
+| `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**`, default doc/test/changelog exclusions, and `--exclude-tests` when no user path was supplied. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
+| `--source-only` | `search` | Shorthand for `--audit-scope source` on ad hoc and named searches. Use it for implementation-code searches without selecting a recipe. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
-| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. Add `--query <filter>` to filter by recipe/query names, query text, labels, severity, path metadata, or descriptions. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Exclude likely test files and prefer production code |
 | `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
@@ -1492,6 +1499,7 @@ same source location.
 | `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` (max: 10000000) |
 | `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length (max: 100000) |
 | `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1, max: 100000; requires `--focus-column`) |
+| `--no-semantic-tokens` | `excerpt` | Omit the `semantic_tokens` array from `excerpt --json` while keeping line spans and content metadata. Useful for compact excerpts and token-budgeted clients. |
 | `--rebuild` | `index` | Delete existing DB and rebuild. Interactive terminals prompt for confirmation; non-interactive runs must also pass `--yes` (or `--force`) and otherwise exit with code 64. |
 | `--yes` | `index` | Confirm `--rebuild` in non-interactive scripts and CI. |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
@@ -3609,10 +3617,12 @@ cdidx search "計算" --prefix                            # クエリ全体を p
 cdidx search "content:auth*" --fts                      # 生のFTS5構文。列修飾子は `content:` だけが有効で、NEAR distance は 100 まで
 cdidx search "Run();" --exact-substring                 # 大文字小文字区別の完全部分一致、FTS5 なし
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
+cdidx search "ExecuteReader" --source-only --json=array # recipe なしで本番 source 向け既定 scope を適用
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
 cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # 同じ行の前方 guard を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
+cdidx search --list-recipes --query sqlite              # recipe/query text、label、severity、path で recipe 発見を絞る
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe bounded-read-evidence --json      # 上限付き file-read helper 経路の陽性根拠を表示
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
@@ -3653,7 +3663,9 @@ before / after を評価します。JSON の検索結果には
 scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
-query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
+このエラーには guard budget、sampled candidate files / languages、`--count` / `--count-by`
+fallback hint が含まれます。query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、
+MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 
@@ -3669,6 +3681,8 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 `broad-token-audit` があります。`--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
+`--query <filter>` を追加すると、recipe/query 名、query text、label、severity、path metadata、
+説明で discovery を絞り込めます。
 組み込み recipe query は `risk_evidence` も出力できます。これは hit が risky なのか、
 すでに bounded / safe と見なせる可能性が高いのかを説明する positive / negative evidence
 facet の短い一覧です。recipe run の JSON は各 matching result にも同じ facet を付けるため、
@@ -3889,6 +3903,7 @@ cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 
 ```bash
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
 ```
 
 ### 既知ファイル内の部分文字列を探す
@@ -3900,7 +3915,7 @@ cdidx find "guard" --all --count --json
 ```
 
 `find` は、リポジトリ全体を対象にする `search` と、行番号が必要な `excerpt` の間を埋めるコマンドです。対象ファイルが既に分かっているときに、raw text ツールへ戻らずに、インデックス済みファイルから一致行番号・列番号・短い前後文脈を返します。query text は `search` と同じく 1,000 文字までです。
-対象を絞る場合は `--path <glob>` を使い、repo-wide の index 済みファイル走査が必要な場合だけ `--all` を明示します。`--all` と `--path` は併用できません。count JSON には `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、`candidate_file_limit`、`line_scan_limit` などの scan summary field が入り、human count output では同じ scan summary が stderr に出ます。
+対象を絞る場合は `--path <glob>` を使い、repo-wide の index 済みファイル走査が必要な場合だけ `--all` を明示します。`--all` と `--path` は併用できません。通常の `find` は大文字小文字を無視する literal substring scan です。`TODO` と `todo` を区別するような byte-for-byte の大文字小文字区別が必要な場合は `--exact` を追加します。count JSON には `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、`candidate_file_limit`、`line_scan_limit` などの scan summary field が入り、human count output では同じ scan summary が stderr に出ます。
 
 ### ファイル一覧
 
@@ -4056,8 +4071,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
-| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect` | inspect 出力に範囲を絞った `source_excerpt` を追加する。symbol query なしで `--path <file> --line <line>` を渡すと file/line 抜粋だけを返せる。 |
-| `--context <n>` / `--before <n>` / `--after <n>` | `inspect` | `source_excerpt` の前後または片側 context 行を追加する。 |
+| `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect`, `excerpt` | inspect 出力に範囲を絞った `source_excerpt` を追加する。`excerpt` では `--start <line> --end <line>` の shorthand として `--line` を使える。symbol query なしで `inspect --path <file> --line <line>` を渡すと file/line 抜粋だけを返せる。 |
+| `--context <n>` / `--before <n>` / `--after <n>` | `inspect`, `excerpt` | `source_excerpt` または `excerpt` window の前後または片側 context 行を追加する。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
@@ -4075,12 +4090,13 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
-| `--audit-scope <source\|all>` | `search --recipe <name>` | recipe の path scope を選ぶ。既定の `source` は recipe metadata により tests、docs、changelog text、recipe 定義を抑制する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。Recipe の JSON 出力には有効な scope、path filter、exclusion が含まれる。 |
+| `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**`、既定の docs/tests/changelog exclusion、`--exclude-tests` を追加する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
+| `--source-only` | `search` | ad hoc / named search で `--audit-scope source` を指定する shorthand。recipe を選ばずに実装コードだけを検索したい場合に使う。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
-| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。`--query <filter>` を追加すると recipe/query 名、query text、label、severity、path metadata、説明で絞り込める。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | テストらしいパスを除外し、本番コードを優先 |
 | `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
@@ -4117,6 +4133,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須（最大: 10000000） |
 | `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります（最大: 100000） |
 | `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、最大: 100000、`--focus-column` 必須） |
+| `--no-semantic-tokens` | `excerpt` | `excerpt --json` から `semantic_tokens` 配列を省略し、line span と content metadata は維持する。compact な excerpt や token budget が厳しい client 向け。 |
 | `--rebuild` | `index` | 既存DBを削除して再構築。interactive terminal では確認プロンプトを出し、non-interactive 実行では `--yes`（または `--force`）がないと終了コード 64 で拒否する。 |
 | `--yes` | `index` | non-interactive script / CI で `--rebuild` を確認済みとして実行する。 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |

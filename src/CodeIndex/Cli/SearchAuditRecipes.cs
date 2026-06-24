@@ -26,8 +26,8 @@ internal static class SearchAuditRecipes
     private const int MaxRecipeDiagnosticCount = 64;
     private const int MaxRecipeDiagnosticLength = 512;
     private static readonly string[] SupportedQuerySeverities = ["info", "low", "medium", "high", "critical"];
-    private static readonly string[] DefaultSourcePathPatterns = ["src/**"];
-    private static readonly string[] DefaultSourceExcludePaths =
+    private static readonly string[] DefaultSourcePathPatternsValue = ["src/**"];
+    private static readonly string[] DefaultSourceExcludePathsValue =
     [
         "src/CodeIndex/Cli/SearchAuditRecipes.cs",
         "tests/**",
@@ -87,6 +87,9 @@ internal static class SearchAuditRecipes
                 "The catch is not a real boundary and should be narrowed, rethrown, or converted to stable diagnostics.")
         ],
         "Classify each broad catch by boundary first. Treat top-level and worker boundaries as intentional only when they normalize to stable sanitized diagnostics; cleanup and probe catches are acceptable only when best-effort behavior is documented and bounded; otherwise narrow the catch or surface a stable diagnostic.");
+
+    internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
+    internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
     [
@@ -953,8 +956,8 @@ internal static class SearchAuditRecipes
         string description,
         List<SearchAuditRecipeQuery> queries) => new(name, description, queries)
         {
-            DefaultPathPatterns = [.. DefaultSourcePathPatterns],
-            DefaultExcludePaths = [.. DefaultSourceExcludePaths],
+            DefaultPathPatterns = [.. DefaultSourcePathPatternsValue],
+            DefaultExcludePaths = [.. DefaultSourceExcludePathsValue],
         };
 
     private static SearchAuditRecipe AllScopedRecipe(
