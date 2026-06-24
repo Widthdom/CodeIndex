@@ -7,6 +7,8 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private static readonly char[] CSharpReferenceLinePreparationTriggerChars = ['"', '\'', '`', '/'];
+
     private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
     private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape, string? ReturnTypeShape);
     private sealed record CSharpImplementedInterface(string Name, IReadOnlyDictionary<string, string> TypeArguments);
@@ -2453,6 +2455,9 @@ public static partial class ReferenceExtractor
 
     private static string PrepareLine(string lang, string line)
     {
+        if (lang == "csharp" && line.IndexOfAny(CSharpReferenceLinePreparationTriggerChars) < 0)
+            return line;
+
         var result = line;
         if (lang == "rust")
             result = MaskRustLifetimeTokens(result);

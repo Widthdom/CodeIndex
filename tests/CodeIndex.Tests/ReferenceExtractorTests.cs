@@ -314,13 +314,13 @@ public partial class ReferenceExtractorTests
     [Fact]
     public void Extract_Solution_IndexesProjectPathReferences_Issue3662()
     {
-        const string content = """
+        var content = """
             Microsoft Visual Studio Solution File, Format Version 12.00
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
             EndProject
             Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "PythonApp", "tools\PythonApp\PythonApp.pyproj", "{33333333-3333-3333-3333-333333333333}"
             EndProject
-            """;
+            """.Replace("\n", "\r\n", StringComparison.Ordinal);
 
         var symbols = SymbolExtractor.Extract(1, "solution", content);
         var references = ReferenceExtractor.Extract(1, "solution", content, symbols);
@@ -338,6 +338,30 @@ public partial class ReferenceExtractorTests
         Assert.Equal("project", pythonReference.ContainerKind);
         Assert.Equal("PythonApp", pythonReference.ContainerName);
         Assert.Equal(4, pythonReference.Line);
+    }
+
+    [Fact]
+    public void Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("class App {");
+        builder.AppendLine("    void Target() { }");
+        for (var index = 0; index < 5_000; index++)
+            builder.Append("    void Caller").Append(index).AppendLine("() { Target(); }");
+        builder.AppendLine("}");
+        var content = builder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var stopwatch = Stopwatch.StartNew();
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        stopwatch.Stop();
+
+        Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller0");
+        Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller4999");
+        var runawayBudget = TimeSpan.FromSeconds(10);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Large C# plain call reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]

@@ -94,7 +94,7 @@ public class DependencyPackageExtractorTests
     [Fact]
     public void Extract_DependencyLock_EmitsResolvedPackageSymbolsAndReferences_Issue3899()
     {
-        const string content =
+        var content =
             """
             {
               "version": 1,
@@ -112,7 +112,7 @@ public class DependencyPackageExtractorTests
                 }
               }
             }
-            """;
+            """.Replace("\n", "\r\n", StringComparison.Ordinal);
 
         var symbols = SymbolExtractor.Extract(10, "dependency_lock", content, filePath: "packages.lock.json");
         var references = ReferenceExtractor.Extract(10, "dependency_lock", content, symbols, path: "packages.lock.json");
