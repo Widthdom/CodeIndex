@@ -1009,7 +1009,12 @@ internal static class KotlinReferenceExtractor
 
         var callIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(trimmed, '(');
         if (callIndex > 0)
-            trimmed = trimmed.Substring(0, callIndex).TrimEnd();
+        {
+            var callEnd = callIndex;
+            while (callEnd > 0 && char.IsWhiteSpace(trimmed[callEnd - 1]))
+                callEnd--;
+            trimmed = trimmed.Substring(0, callEnd);
+        }
 
         var lastSegmentStart = 0;
         var endIndex = trimmed.Length;
