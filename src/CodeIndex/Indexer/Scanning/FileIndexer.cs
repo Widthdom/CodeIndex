@@ -4613,6 +4613,9 @@ public partial class FileIndexer
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var preambleLength = GetShebangPreambleLength(shebangEncoding);
+            if (!HasRawShebangPrefix(bytes, shebangEncoding, preambleLength))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
             var lineEnd = FindShebangLineEnd(bytes, shebangEncoding, preambleLength);
             if (lineEnd < 0)
             {
@@ -4704,6 +4707,47 @@ public partial class FileIndexer
         ShebangEncoding.Utf16LittleEndian or ShebangEncoding.Utf16BigEndian => 2,
         _ => 0,
     };
+
+    private static bool HasRawShebangPrefix(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
+    {
+        var remaining = bytes[start..];
+        return encoding switch
+        {
+            ShebangEncoding.Utf16LittleEndian => StartsWithUtf16LeShebang(remaining)
+                || (remaining.Length >= 2
+                    && remaining[0] == 0xFF
+                    && remaining[1] == 0xFE
+                    && StartsWithUtf16LeShebang(remaining[2..])),
+            ShebangEncoding.Utf16BigEndian => StartsWithUtf16BeShebang(remaining)
+                || (remaining.Length >= 2
+                    && remaining[0] == 0xFE
+                    && remaining[1] == 0xFF
+                    && StartsWithUtf16BeShebang(remaining[2..])),
+            _ => StartsWithUtf8Shebang(remaining)
+                || (remaining.Length >= 3
+                    && remaining[0] == 0xEF
+                    && remaining[1] == 0xBB
+                    && remaining[2] == 0xBF
+                    && StartsWithUtf8Shebang(remaining[3..])),
+        };
+    }
+
+    private static bool StartsWithUtf8Shebang(ReadOnlySpan<byte> bytes)
+        => bytes.Length >= 2 && bytes[0] == (byte)'#' && bytes[1] == (byte)'!';
+
+    private static bool StartsWithUtf16LeShebang(ReadOnlySpan<byte> bytes)
+        => bytes.Length >= 4
+            && bytes[0] == (byte)'#'
+            && bytes[1] == 0
+            && bytes[2] == (byte)'!'
+            && bytes[3] == 0;
+
+    private static bool StartsWithUtf16BeShebang(ReadOnlySpan<byte> bytes)
+        => bytes.Length >= 4
+            && bytes[0] == 0
+            && bytes[1] == (byte)'#'
+            && bytes[2] == 0
+            && bytes[3] == (byte)'!';
 
     private static int FindShebangLineEnd(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
     {

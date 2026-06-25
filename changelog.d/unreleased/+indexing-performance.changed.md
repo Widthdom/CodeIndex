@@ -81,6 +81,7 @@ affected:
 - Added an ASCII fast path to FTS oversize-token validation while preserving rune-aware Unicode fallback detection.
 - Skipped detailed conflict-marker line scanning when decoded content contains no conflict marker prefixes.
 - Avoided redundant line trimming while checking generated-code header markers.
+- Rejected extensionless non-shebang files from raw prefix bytes before line decoding and tokenization.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -142,4 +143,5 @@ affected:
 - FTS oversize-token validation に ASCII fast path を追加しつつ、Unicode は rune-aware fallback で検出するよう維持しました。
 - decoded content に conflict marker prefix が含まれない場合は、詳細な conflict-marker line scan を省略するようにしました。
 - generated-code header marker の確認時に、重複する line trimming を行わないようにしました。
+- 拡張子なしの非 shebang file は line decode と tokenize の前に raw prefix byte で除外するようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

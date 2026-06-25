@@ -1452,6 +1452,25 @@ public partial class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void DetectLanguage_ExtensionlessUtf16ShebangScript_ReturnsLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "utf16-script");
+            File.WriteAllBytes(path, Encoding.Unicode.GetPreamble()
+                .Concat(Encoding.Unicode.GetBytes("#!/usr/bin/env python\nprint('hi')\n"))
+                .ToArray());
+
+            Assert.Equal("python", FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Theory]
     [InlineData("elf", new byte[] { 0x7F, (byte)'E', (byte)'L', (byte)'F', 0x02, 0x01, 0x01, 0x00 })]
     [InlineData("macho", new byte[] { 0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01 })]
