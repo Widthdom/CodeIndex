@@ -597,7 +597,11 @@ internal static class TypedLanguageReferenceExtractor
         if (openParen <= 0)
             return expression;
 
-        return expression.Substring(0, openParen).TrimEnd();
+        var end = openParen;
+        while (end > 0 && char.IsWhiteSpace(expression[end - 1]))
+            end--;
+
+        return expression.Substring(0, end);
     }
 
     private static bool IsTopLevelStopKeyword(string text, int index, string keyword)
