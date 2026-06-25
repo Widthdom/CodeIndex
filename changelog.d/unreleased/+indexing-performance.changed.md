@@ -132,6 +132,7 @@ affected:
 - Scanned Kotlin symbol signature tokens by index, avoiding split arrays in constructable-class checks.
 - Trimmed Java `throws` type-list segments by index, avoiding intermediate trim substrings during reference extraction.
 - Trimmed Java keyword type-list segments by index, avoiding intermediate trim substrings for inheritance references.
+- Trimmed Java generic-bound parameter segments by index, avoiding intermediate trim substrings during bound extraction.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -237,6 +238,7 @@ affected:
 - Kotlin symbol signature token を index で走査し、constructable-class 判定中の split array を避けるようにしました。
 - Java `throws` type-list segment を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。
 - Java keyword type-list segment を index 境界で trim し、継承 reference の中間 trim substring を避けるようにしました。
+- Java generic-bound parameter segment を index 境界で trim し、bound 抽出中の中間 trim substring を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
