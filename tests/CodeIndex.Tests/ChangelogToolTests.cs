@@ -32,7 +32,7 @@ public sealed class ChangelogToolTests
                 Console.SetOut(previousOut);
                 Console.SetError(previousError);
                 Directory.SetCurrentDirectory(previousDirectory);
-                Directory.Delete(unrelatedDirectory, recursive: true);
+                TestProjectHelper.DeleteDirectory(unrelatedDirectory);
             }
         }
     }
@@ -797,8 +797,7 @@ public sealed class ChangelogToolTests
         public void Dispose()
         {
             Directory.SetCurrentDirectory(_previousDirectory);
-            if (Directory.Exists(Root))
-                Directory.Delete(Root, recursive: true);
+            TestProjectHelper.DeleteDirectory(Root);
         }
     }
 
