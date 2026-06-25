@@ -273,7 +273,7 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(remainder, blockKind))
             return false;
 
-        var afterKind = remainder[blockKind.Length..].TrimStart();
+        var afterKind = GetFortranSuffixTrimmedStart(remainder, blockKind.Length);
         if (blockKind == "module" && StartsWithFortranWord(afterKind, "procedure"))
             return false;
 
