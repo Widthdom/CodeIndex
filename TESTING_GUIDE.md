@@ -47,7 +47,9 @@ The test project mirrors the production areas closely.
   snapshot tests stop after enough reader and writer iterations are observed,
   with a two-second cap as the slow-host fallback; do not replace that with a
   fixed sleep because fast lanes should not spend the full cap once the race has
-  already been exercised.
+  already been exercised. Shared-writer blocking tests signal once the worker
+  task has started before asserting it remains blocked, instead of sleeping for
+  a fixed grace period.
 - `LegacySchemaMigrationTests.cs`
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunnerTests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
@@ -283,7 +285,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
   テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に
   2 秒上限だけを fallback として残します。race が既に十分 exercised された fast lane
-  で上限時間を使い切らないよう、固定 sleep に戻さないでください。
+  で上限時間を使い切らないよう、固定 sleep に戻さないでください。shared-writer
+  blocking test は固定 grace period で sleep せず、worker task が開始したことを signal
+  してから blocked のままであることを検証します。
 - `LegacySchemaMigrationTests.cs`
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunnerTests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`

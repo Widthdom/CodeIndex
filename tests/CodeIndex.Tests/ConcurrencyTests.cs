@@ -600,9 +600,14 @@ public class ConcurrencyTests : IDisposable
     {
         var writer = new DbWriter(_db.Connection);
         using var txn = writer.BeginTransaction();
+        using var started = new ManualResetEventSlim(false);
 
-        var markTask = Task.Run(() => writer.MarkGraphReady());
-        await Task.Delay(100);
+        var markTask = Task.Run(() =>
+        {
+            started.Set();
+            writer.MarkGraphReady();
+        });
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
         Assert.False(markTask.IsCompleted);
 
         txn.Commit();
@@ -617,13 +622,15 @@ public class ConcurrencyTests : IDisposable
     {
         var writer = new DbWriter(_db.Connection);
         using var outer = writer.BeginTransaction();
+        using var started = new ManualResetEventSlim(false);
 
         var nestedTask = Task.Run(() =>
         {
+            started.Set();
             using var nested = writer.BeginTransaction();
             nested.Commit();
         });
-        await Task.Delay(100);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
         Assert.False(nestedTask.IsCompleted);
 
         outer.Commit();
