@@ -200,16 +200,34 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        foreach (var token in trimmed[6..].Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        var tokenStart = -1;
+        for (var index = 6; index <= trimmed.Length; index++)
         {
-            if (first)
+            var atEnd = index == trimmed.Length;
+            if (!atEnd && !char.IsWhiteSpace(trimmed[index]))
             {
-                first = false;
+                if (tokenStart < 0)
+                    tokenStart = index;
                 continue;
             }
 
-            if (!IsDockerfileExposePort(token))
+            if (tokenStart < 0)
                 continue;
+
+            var tokenLength = index - tokenStart;
+            if (first)
+            {
+                first = false;
+                tokenStart = -1;
+                continue;
+            }
+
+            var token = trimmed.Substring(tokenStart, tokenLength);
+            if (!IsDockerfileExposePort(token))
+            {
+                tokenStart = -1;
+                continue;
+            }
 
             AddSymbolRecord(
                 symbols,
@@ -226,6 +244,7 @@ public static partial class SymbolExtractor
                     Signature = line.Trim(),
                 },
                 line);
+            tokenStart = -1;
         }
     }
 
