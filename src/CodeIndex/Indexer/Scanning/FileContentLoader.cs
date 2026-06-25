@@ -43,7 +43,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         var (content, warning, inspection) = DecodeIndexableContent(bytes, relativePath);
         var normalized = NormalizeForIndexing(content);
         var checksum = CanReuseRawBytesForNormalizedChecksum(content, warning, inspection, normalized)
-            ? ComputeChecksum(bytes)
+            ? ComputeRawChecksum(bytes)
             : ComputeChecksumFromNormalizedContent(normalized.Content);
 
         return new LoadedFileContent(

@@ -20,6 +20,7 @@ affected:
 
 - Reduced redundant file-content decoding and checksum work during indexing so large codebase scans spend less time reprocessing unchanged UTF-8 and UTF-16 content.
 - Used direct SHA-256 hashing for CR-free raw byte payloads, avoiding the normalized-checksum scan on the common LF-only source-file path.
+- Reused the raw SHA-256 path directly after load-time normalization proves content is byte-equivalent, avoiding a redundant CR probe on common LF-only files.
 - Streamed checksum calculation now appends CR-free chunks directly, avoiding per-byte normalization loops during unchanged-file probes on LF-only files.
 - Short-circuited UTF-16 heuristic detection when the sample has no NUL bytes, avoiding pair-count scans for ordinary UTF-8 source files.
 - Deferred UTF-16 heuristic text-byte counting until NUL parity passes, reducing decode preflight work on NUL-containing non-UTF-16 files.
@@ -59,6 +60,7 @@ affected:
 
 - index 実行時の file-content decode と checksum 処理の重複を減らし、大規模コードベースの scan で未変更 UTF-8 / UTF-16 content の再処理時間を抑えました。
 - CR を含まない raw byte payload では直接 SHA-256 を使い、一般的な LF-only source file で normalized-checksum scan を避けるようにしました。
+- load-time normalization で content が byte-equivalent と分かった後は raw SHA-256 path を直接再利用し、一般的な LF-only file で重複 CR probe を避けるようにしました。
 - streaming checksum calculation でも CR-free chunk を直接 append し、LF-only file の unchanged-file probe で byte 単位の normalization loop を避けるようにしました。
 - sample に NUL byte がない場合は UTF-16 heuristic detection を即終了し、通常の UTF-8 source file で pair-count scan を避けるようにしました。
 - NUL parity が UTF-16 heuristic の閾値を満たした場合だけ text-byte counting を行い、NUL を含む非 UTF-16 file の decode preflight work を減らしました。
