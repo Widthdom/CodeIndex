@@ -12,6 +12,8 @@ affected:
   - tests/CodeIndex.Tests/McpServerTests.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
   - tests/CodeIndex.Tests/ReportCommandRunnerTests.cs
+  - tests/CodeIndex.Tests/FileSystemTraversalPolicyTests.cs
+  - tests/CodeIndex.Tests/DataDirectorySecurityTests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -41,6 +43,7 @@ affected:
 - Reused `TestProjectHelper.DeleteFile` for MCP test file cleanup while preserving the explicit SQLite pool clear.
 - Added shared SQLite database sidecar cleanup in `TestProjectHelper` and used it from database tests instead of a local delete helper.
 - Reused `TestProjectHelper.DeleteDirectory` for report bundle workspace cleanup instead of a local best-effort recursive delete helper.
+- Reused shared temporary directory cleanup in traversal-policy and data-directory security tests.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -63,3 +66,4 @@ affected:
 - MCP test の file cleanup で明示的な SQLite pool clear は維持しつつ、`TestProjectHelper.DeleteFile` を再利用するようにしました。
 - SQLite database sidecar cleanup を `TestProjectHelper` に追加し、database test のローカル delete helper を置き換えました。
 - report bundle 用 workspace cleanup でローカルの best-effort recursive delete helper をやめ、`TestProjectHelper.DeleteDirectory` を再利用するようにしました。
+- traversal-policy test と data-directory security test で一時ディレクトリ cleanup を共通 helper に寄せました。
