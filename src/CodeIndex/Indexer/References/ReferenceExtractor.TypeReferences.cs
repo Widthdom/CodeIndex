@@ -258,7 +258,16 @@ public static partial class ReferenceExtractor
 
     private static string NormalizeCSharpParameterTypeShape(string parameter)
     {
-        var text = TrimCSharpParameterDefaultValue(parameter).Trim();
+        var text = TrimCSharpParameterDefaultValue(parameter);
+        var textStart = 0;
+        while (textStart < text.Length && char.IsWhiteSpace(text[textStart]))
+            textStart++;
+        var textEnd = text.Length;
+        while (textEnd > textStart && char.IsWhiteSpace(text[textEnd - 1]))
+            textEnd--;
+        if (textStart > 0 || textEnd < text.Length)
+            text = text.Substring(textStart, textEnd - textStart);
+
         var refKind = string.Empty;
         foreach (var modifier in new[] { "ref", "out", "in" })
         {
