@@ -11,6 +11,381 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.34.0] - 2026-06-26
+
+#### Added
+
+- **Added an explicit `batch --json-summary` completion record (#3906)** — non-interactive batch callers can now request a final JSON object with `commands_processed`, including `0` for immediate EOF, while the default empty-input behavior remains exit 0 with no output.
+- **Added `languages` lookup filters by language, extension, and alias (#3921)** — `cdidx languages --language <name>`, `--extension <ext>`, and `--alias <alias>` now return the matching support row and include `indexed_file_count` when the command reads the current DB.
+- **Added an environment-variable inventory view for audits (#3922)** — `cdidx doctor --env-inventory` now lists known environment variables with category, sensitivity, policy class, default behavior, config-file support, and source locations so support and security reviews can distinguish public configuration from secrets.
+- **Added a stable JSON doctor report (#3925)** — `cdidx doctor --json` now emits version, runtime, terminal, path, config, `CDIDX_*` environment, inventory, and redaction metadata, with secrets always redacted and optional path redaction for support-safe diagnostics.
+- **Enriched `config show --json` with status and source metadata (#3927)** — config JSON now reports config-file status, active workspace status, effective environment-backed values with sources, secret redaction, and structured JSON errors for unsupported `--json=<format>` variants.
+- **Added editor and diagnostic output formats for `symbols` (#3935)** — `cdidx symbols` now accepts `--format lsp`, `--format qf`, `--format sarif`, and `--json=array` for tools that need locations or one JSON array instead of NDJSON records.
+- **Issue drafts now include filing-ready evidence and omitted-result metadata (#3950)** — `search --format issue-drafts` emits representative `path:line` evidence with compact snippets, source-level omitted-result fields, body sections for omitted results, and replay commands for ad hoc drafts.
+- **Recipe search outputs now support compact listing, projected rows, NDJSON rows, and per-query aggregations (#3957)** — recipe runs can emit `--results-only --search-fields` rows with `query_name` / `recipe` identity, stream row-level `--json=ndjson`, aggregate child-query results with `--count-by` or `--group-by ... --count`, and list recipes with `--format compact` without returning every child definition.
+- **Added projection and paging controls for outline JSON (#3986)** — `cdidx outline --json` now accepts `--outline-fields`, `--kind`, `--limit` / `--top`, and `--cursor outline:<offset>`, and controlled responses include total/returned counts plus `next_cursor` / `has_more` metadata.
+- **Exposed display environment decisions in doctor diagnostics (#3997)** — `cdidx doctor` and `cdidx doctor --json` now report color, terminal-hint, progress, max-line-width, ambiguous-width, and truncation metadata without including sensitive environment values.
+
+#### Changed
+
+- Reduced redundant file-content decoding and checksum work during indexing so large codebase scans spend less time reprocessing unchanged UTF-8 and UTF-16 content.
+- Used direct SHA-256 hashing for CR-free raw byte payloads, avoiding the normalized-checksum scan on the common LF-only source-file path.
+- Reused the raw SHA-256 path directly after load-time normalization proves content is byte-equivalent, avoiding a redundant CR probe on common LF-only files.
+- Streamed checksum calculation now appends CR-free chunks directly, avoiding per-byte normalization loops during unchanged-file probes on LF-only files.
+- Short-circuited UTF-16 heuristic detection when the sample has no NUL bytes, avoiding pair-count scans for ordinary UTF-8 source files.
+- Deferred UTF-16 heuristic text-byte counting until NUL parity passes, reducing decode preflight work on NUL-containing non-UTF-16 files.
+- Limited C# static-interface raw prepass chunk-boundary scanning to a small rolling window, avoiding large temporary buffer rents and duplicate scans for non-candidate files.
+- Stopped C# static-interface raw prepass from scanning for both `abstract` and `virtual` once either contract modifier has been found.
+- Parsed Git LFS pointer files directly from raw ASCII bytes, avoiding UTF-8 string creation, newline replacement, and split allocations during content loading.
+- Reused pooled buffers for streaming raw-byte reads, reducing per-file 80 KiB allocations during C# static-interface prepass and grew-during-read handling.
+- Reused pooled buffers for streaming checksum probes, reducing per-file 80 KiB allocations while validating unchanged large workspace files.
+- Capped streaming checksum and grew-during-read probes to the remaining byte limit plus one byte, avoiding unnecessary full-buffer reads once oversized files are already known to exceed indexing limits.
+- Reused scan-time language data when full-scan records skipped binary or oversized files, avoiding an extra language probe on skip paths.
+- Reused update-mode scan language data when binary or oversized files are converted into skipped records, avoiding another skip-path language probe.
+- Reused MCP scan language data when binary files are converted into skipped records, avoiding another skip-path language probe.
+- Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
+- Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
+- Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
+- Reused scan-time language data when update mode expands the C# static-interface workspace, reducing repeated language probes on expanded update sets.
+- Reused update-mode language probes for stat-based unchanged-file checks, removing another redundant probe on each index target.
+- Reused dry-run language probes while building candidate records, reducing duplicate detection work in large dry-run previews.
+- Limited scan-time language reuse to cases that do not require a second content-sensitive pass, so C/C++ header detection still inspects file content when needed.
+- Passed only scan-confirmed C# files into the C# static-interface prepass for full-scan and MCP indexing, avoiding an extra prepass walk over unrelated languages.
+- Skipped scan-confirmed non-C# targets during update-mode C# static-interface workspace expansion while still preserving deleted contract detection for unscanned paths.
+- Reused full-scan generated-code suppression decisions between extraction and write phases, avoiding duplicate pattern checks per indexed file.
+- Reused generated-code suppression decisions across unchanged-file checks and write paths in CLI update, full-scan, and MCP indexing.
+- Removed per-line string allocations from generated-code header detection, reducing allocation pressure during record construction.
+- Avoided string allocation while checking generated-code filename suffixes during record construction.
+- Reused scan-time language detection during `status --check` workspace freshness validation, avoiding duplicate language probes while hashing large workspaces.
+- Limited scan-time language reuse for extensionless files to stable filename mappings so shebang scripts are re-detected from the loaded content.
+- Skipped generated-code classification during `status --check` freshness hashing, since freshness only compares path, checksum, and line metadata.
+- Avoided allocating generated-code suppression issue objects during the C# static-interface prepass, where only the suppression decision is needed.
+- Added an allocation-free word-boundary precheck before C# static-interface comment/string masking, avoiding large masks for obvious non-candidates.
+- Collapsed C# prepass content-normalization probing to one scan instead of separate CR/BOM/zero-width-space checks.
+- Collapsed line-leading invisible stripping probes to a single `IndexOfAny` pass, avoiding separate BOM and zero-width-space scans on direct normalization callers.
+- Shared the prepass normalization helper across direct chunk, symbol, and reference extraction callers, replacing repeated CR and invisible-marker probes.
+- Used span `IndexOfAny` for the shared prepass normalization probe, replacing the hand-rolled character loop for CR/BOM/zero-width-space detection.
+- Cached raw prepass NUL-byte detection per scan/probe so C# static-interface candidate checks do not repeat UTF-16 eligibility scans for every token.
+- Removed C# static-interface prepass member-header substring allocations by running word-boundary checks over spans.
+- Skipped separator and Unicode normalization work for ASCII index paths that already satisfy the DB path invariant.
+- Skipped separator and trailing-slash normalization work for ignore paths that are already in the scanner's invariant form.
+- Removed per-file path segment array allocations from update-mode path filtering and reused the scanned directory prefix while checking submodule scopes.
+- Reused each ignore-rule-set relative path across all rules from the same ignore file, avoiding repeated relative-path computation in large `.gitignore` files.
+- Reused basename extraction across basename-only rules from the same ignore file, reducing repeated path work during ignore matching.
+- Matched literal ignore rules with ordinal string comparison instead of compiling and running a regular expression.
+- Avoided allocating folded ignore-match candidates when ASCII case folding would leave the path unchanged.
+- Cached effective language-map overrides by start directory and config-file stamps, avoiding repeated parent-directory config discovery while indexing large workspaces.
+- Reused language-detection file names and skipped override suffix checks when no language-map overrides are active.
+- Looked up language-map override suffixes from filename dot positions instead of scanning every override entry per file, preserving the most-specific multi-dot match.
+- Reused cached language-map config path candidates on cache hits, avoiding repeated parent-directory walks while validating override stamps.
+- Combined raw-byte NUL detection and line-ending classification into one pass during content validation, reducing repeated scans on large files.
+- Tracked line numbers incrementally while emitting U+FFFD replacement-character issues, avoiding repeated prefix scans on large decoded files.
+- Used an optimized replacement-character absence check before counting U+FFFD diagnostics, speeding the common clean-content validation path.
+- Skipped FTS oversize-token rune scanning when the whole decoded file is no longer than the token cap.
+- Added an ASCII fast path to FTS oversize-token validation while preserving rune-aware Unicode fallback detection.
+- Skipped detailed conflict-marker line scanning when decoded content contains no conflict marker prefixes.
+- Avoided redundant line trimming while checking generated-code header markers.
+- Rejected extensionless non-shebang files from raw prefix bytes before line decoding and tokenization.
+- Replaced Windows device-path normalization and segment splitting with allocation-free span scanning during file indexability checks.
+- Pre-sized chunk record lists from the known line count, avoiding repeated list growth while chunking long files.
+- Avoided basename extraction and path normalization allocations on generated-code pattern matcher fast paths.
+- Avoided path-segment array allocation while propagating submodule passthrough through default-excluded directory ancestors.
+- Streamed configured symbol extraction over normalized source lines, avoiding whole-file replacement strings and line arrays.
+- Collapsed C# XML doc-comment prechecks to a single slash scan during reference extraction preparation.
+- Skipped Java text-block masking allocation when source files contain no text-block delimiter candidate.
+- Deferred C# reflection-name comment sanitizer buffers until a block comment actually needs masking.
+- Avoided Pascal range string/comment sanitizer allocations on lines without strings or comments.
+- Parsed Swift generic parameter names with spans, avoiding substring and split arrays during alias shadow checks.
+- Parsed TypeScript generic parameter names with spans, avoiding substring and split arrays during alias shadow checks.
+- Compared Java named-type declaration tokens as spans while collecting generic parameter context.
+- Parsed TypeScript named import/export aliases with spans, avoiding comma split arrays.
+- Checked TypeScript parameter shadow names with spans, avoiding comma split arrays in scoped alias analysis.
+- Walked dotted type-reference arguments manually, avoiding per-reference dot split arrays.
+- Checked symbol subkind membership with spans, avoiding pipe split arrays while combining metadata.
+- Compared C# symbol-name keywords without substring allocation during symbol normalization.
+- Compared shared symbol keyword probes without substring allocation during extraction.
+- Trimmed PHP grouped-use items by index, avoiding intermediate trim substrings during import extraction.
+- Trimmed Python import specs by index, avoiding intermediate trim substrings for empty and wildcard entries.
+- Trimmed Python import aliases by index, avoiding extra substring work while splitting `as` clauses.
+- Scanned PHP grouped-use item leading backslashes by index, avoiding `TrimStart` allocation during grouped import reference extraction.
+- Scanned PHP qualified reference leading backslashes by index, avoiding `TrimStart` allocation on shared PHP reference emission paths.
+- Removed a redundant PHP builtin-type trim after qualified names are already rejected, avoiding an unnecessary trim probe during type-reference filtering.
+- Scanned PHP attribute reference leading backslashes by index, avoiding `TrimStart` allocation while emitting attribute type references.
+- Scanned PHP static-access reference leading backslashes by index, avoiding `TrimStart` allocation while emitting class and member references.
+- Trimmed PHP grouped-use prefixes by index, avoiding `TrimEnd` allocation while composing grouped import reference names.
+- Scanned PHP grouped import item leading backslashes by index, avoiding `TrimStart` allocation while composing grouped import references.
+- Trimmed PHP grouped import prefixes by index, avoiding `TrimEnd` allocation while composing grouped import references.
+- Scanned SCSS variable skip prefixes by first non-whitespace index, avoiding `TrimStart` allocation while filtering variable declarations and mixin headers.
+- Scanned Sass indented declaration prefixes by first non-whitespace index, avoiding `TrimStart` allocation while filtering bare-function references.
+- Scanned Sass bare-function prefixes by first non-whitespace index, avoiding `TrimStart` allocation while filtering mixin and function declarations.
+- Scanned XAML type-argument delimiters directly, avoiding split arrays while normalizing generic markup references.
+- Scanned trailing tokens in cross-language comma lists directly, avoiding whitespace split arrays during reference extraction.
+- Trimmed cross-language comma-list segments by index, avoiding intermediate trim substrings during reference extraction.
+- Scanned Kotlin symbol signature tokens by index, avoiding split arrays in constructable-class checks.
+- Trimmed Java `throws` type-list segments by index, avoiding intermediate trim substrings during reference extraction.
+- Trimmed Java keyword type-list segments by index, avoiding intermediate trim substrings for inheritance references.
+- Trimmed Java generic-bound parameter segments by index, avoiding intermediate trim substrings during bound extraction.
+- Trimmed Java generic-bound RHS text by index, avoiding intermediate trim substrings before ampersand scanning.
+- Trimmed Java generic-bound ampersand segments by index, avoiding intermediate trim substrings before type-expression parsing.
+- Trimmed C# base-list segments by index, avoiding intermediate trim substrings during inheritance reference extraction.
+- Trimmed C# where-constraint segments by index, avoiding intermediate trim substrings during constraint reference extraction.
+- Trimmed shared comma-separated type-list segments by index, avoiding per-segment substring work before type parsing.
+- Trimmed Java generic-parameter name segments by index, avoiding intermediate trim substrings while collecting ignored type parameters.
+- Trimmed Java module `provides` implementation segments by index, avoiding intermediate trim substrings during JPMS reference extraction.
+- Checked TypeScript function-type prefixes with spans, avoiding substring trim allocation before arrow-type parsing.
+- Trimmed Kotlin delegated type clauses by index, avoiding a substring trim chain before bare-type extraction.
+- Trimmed Kotlin bare type-name slices by index, avoiding an intermediate trim substring during reference extraction.
+- Trimmed Kotlin call-argument suffixes by index, avoiding a substring trim chain before bare-type name scanning.
+- Trimmed TypeScript same-line import/export brace prefixes by index, avoiding a substring trim chain during multiline named-binding detection.
+- Trimmed TypeScript previous-line import/export brace prefixes by index, avoiding a substring trim chain while scanning multiline bindings.
+- Checked TypeScript import-prefix trailing commas by index, avoiding TrimEnd allocation in multiline named-import detection.
+- Trimmed C# primary-constructor semicolon terminators by index, avoiding a substring trim chain before base-call detection.
+- Trimmed C# primary-constructor body-open terminators by index, avoiding a substring trim chain before base-call detection.
+- Trimmed C# base-type body-open terminators by index, avoiding a substring trim chain before base type parsing.
+- Trimmed C# primary-constructor first base entries by index, avoiding intermediate trim substrings during base-call detection.
+- Trimmed C# base-type first entries by index, avoiding intermediate trim substrings during base type parsing.
+- Trimmed C# callable parameter lists by index, avoiding a substring trim chain before static-interface signature matching.
+- Trimmed C# callable parameter type names by index, avoiding a substring trim chain while normalizing static-interface signature shapes.
+- Trimmed C# callable parameter default-stripped text by index, avoiding `Trim` allocation while normalizing static-interface signature shapes.
+- Scanned C# callable ref-kind modifier tails by index, avoiding `TrimStart` allocation while normalizing static-interface signature shapes.
+- Scanned C# callable parameter modifier tails by index, avoiding `TrimStart` allocation for `this` and `scoped` parameters.
+- Trimmed shared top-level call-argument prefixes by index, avoiding a substring trim chain before type-expression parsing.
+- Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
+- Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
+- Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
+- Parsed PHP grouped import items by comma index, avoiding per-line comma split arrays during symbol extraction.
+- Parsed Python import specs by comma and dot index, avoiding split arrays while expanding import symbols.
+- Resolved Python relative import module prefixes by scanning dot segments directly, avoiding prefix split and join arrays.
+- Enumerated F# record, union, and active-pattern segments directly, avoiding delimiter split arrays during symbol extraction.
+- Trimmed F# segments by index, avoiding intermediate trim substrings during record, union, and active-pattern extraction.
+- Compared Swift import-kind keywords without substring allocation during symbol name normalization.
+- Enumerated Go interface and struct body segments directly, avoiding semicolon split arrays during embedded symbol extraction.
+- Reused Go's direct segment scanner for grouped value names and trimmed segments by index, avoiding comma split arrays and intermediate trim substrings.
+- Checked Go grouped `type` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
+- Checked Go grouped `const` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
+- Checked Go grouped `var` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
+- Sliced Go standalone `const` declaration remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
+- Sliced Go standalone `var` declaration remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
+- Sliced Go `import` declaration remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
+- Sliced Go block-import remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Go import-block closing segments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go inline block-import closing segments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go interface-body trailing braces by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go interface member trailing braces by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go interface member line comments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go interface member block comments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go struct embedded-type trailing braces by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go struct embedded-type line comments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go struct embedded-type block comments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go struct embedded-type tags by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Python logical-header continuation endings by index, avoiding chained trim calls during symbol extraction.
+- Checked Python logical-header line continuations by scanning backward, avoiding a trailing trim allocation during symbol extraction.
+- Trimmed Python import inline comments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Python parenthesized-import fragments by index, avoiding a trailing trim allocation during symbol extraction.
+- Trimmed Python parenthesized-import closing segments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Fortran continuation first lines by index, avoiding a trailing trim allocation during symbol extraction.
+- Trimmed Fortran continuation prefix segments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Fortran continuation next-line starts by index, avoiding a leading trim allocation during symbol extraction.
+- Trimmed Fortran continuation ampersand suffixes by index, avoiding a suffix substring/trim chain during symbol extraction.
+- Trimmed Fortran continuation next-line endings by index, avoiding a trailing trim allocation during symbol extraction.
+- Trimmed Fortran continuation first-line starts by index, avoiding a leading trim allocation during symbol extraction.
+- Trimmed Fortran module block-start remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran block-data start remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran derived-type start remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran block-end remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran block-end tail text by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran module-procedure end remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran module-procedure end tail text by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran routine-end remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Scanned Dockerfile `ENV` bodies from the original line, avoiding line-start and body trim allocations during symbol extraction.
+- Scanned Dockerfile `LABEL` bodies from the original line, avoiding line-start and body trim allocations during symbol extraction.
+- Found Dockerfile key/value assignment separators by index, avoiding token substring allocation during symbol extraction.
+- Trimmed Dockerfile `ENV` signatures by index, avoiding a full-line trim allocation during symbol extraction.
+- Trimmed Dockerfile `LABEL` signatures by index, avoiding a full-line trim allocation during symbol extraction.
+- Scanned Shell alias segment starts by index, avoiding segment substring/trim allocations before alias detection.
+- Found Shell alias assignment separators on the original line, avoiding token substring allocation before name extraction.
+- Trimmed Shell alias names by index, avoiding a slice/trim allocation chain during symbol extraction.
+- Trimmed Shell alias signatures by index, avoiding a full-line trim allocation during symbol extraction.
+- Scanned Shell alias tokens for assignments by index, avoiding token substring allocation during alias enumeration.
+- Read Shell alias tokens on the original line, avoiding per-alias segment substring allocation during symbol extraction.
+- Trimmed Visual Basic enum attribute remainders by index, avoiding a suffix substring/trim chain during symbol extraction.
+- Checked Visual Basic enum initializer continuations by trailing index, avoiding a `TrimEnd` allocation during symbol extraction.
+- Scanned Visual Basic enum initializer code ranges by index, avoiding comment-stripping substring allocation during symbol extraction.
+- Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
+- Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
+- Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
+- Enumerated HTML class-attribute tokens directly, avoiding whitespace split arrays while indexing class references.
+- Enumerated C++ same-line class body members directly, avoiding semicolon split arrays on large class declarations.
+- Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
+- Tightened the CI NuGet cache key to avoid package-cache misses from test-only project file edits while keeping locked restore as the package-input guard.
+- Reused one trimmed publish output while checking C# Razor query aliases, eliminating a duplicate `dotnet publish` run from that test.
+- Folded the trimmed query JSON and Razor-alias smoke coverage into one publish-backed test, removing another redundant `dotnet publish` run from the suite.
+- Removed the CI test command's duplicate results-directory argument so `CodeIndex.Tests.runsettings` remains the single owner of the `TestResults` path.
+- Stopped writing CI test stdout logs to disk for clean first-pass success lanes while preserving console streaming and failed-run log artifacts.
+- Added an OS-scoped NuGet cache restore key so lock-file changes can still reuse compatible package cache contents.
+- Removed the redundant explicit `--no-restore` from the CI `dotnet test` command because `--no-build` already suppresses restore.
+- Replaced fixed two-second waits in concurrent snapshot stress tests with iteration-based completion and the same two-second slow-host cap.
+- Removed post-cancellation fixed sleeps from background-task observer tests by relying on the observer's fault-only continuation contract.
+- Replaced shared-writer blocking test grace sleeps with explicit task-start signals.
+- Shared the normal trimmed published CLI across published CLI smoke tests so each test process pays that publish cost once; single-file publish coverage remains isolated.
+- Moved CI stdout-log directory creation onto the failed-test path so clean first-pass lanes do not pre-create `TestResults` for that log file.
+- Kept CI TRX telemetry summarization available on every matrix lane by letting the failure-diagnostics step build the helper when needed.
+- Cached the pinned Stryker global tool and NuGet packages in the weekly mutation workflow, and update/install the tool only on cache misses.
+- Moved published CLI subprocess execution into `TrimmedCliTestHelper`, removing duplicated process-launch helpers from index/query tests.
+- Shortened post-extraction hook timeout/cancellation leak checks by lowering the artificial hook delay and using a smaller observation window that still catches un-killed workers.
+- Reused `TestProjectHelper.DeleteDirectory` in Git helper tests instead of carrying a duplicate robust cleanup loop.
+- Reused `TestProjectHelper.DeleteFile` for MCP test file cleanup while preserving the explicit SQLite pool clear.
+- Added shared SQLite database sidecar cleanup in `TestProjectHelper` and used it from database tests instead of a local delete helper.
+- Reused `TestProjectHelper.DeleteDirectory` for report bundle workspace cleanup instead of a local best-effort recursive delete helper.
+- Reused shared temporary directory cleanup in traversal-policy and data-directory security tests.
+- Reused shared temporary directory cleanup for import/export archive test workspaces.
+- Reused shared temporary directory cleanup for configured-pattern extractor test workspaces.
+- Reused shared temporary directory cleanup for private/global log test workspaces.
+- Reused shared temporary directory creation and cleanup for suggestion-store test fixtures.
+- Centralized SQLite-pool-cleared temporary directory cleanup in legacy schema migration tests.
+- Reused shared temporary directory cleanup for MCP indexing fixture workspaces.
+- Reused shared temporary directory cleanup for audit-log private parent workspaces.
+- Reused shared temporary directory cleanup for metrics-log private parent workspaces.
+- Reused the DB command runner test cleanup helper for temporary cleanup safety fixtures.
+- Reused shared temporary directory cleanup for suggestion CLI test fixtures.
+- Reused shared temporary directory cleanup for issue duplicate preflight fixtures.
+- Reused shared temporary directory cleanup for changelog tool test repositories.
+- Reused shared temporary directory cleanup for file-indexer skipped-root fixtures.
+- Reused shared temporary directory cleanup for file-indexer symlink target fixtures.
+- Reused shared temporary directory cleanup for program-runner query trace log workspaces.
+- Reused shared temporary directory cleanup for program-runner extractor/cache directory fixtures.
+- Reused shared temporary directory cleanup for import rollback workspaces.
+- Reused shared temporary directory cleanup for audit log write-target directory fixtures.
+- Reused shared temporary directory cleanup for metrics write-target directory fixtures.
+- Reused shared temporary directory cleanup for configured-pattern out-of-tree language fixtures.
+- Reused shared temporary directory cleanup for temporary dotnet host fixtures.
+- Reused shared temporary directory cleanup from the watch runner test helper.
+- Reused shared temporary directory cleanup for database purge workspaces.
+- Reused shared temporary directory cleanup for reader BOM end-to-end fixtures.
+- Removed redundant `Directory.Exists` guards around file-indexer cleanup helper calls.
+- Removed remaining redundant directory-existence guards around MCP and index-command cleanup helpers.
+- Reused shared file cleanup for index-command temporary DB, lock, and outside-fixture file cleanup.
+- Reused MCP server file cleanup helpers for temporary DB and lock sidecar cleanup.
+- Reused shared file cleanup for program-runner cache, script, and temporary file cleanup.
+- Ran broad extractor practical-budget runaway guards only on the primary net8.0 target, keeping focused functional coverage cross-target while avoiding duplicate large-fixture work on net9.0 lanes.
+- Removed the redundant `TestResults/**/*Sequence*.xml` artifact glob because `TestResults/**/*.xml` already uploads VSTest sequence XML diagnostics.
+- Removed `dev.sh coverage`'s duplicate `--results-directory` argument so the shared runsettings file remains the only owner of the `TestResults` path for local coverage runs too.
+- Routed MCP index test database sidecar cleanup through `TestProjectHelper.DeleteSqliteDatabaseFiles`, removing a second local retry loop.
+- Replaced MCP request-timeout test fixed sleeps with signal-gated delay hooks, confirmed hook startup before awaiting timeout responses, and kept the guards shorter than the old fixed waits.
+- **Exposed full grouped-hotspot definition sites (#3900)** — `hotspots --group-by-name --json` now keeps `paths` as a capped compatibility sample while adding `representative` and full `definition_site_details` metadata for every definition site in the group.
+- **Added structured impact path details (#3932)** — `impact --json --with-paths` now keeps the existing name-only `paths` arrays and adds `path_details` with per-hop definition site, family key, logical target key, and reference-site metadata so same-name or partial symbols are distinguishable.
+- **DB maintenance commands gained safer previews and bounded schema diagnostics (#3937)** — `db checkpoint --dry-run` now reports the source files and bytes without creating a checkpoint, `db schema` adds entry/SQL/internal-object controls, and `db --help` documents the main maintenance side effects.
+- **DB diagnostics gained an `integrity` subcommand and schema projections (#3958)** — `cdidx db integrity` now aliases the existing integrity check, and `db schema` accepts `--type`, `--name`, and `--summary-only` so automation can request focused schema diagnostics without consuming the full SQL payload.
+- **Adjusted hotspot ranking for generic names (#3976)** — hotspot ordering now uses `ranking_score` with a `generic_name_penalty` for broad names such as `Combine` and `GetString`, while JSON keeps raw `reference_score` and the applied penalty for diagnostics. `symbols --sort hotspot` and `--sort complexity` use the same penalized hotspot signal for ordering.
+- **SQLite command policy now centralizes typed parameters and scalar reads (#3982)** — high-traffic DB paths use shared helpers for typed text/integer/boolean/limit binding, integer scalar diagnostics, and quoted-identifier SQL construction, and the audit recipe now distinguishes `AddWithValue` risk from quoted identifiers and typed helper usage.
+- Centralized SQLite connection-string modes, read-only URI flag construction, command timeout diagnostics, and WAL/read-only fallback status reporting under a shared SQLite connection policy (#3983).
+- **MCP timeout diagnostics now expose stable categories (#3990)** — HTTP response write and SSE write timeouts now log `timeout:http_response_write` / `timeout:sse_write`, actively abort the HTTP response when the write budget expires, and JSON-RPC request timeouts include `timeout_category: "mcp_request"` so callers can distinguish timeout classes from caller cancellation.
+
+#### Fixed
+
+- Improved `unused` filtering with the `--confidence` alias and the `--actionable` preset for private medium-confidence cleanup candidates.
+- Routed serialization contracts, DTO/config/metadata surfaces, generated/documentation surfaces, and test-only hooks into the low-confidence unused bucket.
+- Filled `unused --count --json` bucket and confidence summaries.
+- **`validate-config` no longer crashes when no config file exists (#3892)** — `validate-config --json` now accepts JSON mode, returns `valid: true` with `path: null` for no-config workspaces, and emits structured JSON errors for validation or argument failures in JSON mode.
+- **Search audit help now lists implemented output-control flags (#3893)** — `search --help` includes the audit projection, sampling, per-file, JSON byte limit, result-only, and follow-up flags already accepted by the parser, and `recipes`/`audit` now provide direct help and aliases for the underlying search audit flows.
+- **C# reference extraction now suppresses common qualified member-call overmatches (#3894)** — `Path.Combine`, `Math.Max`, `string.Join`, `JsonElement.GetString`, and similar receiver-qualified common calls no longer appear as references to unrelated same-name local functions, while direct and `this.` local calls remain indexed.
+- **`deps --exclude-tests` now filters both sides of dependency edges (#3895)** — file-dependency queries now remove likely test-like source and target paths, and `deps` limits symbol sampling to displayed edges so limited queries stay responsive.
+- **JSON-mode query, batch, suggestions, and validate output is now consistently machine-readable (#3896)** — `find --json=array`, invalid regex errors, batch JSON parse errors, status/languages/validate argument errors, empty suggestion lists, missing suggestions, `validate --format count --json`, and BOM validation findings now emit parseable JSON contracts.
+- **`validate` can now scope out tests and paths (#3897)** — added `validate --exclude-tests`, repeatable `--exclude-path`, and `--include-generated` support so validation output can avoid fixtures and generated samples, and suppressed default UTF-8 BOM noise for Visual Studio `.sln` files.
+- **Repository configuration files are now indexed for search (#3898)** — `.config`, `.runsettings`, `.rules`, and `.gitattributes` files are recognized instead of being skipped as unknown extensions, so `files --path` and `search --path` can target important repository configuration.
+- **Dependency manifests and locks now expose package graph facts (#3899)** — `Directory.Packages.props`, `packages.config`, `requirements.txt`, `pyproject.toml`, and `packages.lock.json` now emit package symbols and `dependency` references with manifest/lock, version/constraint, resolved, requested, scope, and direct/transitive metadata. CLI language and kind filters accept `dependency_manifest`, `dependency_lock`, `package`, and `dependency`.
+- **Audited private helpers reported by `unused` (#3901, #3945)** — removed dead production helper wrappers and stale C# namespace-scope support so `unused --exclude-tests` no longer reports those reviewed private helpers as cleanup candidates.
+- **Reduced repeated exact-substring search hints (#3903)** — punctuation-heavy search JSON now attaches the rerun hint only to the first result, and the guide clarifies `find --all` literal substring and case behavior.
+- **Recipe search output can now be globally bounded and reports byte-cap interruption clearly (#3904)** — recipe runs support `--total-limit` across child queries, `--max-json-bytes` is limited to NDJSON row streams instead of being silently ignored by compact JSON, and interrupted NDJSON streams now finish with `done:false`.
+- **Added not-found metadata for empty config/workspace states (#3905)** — `config show --json` and `workspace status --json` now include searched paths, supported file names, explicit status reasons, and effective/default summaries when no local config or workspace manifest exists.
+- **SQLite parameter binding now avoids `AddWithValue` inference in production paths (#3907)** — database readers, writers, and related CLI database queries now bind parameters through shared typed helpers that set SQLite type, `DbType`, and text sizes where available.
+- **Head freshness fields are now explainable (#3911)** — `status --explain` now documents `indexed_head_sha`, `indexed_head_commit`, and related HEAD drift fields so users can distinguish the latest incremental index stamp from the legacy full-scan-only stamp.
+- **C# symbol range regression coverage now locks small method spans (#3912)** — regression tests cover C# methods near local functions, lambdas, generic helpers, and later partial-class members so `definition`, `goto`, `symbols --sort size`, and `outline` keep using tight method end lines instead of class-level EOF ranges.
+- **Body-focused definition JSON no longer emits uncapped `content` (#3913)** — `inspect` JSON definitions and `definition --json --body` now omit the full definition `content` field and report why callers should use `body_content` slices instead.
+- **Plain outline JSON now honors explicit limits (#3914)** — `outline --json --limit <n>` now caps the `symbols` array and includes paging metadata instead of silently returning every symbol.
+- **`inspect --path --line` now returns exact or enclosing symbols (#3915)** — file-line inspect resolves a symbol on the requested definition line first, then the smallest enclosing symbol for body lines, so JSON results include `definitions`, `nearby_symbols`, and body-capable symbol context instead of only a source excerpt.
+- **CLI help and excerpt contracts are tighter (#3916)** — `inspect`, `excerpt`, `references`, `batch`, `db`, and `hooks` help now documents their actual modes and JSON Lines behavior, legacy `refs`/`stats`/`fold` help resolves to command-specific usage, unknown `--help --json` returns a JSON usage error, and `excerpt` accepts `path:line` / `path:start-end` locations with clearer focus-option validation.
+- **GitHub Actions `run:` blocks are classified as code in search facets (#3917)** - Searches in workflow YAML now treat matches inside `run: |` and `run: >` script blocks as code instead of help text, while ordinary prose block scalars keep existing help-text classification.
+- **Audit-oriented defaults now avoid help examples and support files (#3918)** - Risky-code recipes exclude `help_text` matches by default, and `unused --exclude-tests` / `files --exclude-tests` now apply production-source defaults when no explicit path scope is supplied.
+- **Regex construction audit recipes now separate bounded aliases from raw-looking construction (#3919)** — `regex-construction` searches for `new Regex(` to avoid `RegexTimeoutDiagnostic` prefix hits, and built-in recipes now expose bounded-wrapper alias and fully qualified raw BCL regex child queries with `risk_evidence`.
+- **Filesystem traversal audits now flag direct enumeration without nearby options (#3920)** — `filesystem-traversal/enumerate-without-options` highlights direct `Directory.Enumerate*` calls that lack nearby `EnumerationOptions` evidence and carries guard-filter metadata for reproducible triage.
+- **Auth-token audits now have a narrower recipe and token-domain hints (#3923)** — `auth-token-audit` focuses on bearer, GitHub, API, access-token, authorization-header, and token-secret contexts, while broad `token` searches now point reviewers toward auth-token or broad-token recipes when results are empty or noisy.
+- **`unused` now preserves generic method kinds (#3924)** — C# methods with generic parameters, default parameters, or expression-bodied implementations now keep the same `function` kind in `unused` JSON that `symbols` and `definition` report.
+- **Issue-draft output now warns about repository-missing labels (#3926)** — `search --format issue-drafts --open-issues github --repo <owner/name>` fetches repository labels, reports generated labels that do not exist as `missing_labels`, and includes a human-readable `label_warning` without mutating GitHub labels.
+- **Cancellation now propagates through more long-running paths (#3928)** — index and backfill database writes, MCP HTTP response writes, and export/import archive copies now honor the caller cancellation token so interrupted operations stop earlier instead of continuing on non-cancellable paths.
+- **Audit recipes now expose risk evidence facets (#3929)** — built-in recipe query metadata and recipe result JSON now include `risk_evidence` so reviewers can distinguish risky matches from likely-bounded helper, sanitizer, factory, protocol, or saturation cases without losing the evidence path.
+- **Fixed `find --format lsp` match ranges (#3930)** — LSP locations now cover the full matched literal instead of returning a one-character range.
+- **Fixed `search` editor and CSV locations (#3931)** — `--format lsp`, `--format qf`, and `--format csv` now point to the primary matched line and column instead of the containing chunk start.
+- **`goto --exclude-tests` now matches its help contract (#3934)** — `goto` accepts the documented exclude filters instead of rejecting `--exclude-tests` and `--exclude-path` as unsupported options.
+- **`status --explain` now covers visible status fields (#3936)** — `status --explain path_case_sensitive` and JSON `known_fields` now include runtime diagnostics in addition to readiness fields, so users can explain fields they see in `status --json`.
+- **`map --sections hotspots --json` now returns its hotspot fields (#3938)** — Section filtering now maps `hotspots` to `top_files`, `symbol_rich_files`, `reference_rich_files`, and `entrypoints`, and the response reports the section-to-property mapping for CLI JSON and MCP structured output.
+- **`workspace current --json` now returns an explicit inactive state (#3939)** — when no active workspace is set, JSON output includes `active:false`, `workspace:null`, and stable `status` / `reason` / `code` fields instead of serializing to `{}`.
+- **Guarded broad-search refusals now include candidate diagnostics (#3940)** — CLI and MCP refusal text includes sampled candidate files, sampled languages, the guard budget, and count/count-by fallback hints.
+- **Recipe count output now reports matched and omitted result counts (#3941)** — `search --recipe ... --format count` now returns explicit per-query matched, emitted, and omitted counts, and regular recipe JSON exposes the same count metadata instead of requiring callers to infer truncation from emitted rows.
+- **Added compact excerpt JSON controls (#3942)** — `cdidx excerpt --json` now supports `--no-semantic-tokens`, and `excerpt --line <line> --context <n>` is documented as a concise line-focused form.
+- **Deps graph JSON output now carries schema metadata and symbol controls (#3943)** — `deps --json` and `deps --format json-graph` include `api_version`, freshness, and `query_context`, and `--suppress-noise`, `--symbol`, and `--symbol-family` can trim generic or ambiguous edge symbol samples.
+- **Audit log idle waits now accept cancellation (#3946)** — MCP audit-log drain waits use the existing completion signal with a cancellation-aware overload so shutdown and tests can stop waiting without polling or wall-clock sleep loops.
+- **Outline JSON shape errors are now command-specific (#3947)** — `outline --json=array` and other JSON shape values now explain that outline emits one JSON object and point callers to plain `--json` with limit/paging metadata.
+- **`files --count --bytes` now reports byte aggregates (#3948)** — count mode now includes total, average, and maximum file-size metadata in JSON output and prints a size-aware human summary instead of silently dropping `--bytes`.
+- **Fixed `validate --format lsp` diagnostics (#3949)** — LSP locations now include a non-zero fallback range plus validation kind, message, severity, and source metadata.
+- **SQLite retry backoff no longer uses `Thread.Sleep` (#3952)** — transient DB-open retries now wait through a bounded wait primitive that keeps cancellation behavior consistent and removes the remaining production blocking sleep.
+- **Utility commands now reject unsupported JSON forms with structured errors (#3955)** — `license --json`, `license --json=array`, and `completions ... --json` now return JSON error objects instead of falling back to human text or ambiguous option handling.
+- **Inactive workspace status JSON is now machine-readable (#3956)** — `workspace status --json` now includes `manifest_found:false` and a stable `manifest_status.code` when no workspace manifest is present.
+- **Exception classifiers no longer depend on provider message substrings (#3959)** — SQLite, raw FTS, import manifest, and trimmed JSON paths now use scoped error codes, preflight state checks, explicit exception kinds, or runtime metadata instead of branching on localized exception prose.
+- **Static regex audits now cover direct `Regex.Match` and `Regex.Replace` calls (#3960)** - built-in audit recipes can flag static regex APIs separately from `new Regex(...)`, while additional raw call sites now use the shared bounded regex wrapper.
+- **Package normalization now hardens temporary rewrites (#3961)** — package rewrites now use collision-resistant `.cdidx-normalize-*.tmp` files, preserve any pre-existing legacy `.normalize-tmp` neighbor, flush replacement durability on Unix, and honor cancellation between archive entries and stream chunks while cleaning up created temp files best-effort.
+- **Best-effort cleanup failures are now visible in low-noise diagnostics (#3962)** — private log pruning reports failed file deletes through the existing diagnostic sink, and watch sub-run spool cleanup failures now emit a bounded warning without failing the watch update.
+- **Runtime timing paths now use injectable time or wait handles (#3963)** — MCP health, keep-alive, audit timestamps, request-cancellation tombstones, report bundle metadata, and checkpoint metadata now use injectable time, while audit-log idle waits use a completion signal and spinner shutdown waits for the spinner task instead of wall-clock polling or `Thread.Sleep`.
+- **MaxValue sentinels no longer expand fetches or diagnostics into unbounded work (#3964)** — MCP and CLI over-fetch helpers now clamp to documented result limits, bounded HTTP reads avoid huge declared-length preallocation, overflowed maintenance byte estimates report unknown, and rate-limit diagnostics cap huge intervals.
+- **Built-in audits now cover recurring dogfood risk patterns (#3967)** — added `dogfood-risk-patterns` with focused child queries for exception-message classifiers, static Regex APIs, relaxed JSON encoders, temp-file and overwrite moves, suppressed cleanup diagnostics, wall-clock deadlines, MaxValue sentinels, recipe contracts, raw SQL/PRAGMA paths, environment parser fallback, and plugin lifecycle hazards.
+- **Long-running process waits now separate cancellation from timeouts (#3969)** — git process waits pass the caller token into `WaitForExitAsync`, while the MCP HTTP shutdown boundary now uses a bounded dispose wait with diagnostics instead of an unbounded synchronous wait.
+- **Filesystem boundary checks now share common cleanup and reparse-point primitives (#3970)** — sensitive-state directories, private logs, cleanup targets, scanner probes, plugin discovery, pattern configs, import/export temp cleanup, and MCP path boundaries now use shared normalization, descendant, and symlink/reparse-point helpers so the policy is easier to audit and less likely to drift.
+- **Extractor plugin lifecycle hardening (#3971)** — plugin types that implement both symbol and reference extractor interfaces are now constructed once and registered for both roles from the same instance, while status output reports retained plugin assembly load context counts for long-running process audits.
+- **Centralized integer environment option parsing for SQLite pragma knobs (#3972)** — SQLite cache, mmap, and busy-timeout environment options now use the shared `CdidxEnvironment` parser path with source/status/fallback metadata instead of direct process environment reads.
+- **Release downloads now use the shared GitHub HTTP policy (#3973)** — upgrade asset downloads now share bounded timeouts, proxy/default-credential handling, and bounded redacted HTTP failure diagnostics without sending GitHub API-only media type headers to release assets.
+- **Improved search CLI ergonomics and recipe discovery (#3975)** — search help now surfaces projection/output controls, `--list-recipes --query <filter>` narrows discovery, misspelled recipe query selectors suggest likely matches across recipes, and two-token code phrases such as `async void` can trigger an exact-substring hint.
+- **Added source-only scope for ad hoc searches (#3978)** — `cdidx search --source-only` and `--audit-scope source` now apply production-source defaults to ad hoc and named searches without requiring a recipe.
+- **The empty-catch audit recipe now targets actual catch clauses (#3979)** — `risky-code/empty-catch-review` searches for the `catch` token with code-origin and brace guard filtering plus risk evidence, covering spacing-free catch clauses while avoiding comments, parser identifiers, and string-literal syntax examples that previously overwhelmed audit results.
+- **HTTP MCP transport now disposes owned semaphore gates (#3985)** — clean shutdown now releases the long-lived queue and handler SemaphoreSlim instances once the accept loop has stopped and the gates are idle.
+- **Generated checkpoint and report archive timestamps are safer (#3987)** — automatic checkpoint names now add a random suffix after the UTC timestamp so repeated generated names in the same millisecond do not collide, and report bundle tar entries use a stable modification time while generation time remains in bundle metadata files.
+- **Process and memory metric capture is now centralized (#3988)** — CLI memory traces, status process metrics, and MCP index memory traces now share one snapshot helper that disposes the current-process handle after reading metrics.
+- **Broad exception catch audit results now expose boundary taxonomy (#3992)** — `risky-code/broad-exception-catch` now reports broad-catch boundary categories and expected diagnostic behaviors in recipe list, JSON, compact, and issue-draft output so intentional top-level, cleanup, probe, diagnostic-sanitization, and worker boundaries can be distinguished from catches that should be narrowed or rethrown.
+- **Bounded file reads now share explicit open and audit contracts (#3994)** — production length checks, probes, tails, hashes, and archive export copies now use shared file-open helpers, archive export copies the captured snapshot length exactly, and the new `bounded-read-evidence` recipe reports positive evidence for max-byte helper paths.
+- **File URI conversion now uses a shared policy across LSP and SQLite paths (#3995)** — LSP locations, LSP `textDocument.uri` parsing, and SQLite read-only file URI generation now route through one helper so spaces and `#` characters are escaped and decoded consistently.
+- **Package normalization now clears stale legacy temp files safely (#3996)** — before rewriting, the normalizer removes a legacy `.normalize-tmp` sidecar only after taking an exclusive lock, aborts when that file is locked or inaccessible, and continues to write replacements through durable same-directory `.cdidx-normalize-*.tmp` temp files.
+
+#### Security
+
+- **Bounded JSON protocol and metadata parsing (#3908)** — worker protocol JSON now uses explicit depth-limited parse and serializer options, suggestion-store streaming observes cancellation, and export manifests read unknown-extension samples with item and string caps.
+- **MCP audit argument redaction now bounds secret-pattern scans (#3909)** — audit logging now applies a timeout-bounded, display-prefix secret scan before echoing opted-in argument values, preventing pathological argument text from stalling best-effort audit emission.
+- **Git and upgrade subprocesses now scrub inherited environments (#3910)** — git helpers and the upgrade installer now launch with an explicit allowlist for PATH/home/temp/proxy/certificate and tool-specific variables, while `CDIDX_TEST_*` forwarding remains limited to isolated worker test hooks.
+- **Diagnostic redaction policy now backs suggestion and lifecycle log scrubbing (#3933)** — suggestion persistence/GitHub submission redaction and global tool-log argument redaction now share the central sensitive-name and token policy, reducing drift between support diagnostics and locally stored suggestion metadata.
+- **Filesystem enumeration now uses an explicit shared traversal policy (#3951)** - solution/project discovery, indexer marker traversal, plugin/hook discovery, checkpoint/backup listing, and import cleanup now route top-directory-only enumeration through one helper with explicit recursion and inaccessible-path behavior.
+- **GitHub HTTP policy now bounds timeouts and reports proxy credential status safely (#3954)** — GitHub API clients clamp infinite or oversized timeouts to five minutes, and `cdidx doctor` reports only `proxy_default_credentials: enabled|disabled` plus the maximum timeout without exposing credential material.
+- **Relaxed JSON escaping is now gated to local JSONL diagnostics sinks (#3965)** — metrics and MCP audit logs share a named local-only writer option, and tests prevent relaxed escaping from spreading into HTTP, HTML, or externally embedded JSON surfaces.
+- **MCP HTTP auth and SSE drops now expose internal diagnostics (#3966)** — HTTP health now reports bearer auth-denial class counters and SSE event-stream drop reasons while keeping client-visible auth failures generic.
+- **Source-code guard diagnostics now include matched reason counts (#3974)** — `suggest_improvement` rejections keep the primary `source_code_rejection.reason_code`, add bounded `reason_code_counts` diagnostics without echoing rejected text, and document that the guard is a convenience filter rather than a security or data-loss-prevention boundary.
+- **XML extraction now uses shared bounded reader settings (#3981)** — extractor XML readers now centralize DTD policy, disable external resolution, and apply explicit document and entity character limits while keeping app manifests on the intentional DTD-ignore path.
+- **Private temp and control files are created with owner-only modes up front (#3984)** — watch sub-run spool files, index lock files, staged hook scripts, and sensitive atomic temp files now request POSIX `0600` at creation time instead of relying only on a later chmod.
+- **Process launch builders now share an explicit no-shell policy (#3991)** — installer, git, symbol-worker, and hook-worker process start info now route through a shared helper for shell use, working directory, redirection, worker UTF-8 encoding, and protocol line-limit arguments.
+- **Regex timeout diagnostics and redaction fallbacks now share one policy (#3993)** — CLI, MCP, indexing, configured extractor, diagnostic redaction, suggestion, and GitHub response-body timeout paths now use centralized categories, messages, and fail-closed redaction fallback strings.
+- **Atomic file move, directory publish, and cleanup paths now share explicit policy helpers (#4001)** - log rotation, import replacement rollback, database restore moves, checkpoint publishing, suggestion corrupt-file preservation, and best-effort cleanup now route through shared helpers that make overwrite behavior, long-path normalization, destination mode application, and parent-directory durability checks explicit.
+
+#### Documentation
+
+- **Documented the sensitive buffer clearing policy (#3989)** — the developer guide now classifies token material, LSP request payloads, bounded HTTP copy buffers, and non-sensitive protocol/generated buffers, with focused tests covering token UTF-8 zeroing and LSP payload range clearing.
+
+#### Internal
+
+- **Added JSON contract coverage for CLI utility error paths (#3968)** — tests now parse structured JSON from utility unsupported-option cases so `license`, `completions`, and `config show` keep their machine-readable error contracts.
+- **Centralized touched CLI stdout contracts behind output helpers (#3980)** — `CommandOutputWriter` now owns shared stdout emission for JSON/text helpers, and touched error and count payloads route through output helpers instead of ad hoc stdout serialization.
+- **Background timeout handling now shares categorized cancellation helpers (#3998)** — GitHub API calls, upgrade downloads, MCP client requests, HTTP response writes, and SSE writes now use a common timeout scope that distinguishes timeout cancellation from caller cancellation.
+- **MCP bounded-channel and gate contracts are now documented and ownership is explicit (#3999)** — HTTP request queues, request-log drops, concurrent handler gates, event-stream gates, and audit-log drops now have documented backpressure behavior, including which gates are owner-disposed and which transport semaphores intentionally live for the transport lifetime during bounded shutdown.
+- **Centralized sensitive buffer and bounded generated JSON policy (#4000)** — sensitive ArrayPool returns now route through `SensitiveBufferPolicy`, and bounded generated JSON capture uses a named helper with tests for the clear ranges and byte-budget clamp.
+- **Installer snippet tests now fail fast on hangs (#4015)** — `InstallScriptTests.RunInstallerSnippet` now applies a bounded timeout, kills the snippet process tree when the timeout expires, and surfaces captured diagnostics from selected success assertions instead of allowing the full suite to hang silently.
+- **Reinstall test failures now include installer output (#4024)** — installer snippets now keep a wider bounded timeout for net9 test load, and `DownloadAndInstall_ReinstallReplacesExistingOptionalDirectories` reports captured stdout/stderr when the snippet exits non-zero so reinstall failures are diagnosable from the assertion message.
+- **GitHelper timeout tests now tolerate full-suite load (#4027)** — git subprocess timeout assertions now use a wider wall-clock budget while keeping the fake git command's natural completion beyond that budget, so missed timeout handling still fails deterministically.
+
 ### [1.33.2] - 2026-06-23
 
 #### Changed
@@ -4206,6 +4581,381 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.34.0] - 2026-06-26
+
+#### 追加
+
+- **`batch --json-summary` の明示的な完了レコードを追加しました (#3906)** — 非対話の batch 呼び出し元は、即時 EOF の `0` を含む `commands_processed` 付きの最終 JSON オブジェクトを要求できるようになりました。既定の空入力時の挙動は exit 0 かつ無出力のままです。
+- **`languages` に言語名・拡張子・alias lookup を追加しました (#3921)** — `cdidx languages --language <name>`、`--extension <ext>`、`--alias <alias>` で該当する support 行を返し、現在の DB を読む場合は `indexed_file_count` も出力します。
+- **監査向けの環境変数 inventory view を追加しました (#3922)** — `cdidx doctor --env-inventory` が既知の環境変数を category / sensitivity / policy class / 既定動作 / config file 対応 / source location 付きで表示し、support や security review で公開設定と secret を区別できるようになりました。
+- **安定した JSON doctor report を追加しました (#3925)** — `cdidx doctor --json` が version / runtime / terminal / path / config / `CDIDX_*` environment / inventory / redaction metadata を出力し、secret は常に伏せ、support に渡しやすい path redaction も選べるようになりました。
+- **`config show --json` に status / source metadata を追加しました (#3927)** — config JSON が config file status / active workspace status / source 付きの有効な環境変数ベース設定 / secret redaction を返し、未対応の `--json=<format>` variant も構造化 JSON error で返すようになりました。
+- **`symbols` に editor / diagnostic 出力形式を追加しました (#3935)** — `cdidx symbols` が `--format lsp`、`--format qf`、`--format sarif`、`--json=array` を受け付け、location や単一 JSON array が必要なツールに渡しやすくなりました。
+- **issue draft に起票向けの evidence と omitted-result metadata を追加しました (#3950)** — `search --format issue-drafts` は代表的な `path:line` evidence と compact snippet、source レベルの omitted-result fields、body 内の omitted results セクション、ad hoc draft 向け replay command を出力するようになりました。
+- **recipe search 出力が compact 一覧、projection row、NDJSON row、query ごとの aggregation に対応しました (#3957)** — recipe 実行は `query_name` / `recipe` を含む `--results-only --search-fields` row、row 単位の `--json=ndjson` stream、`--count-by` または `--group-by ... --count` による child query 別集計、全 child 定義を返さない `--list-recipes --format compact` を出力できるようになりました。
+- **outline JSON に projection / paging control を追加しました (#3986)** — `cdidx outline --json` が `--outline-fields`、`--kind`、`--limit` / `--top`、`--cursor outline:<offset>` を受け付け、制御付き応答に total / returned count と `next_cursor` / `has_more` metadata を含めるようになりました。
+- **doctor diagnostics に display environment decisions を追加しました (#3997)** — `cdidx doctor` と `cdidx doctor --json` が color / terminal hint / progress / max-line-width / ambiguous-width / truncation metadata を出力し、sensitive な環境値は含めないようになりました。
+
+#### 変更
+
+- index 実行時の file-content decode と checksum 処理の重複を減らし、大規模コードベースの scan で未変更 UTF-8 / UTF-16 content の再処理時間を抑えました。
+- CR を含まない raw byte payload では直接 SHA-256 を使い、一般的な LF-only source file で normalized-checksum scan を避けるようにしました。
+- load-time normalization で content が byte-equivalent と分かった後は raw SHA-256 path を直接再利用し、一般的な LF-only file で重複 CR probe を避けるようにしました。
+- streaming checksum calculation でも CR-free chunk を直接 append し、LF-only file の unchanged-file probe で byte 単位の normalization loop を避けるようにしました。
+- sample に NUL byte がない場合は UTF-16 heuristic detection を即終了し、通常の UTF-8 source file で pair-count scan を避けるようにしました。
+- NUL parity が UTF-16 heuristic の閾値を満たした場合だけ text-byte counting を行い、NUL を含む非 UTF-16 file の decode preflight work を減らしました。
+- C# static-interface raw prepass の chunk-boundary scan を小さな rolling window に限定し、候補外ファイルでの大きな temporary buffer rent と duplicate scan を避けるようにしました。
+- C# static-interface raw prepass で `abstract` または `virtual` のどちらか一方が見つかった後は、もう一方の contract modifier scan を省略するようにしました。
+- Git LFS pointer file を raw ASCII byte から直接 parse し、content loading 中の UTF-8 string 作成、newline replacement、split allocation を避けるようにしました。
+- streaming raw-byte read で pooled buffer を再利用し、C# static-interface prepass と grew-during-read handling 中の file ごとの 80 KiB allocation を減らしました。
+- streaming checksum probe でも pooled buffer を再利用し、大規模 workspace の unchanged file 検証中の file ごとの 80 KiB allocation を減らしました。
+- streaming checksum と grew-during-read probe の読み取りを残り byte limit + 1 byte に抑え、oversized file が indexing limit を超えると分かった後の不要な full-buffer read を避けるようにしました。
+- full-scan record が binary file や oversized file を skip する path でも scan 時点の language 情報を再利用し、skip path の追加 language probe を避けるようにしました。
+- update mode で binary file や oversized file を skipped record に変換する場合も scan 時点の language 情報を再利用し、skip path の追加 language probe を避けるようにしました。
+- MCP index で binary file を skipped record に変換する場合も scan 時点の language 情報を再利用し、skip path の追加 language probe を避けるようにしました。
+- C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
+- full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
+- MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。
+- update mode が C# static-interface workspace を拡張するときも scan 時点の言語情報を再利用し、拡張された更新対象で language probe を繰り返さないようにしました。
+- update mode の language probe を stat-based unchanged-file 判定にも再利用し、index 対象ごとの追加 probe を削りました。
+- dry-run の candidate record 構築でも language probe を再利用し、大規模 dry-run preview での重複検出処理を減らしました。
+- scan 時点の language 再利用は二度目の content-sensitive pass が不要な場合に限定し、C/C++ header 判定では必要に応じて file content を確認するようにしました。
+- full-scan と MCP index の C# static-interface prepass には scan で確認済みの C# ファイルだけを渡し、関連しない言語を prepass で余分に走査しないようにしました。
+- update mode の C# static-interface workspace 拡張では、scan 済みの非 C# target を prepass から除外しつつ、scan されない削除済み contract の検出は維持しました。
+- full-scan の generated-code suppression 判定を extraction phase と write phase で再利用し、index 対象ファイルごとの重複 pattern check を避けました。
+- CLI update、full-scan、MCP index で generated-code suppression 判定を unchanged-file check と write path の間で再利用するようにしました。
+- generated-code header 判定で行ごとの string allocation を発生させず、record 構築中の allocation pressure を減らしました。
+- record 構築中の generated-code filename suffix 判定で string allocation を避けるようにしました。
+- `status --check` の workspace freshness validation でも scan 時点の language 判定を再利用し、大規模 workspace を hash する際の重複 language probe を避けるようにしました。
+- 拡張子なし file の scan 時点 language 再利用は安定した filename mapping に限定し、shebang script は load 後の content から再判定するようにしました。
+- freshness は path、checksum、line metadata だけを比較するため、`status --check` の freshness hashing 中は generated-code classification を省略するようにしました。
+- C# static-interface prepass では suppression 判定だけが必要なため、generated-code suppression issue object の割り当てを避けるようにしました。
+- C# static-interface の comment/string masking 前に allocation-free の word-boundary precheck を追加し、明らかな候補外ファイルで大きな mask を作らないようにしました。
+- C# prepass content normalization の事前判定を、CR / BOM / zero-width-space の個別 scan ではなく1回の scan にまとめました。
+- 行頭不可視文字 stripping の事前判定を単一の `IndexOfAny` pass にまとめ、direct normalization caller で BOM と zero-width-space を別々に scan しないようにしました。
+- direct chunk / symbol / reference extraction caller で prepass normalization helper を共有し、CR と invisible marker の重複 probe を置き換えました。
+- 共有 prepass normalization probe で span `IndexOfAny` を使い、CR / BOM / zero-width-space 検出の手書き character loop を置き換えました。
+- raw prepass の NUL-byte 検出を scan/probe ごとに cache し、C# static-interface candidate 判定で token ごとに UTF-16 eligibility scan を繰り返さないようにしました。
+- C# static-interface prepass の member-header substring allocation をなくし、word-boundary check を span 上で実行するようにしました。
+- DB path invariant をすでに満たす ASCII index path では、separator と Unicode normalization の処理を省略するようにしました。
+- scanner invariant をすでに満たす ignore path では、separator と trailing-slash normalization の処理を省略するようにしました。
+- update-mode path filtering で file ごとの path segment array allocation をなくし、submodule scope 判定では走査済み directory prefix を再利用するようにしました。
+- 同じ ignore file から作られた ignore rule set 内では相対 path を各 rule で共有し、大きな `.gitignore` に対する relative-path computation の繰り返しを避けるようにしました。
+- 同じ ignore file から作られた basename-only rule 間で basename extraction を共有し、ignore matching 中の path work の繰り返しを減らしました。
+- literal ignore rule は regular expression の compile / match を使わず、ordinal string comparison で判定するようにしました。
+- ASCII case folding で path が変わらない ignore-match candidate では、folded string の割り当てを避けるようにしました。
+- effective language-map override を start directory と config-file stamp ごとに cache し、大規模 workspace の index 中に親ディレクトリ config discovery を繰り返さないようにしました。
+- language detection で file name を再利用し、language-map override が有効でない場合は override suffix check を省略するようにしました。
+- file ごとの全 override entry 走査を避け、filename の dot 位置から language-map override suffix を lookup し、最も具体的な multi-dot match を使うようにしました。
+- language-map cache hit 時は cached config path candidate を再利用し、override stamp 検証中の親ディレクトリ walk を繰り返さないようにしました。
+- content validation 中の raw-byte NUL 検出と line-ending 分類を1回の pass に統合し、大きな file での重複 scan を減らしました。
+- U+FFFD replacement-character issue を出す際の行番号を逐次追跡し、大きな decoded file で prefix scan を繰り返さないようにしました。
+- U+FFFD diagnostic の count 前に最適化された replacement-character 不在確認を使い、問題のない content validation の共通経路を高速化しました。
+- decoded file 全体が token cap 以下の場合は FTS oversize-token の rune scan を省略するようにしました。
+- FTS oversize-token validation に ASCII fast path を追加しつつ、Unicode は rune-aware fallback で検出するよう維持しました。
+- decoded content に conflict marker prefix が含まれない場合は、詳細な conflict-marker line scan を省略するようにしました。
+- generated-code header marker の確認時に、重複する line trimming を行わないようにしました。
+- 拡張子なしの非 shebang file は line decode と tokenize の前に raw prefix byte で除外するようにしました。
+- file indexability check 中の Windows device path 判定で、path normalization と segment split を allocation-free な span 走査へ置き換えました。
+- 既知の line count から chunk record list の容量を事前見積もりし、長い file の chunking 中に list growth を繰り返さないようにしました。
+- generated-code pattern matcher の fast path で basename extraction と path normalization allocation を避けるようにしました。
+- default-excluded directory 祖先で submodule passthrough を伝播する際に path segment array を割り当てないようにしました。
+- configured symbol extraction で正規化済み source line を逐次処理し、file 全体の replacement string と line array を作らないようにしました。
+- reference extraction preparation 中の C# XML doc-comment 事前判定を、1回の slash scan にまとめました。
+- Java text block delimiter 候補を含まない source file では text-block masking allocation を省略するようにしました。
+- C# reflection-name comment sanitizer の buffer 確保を、block comment masking が実際に必要になるまで遅延しました。
+- Pascal range の string/comment sanitizer で、string や comment のない行の割り当てを避けるようにしました。
+- Swift generic parameter 名を span で parse し、alias shadow check 中の substring と split array を避けるようにしました。
+- TypeScript generic parameter 名を span で parse し、alias shadow check 中の substring と split array を避けるようにしました。
+- Java generic parameter context の収集中に、named-type declaration token を span で比較するようにしました。
+- TypeScript named import/export alias を span で parse し、comma split array を避けるようにしました。
+- TypeScript scoped alias analysis で parameter shadow 名を span で確認し、comma split array を避けるようにしました。
+- dotted type-reference argument を手動で走査し、reference ごとの dot split array を避けるようにしました。
+- symbol subkind membership を span で確認し、metadata 結合時の pipe split array を避けるようにしました。
+- C# symbol name 正規化中の keyword 比較で substring allocation を避けるようにしました。
+- shared symbol keyword probe で substring allocation を避けるようにしました。
+- PHP grouped-use item を index 境界で trim し、import 抽出中の中間 trim substring を避けるようにしました。
+- Python import spec を index 境界で trim し、空要素や wildcard 要素の中間 trim substring を避けるようにしました。
+- Python import alias を index 境界で trim し、`as` 句の分割時の余分な substring 作成を避けるようにしました。
+- PHP grouped-use item の leading backslash を index で走査し、grouped import reference 抽出中の `TrimStart` allocation を避けるようにしました。
+- PHP qualified reference の leading backslash を index で走査し、共有 PHP reference emission path の `TrimStart` allocation を避けるようにしました。
+- qualified name を既に除外した後の PHP builtin-type trim を削り、type-reference filtering 中の不要な trim probe を避けるようにしました。
+- PHP attribute reference の leading backslash を index で走査し、attribute type reference の emission 中の `TrimStart` allocation を避けるようにしました。
+- PHP static-access reference の leading backslash を index で走査し、class / member reference の emission 中の `TrimStart` allocation を避けるようにしました。
+- PHP grouped-use prefix を index 境界で trim し、grouped import reference name の構築中の `TrimEnd` allocation を避けるようにしました。
+- PHP grouped import item の leading backslash を index で走査し、grouped import reference の構築中の `TrimStart` allocation を避けるようにしました。
+- PHP grouped import prefix を index 境界で trim し、grouped import reference の構築中の `TrimEnd` allocation を避けるようにしました。
+- SCSS variable skip prefix を最初の非空白 index で判定し、variable declaration と mixin header の filtering 中の `TrimStart` allocation を避けるようにしました。
+- Sass indented declaration prefix を最初の非空白 index で判定し、bare-function reference の filtering 中の `TrimStart` allocation を避けるようにしました。
+- Sass bare-function prefix を最初の非空白 index で判定し、mixin / function declaration の filtering 中の `TrimStart` allocation を避けるようにしました。
+- XAML type-argument delimiter を直接走査し、generic markup reference の正規化中の split array を避けるようにしました。
+- cross-language comma list の末尾 token を直接走査し、reference 抽出中の whitespace split array を避けるようにしました。
+- cross-language comma-list segment を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。
+- Kotlin symbol signature token を index で走査し、constructable-class 判定中の split array を避けるようにしました。
+- Java `throws` type-list segment を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。
+- Java keyword type-list segment を index 境界で trim し、継承 reference の中間 trim substring を避けるようにしました。
+- Java generic-bound parameter segment を index 境界で trim し、bound 抽出中の中間 trim substring を避けるようにしました。
+- Java generic-bound RHS text を index 境界で trim し、ampersand 走査前の中間 trim substring を避けるようにしました。
+- Java generic-bound ampersand segment を index 境界で trim し、type-expression parse 前の中間 trim substring を避けるようにしました。
+- C# base-list segment を index 境界で trim し、継承 reference 抽出中の中間 trim substring を避けるようにしました。
+- C# where-constraint segment を index 境界で trim し、constraint reference 抽出中の中間 trim substring を避けるようにしました。
+- shared comma-separated type-list segment を index 境界で trim し、type parse 前の segment ごとの substring work を避けるようにしました。
+- Java generic-parameter name segment を index 境界で trim し、無視対象 type parameter の収集中の中間 trim substring を避けるようにしました。
+- Java module `provides` implementation segment を index 境界で trim し、JPMS reference 抽出中の中間 trim substring を避けるようにしました。
+- TypeScript function-type prefix を span で確認し、arrow-type parse 前の substring trim allocation を避けるようにしました。
+- Kotlin delegated type clause を index 境界で trim し、bare-type 抽出前の substring trim chain を避けるようにしました。
+- Kotlin bare type-name slice を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。
+- Kotlin call-argument suffix を index 境界で trim し、bare-type name scan 前の substring trim chain を避けるようにしました。
+- TypeScript same-line import/export brace prefix を index 境界で trim し、multiline named-binding 検出中の substring trim chain を避けるようにしました。
+- TypeScript previous-line import/export brace prefix を index 境界で trim し、multiline binding 走査中の substring trim chain を避けるようにしました。
+- TypeScript import-prefix trailing comma を index で確認し、multiline named-import 検出中の TrimEnd allocation を避けるようにしました。
+- C# primary-constructor semicolon terminator を index 境界で trim し、base-call 検出前の substring trim chain を避けるようにしました。
+- C# primary-constructor body-open terminator を index 境界で trim し、base-call 検出前の substring trim chain を避けるようにしました。
+- C# base-type body-open terminator を index 境界で trim し、base type parse 前の substring trim chain を避けるようにしました。
+- C# primary-constructor first base entry を index 境界で trim し、base-call 検出中の中間 trim substring を避けるようにしました。
+- C# base-type first entry を index 境界で trim し、base type parse 中の中間 trim substring を避けるようにしました。
+- C# callable parameter list を index 境界で trim し、static-interface signature matching 前の substring trim chain を避けるようにしました。
+- C# callable parameter type name を index 境界で trim し、static-interface signature shape の正規化中の substring trim chain を避けるようにしました。
+- C# callable parameter の default-stripped text を index 境界で trim し、static-interface signature shape の正規化中の `Trim` allocation を避けるようにしました。
+- C# callable ref-kind modifier tail を index で走査し、static-interface signature shape の正規化中の `TrimStart` allocation を避けるようにしました。
+- C# callable parameter modifier tail を index で走査し、`this` / `scoped` parameter の `TrimStart` allocation を避けるようにしました。
+- shared top-level call-argument prefix を index 境界で trim し、type-expression parse 前の substring trim chain を避けるようにしました。
+- wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
+- Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
+- dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
+- PHP grouped import item を comma index で解析し、symbol 抽出中の行ごとの comma split array を避けるようにしました。
+- Python import spec を comma / dot index で解析し、import symbol 展開中の split array を避けるようにしました。
+- Python relative import の module prefix を dot segment の直接走査で解決し、prefix split と join array を避けるようにしました。
+- F# record / union / active-pattern segment を直接列挙し、symbol 抽出中の delimiter split array を避けるようにしました。
+- F# segment trim も index 境界で行い、record / union / active-pattern 抽出中の中間 trim substring を避けるようにしました。
+- Swift symbol name 正規化中の import-kind keyword 比較で substring allocation を避けるようにしました。
+- Go interface / struct body segment を直接列挙し、embedded symbol 抽出中の semicolon split array を避けるようにしました。
+- Go の direct segment scanner を grouped value name にも再利用し、segment trim を index で行うことで comma split array と中間 trim substring を避けるようにしました。
+- Go grouped `type` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
+- Go grouped `const` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
+- Go grouped `var` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
+- Go standalone `const` declaration remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Go standalone `var` declaration remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Go `import` declaration remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Go block-import remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Go import-block closing segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go inline block-import closing segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go interface-body trailing brace を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go interface member trailing brace を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go interface member line comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go interface member block comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go struct embedded-type trailing brace を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go struct embedded-type line comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go struct embedded-type block comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go struct embedded-type tag を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Python logical-header continuation ending を index 境界で trim し、symbol extraction 中の chained trim 呼び出しを避けるようにしました。
+- Python logical-header line continuation を末尾から走査して判定し、symbol extraction 中の trailing trim allocation を避けるようにしました。
+- Python import inline comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Python parenthesized-import fragment を index 境界で trim し、symbol extraction 中の trailing trim allocation を避けるようにしました。
+- Python parenthesized-import closing segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Fortran continuation first line を index 境界で trim し、symbol extraction 中の trailing trim allocation を避けるようにしました。
+- Fortran continuation prefix segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Fortran continuation next-line start を index 境界で trim し、symbol extraction 中の leading trim allocation を避けるようにしました。
+- Fortran continuation ampersand suffix を index 境界で trim し、symbol extraction 中の suffix substring / trim chain を避けるようにしました。
+- Fortran continuation next-line ending を index 境界で trim し、symbol extraction 中の trailing trim allocation を避けるようにしました。
+- Fortran continuation first-line start を index 境界で trim し、symbol extraction 中の leading trim allocation を避けるようにしました。
+- Fortran module block-start remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran block-data start remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran derived-type start remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran block-end remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran block-end tail text を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran module-procedure end remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran module-procedure end tail text を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran routine-end remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Dockerfile `ENV` body を元の行から走査し、symbol extraction 中の line-start / body trim allocation を避けるようにしました。
+- Dockerfile `LABEL` body を元の行から走査し、symbol extraction 中の line-start / body trim allocation を避けるようにしました。
+- Dockerfile key/value assignment separator を index で探し、symbol extraction 中の token substring allocation を避けるようにしました。
+- Dockerfile `ENV` signature を index 境界で trim し、symbol extraction 中の full-line trim allocation を避けるようにしました。
+- Dockerfile `LABEL` signature を index 境界で trim し、symbol extraction 中の full-line trim allocation を避けるようにしました。
+- Shell alias segment start を index で走査し、alias 判定前の segment substring / trim allocation を避けるようにしました。
+- Shell alias assignment separator を元の行で探索し、name 抽出前の token substring allocation を避けるようにしました。
+- Shell alias name を index 境界で trim し、symbol extraction 中の slice / trim allocation chain を避けるようにしました。
+- Shell alias signature を index 境界で trim し、symbol extraction 中の full-line trim allocation を避けるようにしました。
+- Shell alias token assignment を index で走査し、alias enumeration 中の token substring allocation を避けるようにしました。
+- Shell alias token を元の行上で読み取り、symbol extraction 中の alias ごとの segment substring allocation を避けるようにしました。
+- Visual Basic enum attribute remainder を index 境界で trim し、symbol extraction 中の suffix substring / trim chain を避けるようにしました。
+- Visual Basic enum initializer continuation を trailing index で判定し、symbol extraction 中の `TrimEnd` allocation を避けるようにしました。
+- Visual Basic enum initializer code range を index で走査し、symbol extraction 中の comment-stripping substring allocation を避けるようにしました。
+- Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
+- Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
+- Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。
+- HTML class attribute token を直接列挙し、class reference index 中の whitespace split array を避けるようにしました。
+- C++ same-line class body member を直接列挙し、大きな class declaration で semicolon split array を避けるようにしました。
+- package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
+- CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
+- C# Razor query alias の検証で 1 回の trimmed publish output を再利用し、そのテストから重複する `dotnet publish` 実行を削減しました。
+- trimmed query JSON と Razor alias の smoke coverage を 1 つの publish-backed test に統合し、suite からさらに重複する `dotnet publish` 実行を削減しました。
+- CI test command の重複 results-directory 引数を削除し、`CodeIndex.Tests.runsettings` を `TestResults` path の単一管理元にしました。
+- clean な初回成功 lane では CI test stdout log を disk に書かないようにし、console streaming と失敗時の log artifact は維持しました。
+- OS 単位の NuGet cache restore key を追加し、lock file 変更時にも互換性のある package cache 内容を再利用できるようにしました。
+- `--no-build` が restore を抑止するため、CI の `dotnet test` command から重複する明示的な `--no-restore` を削除しました。
+- concurrent snapshot stress test の固定 2 秒待機を、反復数ベースの完了判定と従来同等の 2 秒 slow-host 上限へ置き換えました。
+- background-task observer test から cancellation 後の固定 sleep を削除し、observer の fault-only continuation 契約に基づく検証へ寄せました。
+- shared-writer blocking test の grace sleep を、明示的な task-start signal に置き換えました。
+- published CLI smoke test 間で通常の trimmed publish output を共有し、test process あたり 1 回の publish cost に抑えました。single-file publish coverage は引き続き隔離します。
+- CI stdout log 用 directory の作成を failed-test path に移し、clean な初回成功 lane ではその log file のために `TestResults` を事前作成しないようにしました。
+- CI の TRX telemetry summarizer は failure-diagnostics step 側で必要に応じて helper を build し、全 matrix lane で診断を出せるようにしました。
+- weekly mutation workflow で pinned Stryker global tool と NuGet package を cache し、cache miss のときだけ tool を update / install するようにしました。
+- published CLI subprocess execution を `TrimmedCliTestHelper` に移し、index/query test の重複 process-launch helper を削除しました。
+- post-extraction hook の timeout / cancellation leak check で人工 hook delay と観測 window を短縮し、kill されなかった worker は引き続き検出しつつ固定待機を減らしました。
+- Git helper test で重複していた robust cleanup loop を削除し、`TestProjectHelper.DeleteDirectory` を再利用するようにしました。
+- MCP test の file cleanup で明示的な SQLite pool clear は維持しつつ、`TestProjectHelper.DeleteFile` を再利用するようにしました。
+- SQLite database sidecar cleanup を `TestProjectHelper` に追加し、database test のローカル delete helper を置き換えました。
+- report bundle 用 workspace cleanup でローカルの best-effort recursive delete helper をやめ、`TestProjectHelper.DeleteDirectory` を再利用するようにしました。
+- traversal-policy test と data-directory security test で一時ディレクトリ cleanup を共通 helper に寄せました。
+- import / export archive test の workspace cleanup を共通 helper に寄せました。
+- configured-pattern extractor test の workspace cleanup を共通 helper に寄せました。
+- private / global log test の workspace cleanup を共通 helper に寄せました。
+- suggestion-store test fixture の一時ディレクトリ作成と cleanup を共通 helper に寄せました。
+- legacy schema migration test の SQLite pool clear 付き一時ディレクトリ cleanup を集約しました。
+- MCP indexing fixture workspace の cleanup を共通 helper に寄せました。
+- audit log の private parent workspace cleanup を共通 helper に寄せました。
+- metrics log の private parent workspace cleanup を共通 helper に寄せました。
+- DB command runner test の temporary cleanup safety fixture で cleanup helper を再利用しました。
+- suggestion CLI test fixture の cleanup を共通 helper に寄せました。
+- issue duplicate preflight fixture の cleanup を共通 helper に寄せました。
+- changelog tool test repository の cleanup を共通 helper に寄せました。
+- file-indexer skipped-root fixture の cleanup を共通 helper に寄せました。
+- file-indexer symlink target fixture の cleanup を共通 helper に寄せました。
+- program-runner query trace log workspace の cleanup を共通 helper に寄せました。
+- program-runner extractor / cache directory fixture の cleanup を共通 helper に寄せました。
+- import rollback workspace の cleanup を共通 helper に寄せました。
+- audit log write-target directory fixture の cleanup を共通 helper に寄せました。
+- metrics write-target directory fixture の cleanup を共通 helper に寄せました。
+- configured-pattern out-of-tree language fixture の cleanup を共通 helper に寄せました。
+- temporary dotnet host fixture の cleanup を共通 helper に寄せました。
+- watch runner test helper の cleanup を共通 helper に寄せました。
+- database purge workspace の cleanup を共通 helper に寄せました。
+- reader BOM end-to-end fixture の cleanup を共通 helper に寄せました。
+- file-indexer cleanup helper 呼び出し前の重複 `Directory.Exists` guard を削除しました。
+- MCP / index-command cleanup helper 呼び出し前に残っていた重複 directory-existence guard を削除しました。
+- index-command の一時 DB、lock、outside fixture file cleanup を共通 file cleanup helper に寄せました。
+- MCP server の一時 DB / lock sidecar cleanup を既存 file cleanup helper に寄せました。
+- program-runner の cache、script、一時 file cleanup を共通 file cleanup helper に寄せました。
+- extractor の broad な practical-budget runaway guard を primary の net8.0 target のみで実行し、focused な機能テストは cross-target のまま、net9.0 lane での大規模 fixture 重複実行を避けるようにしました。
+- `TestResults/**/*.xml` が VSTest の sequence XML diagnostics も upload するため、重複していた `TestResults/**/*Sequence*.xml` artifact glob を削除しました。
+- `dev.sh coverage` の重複 `--results-directory` 引数を削除し、ローカル coverage 実行でも共有 runsettings file だけが `TestResults` path を管理するようにしました。
+- MCP index test の database sidecar cleanup を `TestProjectHelper.DeleteSqliteDatabaseFiles` に寄せ、2 つ目のローカル retry loop を削除しました。
+- MCP request-timeout test の固定 sleep を signal-gated delay hook に置き換え、timeout response を待つ前に hook startup を確認し、従来の固定待機より短い guard にしました。
+- **grouped hotspot の全 definition site を出力するようにしました (#3900)** — `hotspots --group-by-name --json` は互換性のため `paths` を上限付き sample として残しつつ、group の表示対象を示す `representative` と全 definition site を含む `definition_site_details` metadata を返します。
+- **impact path に構造化された詳細情報を追加しました (#3932)** — `impact --json --with-paths` は既存の名前だけの `paths` 配列を維持しつつ、各 hop の definition site、family key、logical target key、reference-site metadata を含む `path_details` を追加し、同名 symbol や partial symbol を区別できるようにしました。
+- **DB maintenance command に安全な preview と bounded schema diagnostics を追加しました (#3937)** — `db checkpoint --dry-run` は checkpoint を作成せずにコピー元 file と byte 数を報告し、`db schema` は entry / SQL / internal object の制御を追加し、`db --help` は主要な maintenance side effect を記載するようになりました。
+- **DB diagnostics に `integrity` サブコマンドと schema projection を追加しました (#3958)** — `cdidx db integrity` は既存の integrity check と同義になり、`db schema` は `--type`、`--name`、`--summary-only` を受け付けるため、自動化が SQL payload 全体を読まずに必要な schema diagnostics だけを取得できます。
+- **generic name の hotspot ranking を調整しました (#3976)** — hotspot の並び順は `Combine` や `GetString` のような広い名前に `generic_name_penalty` を適用した `ranking_score` を使い、JSON には診断用として生の `reference_score` と適用 penalty も残します。`symbols --sort hotspot` と `--sort complexity` も同じ penalty 済み hotspot signal で並べます。
+- **SQLite command policy が typed parameter と scalar read を集約しました (#3982)** — 主要な DB パスは text / integer / boolean / limit の型付き binding、integer scalar diagnostic、quoted identifier SQL construction の共有 helper を使うようになり、audit recipe は `AddWithValue` のリスクと quoted identifier / typed helper 利用を区別できるようになりました。
+- SQLite の接続文字列モード、read-only URI フラグ生成、command timeout 診断、WAL/read-only fallback の status 報告を共有 SQLite connection policy に集約しました (#3983)。
+- **MCP timeout diagnostics が stable category を公開するようになりました (#3990)** — HTTP response write と SSE write の timeout は `timeout:http_response_write` / `timeout:sse_write` を記録し、write budget を超えた HTTP response を能動的に abort します。JSON-RPC request timeout は `timeout_category: "mcp_request"` を含めるため、caller は timeout class と caller cancellation を区別できます。
+
+#### 修正
+
+- `unused` に `--confidence` alias と、private かつ medium confidence の削除候補へ絞る `--actionable` preset を追加しました。
+- serialization contract、DTO/config/metadata surface、generated/documentation surface、test-only hook を低 confidence の unused bucket に寄せるようにしました。
+- `unused --count --json` の bucket / confidence summary を出力するようにしました。
+- **config ファイルがない場合でも `validate-config` がクラッシュしなくなりました (#3892)** — `validate-config --json` は JSON mode を受け付け、config がない workspace では `valid: true` と `path: null` を返し、JSON mode での検証エラーや引数エラーは構造化 JSON error として出力します。
+- **search audit help に実装済みの出力制御フラグを表示するようになりました (#3893)** — `search --help` は、parser が既に受理している audit projection、sampling、per-file、JSON byte limit、result-only、follow-up の各フラグを表示し、`recipes` / `audit` から search audit の流れに直接入れる help と alias も追加しました。
+- **C# 参照抽出で一般的な qualified member call の過剰一致を抑制しました (#3894)** — `Path.Combine`、`Math.Max`、`string.Join`、`JsonElement.GetString` などの receiver 付き共通呼び出しが、同名の無関係なローカル関数への参照として扱われなくなりました。一方で direct call と `this.` 経由のローカル呼び出しは引き続き index されます。
+- **`deps --exclude-tests` が依存エッジの両端をフィルタするようになりました (#3895)** — ファイル依存クエリは source path と target path の両方からテストらしいパスを除外し、`deps` は表示対象のエッジだけを symbol sampling することで limit 付きクエリの応答性を保ちます。
+- **JSON モードの query / batch / suggestions / validate 出力を機械可読形式に統一しました (#3896)** — `find --json=array`、不正 regex エラー、batch JSON parse エラー、status / languages / validate の引数エラー、空の suggestions list、存在しない suggestion、`validate --format count --json`、BOM 検証結果が parse 可能な JSON contract を返すようになりました。
+- **`validate` で tests と path を除外できるようになりました (#3897)** — `validate --exclude-tests`、繰り返し指定できる `--exclude-path`、`--include-generated` に対応し、validation output を fixtures や generated samples から外して絞れるようにしました。また Visual Studio `.sln` file の UTF-8 BOM は既定ノイズとして抑制しました。
+- **Repository configuration files を search 用に index するようになりました (#3898)** — `.config`、`.runsettings`、`.rules`、`.gitattributes` files を unknown extension として skip せず認識し、重要な repository configuration を `files --path` と `search --path` で対象にできるようにしました。
+- **Dependency manifests と lock が package graph facts を公開するようになりました (#3899)** — `Directory.Packages.props`、`packages.config`、`requirements.txt`、`pyproject.toml`、`packages.lock.json` が package symbols と `dependency` references を出力し、manifest/lock、version/constraint、resolved、requested、scope、direct/transitive の metadata を確認できるようになりました。CLI の language/kind filters は `dependency_manifest`、`dependency_lock`、`package`、`dependency` を受け付けます。
+- **`unused` が報告した private helper を監査しました (#3901, #3945)** — 未使用の本番 helper wrapper と古い C# namespace-scope support を削除し、`unused --exclude-tests` が監査済みの private helper を cleanup 候補として報告しないようにしました。
+- **exact-substring 検索ヒントの重複を抑制しました (#3903)** — 記号を多く含む search JSON では再実行ヒントを先頭結果だけに付け、ガイドでは `find --all` の literal substring と大文字小文字の挙動を明確化しました。
+- **recipe search 出力を全体上限で抑え、byte cap 中断を明確にしました (#3904)** — recipe 実行は child query 全体にまたがる `--total-limit` に対応し、`--max-json-bytes` は compact JSON で黙って無視せず NDJSON row stream のみに制限され、中断された NDJSON stream は `done:false` で終了するようになりました。
+- **config / workspace が未検出のときの metadata を追加しました (#3905)** — ローカル config や workspace manifest が無い場合でも、`config show --json` と `workspace status --json` が searched paths / supported file names / 明示的な status reason / effective/default summary を返すようになりました。
+- **本番経路の SQLite parameter binding が `AddWithValue` の推論を避けるようになりました (#3907)** — database reader / writer と関連する CLI の DB query は、SQLite type、`DbType`、利用可能な text size を明示する共有 typed helper 経由で parameter を bind します。
+- **HEAD freshness field を `status --explain` で説明できるようになりました (#3911)** — `indexed_head_sha`、`indexed_head_commit`、関連する HEAD drift field の説明を追加し、最新の incremental index stamp と legacy の full-scan 限定 stamp を区別できるようにしました。
+- **小さな C# method の symbol range を固定する回帰テストを追加しました (#3912)** — local function、lambda、generic helper、後続の partial class member の近くにある C# method をカバーし、`definition`、`goto`、`symbols --sort size`、`outline` が class 末尾まで伸びた range ではなく正しい method 終端を使い続けるようにしました。
+- **body-focused な definition JSON が無制限の `content` を出さないようになりました (#3913)** — `inspect` の JSON definitions と `definition --json --body` は full definition の `content` フィールドを省略し、代わりに `body_content` の slice を使うべき理由を返します。
+- **plain outline JSON が明示的な limit を反映するようになりました (#3914)** — `outline --json --limit <n>` は全シンボルを返す代わりに `symbols` 配列を上限で切り、paging metadata を含めるようになりました。
+- **`inspect --path --line` が exact または enclosing symbol を返すようになりました (#3915)** — file-line inspect は指定行が定義行ならその symbol を優先し、body 行では最小の enclosing symbol を解決するため、JSON 結果が source excerpt だけでなく `definitions`、`nearby_symbols`、body 取得可能な symbol context を含むようになりました。
+- **CLI help と excerpt 契約を厳密化しました (#3916)** — `inspect`、`excerpt`、`references`、`batch`、`db`、`hooks` の help は実際の mode と JSON Lines の挙動を記載し、legacy alias の `refs` / `stats` / `fold` は command-specific usage に解決され、未知コマンドの `--help --json` は JSON usage error を返し、`excerpt` は `path:line` / `path:start-end` location と明確な focus option validation を受け付けるようになりました。
+- **GitHub Actions の `run:` ブロックを検索 facet で code として分類するようになりました (#3917)** - workflow YAML の `run: |` / `run: >` script block 内の一致を help text ではなく code として扱い、通常の prose block scalar は従来どおり help-text 分類を維持します。
+- **監査向け既定値がヘルプ例と支援ファイルを避けるようになりました (#3918)** - risky-code recipe は既定で `help_text` の一致を除外し、明示的な path scope がない `unused --exclude-tests` / `files --exclude-tests` は production source の既定スコープを適用します。
+- **regex construction audit recipe が bounded alias と raw 風の construction を分離するようになりました (#3919)** — `regex-construction` は `new Regex(` を検索して `RegexTimeoutDiagnostic` の prefix hit を避け、組み込み recipe は bounded-wrapper alias と fully qualified raw BCL regex の child query を `risk_evidence` 付きで出力します。
+- **filesystem traversal audit が近傍オプションなしの直接列挙を検出するようになりました (#3920)** — `filesystem-traversal/enumerate-without-options` は近傍に `EnumerationOptions` evidence がない direct `Directory.Enumerate*` call を表示し、再現可能な triage 用の guard-filter metadata も出力します。
+- **auth-token audit に絞り込み recipe と token-domain hint を追加しました (#3923)** — `auth-token-audit` は bearer / GitHub / API / access-token / authorization-header / token-secret 文脈に集中し、広い `token` 検索が空または noisy な場合は auth-token / broad-token recipe へ誘導するようになりました。
+- **`unused` が generic method の kind を維持するようになりました (#3924)** — generic parameter、default parameter、expression-bodied 実装を持つ C# メソッドについて、`unused` JSON が `symbols` / `definition` と同じ `function` kind を返すようになりました。
+- **issue-draft 出力で repository に存在しない label を警告するようにしました (#3926)** — `search --format issue-drafts --open-issues github --repo <owner/name>` は repository labels を取得し、生成された label のうち存在しないものを `missing_labels` として報告し、GitHub labels は変更せずに読みやすい `label_warning` を含めます。
+- **長時間実行される経路で cancellation がより伝播するようになりました (#3928)** — インデックスと backfill のDB書き込み、MCP HTTP応答書き込み、export/importアーカイブコピーが呼び出し元の cancellation token を尊重し、中断後もキャンセル不能な経路で処理が続きにくいようにしました。
+- **audit recipe が risk evidence facet を出力するようになりました (#3929)** — 組み込み recipe query metadata と recipe result JSON に `risk_evidence` を追加し、reviewer が risky な一致と、bounded helper / sanitizer / factory / protocol / saturation 由来で安全寄りの一致を evidence path と一緒に切り分けられるようにしました。
+- **`find --format lsp` の一致 range を修正しました (#3930)** — LSP location が 1 文字だけではなく、一致したリテラル全体を覆うようになりました。
+- **`search` の editor / CSV location を修正しました (#3931)** — `--format lsp`、`--format qf`、`--format csv` が chunk 開始位置ではなく、主一致の行と桁を指すようになりました。
+- **`goto --exclude-tests` が help 契約どおりに動くようになりました (#3934)** — `goto` は、記載済みの除外フィルタを受け付け、`--exclude-tests` や `--exclude-path` を未対応オプションとして拒否しなくなりました。
+- **`status --explain` が visible status field も説明するようになりました (#3936)** — `status --explain path_case_sensitive` と JSON の `known_fields` が readiness field に加えて runtime diagnostics も含むようになり、`status --json` で見える field をそのまま説明できます。
+- **`map --sections hotspots --json` が hotspot field を返すようになりました (#3938)** — Section filter が `hotspots` を `top_files`、`symbol_rich_files`、`reference_rich_files`、`entrypoints` に対応付け、CLI JSON と MCP structured output で section と property の対応も返すようにしました。
+- **`workspace current --json` が明示的な inactive state を返すようになりました (#3939)** — active workspace が未設定の場合、JSON 出力は `{}` ではなく `active:false`、`workspace:null`、安定した `status` / `reason` / `code` フィールドを含みます。
+- **guard 付き広域検索の拒否に候補診断を追加しました (#3940)** — CLI / MCP の拒否メッセージに sampled candidate files、sampled languages、guard budget、count / count-by fallback hint を含めました。
+- **recipe の count 出力が一致件数と省略件数を返すようになりました (#3941)** — `search --recipe ... --format count` は query ごとに matched / emitted / omitted 件数を明示し、通常の recipe JSON も同じ件数メタデータを返すため、呼び出し側が出力済み行から truncation を推測する必要がなくなりました。
+- **compact な excerpt JSON 制御を追加しました (#3942)** — `cdidx excerpt --json` で `--no-semantic-tokens` を指定できるようにし、`excerpt --line <line> --context <n>` を行中心の短い指定として文書化しました。
+- **Deps graph JSON output が schema metadata と symbol controls を持つようになりました (#3943)** — `deps --json` と `deps --format json-graph` が `api_version`、freshness、`query_context` を含み、`--suppress-noise`、`--symbol`、`--symbol-family` で generic または曖昧な edge symbol samples を絞り込めるようになりました。
+- **監査ログの idle 待機がキャンセルを受け取れるようになりました (#3946)** — MCP 監査ログの drain 待機は既存の完了シグナルに cancellation-aware overload を追加し、shutdown やテストが polling や wall-clock sleep loop なしで待機を止められるようになりました。
+- **outline JSON shape のエラーがコマンド固有になりました (#3947)** — `outline --json=array` などの JSON shape 値は、outline が単一 JSON object を出力することを説明し、plain `--json` と limit/paging metadata の利用を案内するようになりました。
+- **`files --count --bytes` がバイト集計を返すようになりました (#3948)** — count mode は JSON 出力で合計・平均・最大ファイルサイズのメタデータを含め、human 出力でも `--bytes` を無視せずサイズ付きの要約を表示します。
+- **`validate --format lsp` の diagnostics を修正しました (#3949)** — LSP location がゼロ幅 fallback ではなくなり、validation の kind / message / severity / source metadata を含むようになりました。
+- **SQLite retry backoff が `Thread.Sleep` を使わなくなりました (#3952)** — 一時的な DB open retry は bounded wait primitive で待機するようになり、キャンセル挙動を揃えつつ production に残っていた blocking sleep を除去しました。
+- **utility command が未対応の JSON 形式を構造化エラーで拒否するようになりました (#3955)** — `license --json`、`license --json=array`、`completions ... --json` は human text や曖昧な option handling に戻らず、JSON error object を返します。
+- **inactive workspace status の JSON が機械判定しやすくなりました (#3956)** — workspace manifest が存在しない場合、`workspace status --json` は `manifest_found:false` と安定した `manifest_status.code` を含むようになりました。
+- **例外分類がプロバイダーのメッセージ部分一致に依存しなくなりました (#3959)** — SQLite、raw FTS、インポートマニフェスト、trimmed JSON の各経路で、ローカライズされる例外本文ではなく、範囲を限定したエラーコード、事前状態確認、明示的な例外種別、実行時メタデータに基づいて分岐するようにしました。
+- **static regex 監査が直接の `Regex.Match` / `Regex.Replace` 呼び出しを検出するようになりました (#3960)** - built-in audit recipe が `new Regex(...)` とは別に static regex API を検出できるようになり、追加の raw 呼び出し箇所も共有の bounded regex wrapper を使うようになりました。
+- **package normalization の temporary rewrite を堅牢化しました (#3961)** — package rewrite は衝突しにくい `.cdidx-normalize-*.tmp` を使い、既存の legacy `.normalize-tmp` 隣接ファイルを保持し、Unix では置き換えの耐久性を flush し、archive entry 間と stream chunk 間で cancellation を反映しつつ作成済み temp file を best-effort で削除します。
+- **ベストエフォート cleanup の失敗を低ノイズ診断で確認できるようになりました (#3962)** — private log pruning はファイル削除失敗を既存の diagnostic sink に報告し、watch sub-run spool の cleanup 失敗は watch update を失敗させずに bounded warning として出力します。
+- **runtime timing path が injectable time または wait handle を使うようになりました (#3963)** — MCP health、keep-alive、audit timestamp、request-cancellation tombstone、report bundle metadata、checkpoint metadata は injectable time を使い、audit-log idle wait は completion signal を、spinner shutdown は spinner task の完了待ちを使うため、wall-clock polling や `Thread.Sleep` に依存しなくなりました。
+- **MaxValue sentinel が fetch や diagnostics を無制限相当に広げないようにしました (#3964)** — MCP / CLI の over-fetch helper は documented result limit に clamp し、bounded HTTP read は巨大 declared length で事前確保せず、maintenance byte estimate の overflow は unknown として扱い、rate-limit diagnostics は巨大 interval を上限値で丸めます。
+- **組み込み audit が dogfood で繰り返し見つかった risk pattern を扱うようになりました (#3967)** — `dogfood-risk-patterns` を追加し、exception-message classifier、static Regex API、relaxed JSON encoder、temp-file / overwrite move、suppressed cleanup diagnostics、wall-clock deadline、MaxValue sentinel、recipe contract、raw SQL / PRAGMA、environment parser fallback、plugin lifecycle hazard を focused child query として確認できるようにしました。
+- **長時間の process wait で cancellation と timeout を分離しました (#3969)** — git process wait は呼び出し元 token を `WaitForExitAsync` に渡し、MCP HTTP の shutdown 境界は無期限の同期待ちではなく診断付きの bounded dispose wait を使うようになりました。
+- **ファイルシステム境界チェックが、クリーンアップと再解析ポイントの共通プリミティブを使うようになりました (#3970)** — 機密状態ディレクトリ、プライベートログ、クリーンアップ対象、スキャナーの属性確認、プラグイン検出、パターン設定、インポート/エクスポートの一時ディレクトリ削除、MCP のパス境界が共有の正規化・子孫判定・シンボリックリンク/再解析ポイントヘルパーを使うようになり、方針を監査しやすく、乖離しにくくしました。
+- **Extractor plugin lifecycle を堅牢化しました (#3971)** — symbol / reference extractor interface の両方を実装する plugin type は一度だけ構築され、同じ instance から両方の role に登録されるようになりました。さらに長時間実行プロセスの監査向けに、status 出力が保持中の plugin assembly load context 件数を報告します。
+- **SQLite pragma 系の整数環境オプション解析を集約しました (#3972)** — SQLite cache / mmap / busy-timeout の環境オプションはプロセス環境を直接読まず、source / status / fallback メタデータを持つ共有 `CdidxEnvironment` parser 経由になりました。
+- **release download が共有 GitHub HTTP policy を使うようになりました (#3973)** — upgrade asset download は bounded timeout、proxy/default credential handling、bounded かつ redacted された HTTP failure diagnostics を共有し、release asset には GitHub API 専用の media type header を送らないようになりました。
+- **search CLI の使いやすさと recipe discovery を改善しました (#3975)** — search help に projection / output control を表示し、`--list-recipes --query <filter>` で discovery を絞り込み、誤った recipe query selector には recipe をまたいだ候補を提示し、`async void` のような2トークンの code phrase でも exact-substring hint を出せるようにしました。
+- **ad hoc search 向け source-only scope を追加しました (#3978)** — recipe を選ばなくても `cdidx search --source-only` と `--audit-scope source` で本番 source 向け既定 scope を ad hoc / named search に適用できるようにしました。
+- **empty-catch audit recipe が実際の catch clause を対象にするようになりました (#3979)** — `risky-code/empty-catch-review` は `catch` token を code-origin filter、brace guard filter、risk evidence 付きで検索し、空白なしの catch clause も対象にしつつ、以前 audit result を埋めていた comment、parser identifier、string literal の構文例を避けるようになりました。
+- **HTTP MCP transport が所有 semaphore gate を dispose するようになりました (#3985)** — 正常 shutdown 時に accept loop 停止後、queue / handler の長寿命 SemaphoreSlim が idle になってから解放されます。
+- **生成される checkpoint と report archive の timestamp を安全にしました (#3987)** — automatic checkpoint 名は UTC timestamp の後ろに random suffix を追加して同一 millisecond の衝突を避け、report bundle の tar entry は固定 modification time を使いつつ、生成時刻は bundle 内の metadata file に残します。
+- **process / memory metric の取得を一元化しました (#3988)** — CLI memory trace、status process metrics、MCP index memory trace が共通 snapshot helper を使い、metrics 読み取り後に current-process handle を dispose するようになりました。
+- **広い例外 catch の audit 結果が境界 taxonomy を出力するようになりました (#3992)** — `risky-code/broad-exception-catch` は recipe list、JSON、compact、issue-draft output で broad catch の境界カテゴリと期待される diagnostic behavior を出力するため、意図的な top-level / cleanup / probe / diagnostic-sanitization / worker 境界と、narrowing または rethrow が必要な catch を区別できます。
+- **上限付きファイル読み取りの open と audit 契約を明示化しました (#3994)** — 本番コードの長さ確認、probe、tail、hash、archive export copy が共有 file-open helper を使うようになり、archive export は取得済み snapshot 長を厳密にコピーし、新しい `bounded-read-evidence` recipe が max-byte helper 経路の陽性根拠を報告します。
+- **file URI 変換が LSP と SQLite path で共有 policy を使うようになりました (#3995)** — LSP location、LSP `textDocument.uri` の解析、SQLite read-only file URI 生成が同じ helper を経由し、空白や `#` を含む path の escape / decode が一貫するようになりました。
+- **package normalization が古い legacy temp file を安全に掃除するようになりました (#3996)** — rewrite 前に normalizer は legacy `.normalize-tmp` sidecar を排他 lock できた場合だけ削除し、その file が lock 中または access 不能な場合は abort し、replacement は引き続き同じ directory の durable な `.cdidx-normalize-*.tmp` temp file 経由で書き込みます。
+
+#### セキュリティ
+
+- **JSON protocol と metadata parsing の境界を強化しました (#3908)** — worker protocol JSON は明示的な depth 制限付き parse / serializer options を使い、suggestion store の streaming 読み込みは cancellation を監視し、export manifest の unknown-extension sample は item 数と文字列長を制限して読み込むようになりました。
+- **MCP audit argument redaction の secret pattern scan を bounded にしました (#3909)** — audit logging は、opt-in された argument value を echo する前に timeout 付きの表示 prefix secret scan を行うようになり、病的な argument text で best-effort の audit 出力が停止しないようにしました。
+- **git と upgrade subprocess が継承環境を scrub するようになりました (#3910)** — git helper と upgrade installer は PATH / home / temp / proxy / certificate と tool-specific variables の明示 allowlist で起動し、`CDIDX_TEST_*` の forward は isolated worker の test hook に限定されます。
+- **診断 redaction policy が suggestion と lifecycle log の秘匿処理を支えるようになりました (#3933)** — suggestion の永続化 / GitHub 投稿前 redaction と global tool log の引数 redaction が中央の sensitive-name / token policy を共有し、サポート診断とローカル suggestion metadata の秘匿ルールのずれを減らします。
+- **filesystem enumeration が明示的な共有 traversal policy を使うようになりました (#3951)** - solution/project discovery、indexer marker traversal、plugin/hook discovery、checkpoint/backup listing、import cleanup の top-directory-only enumeration が、再帰と inaccessible-path の扱いを明示した単一 helper を経由するようになりました。
+- **GitHub HTTP policy が timeout を bounded にし proxy credential status を安全に報告するようになりました (#3954)** — GitHub API client は infinite または過大な timeout を 5 分に clamp し、`cdidx doctor` は credential material を出さずに `proxy_default_credentials: enabled|disabled` と maximum timeout だけを報告します。
+- **relaxed JSON escaping を local JSONL 診断 sink に限定しました (#3965)** — メトリクスと MCP 監査ログは local-only の名前付き writer option を共有し、HTTP、HTML、外部埋め込み JSON に relaxed escaping が広がらないようテストで固定しました。
+- **MCP HTTP auth と SSE drop の内部診断を公開しました (#3966)** — HTTP health は bearer auth-denial class の counter と SSE event-stream drop reason を報告し、client-visible な auth failure は generic なまま維持します。
+- **ソースコードガード診断にマッチした理由件数を追加しました (#3974)** — `suggest_improvement` の拒否は主理由の `source_code_rejection.reason_code` を維持し、拒否された本文を反映せずに上限付きの `reason_code_counts` 診断を追加します。また、このガードがセキュリティ境界やデータ漏えい防止境界ではなく便宜的なフィルタであることを明記しました。
+- **XML 抽出で共有された上限制御付き reader 設定を使うようになりました (#3981)** — extractor の XML reader は DTD policy、外部解決の無効化、document / entity 文字数上限を一箇所で管理し、app manifest は意図した DTD-ignore 経路のまま処理します。
+- **一時ファイルと制御ファイルを作成時点から owner-only mode にしました (#3984)** — watch sub-run spool file、index lock file、staged hook script、sensitive atomic temp file は、後続の chmod だけに頼らず POSIX `0600` を作成時に要求するようになりました。
+- **process launch builder が明示的な no-shell policy を共有するようになりました (#3991)** — installer、git、symbol worker、hook worker の process start info が共有 helper を経由し、shell 使用、working directory、redirect、worker の UTF-8 encoding、protocol line-limit 引数の扱いを一箇所に集約しました。
+- **Regex timeout 診断と redaction fallback を単一 policy に集約しました (#3993)** — CLI、MCP、indexing、configured extractor、diagnostic redaction、suggestion、GitHub response body の timeout 経路で、カテゴリ、メッセージ、fail-closed な redaction fallback 文字列を共通化しました。
+- **atomic file move、directory publish、cleanup 経路が明示的な policy helper を共有するようになりました (#4001)** - log rotation、import replacement rollback、database restore move、checkpoint publishing、suggestion corrupt-file preservation、best-effort cleanup が、overwrite の扱い、long-path normalization、destination mode 適用、parent-directory durability check を明示する共有 helper を経由するようになりました。
+
+#### ドキュメント
+
+- **センシティブバッファの clearing 方針を文書化しました (#3989)** — 開発者ガイドで token material、LSP request payload、bounded HTTP copy buffer、非センシティブな protocol/generated buffer を分類し、token UTF-8 の zero 化と LSP payload range clearing を focused test で固定しました。
+
+#### 内部変更
+
+- **CLI utility error path の JSON contract coverage を追加しました (#3968)** — `license`、`completions`、`config show` が機械可読 error contract を維持するよう、utility の unsupported-option ケースで構造化 JSON を parse するテストを追加しました。
+- **今回触れた CLI stdout contract を output helper 経由に集約しました (#3980)** — `CommandOutputWriter` が JSON / text helper の共有 stdout emission を担い、今回触れた error と count payload は個別の stdout serialization ではなく output helper を経由します。
+- **background timeout handling が categorized cancellation helper を共有するようになりました (#3998)** — GitHub API call、upgrade download、MCP client request、HTTP response write、SSE write は共通の timeout scope を使い、timeout cancellation と caller cancellation を区別します。
+- **MCP bounded-channel と gate の contract を文書化し ownership を明確にしました (#3999)** — HTTP request queue、request-log drop、concurrent handler gate、event-stream gate、audit-log drop は backpressure behavior を文書化し、owner が dispose する gate と bounded shutdown 中に transport lifetime として意図的に残す semaphore の区別も明確になりました。
+- **センシティブバッファと bounded generated JSON の方針を中央化しました (#4000)** — センシティブな ArrayPool 返却は `SensitiveBufferPolicy` 経由になり、bounded generated JSON capture も named helper を使うようにして、clear range と byte-budget clamp をテストで固定しました。
+- **installer snippet テストが hang 時に bounded failure するようになりました (#4015)** — `InstallScriptTests.RunInstallerSnippet` は bounded timeout を適用し、timeout 時に snippet の process tree を kill し、一部の成功系 assertion から captured diagnostics を表示するため、full suite が無音で hang し続けなくなりました。
+- **reinstall テスト失敗時に installer 出力が表示されるようになりました (#4024)** — installer snippet は net9 のテスト負荷に耐える広めの bounded timeout を使い、`DownloadAndInstall_ReinstallReplacesExistingOptionalDirectories` は snippet が非 0 で終了した場合に captured stdout/stderr を assertion message に含めるため、reinstall 失敗を診断しやすくなりました。
+- **GitHelper の timeout テストが full-suite load に耐えるようになりました (#4027)** — git subprocess timeout assertion は広めの wall-clock budget を使い、fake git command の自然完了はその budget より後に保つため、timeout 処理漏れは引き続き決定的に失敗します。
+
 ### [1.33.2] - 2026-06-23
 
 #### 変更
@@ -8383,7 +9133,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.33.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.0...HEAD
+[1.34.0]: https://github.com/Widthdom/CodeIndex/compare/v1.33.2...v1.34.0
 [1.33.2]: https://github.com/Widthdom/CodeIndex/compare/v1.33.1...v1.33.2
 [1.33.1]: https://github.com/Widthdom/CodeIndex/compare/v1.33.0...v1.33.1
 [1.33.0]: https://github.com/Widthdom/CodeIndex/compare/v1.32.5...v1.33.0
