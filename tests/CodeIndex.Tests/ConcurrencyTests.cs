@@ -608,7 +608,7 @@ public class ConcurrencyTests : IDisposable
             writer.MarkGraphReady();
         });
         Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
-        Assert.False(markTask.IsCompleted);
+        await AssertTaskRemainsBlockedAsync(markTask);
 
         txn.Commit();
         txn.Dispose();
@@ -631,7 +631,7 @@ public class ConcurrencyTests : IDisposable
             nested.Commit();
         });
         Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
-        Assert.False(nestedTask.IsCompleted);
+        await AssertTaskRemainsBlockedAsync(nestedTask);
 
         outer.Commit();
         outer.Dispose();
@@ -682,6 +682,12 @@ public class ConcurrencyTests : IDisposable
 
         cts.Cancel();
         await Task.WhenAll(writeTask, readTask);
+    }
+
+    private static async Task AssertTaskRemainsBlockedAsync(Task task)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromMilliseconds(100)));
+        Assert.NotSame(task, completed);
     }
 
     public void Dispose()
