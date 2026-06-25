@@ -9038,8 +9038,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -9740,8 +9739,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -9811,8 +9809,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11583,11 +11580,10 @@ public sealed class Caller
         finally
         {
             heldLock.Dispose();
-            File.Delete(infoPath);
-            File.Delete(lockPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11614,12 +11610,9 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11656,12 +11649,9 @@ public sealed class Caller
         {
             McpIndexRunLock.CleanupDiagnosticSinkForTesting = null;
             McpIndexRunLock.DeleteFileForTesting = File.Delete;
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11705,11 +11695,10 @@ public sealed class Caller
         finally
         {
             heldLock.Dispose();
-            File.Delete(infoPath);
-            File.Delete(lockPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11756,11 +11745,10 @@ public sealed class Caller
         finally
         {
             heldLock.Dispose();
-            File.Delete(infoPath);
-            File.Delete(lockPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11986,8 +11974,7 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRootA);
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
@@ -12097,8 +12084,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
@@ -12140,8 +12126,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteSqliteDatabaseFiles(dbPath);
         }
     }
@@ -12373,8 +12358,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12435,8 +12419,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12474,8 +12457,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12574,8 +12556,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12665,8 +12646,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12736,8 +12716,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12819,8 +12798,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -12859,8 +12837,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -12909,8 +12886,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -12949,8 +12925,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -13300,8 +13275,7 @@ public sealed class Caller
         {
             if (originalMode.HasValue && Directory.Exists(unreadableDir))
                 File.SetUnixFileMode(unreadableDir, originalMode.Value);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -13324,9 +13298,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -14324,8 +14296,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
