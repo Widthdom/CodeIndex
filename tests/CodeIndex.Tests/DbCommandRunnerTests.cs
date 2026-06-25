@@ -971,8 +971,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1010,8 +1009,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
