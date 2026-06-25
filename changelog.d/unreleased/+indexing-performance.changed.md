@@ -20,6 +20,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.FSharp.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
@@ -128,6 +129,7 @@ affected:
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
+- Enumerated HTML class-attribute tokens directly, avoiding whitespace split arrays while indexing class references.
 - Enumerated C++ same-line class body members directly, avoiding semicolon split arrays on large class declarations.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
@@ -219,5 +221,6 @@ affected:
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。
+- HTML class attribute token を直接列挙し、class reference index 中の whitespace split array を避けるようにしました。
 - C++ same-line class body member を直接列挙し、大きな class declaration で semicolon split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
