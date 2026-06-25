@@ -193,6 +193,7 @@ affected:
 - Trimmed Go interface-body trailing braces by index, avoiding a prefix substring/trim chain during symbol extraction.
 - Trimmed Go interface member trailing braces by index, avoiding a prefix substring/trim chain during symbol extraction.
 - Trimmed Go interface member line comments by index, avoiding a prefix substring/trim chain during symbol extraction.
+- Trimmed Go interface member block comments by index, avoiding a prefix substring/trim chain during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -347,6 +348,7 @@ affected:
 - Go interface-body trailing brace を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
 - Go interface member trailing brace を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
 - Go interface member line comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
+- Go interface member block comment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。
