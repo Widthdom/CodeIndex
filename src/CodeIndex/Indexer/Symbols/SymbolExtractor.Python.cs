@@ -946,11 +946,20 @@ public static partial class SymbolExtractor
         var relativeQualifiedModulePart = treatAsFromImport
             ? ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix)
             : null;
-        foreach (var rawSpec in importedNames.Split(','))
+        var specStart = 0;
+        while (specStart <= importedNames.Length)
         {
-            var spec = rawSpec.Trim();
+            var commaIndex = importedNames.IndexOf(',', specStart);
+            var specEnd = commaIndex >= 0 ? commaIndex : importedNames.Length;
+            var spec = importedNames.Substring(specStart, specEnd - specStart).Trim();
             if (spec.Length == 0 || spec == "*")
+            {
+                if (commaIndex < 0)
+                    break;
+
+                specStart = commaIndex + 1;
                 continue;
+            }
 
             var aliasIndex = spec.IndexOf(" as ", StringComparison.Ordinal);
             var importedName = aliasIndex >= 0
@@ -958,7 +967,7 @@ public static partial class SymbolExtractor
                 : spec;
             var localName = aliasIndex >= 0
                 ? spec[(aliasIndex + " as ".Length)..].Trim()
-                : importedName.Split('.')[0].Trim();
+                : GetPythonImportLocalName(importedName);
 
             if (importedName.Length > 0)
             {
@@ -1016,10 +1025,7 @@ public static partial class SymbolExtractor
                 AddPythonImportEntry(line, absoluteStartColumn, localName, entries, seenNames, ref searchStartColumn);
             }
 
-            if (string.IsNullOrEmpty(pythonModulePrefix))
-                continue;
-
-            if (aliasIndex >= 0)
+            if (!string.IsNullOrEmpty(pythonModulePrefix) && aliasIndex >= 0)
             {
                 AddPythonImportEntry(
                     line,
@@ -1029,7 +1035,20 @@ public static partial class SymbolExtractor
                     seenNames,
                     ref searchStartColumn);
             }
+
+            if (commaIndex < 0)
+                break;
+
+            specStart = commaIndex + 1;
         }
+    }
+
+    private static string GetPythonImportLocalName(string importedName)
+    {
+        var dotIndex = importedName.IndexOf('.');
+        return dotIndex >= 0
+            ? importedName[..dotIndex].Trim()
+            : importedName;
     }
 
     private static string? ResolvePythonRelativeFromImportModuleName(string? modulePart, string? pythonModulePrefix)
