@@ -2600,7 +2600,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 

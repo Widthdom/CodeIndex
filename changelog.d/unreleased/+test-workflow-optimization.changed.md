@@ -83,6 +83,7 @@ affected:
 - Reused shared temporary directory cleanup for configured-pattern out-of-tree language fixtures.
 - Reused shared temporary directory cleanup for temporary dotnet host fixtures.
 - Reused shared temporary directory cleanup from the watch runner test helper.
+- Reused shared temporary directory cleanup for database purge workspaces.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -128,3 +129,4 @@ affected:
 - configured-pattern out-of-tree language fixture の cleanup を共通 helper に寄せました。
 - temporary dotnet host fixture の cleanup を共通 helper に寄せました。
 - watch runner test helper の cleanup を共通 helper に寄せました。
+- database purge workspace の cleanup を共通 helper に寄せました。
