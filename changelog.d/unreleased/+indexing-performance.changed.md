@@ -214,6 +214,7 @@ affected:
 - Scanned Shell alias segment starts by index, avoiding segment substring/trim allocations before alias detection.
 - Found Shell alias assignment separators on the original line, avoiding token substring allocation before name extraction.
 - Trimmed Shell alias names by index, avoiding a slice/trim allocation chain during symbol extraction.
+- Trimmed Shell alias signatures by index, avoiding a full-line trim allocation during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -387,6 +388,7 @@ affected:
 - Shell alias segment start を index で走査し、alias 判定前の segment substring / trim allocation を避けるようにしました。
 - Shell alias assignment separator を元の行で探索し、name 抽出前の token substring allocation を避けるようにしました。
 - Shell alias name を index 境界で trim し、symbol extraction 中の slice / trim allocation chain を避けるようにしました。
+- Shell alias signature を index 境界で trim し、symbol extraction 中の full-line trim allocation を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。

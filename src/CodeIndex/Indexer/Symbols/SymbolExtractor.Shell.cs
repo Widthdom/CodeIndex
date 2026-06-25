@@ -36,7 +36,7 @@ public static partial class SymbolExtractor
                     StartLine = i + 1,
                     StartColumn = tokenStart,
                     EndLine = i + 1,
-                    Signature = line.Trim(),
+                    Signature = GetShellTrimmedSlice(line, 0, line.Length),
                 };
                 AddSymbolRecord(
                     symbols,
