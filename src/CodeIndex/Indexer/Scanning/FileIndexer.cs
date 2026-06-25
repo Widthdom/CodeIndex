@@ -298,11 +298,13 @@ public partial class FileIndexer
 
         private readonly IgnoreRuleSet? _parent;
         private readonly IReadOnlyList<IgnoreRule> _rules;
+        private readonly string? _sourceDirectory;
 
         private IgnoreRuleSet(IgnoreRuleSet? parent, IReadOnlyList<IgnoreRule> rules)
         {
             _parent = parent;
             _rules = rules;
+            _sourceDirectory = rules.Count == 0 ? null : rules[0].SourceDirectory;
         }
 
         internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
@@ -311,9 +313,16 @@ public partial class FileIndexer
         internal bool IsIgnored(string absolutePath, bool isDirectory)
         {
             var ignored = _parent?.IsIgnored(absolutePath, isDirectory) ?? false;
+            if (_sourceDirectory is null)
+                return ignored;
+
+            var relativePath = IgnoreRule.GetRelativeCandidatePath(_sourceDirectory, absolutePath);
+            if (relativePath is null)
+                return ignored;
+
             foreach (var rule in _rules)
             {
-                if (rule.IsMatch(absolutePath, isDirectory))
+                if (rule.IsMatch(relativePath, isDirectory))
                     ignored = !rule.Negated;
             }
 
@@ -368,6 +377,8 @@ public partial class FileIndexer
         }
 
         internal bool Negated { get; }
+
+        internal string SourceDirectory => _sourceDirectory;
 
         internal static bool TryParse(string sourceDirectory, string rawLine, bool ignoreCase, out IgnoreRule? rule, out string? errorMessage)
         {
@@ -426,18 +437,23 @@ public partial class FileIndexer
             }
         }
 
-        internal bool IsMatch(string absolutePath, bool isDirectory)
+        internal static string? GetRelativeCandidatePath(string sourceDirectory, string absolutePath)
         {
-            if (_directoryOnly && !isDirectory)
-                return false;
-
-            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_sourceDirectory, absolutePath));
+            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(sourceDirectory, absolutePath));
             if (relativePath.Length == 0 ||
                 relativePath == "." ||
                 relativePath.StartsWith("../", StringComparison.Ordinal))
             {
-                return false;
+                return null;
             }
+
+            return relativePath;
+        }
+
+        internal bool IsMatch(string relativePath, bool isDirectory)
+        {
+            if (_directoryOnly && !isDirectory)
+                return false;
 
             var candidate = _matchBasenameOnly
                 ? Path.GetFileName(relativePath)
