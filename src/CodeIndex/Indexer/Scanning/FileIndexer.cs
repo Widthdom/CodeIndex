@@ -4421,7 +4421,7 @@ public partial class FileIndexer
 
     private static int FindOversizeFtsTokenLine(string content, int maxTokenLength)
     {
-        if (string.IsNullOrEmpty(content))
+        if (string.IsNullOrEmpty(content) || content.Length <= maxTokenLength)
             return 0;
 
         var lineNumber = 1;
