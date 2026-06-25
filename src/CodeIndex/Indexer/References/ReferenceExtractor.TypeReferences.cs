@@ -4401,9 +4401,13 @@ public static partial class ReferenceExtractor
 
     private static string MaskJavaTextBlocks(string content)
     {
+        var firstTextBlockCandidate = content.IndexOf("\"\"\"", StringComparison.Ordinal);
+        if (firstTextBlockCandidate < 0)
+            return content;
+
         var chars = content.ToCharArray();
 
-        for (var i = 0; i + 2 < chars.Length; i++)
+        for (var i = firstTextBlockCandidate; i + 2 < chars.Length; i++)
         {
             if (!IsJavaTextBlockOpening(chars, i))
                 continue;
