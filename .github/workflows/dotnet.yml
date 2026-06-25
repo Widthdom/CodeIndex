@@ -284,8 +284,18 @@ jobs:
               [string]$LogPath
             )
 
-            dotnet @testArgs 2>&1 | Tee-Object -FilePath $LogPath | ForEach-Object { Write-Host $_ }
+            $capturedOutput = [System.Collections.Generic.List[string]]::new()
+            dotnet @testArgs 2>&1 | ForEach-Object {
+              $line = [string]$_
+              $capturedOutput.Add($line)
+              Write-Host $line
+            }
+
             $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+              [System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)
+            }
+
             return $exitCode
           }
 

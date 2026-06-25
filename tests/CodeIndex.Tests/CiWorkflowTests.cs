@@ -41,6 +41,10 @@ public class CiWorkflowTests
         Assert.Contains("--blame-hang", workflow);
         Assert.Contains("--blame-hang-timeout\", \"5m", workflow);
         Assert.Contains("test-output-first.txt", workflow);
+        Assert.Contains("[System.Collections.Generic.List[string]]::new()", workflow);
+        Assert.Contains("if ($exitCode -ne 0)", workflow);
+        Assert.Contains("[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)", workflow);
+        Assert.DoesNotContain("Tee-Object", workflow);
         Assert.Contains("id: test", workflow);
         Assert.Contains("\"summarize=true\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
         Assert.Contains("steps.test.outputs.summarize == 'true' || failure()", workflow);
