@@ -1262,7 +1262,7 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void GetReusableDetectedLanguage_ExtensionlessScript_ReusesScanResultLanguage()
+    public void GetReusableDetectedLanguage_ExtensionlessScriptReturnsNullToPreserveContentDetection()
     {
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
@@ -1272,8 +1272,35 @@ public partial class FileIndexerTests
 
             var indexer = new FileIndexer(tempDir, ignoreCase: false);
             var scanResult = indexer.ScanFilesDetailed();
+            File.WriteAllText(path, "#!/usr/bin/env ruby\nputs 'hi'\n");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2));
 
-            Assert.Equal("python", FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages));
+            var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage);
+
+            Assert.Equal("python", scanResult.FileLanguages[path]);
+            Assert.Null(knownLanguage);
+            Assert.Equal("ruby", loaded.Record.Lang);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetReusableDetectedLanguage_ExtensionlessFileNameMappingReusesScanResultLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Makefile");
+            File.WriteAllText(path, "all:\n\t@echo hi\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var scanResult = indexer.ScanFilesDetailed();
+
+            Assert.Equal("makefile", FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages));
         }
         finally
         {

@@ -329,7 +329,7 @@ jobs:
 
       - name: Summarize TRX telemetry
         if: always() && (steps.test.outputs.summarize == 'true' || failure())
-        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build -- summarize --results-directory ./TestResults --top 10
+        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
         if: always() && (steps.test.outputs.summarize == 'true' || failure())

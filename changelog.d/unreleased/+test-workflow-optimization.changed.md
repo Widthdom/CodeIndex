@@ -53,7 +53,7 @@ affected:
 - Replaced shared-writer blocking test grace sleeps with explicit task-start signals.
 - Shared the normal trimmed published CLI across published CLI smoke tests so each test process pays that publish cost once; single-file publish coverage remains isolated.
 - Moved CI stdout-log directory creation onto the failed-test path so clean first-pass lanes do not pre-create `TestResults` for that log file.
-- Ran the CI TRX telemetry summarizer with Release `--no-build` output so failed/pass-on-retry lanes do not rebuild the helper during diagnostics.
+- Kept CI TRX telemetry summarization available on every matrix lane by letting the failure-diagnostics step build the helper when needed.
 - Cached the pinned Stryker global tool and NuGet packages in the weekly mutation workflow, and update/install the tool only on cache misses.
 - Moved published CLI subprocess execution into `TrimmedCliTestHelper`, removing duplicated process-launch helpers from index/query tests.
 - Shortened post-extraction hook timeout/cancellation leak checks by lowering the artificial hook delay and using a smaller observation window that still catches un-killed workers.
@@ -105,7 +105,7 @@ affected:
 - shared-writer blocking test の grace sleep を、明示的な task-start signal に置き換えました。
 - published CLI smoke test 間で通常の trimmed publish output を共有し、test process あたり 1 回の publish cost に抑えました。single-file publish coverage は引き続き隔離します。
 - CI stdout log 用 directory の作成を failed-test path に移し、clean な初回成功 lane ではその log file のために `TestResults` を事前作成しないようにしました。
-- CI の TRX telemetry summarizer を Release `--no-build` output で実行し、失敗または retry 成功 lane の診断中に helper を再ビルドしないようにしました。
+- CI の TRX telemetry summarizer は failure-diagnostics step 側で必要に応じて helper を build し、全 matrix lane で診断を出せるようにしました。
 - weekly mutation workflow で pinned Stryker global tool と NuGet package を cache し、cache miss のときだけ tool を update / install するようにしました。
 - published CLI subprocess execution を `TrimmedCliTestHelper` に移し、index/query test の重複 process-launch helper を削除しました。
 - post-extraction hook の timeout / cancellation leak check で人工 hook delay と観測 window を短縮し、kill されなかった worker は引き続き検出しつつ固定待機を減らしました。

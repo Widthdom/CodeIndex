@@ -52,6 +52,7 @@ affected:
 - Removed per-line string allocations from generated-code header detection, reducing allocation pressure during record construction.
 - Avoided string allocation while checking generated-code filename suffixes during record construction.
 - Reused scan-time language detection during `status --check` workspace freshness validation, avoiding duplicate language probes while hashing large workspaces.
+- Limited scan-time language reuse for extensionless files to stable filename mappings so shebang scripts are re-detected from the loaded content.
 - Skipped generated-code classification during `status --check` freshness hashing, since freshness only compares path, checksum, and line metadata.
 - Avoided allocating generated-code suppression issue objects during the C# static-interface prepass, where only the suppression decision is needed.
 - Added an allocation-free word-boundary precheck before C# static-interface comment/string masking, avoiding large masks for obvious non-candidates.
@@ -94,6 +95,7 @@ affected:
 - generated-code header 判定で行ごとの string allocation を発生させず、record 構築中の allocation pressure を減らしました。
 - record 構築中の generated-code filename suffix 判定で string allocation を避けるようにしました。
 - `status --check` の workspace freshness validation でも scan 時点の language 判定を再利用し、大規模 workspace を hash する際の重複 language probe を避けるようにしました。
+- 拡張子なし file の scan 時点 language 再利用は安定した filename mapping に限定し、shebang script は load 後の content から再判定するようにしました。
 - freshness は path、checksum、line metadata だけを比較するため、`status --check` の freshness hashing 中は generated-code classification を省略するようにしました。
 - C# static-interface prepass では suppression 判定だけが必要なため、generated-code suppression issue object の割り当てを避けるようにしました。
 - C# static-interface の comment/string masking 前に allocation-free の word-boundary precheck を追加し、明らかな候補外ファイルで大きな mask を作らないようにしました。

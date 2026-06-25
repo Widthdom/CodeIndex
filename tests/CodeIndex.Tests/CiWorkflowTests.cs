@@ -57,10 +57,10 @@ public class CiWorkflowTests
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
             normalizedWorkflow);
         Assert.Contains(
-            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build -- summarize",
+            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize",
             workflow);
         Assert.DoesNotContain(
-            "run: dotnet run --project tools/CodeIndex.TestTelemetry -- summarize",
+            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
             workflow);
         Assert.DoesNotContain(
             "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",

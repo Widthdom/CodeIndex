@@ -1054,7 +1054,25 @@ public partial class FileIndexer
         if (string.IsNullOrEmpty(language))
             return false;
 
-        return !string.Equals(Path.GetExtension(filePath), ".h", StringComparison.OrdinalIgnoreCase);
+        var fileName = Path.GetFileName(filePath);
+        if (FileNameMap.TryGetValue(fileName, out var nameLanguage))
+            return string.Equals(language, nameLanguage, StringComparison.Ordinal);
+
+        foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
+        {
+            if (fileName.Length > prefix.Length &&
+                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
+            }
+        }
+
+        if (TryDetectLanguageOverride(filePath, out var overrideLanguage))
+            return string.Equals(language, overrideLanguage, StringComparison.Ordinal);
+
+        var extension = Path.GetExtension(filePath);
+        return !string.IsNullOrEmpty(extension)
+            && !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
