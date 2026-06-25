@@ -1930,8 +1930,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempParentDir))
-                Directory.Delete(tempParentDir, true);
+            TestProjectHelper.DeleteDirectory(tempParentDir);
         }
     }
 
