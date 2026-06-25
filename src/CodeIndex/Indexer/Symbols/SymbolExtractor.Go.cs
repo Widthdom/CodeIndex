@@ -672,7 +672,7 @@ public static partial class SymbolExtractor
 
             var lineCommentIndex = candidate.IndexOf("//", StringComparison.Ordinal);
             if (lineCommentIndex >= 0)
-                candidate = candidate[..lineCommentIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, lineCommentIndex);
 
             var blockCommentIndex = candidate.IndexOf("/*", StringComparison.Ordinal);
             if (blockCommentIndex >= 0)
