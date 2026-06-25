@@ -100,6 +100,15 @@ public static partial class SymbolExtractor
         return end == fragment.Length ? fragment : fragment[..end];
     }
 
+    private static bool EndsWithPythonLineContinuation(string line)
+    {
+        var end = line.Length;
+        while (end > 0 && char.IsWhiteSpace(line[end - 1]))
+            end--;
+
+        return end > 0 && line[end - 1] == '\\';
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
     {
         var declarationIndent = CountIndent(lines[startLineIndex]);
@@ -179,7 +188,7 @@ public static partial class SymbolExtractor
                     return builder.ToString();
             }
 
-            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+            if (parenDepth == 0 && bracketDepth == 0 && !EndsWithPythonLineContinuation(line))
                 break;
         }
 
