@@ -1258,7 +1258,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(dir);
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
