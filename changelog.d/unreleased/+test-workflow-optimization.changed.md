@@ -14,6 +14,7 @@ affected:
   - tests/CodeIndex.Tests/ReportCommandRunnerTests.cs
   - tests/CodeIndex.Tests/FileSystemTraversalPolicyTests.cs
   - tests/CodeIndex.Tests/DataDirectorySecurityTests.cs
+  - tests/CodeIndex.Tests/ExportImportCommandRunnerTests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -44,6 +45,7 @@ affected:
 - Added shared SQLite database sidecar cleanup in `TestProjectHelper` and used it from database tests instead of a local delete helper.
 - Reused `TestProjectHelper.DeleteDirectory` for report bundle workspace cleanup instead of a local best-effort recursive delete helper.
 - Reused shared temporary directory cleanup in traversal-policy and data-directory security tests.
+- Reused shared temporary directory cleanup for import/export archive test workspaces.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -67,3 +69,4 @@ affected:
 - SQLite database sidecar cleanup を `TestProjectHelper` に追加し、database test のローカル delete helper を置き換えました。
 - report bundle 用 workspace cleanup でローカルの best-effort recursive delete helper をやめ、`TestProjectHelper.DeleteDirectory` を再利用するようにしました。
 - traversal-policy test と data-directory security test で一時ディレクトリ cleanup を共通 helper に寄せました。
+- import / export archive test の workspace cleanup を共通 helper に寄せました。
