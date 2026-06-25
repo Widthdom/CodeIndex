@@ -12,6 +12,7 @@ public class CiWorkflowTests
         var normalizedWorkflow = workflow.ReplaceLineEndings("\n");
 
         Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
+        Assert.DoesNotContain("--results-directory\", \"./TestResults", workflow);
         Assert.Contains(
             "- name: Select CI lane\n        id: lane",
             normalizedWorkflow);

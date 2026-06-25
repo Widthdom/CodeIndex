@@ -268,8 +268,7 @@ jobs:
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout", "5m",
-            "--logger", "trx;LogFileName=test_results.trx",
-            "--results-directory", "./TestResults"
+            "--logger", "trx;LogFileName=test_results.trx"
           )
 
           $collectCoverage = "${{ steps.lane.outputs.primary_lane }}" -eq "true"
