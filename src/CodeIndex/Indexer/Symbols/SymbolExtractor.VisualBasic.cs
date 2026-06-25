@@ -125,23 +125,24 @@ public static partial class SymbolExtractor
 
     private static void UpdateVisualBasicEnumInitializerState(string line, ref int parenDepth, ref bool inInitializer)
     {
-        var code = StripVisualBasicComment(line);
-        foreach (var ch in code)
+        var codeEnd = FindVisualBasicCommentStart(line);
+        for (var i = 0; i < codeEnd; i++)
         {
+            var ch = line[i];
             if (ch == '(')
                 parenDepth++;
             else if (ch == ')' && parenDepth > 0)
                 parenDepth--;
         }
 
-        var lastCodeIndex = GetVisualBasicLastNonWhitespaceIndex(code);
+        var lastCodeIndex = GetVisualBasicLastNonWhitespaceIndex(line, codeEnd);
         inInitializer = parenDepth > 0
-            || (lastCodeIndex >= 0 && code[lastCodeIndex] is '_' or '=' or '+' or '-' or '*' or '/' or '&' or ',' or '.');
+            || (lastCodeIndex >= 0 && line[lastCodeIndex] is '_' or '=' or '+' or '-' or '*' or '/' or '&' or ',' or '.');
     }
 
-    private static int GetVisualBasicLastNonWhitespaceIndex(string text)
+    private static int GetVisualBasicLastNonWhitespaceIndex(string text, int endExclusive)
     {
-        for (var i = text.Length - 1; i >= 0; i--)
+        for (var i = endExclusive - 1; i >= 0; i--)
         {
             if (!char.IsWhiteSpace(text[i]))
                 return i;
@@ -150,7 +151,7 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static string StripVisualBasicComment(string line)
+    private static int FindVisualBasicCommentStart(string line)
     {
         var inString = false;
         for (var i = 0; i < line.Length; i++)
@@ -169,10 +170,10 @@ public static partial class SymbolExtractor
             }
 
             if (!inString && ch == '\'')
-                return line[..i];
+                return i;
         }
 
-        return line;
+        return line.Length;
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindVisualBasicRange(string[] lines, int startIndex)
