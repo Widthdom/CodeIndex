@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -60,7 +61,7 @@ internal sealed partial class FileContentLoader
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
-            bufferSize: 81920,
+            bufferSize: StreamBufferSize,
             options: FileOptions.SequentialScan);
         return TryComputeChecksum(stream, maxBytes, out checksum, cancellationToken);
     }
@@ -76,30 +77,37 @@ internal sealed partial class FileContentLoader
 
         checksum = string.Empty;
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[81920];
-        var pendingCarriageReturn = false;
-        long total = 0;
-        while (true)
+        var buffer = ArrayPool<byte>.Shared.Rent(StreamBufferSize);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var read = stream.Read(buffer, 0, buffer.Length);
-            if (read == 0)
-                break;
+            var pendingCarriageReturn = false;
+            long total = 0;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = stream.Read(buffer, 0, buffer.Length);
+                if (read == 0)
+                    break;
 
-            total += read;
-            if (total > maxBytes)
-                return false;
+                total += read;
+                if (total > maxBytes)
+                    return false;
 
-            var bytes = buffer.AsSpan(0, read);
-            if (!pendingCarriageReturn && bytes.IndexOf((byte)0x0D) < 0)
-                hasher.AppendData(bytes);
-            else
-                AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
+                var bytes = buffer.AsSpan(0, read);
+                if (!pendingCarriageReturn && bytes.IndexOf((byte)0x0D) < 0)
+                    hasher.AppendData(bytes);
+                else
+                    AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
+            }
+
+            FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
+            checksum = FinishChecksum(hasher);
+            return true;
         }
-
-        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
-        checksum = FinishChecksum(hasher);
-        return true;
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static void AppendNormalizedChecksumBytes(
