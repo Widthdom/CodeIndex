@@ -1071,7 +1071,10 @@ internal static class KotlinReferenceExtractor
                      && i + 4 <= segment.Length
                      && string.CompareOrdinal(segment, i, " by ", 0, 4) == 0)
             {
-                return segment.Substring(0, i).TrimEnd();
+                var end = i;
+                while (end > 0 && char.IsWhiteSpace(segment[end - 1]))
+                    end--;
+                return segment.Substring(0, end);
             }
         }
 
