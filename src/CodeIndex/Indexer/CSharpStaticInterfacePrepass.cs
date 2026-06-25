@@ -1,4 +1,3 @@
-using System.Buffers;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -190,20 +189,14 @@ internal static class CSharpStaticInterfacePrepass
                 return;
             }
 
-            var combinedLength = _tailLength + bytes.Length;
-            var rented = ArrayPool<byte>.Shared.Rent(combinedLength);
-            try
-            {
-                _tail.AsSpan(0, _tailLength).CopyTo(rented);
-                bytes.CopyTo(rented.AsSpan(_tailLength));
-                var combined = rented.AsSpan(0, combinedLength);
-                Scan(combined);
-                CaptureTail(combined);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
+            var boundaryNewLength = Math.Min(TailBytes, bytes.Length);
+            Span<byte> boundary = stackalloc byte[TailBytes * 2];
+            _tail.AsSpan(0, _tailLength).CopyTo(boundary);
+            bytes[..boundaryNewLength].CopyTo(boundary[_tailLength..]);
+            Scan(boundary[..(_tailLength + boundaryNewLength)]);
+            if (!MayContainContractCandidate)
+                Scan(bytes);
+            CaptureTail(bytes);
         }
 
         private void Scan(ReadOnlySpan<byte> bytes)
@@ -223,11 +216,19 @@ internal static class CSharpStaticInterfacePrepass
 
         private void CaptureTail(ReadOnlySpan<byte> bytes)
         {
-            _tailLength = Math.Min(TailBytes, bytes.Length);
-            if (_tailLength == 0)
+            if (bytes.Length >= TailBytes)
+            {
+                _tailLength = TailBytes;
+                bytes[^_tailLength..].CopyTo(_tail);
                 return;
+            }
 
-            bytes[^_tailLength..].CopyTo(_tail);
+            var retainedLength = Math.Min(TailBytes - bytes.Length, _tailLength);
+            if (retainedLength > 0)
+                _tail.AsSpan(_tailLength - retainedLength, retainedLength).CopyTo(_tail);
+
+            bytes.CopyTo(_tail.AsSpan(retainedLength));
+            _tailLength = retainedLength + bytes.Length;
         }
     }
 
