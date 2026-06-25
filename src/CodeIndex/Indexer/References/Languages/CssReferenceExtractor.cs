@@ -1114,8 +1114,11 @@ internal static class CssReferenceExtractor
 
     private static bool ShouldSkipSassIndentedDeclarationReferences(string preparedLine)
     {
-        var trimmed = preparedLine.TrimStart();
-        return trimmed.StartsWith("=", StringComparison.Ordinal);
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        return firstNonWhitespace < preparedLine.Length && preparedLine[firstNonWhitespace] == '=';
     }
 
     private static bool ShouldSkipSassBareFunctionReference(string preparedLine, int functionIndex)
