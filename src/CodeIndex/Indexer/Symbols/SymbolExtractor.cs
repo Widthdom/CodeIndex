@@ -10773,7 +10773,7 @@ public static partial class SymbolExtractor
         if (startIndex < 0 || startIndex + keyword.Length > line.Length)
             return false;
 
-        if (!string.Equals(line.Substring(startIndex, keyword.Length), keyword, StringComparison.Ordinal))
+        if (string.CompareOrdinal(line, startIndex, keyword, 0, keyword.Length) != 0)
             return false;
 
         var nextIndex = startIndex + keyword.Length;
