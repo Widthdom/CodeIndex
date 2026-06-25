@@ -1540,7 +1540,7 @@ public partial class QueryCommandRunnerTests
 
             var publishedCli = TrimmedCliTestHelper.SharedTrimmedCli;
 
-            var (searchExitCode, searchStdOut, searchStdErr) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "search", queryToken, "--db", dbPath, "--count", "--json");
+            var (searchExitCode, searchStdOut, searchStdErr) = RunSanitizedPublishedCli(publishedCli, "search", queryToken, "--db", dbPath, "--count", "--json");
             Assert.Equal(CommandExitCodes.Success, searchExitCode);
             Assert.Equal(string.Empty, searchStdErr);
             using (var searchJson = JsonDocument.Parse(searchStdOut))
@@ -1549,7 +1549,7 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(1, searchJson.RootElement.GetProperty("files").GetInt32());
             }
 
-            var (findExitCode, findStdOut, findStdErr) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "find", queryToken, "--db", dbPath, "--path", "src/**", "--count", "--json");
+            var (findExitCode, findStdOut, findStdErr) = RunSanitizedPublishedCli(publishedCli, "find", queryToken, "--db", dbPath, "--path", "src/**", "--count", "--json");
             Assert.Equal(CommandExitCodes.Success, findExitCode);
             Assert.Equal(string.Empty, findStdErr);
             using (var findJson = JsonDocument.Parse(findStdOut))
@@ -1559,7 +1559,7 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(1, findJson.RootElement.GetProperty("file_count").GetInt32());
             }
 
-            var (symbolsExitCode, symbolsStdOut, symbolsStdErr) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "symbols", "@", "--db", dbPath, "--lang", "csharp", "--exact", "--count", "--json");
+            var (symbolsExitCode, symbolsStdOut, symbolsStdErr) = RunSanitizedPublishedCli(publishedCli, "symbols", "@", "--db", dbPath, "--lang", "csharp", "--exact", "--count", "--json");
             Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
             Assert.Equal(string.Empty, symbolsStdErr);
             using (var symbolsJson = JsonDocument.Parse(symbolsStdOut))
@@ -1568,7 +1568,7 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(0, symbolsJson.RootElement.GetProperty("files").GetInt32());
             }
 
-            var (validateExitCode, validateStdOut, validateStdErr) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "validate", "--db", dbPath, "--json");
+            var (validateExitCode, validateStdOut, validateStdErr) = RunSanitizedPublishedCli(publishedCli, "validate", "--db", dbPath, "--json");
             Assert.Equal(CommandExitCodes.Success, validateExitCode);
             Assert.Equal(string.Empty, validateStdErr);
             using (var validateJson = JsonDocument.Parse(validateStdOut))
@@ -1577,7 +1577,7 @@ public partial class QueryCommandRunnerTests
                 Assert.True(validateJson.RootElement.GetProperty("issues").ValueKind is JsonValueKind.Array);
             }
 
-            var (outlineExitCode, outlineStdOut, outlineStdErr) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "outline", "src/missing.cs", "--db", dbPath, "--json");
+            var (outlineExitCode, outlineStdOut, outlineStdErr) = RunSanitizedPublishedCli(publishedCli, "outline", "src/missing.cs", "--db", dbPath, "--json");
             Assert.Equal(CommandExitCodes.NotFound, outlineExitCode);
             Assert.Equal(string.Empty, outlineStdErr);
             using (var outlineJson = JsonDocument.Parse(outlineStdOut))
@@ -1588,7 +1588,7 @@ public partial class QueryCommandRunnerTests
 
             foreach (var lang in new[] { "cshtml", "razor" })
             {
-                var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "search", aliasToken, "--db", dbPath, "--lang", lang, "--count", "--json");
+                var (exitCode, stdout, stderr) = RunSanitizedPublishedCli(publishedCli, "search", aliasToken, "--db", dbPath, "--lang", lang, "--count", "--json");
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
@@ -5978,39 +5978,12 @@ public partial class QueryCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
-    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedCli, string workingDirectory, params string[] args)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        if (Path.GetExtension(publishedCli).Equals(".dll", StringComparison.OrdinalIgnoreCase))
-        {
-            psi.FileName = "dotnet";
-            psi.ArgumentList.Add(publishedCli);
-        }
-        else
-        {
-            psi.FileName = publishedCli;
-        }
-
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-        SanitizeChildCliEnvironment(psi);
-
-        using var process = System.Diagnostics.Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start published cdidx subprocess / 公開済み cdidx サブプロセスの起動に失敗");
-        process.StandardInput.Close();
-        var stdOut = process.StandardOutput.ReadToEnd();
-        var stdErr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdOut, stdErr);
-    }
+    private static (int ExitCode, string StdOut, string StdErr) RunSanitizedPublishedCli(PublishedCli publishedCli, params string[] args)
+        => TrimmedCliTestHelper.RunPublishedCli(
+            publishedCli,
+            publishedCli.PublishDirectory,
+            SanitizeChildCliEnvironment,
+            args);
 
     private static string GetBuiltCliDllPath()
     {

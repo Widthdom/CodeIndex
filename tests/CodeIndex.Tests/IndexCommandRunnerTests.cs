@@ -1102,7 +1102,7 @@ public class IndexCommandRunnerTests
 
             var publishedCli = TrimmedCliTestHelper.PublishTrimmedCli(publishDir, publishSingleFile: true);
 
-            var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli.EntryPointPath, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
+            var (exitCode, stdout, stderr) = TrimmedCliTestHelper.RunPublishedCli(publishedCli, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("cdidx: scanning files...", stderr);
@@ -5168,7 +5168,7 @@ public sealed class Caller
                 try
                 {
                     Console.SetOut(stdout);
-                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "backfill-fold", "--db", dbPath, "--json");
+                    var (exitCode, stdoutText, stderrText) = TrimmedCliTestHelper.RunPublishedCli(publishedCli, publishedCli.PublishDirectory, "backfill-fold", "--db", dbPath, "--json");
                     successExitCode = exitCode;
                     Assert.True(!string.IsNullOrWhiteSpace(stdoutText), $"published backfill-fold produced no stdout. stderr={stderrText}");
                     using var document = JsonDocument.Parse(stdoutText);
@@ -5194,7 +5194,7 @@ public sealed class Caller
                 try
                 {
                     Console.SetOut(stdout);
-                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "backfill-fold", "--db", missingDbPath, "--json");
+                    var (exitCode, stdoutText, stderrText) = TrimmedCliTestHelper.RunPublishedCli(publishedCli, publishedCli.PublishDirectory, "backfill-fold", "--db", missingDbPath, "--json");
                     errorExitCode = exitCode;
                     Assert.True(!string.IsNullOrWhiteSpace(stdoutText), $"published backfill-fold error path produced no stdout. stderr={stderrText}");
                     using var document = JsonDocument.Parse(stdoutText);
@@ -12387,36 +12387,6 @@ public sealed class Caller
 
         using var process = System.Diagnostics.Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");
-        var stdOut = process.StandardOutput.ReadToEnd();
-        var stdErr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdOut, stdErr);
-    }
-
-    private static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(string publishedCli, string workingDirectory, params string[] args)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        if (Path.GetExtension(publishedCli).Equals(".dll", StringComparison.OrdinalIgnoreCase))
-        {
-            psi.FileName = "dotnet";
-            psi.ArgumentList.Add(publishedCli);
-        }
-        else
-        {
-            psi.FileName = publishedCli;
-        }
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-
-        using var process = System.Diagnostics.Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start published cdidx subprocess / 公開済み cdidx サブプロセスの起動に失敗");
         var stdOut = process.StandardOutput.ReadToEnd();
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();

@@ -23,6 +23,50 @@ internal static class TrimmedCliTestHelper
 
     internal static PublishedCli SharedTrimmedCli => SharedTrimmedCliLazy.Value;
 
+    internal static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(
+        PublishedCli publishedCli,
+        string workingDirectory,
+        params string[] args)
+        => RunPublishedCli(publishedCli, workingDirectory, configureProcessStartInfo: null, args);
+
+    internal static (int ExitCode, string StdOut, string StdErr) RunPublishedCli(
+        PublishedCli publishedCli,
+        string workingDirectory,
+        Action<ProcessStartInfo>? configureProcessStartInfo,
+        params string[] args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        if (Path.GetExtension(publishedCli.EntryPointPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            psi.FileName = "dotnet";
+            psi.ArgumentList.Add(publishedCli.EntryPointPath);
+        }
+        else
+        {
+            psi.FileName = publishedCli.EntryPointPath;
+        }
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+        configureProcessStartInfo?.Invoke(psi);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start published cdidx subprocess / 公開済み cdidx サブプロセスの起動に失敗");
+        process.StandardInput.Close();
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdOut, stdErr);
+    }
+
     internal static PublishedCli PublishTrimmedCli(string outputDir, bool publishSingleFile = false)
     {
         Directory.CreateDirectory(outputDir);
