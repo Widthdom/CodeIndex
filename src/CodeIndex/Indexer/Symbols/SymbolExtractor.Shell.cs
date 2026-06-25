@@ -16,12 +16,11 @@ public static partial class SymbolExtractor
             var line = lines[i];
             foreach (var (tokenStart, tokenEnd) in EnumerateShellAliasDefinitions(line))
             {
-                var token = line[tokenStart..tokenEnd];
-                var equalsIndex = token.IndexOf('=');
-                if (equalsIndex <= 0)
+                var equalsIndex = line.IndexOf('=', tokenStart, tokenEnd - tokenStart);
+                if (equalsIndex <= tokenStart)
                     continue;
 
-                var name = token[..equalsIndex].Trim();
+                var name = line[tokenStart..equalsIndex].Trim();
                 if (!IsShellAliasName(name))
                     continue;
 
