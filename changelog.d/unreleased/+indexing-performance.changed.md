@@ -124,6 +124,7 @@ affected:
 - Parsed Python import specs by comma and dot index, avoiding split arrays while expanding import symbols.
 - Resolved Python relative import module prefixes by scanning dot segments directly, avoiding prefix split and join arrays.
 - Enumerated F# record, union, and active-pattern segments directly, avoiding delimiter split arrays during symbol extraction.
+- Trimmed F# segments by index, avoiding intermediate trim substrings during record, union, and active-pattern extraction.
 - Enumerated Go interface and struct body segments directly, avoiding semicolon split arrays during embedded symbol extraction.
 - Reused Go's direct segment scanner for grouped value names and trimmed segments by index, avoiding comma split arrays and intermediate trim substrings.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
@@ -216,6 +217,7 @@ affected:
 - Python import spec を comma / dot index で解析し、import symbol 展開中の split array を避けるようにしました。
 - Python relative import の module prefix を dot segment の直接走査で解決し、prefix split と join array を避けるようにしました。
 - F# record / union / active-pattern segment を直接列挙し、symbol 抽出中の delimiter split array を避けるようにしました。
+- F# segment trim も index 境界で行い、record / union / active-pattern 抽出中の中間 trim substring を避けるようにしました。
 - Go interface / struct body segment を直接列挙し、embedded symbol 抽出中の semicolon split array を避けるようにしました。
 - Go の direct segment scanner を grouped value name にも再利用し、segment trim を index で行うことで comma split array と中間 trim substring を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
