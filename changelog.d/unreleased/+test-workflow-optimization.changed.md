@@ -14,6 +14,7 @@ affected:
 - Removed the CI test command's duplicate results-directory argument so `CodeIndex.Tests.runsettings` remains the single owner of the `TestResults` path.
 - Stopped writing CI test stdout logs to disk for clean first-pass success lanes while preserving console streaming and failed-run log artifacts.
 - Added an OS-scoped NuGet cache restore key so lock-file changes can still reuse compatible package cache contents.
+- Removed the redundant explicit `--no-restore` from the CI `dotnet test` command because `--no-build` already suppresses restore.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -22,3 +23,4 @@ affected:
 - CI test command の重複 results-directory 引数を削除し、`CodeIndex.Tests.runsettings` を `TestResults` path の単一管理元にしました。
 - clean な初回成功 lane では CI test stdout log を disk に書かないようにし、console streaming と失敗時の log artifact は維持しました。
 - OS 単位の NuGet cache restore key を追加し、lock file 変更時にも互換性のある package cache 内容を再利用できるようにしました。
+- `--no-build` が restore を抑止するため、CI の `dotnet test` command から重複する明示的な `--no-restore` を削除しました。

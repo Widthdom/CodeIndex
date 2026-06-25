@@ -264,7 +264,6 @@ jobs:
             "--configuration", "Release",
             "--framework", "${{ matrix.test-framework }}",
             "--no-build",
-            "--no-restore",
             "--nologo",
             "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
             "--blame-crash",

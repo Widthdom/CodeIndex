@@ -38,6 +38,7 @@ public class CiWorkflowTests
             "$collectCoverage = \"${{ steps.lane.outputs.primary_lane }}\" -eq \"true\"",
             workflow);
         Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-latest/net8.0", workflow);
+        Assert.DoesNotContain("\"--no-build\",\n            \"--no-restore\"", normalizedWorkflow);
         Assert.Contains("--blame-crash", workflow);
         Assert.Contains("--blame-hang", workflow);
         Assert.Contains("--blame-hang-timeout\", \"5m", workflow);
