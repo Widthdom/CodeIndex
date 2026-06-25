@@ -17,6 +17,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.CSharpScanner.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.StructuralMetadata.cs
@@ -113,6 +114,7 @@ affected:
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
+- Parsed PHP grouped import items by comma index, avoiding per-line comma split arrays during symbol extraction.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -194,4 +196,5 @@ affected:
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
+- PHP grouped import item を comma index で解析し、symbol 抽出中の行ごとの comma split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

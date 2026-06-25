@@ -58,11 +58,21 @@ public static partial class SymbolExtractor
         {
             var prefix = groupUseMatch.Groups["prefix"].Value;
             var signature = line.Trim();
-            foreach (var rawItem in groupUseMatch.Groups["items"].Value.Split(','))
+            var items = groupUseMatch.Groups["items"].Value;
+            var itemStart = 0;
+            while (itemStart <= items.Length)
             {
-                var item = rawItem.Trim();
+                var commaIndex = items.IndexOf(',', itemStart);
+                var itemEnd = commaIndex >= 0 ? commaIndex : items.Length;
+                var item = items.Substring(itemStart, itemEnd - itemStart).Trim();
                 if (item.Length == 0)
+                {
+                    if (commaIndex < 0)
+                        break;
+
+                    itemStart = commaIndex + 1;
                     continue;
+                }
 
                 var importedName = item;
                 var alias = string.Empty;
@@ -90,6 +100,11 @@ public static partial class SymbolExtractor
                         EndLine = lineNumber,
                         Signature = signature
                     });
+
+                if (commaIndex < 0)
+                    break;
+
+                itemStart = commaIndex + 1;
             }
 
             return;
