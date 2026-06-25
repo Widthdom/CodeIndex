@@ -15606,7 +15606,7 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(500),
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
         };
         using var delayStarted = new ManualResetEventSlim(false);
         using var releaseDelay = new ManualResetEventSlim(false);
@@ -15656,22 +15656,34 @@ public sealed class Caller
         {
             RequestTimeout = TimeSpan.FromMilliseconds(20),
         };
+        using var delayStarted = new ManualResetEventSlim(false);
+        using var releaseDelay = new ManualResetEventSlim(false);
         server.RequestDelayForTests = _ =>
         {
-            Thread.Sleep(TimeSpan.FromMilliseconds(200));
+            delayStarted.Set();
+            Assert.True(releaseDelay.Wait(TimeSpan.FromSeconds(5)));
             return Task.CompletedTask;
         };
 
-        var responseText = await server.ProcessFrameAsync(
-            """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
+        try
+        {
+            var responseText = await server.ProcessFrameAsync(
+                """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
+            Assert.True(delayStarted.Wait(TimeSpan.FromSeconds(1)));
+            server.RequestDelayForTests = null;
 
-        var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
-        var error = response["error"]!;
-        Assert.Equal(-32603, error["code"]!.GetValue<int>());
-        Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
-        Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
-        Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
-        Assert.Equal(123, response["id"]!.GetValue<int>());
+            var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
+            var error = response["error"]!;
+            Assert.Equal(-32603, error["code"]!.GetValue<int>());
+            Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
+            Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+            Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
+            Assert.Equal(123, response["id"]!.GetValue<int>());
+        }
+        finally
+        {
+            releaseDelay.Set();
+        }
     }
 
     [Fact]
