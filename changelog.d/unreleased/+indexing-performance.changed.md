@@ -17,6 +17,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Cpp.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.CSharpScanner.cs
+  - src/CodeIndex/Indexer/Symbols/CSharpSymbolNameNormalizer.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.FSharp.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
@@ -118,6 +119,7 @@ affected:
 - Checked TypeScript parameter shadow names with spans, avoiding comma split arrays in scoped alias analysis.
 - Walked dotted type-reference arguments manually, avoiding per-reference dot split arrays.
 - Checked symbol subkind membership with spans, avoiding pipe split arrays while combining metadata.
+- Compared C# symbol-name keywords without substring allocation during symbol normalization.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -212,6 +214,7 @@ affected:
 - TypeScript scoped alias analysis で parameter shadow 名を span で確認し、comma split array を避けるようにしました。
 - dotted type-reference argument を手動で走査し、reference ごとの dot split array を避けるようにしました。
 - symbol subkind membership を span で確認し、metadata 結合時の pipe split array を避けるようにしました。
+- C# symbol name 正規化中の keyword 比較で substring allocation を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
