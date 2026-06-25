@@ -200,7 +200,9 @@ jobs:
           path: |
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          # Locked restore keeps package inputs honest; avoid evicting the cache for project-only test edits.
+          # locked restore がパッケージ入力を検証するため、テスト用 project だけの変更ではキャッシュを失効させない。
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent

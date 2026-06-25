@@ -19,6 +19,8 @@ public class CiWorkflowTests
             "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
             workflow);
         Assert.DoesNotContain("collect_coverage", workflow);
+        Assert.Contains("key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("'**/*.csproj'", workflow, StringComparison.Ordinal);
         Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
