@@ -937,11 +937,13 @@ internal static class PhpReferenceExtractor
 
             var itemGroup = itemMatch.Groups["name"];
             var rawItemName = itemGroup.Value;
-            var trimmedItemName = rawItemName.TrimStart('\\');
-            if (trimmedItemName.Length == 0)
+            var leadingBackslashCount = 0;
+            while (leadingBackslashCount < rawItemName.Length && rawItemName[leadingBackslashCount] == '\\')
+                leadingBackslashCount++;
+            if (leadingBackslashCount == rawItemName.Length)
                 continue;
 
-            var leadingBackslashCount = rawItemName.Length - trimmedItemName.Length;
+            var trimmedItemName = rawItemName.Substring(leadingBackslashCount);
             var itemShortNameStart = trimmedItemName.LastIndexOf('\\') + 1;
             var shortNameIndex = itemsGroup.Index + itemGroup.Index + leadingBackslashCount + itemShortNameStart;
             AddPhpReferenceFromName(
