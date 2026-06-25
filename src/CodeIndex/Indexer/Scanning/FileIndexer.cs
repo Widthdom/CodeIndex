@@ -4462,10 +4462,14 @@ public partial class FileIndexer
     /// </summary>
     private static int CountReplacementChars(string content)
     {
-        var count = 0;
-        for (int i = 0; i < content.Length; i++)
+        var firstReplacement = content.IndexOf('\uFFFD');
+        if (firstReplacement < 0)
+            return 0;
+
+        var count = 1;
+        for (int i = firstReplacement + 1; i < content.Length; i++)
         {
-            if (content[i] == '�') count++;
+            if (content[i] == '\uFFFD') count++;
         }
         return count;
     }

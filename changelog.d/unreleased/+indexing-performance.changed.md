@@ -76,6 +76,7 @@ affected:
 - Reused cached language-map config path candidates on cache hits, avoiding repeated parent-directory walks while validating override stamps.
 - Combined raw-byte NUL detection and line-ending classification into one pass during content validation, reducing repeated scans on large files.
 - Tracked line numbers incrementally while emitting U+FFFD replacement-character issues, avoiding repeated prefix scans on large decoded files.
+- Used an optimized replacement-character absence check before counting U+FFFD diagnostics, speeding the common clean-content validation path.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -132,4 +133,5 @@ affected:
 - language-map cache hit 時は cached config path candidate を再利用し、override stamp 検証中の親ディレクトリ walk を繰り返さないようにしました。
 - content validation 中の raw-byte NUL 検出と line-ending 分類を1回の pass に統合し、大きな file での重複 scan を減らしました。
 - U+FFFD replacement-character issue を出す際の行番号を逐次追跡し、大きな decoded file で prefix scan を繰り返さないようにしました。
+- U+FFFD diagnostic の count 前に最適化された replacement-character 不在確認を使い、問題のない content validation の共通経路を高速化しました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
