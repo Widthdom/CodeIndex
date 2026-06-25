@@ -3354,6 +3354,9 @@ public partial class FileIndexer
     }
 
     internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath)
+        => BuildSkippedFileRecord(absolutePath, relativePath, knownLanguage: null);
+
+    internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath, string? knownLanguage)
     {
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
@@ -3364,7 +3367,9 @@ public partial class FileIndexer
         return new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguageForIndexing(absolutePath).Language,
+            Lang = string.IsNullOrEmpty(knownLanguage)
+                ? TryDetectLanguageForIndexing(absolutePath).Language
+                : knownLanguage,
             Size = info.Exists ? info.Length : 0,
             Lines = 0,
             Checksum = null,

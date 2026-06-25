@@ -1346,7 +1346,7 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
+                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
                             var issue = BuildNullByteIssue(ex);
                             extractionResults.Add(
                                 FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
@@ -1354,7 +1354,7 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {
-                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
+                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
                             var issue = new FileIssue
                             {
                                 Path = ex.RelativePath,
