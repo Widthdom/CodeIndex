@@ -185,7 +185,7 @@ public static partial class SymbolExtractor
 
         if (StartsWithFortranWord(trimmed, "module"))
         {
-            var remainder = trimmed["module".Length..].TrimStart();
+            var remainder = GetFortranSuffixTrimmedStart(trimmed, "module".Length);
             if (StartsWithFortranWord(remainder, "procedure"))
             {
                 kind = "procedure";
