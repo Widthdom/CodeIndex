@@ -394,10 +394,11 @@ internal static class TypeScriptReferenceExtractor
             return false;
         }
 
-        foreach (var parameter in line.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        var parameters = line.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
+        var start = 0;
+        while (TryReadTypeScriptGenericParameterName(parameters, ref start, includeColonDelimiter: false, out var name))
         {
-            var name = parameter.Trim().Split([' ', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (string.Equals(name, alias, StringComparison.Ordinal))
+            if (name.Equals(alias.AsSpan(), StringComparison.Ordinal))
                 return true;
         }
 
@@ -412,14 +413,52 @@ internal static class TypeScriptReferenceExtractor
         if (openAngle < 0 || closeAngle <= openAngle)
             return names;
 
-        foreach (var parameter in parameters.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        var genericParameters = parameters.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
+        var start = 0;
+        while (TryReadTypeScriptGenericParameterName(genericParameters, ref start, includeColonDelimiter: true, out var name))
         {
-            var name = parameter.Trim().Split([' ', '=', ':'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(name))
-                names.Add(name);
+            names.Add(name.ToString());
         }
 
         return names;
+    }
+
+    private static bool TryReadTypeScriptGenericParameterName(
+        ReadOnlySpan<char> parameters,
+        ref int start,
+        bool includeColonDelimiter,
+        out ReadOnlySpan<char> name)
+    {
+        while (start <= parameters.Length)
+        {
+            var remaining = parameters[start..];
+            var commaIndex = remaining.IndexOf(',');
+            ReadOnlySpan<char> parameter;
+            if (commaIndex < 0)
+            {
+                parameter = remaining;
+                start = parameters.Length + 1;
+            }
+            else
+            {
+                parameter = remaining[..commaIndex];
+                start += commaIndex + 1;
+            }
+
+            parameter = parameter.Trim();
+            if (parameter.IsEmpty)
+                continue;
+
+            var delimiterIndex = includeColonDelimiter
+                ? parameter.IndexOfAny(' ', '=', ':')
+                : parameter.IndexOfAny(' ', '=');
+            name = delimiterIndex < 0 ? parameter : parameter[..delimiterIndex].TrimEnd();
+            if (!name.IsEmpty)
+                return true;
+        }
+
+        name = default;
+        return false;
     }
 
     private static bool ContainsKeyword(string text, string keyword)

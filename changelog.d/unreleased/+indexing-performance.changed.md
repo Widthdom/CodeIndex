@@ -19,6 +19,7 @@ affected:
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.StructuralMetadata.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
+  - src/CodeIndex/Indexer/References/Languages/TypeScriptReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - .github/workflows/dotnet.yml
@@ -98,6 +99,7 @@ affected:
 - Deferred C# reflection-name comment sanitizer buffers until a block comment actually needs masking.
 - Avoided Pascal range string/comment sanitizer allocations on lines without strings or comments.
 - Parsed Swift generic parameter names with spans, avoiding substring and split arrays during alias shadow checks.
+- Parsed TypeScript generic parameter names with spans, avoiding substring and split arrays during alias shadow checks.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -170,4 +172,5 @@ affected:
 - C# reflection-name comment sanitizer の buffer 確保を、block comment masking が実際に必要になるまで遅延しました。
 - Pascal range の string/comment sanitizer で、string や comment のない行の割り当てを避けるようにしました。
 - Swift generic parameter 名を span で parse し、alias shadow check 中の substring と split array を避けるようにしました。
+- TypeScript generic parameter 名を span で parse し、alias shadow check 中の substring と split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
