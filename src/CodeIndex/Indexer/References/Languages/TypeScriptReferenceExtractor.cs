@@ -124,19 +124,36 @@ internal static class TypeScriptReferenceExtractor
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
-    private static IEnumerable<string> ExtractNamedImportExportAliases(string body)
+    private static List<string> ExtractNamedImportExportAliases(string body)
     {
-        foreach (var part in body.Split(','))
+        var aliases = new List<string>();
+        var remaining = body.AsSpan();
+        while (true)
         {
-            var item = part.Trim();
+            var commaIndex = remaining.IndexOf(',');
+            var item = commaIndex < 0 ? remaining : remaining[..commaIndex];
+            item = item.Trim();
             if (item.Length == 0)
-                continue;
+            {
+                if (commaIndex < 0)
+                    break;
 
-            var asIndex = item.LastIndexOf(" as ", StringComparison.Ordinal);
+                remaining = remaining[(commaIndex + 1)..];
+                continue;
+            }
+
+            var asIndex = item.LastIndexOf(" as ".AsSpan());
             var alias = asIndex >= 0 ? item[(asIndex + 4)..].Trim() : item;
             if (IsTypeScriptIdentifier(alias))
-                yield return alias;
+                aliases.Add(alias.ToString());
+
+            if (commaIndex < 0)
+                break;
+
+            remaining = remaining[(commaIndex + 1)..];
         }
+
+        return aliases;
     }
 
     public static void EmitTypePositionReferences(
@@ -2086,7 +2103,10 @@ internal static class TypeScriptReferenceExtractor
     private static bool IsTypeScriptIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
 
-    private static bool IsTypeScriptIdentifier(string text)
+    private static bool IsTypeScriptIdentifier(string text) =>
+        IsTypeScriptIdentifier(text.AsSpan());
+
+    private static bool IsTypeScriptIdentifier(ReadOnlySpan<char> text)
     {
         if (text.Length == 0 || !IsTypeScriptIdentifierStart(text[0]))
             return false;
