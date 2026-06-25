@@ -62,20 +62,18 @@ public static partial class SymbolExtractor
             if (segmentEnd - trimmedSegmentStart >= "alias".Length
                 && string.CompareOrdinal(line, trimmedSegmentStart, "alias", 0, "alias".Length) == 0)
             {
-                var segment = line[segmentStart..segmentEnd];
-                var trimmedOffset = trimmedSegmentStart - segmentStart;
-                var cursor = trimmedOffset + "alias".Length;
-                while (TryReadShellAliasToken(segment, ref cursor, out var tokenStart, out var tokenEnd))
+                var cursor = trimmedSegmentStart + "alias".Length;
+                while (TryReadShellAliasToken(line, segmentEnd, ref cursor, out var tokenStart, out var tokenEnd))
                 {
                     if (tokenEnd <= tokenStart)
                         continue;
 
-                    var equalsIndex = segment.IndexOf('=', tokenStart, tokenEnd - tokenStart);
-                    if (segment[tokenStart] == '-' && equalsIndex < 0)
+                    var equalsIndex = line.IndexOf('=', tokenStart, tokenEnd - tokenStart);
+                    if (line[tokenStart] == '-' && equalsIndex < 0)
                         continue;
 
                     if (equalsIndex > tokenStart)
-                        yield return (segmentStart + tokenStart, segmentStart + tokenEnd);
+                        yield return (tokenStart, tokenEnd);
                 }
             }
 
@@ -150,18 +148,18 @@ public static partial class SymbolExtractor
         return line.Length;
     }
 
-    private static bool TryReadShellAliasToken(string segment, ref int cursor, out int tokenStart, out int tokenEnd)
+    private static bool TryReadShellAliasToken(string text, int endExclusive, ref int cursor, out int tokenStart, out int tokenEnd)
     {
         tokenStart = -1;
         tokenEnd = -1;
 
-        while (cursor < segment.Length && char.IsWhiteSpace(segment[cursor]))
+        while (cursor < endExclusive && char.IsWhiteSpace(text[cursor]))
             cursor++;
 
-        if (cursor >= segment.Length)
+        if (cursor >= endExclusive)
             return false;
 
-        if (segment[cursor] is ';' or '|' or '&' or '#')
+        if (text[cursor] is ';' or '|' or '&' or '#')
             return false;
 
         tokenStart = cursor;
@@ -169,9 +167,9 @@ public static partial class SymbolExtractor
         var inDoubleQuote = false;
         var escapeNext = false;
 
-        while (cursor < segment.Length)
+        while (cursor < endExclusive)
         {
-            var ch = segment[cursor];
+            var ch = text[cursor];
             if (escapeNext)
             {
                 escapeNext = false;
