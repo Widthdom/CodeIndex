@@ -971,10 +971,10 @@ public static partial class SymbolExtractor
             var spec = importedNames[trimStart..trimEnd];
             var aliasIndex = spec.IndexOf(" as ", StringComparison.Ordinal);
             var importedName = aliasIndex >= 0
-                ? spec[..aliasIndex].Trim()
+                ? SliceTrimmedPythonImportPart(spec, 0, aliasIndex)
                 : spec;
             var localName = aliasIndex >= 0
-                ? spec[(aliasIndex + " as ".Length)..].Trim()
+                ? SliceTrimmedPythonImportPart(spec, aliasIndex + " as ".Length, spec.Length)
                 : GetPythonImportLocalName(importedName);
 
             if (importedName.Length > 0)
@@ -1049,6 +1049,16 @@ public static partial class SymbolExtractor
 
             specStart = commaIndex + 1;
         }
+    }
+
+    private static string SliceTrimmedPythonImportPart(string value, int startIndex, int endIndex)
+    {
+        while (startIndex < endIndex && char.IsWhiteSpace(value[startIndex]))
+            startIndex++;
+        while (endIndex > startIndex && char.IsWhiteSpace(value[endIndex - 1]))
+            endIndex--;
+
+        return startIndex == endIndex ? string.Empty : value[startIndex..endIndex];
     }
 
     private static string GetPythonImportLocalName(string importedName)
