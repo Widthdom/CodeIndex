@@ -1,6 +1,7 @@
 ---
 category: changed
 affected:
+  - src/CodeIndex/Indexer/DependencyPackageExtractor.cs
   - src/CodeIndex/Cli/IndexCommandRunner.DryRun.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Cli/IndexFreshnessChecker.cs
@@ -111,6 +112,7 @@ affected:
 - Checked symbol subkind membership with spans, avoiding pipe split arrays while combining metadata.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
+- Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -191,4 +193,5 @@ affected:
 - symbol subkind membership を span で確認し、metadata 結合時の pipe split array を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
+- dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
