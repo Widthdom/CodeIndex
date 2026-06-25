@@ -508,7 +508,7 @@ public static partial class SymbolExtractor
             var candidate = trimmed;
             var trailingBraceIndex = candidate.IndexOf('}');
             if (trailingBraceIndex >= 0)
-                candidate = candidate[..trailingBraceIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, trailingBraceIndex);
 
             if (candidate.Length > 0 && !candidate.StartsWith("}", StringComparison.Ordinal))
                 TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, candidate);
