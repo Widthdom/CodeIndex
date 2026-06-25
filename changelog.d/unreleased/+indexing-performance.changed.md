@@ -70,6 +70,7 @@ affected:
 - Reused basename extraction across basename-only rules from the same ignore file, reducing repeated path work during ignore matching.
 - Matched literal ignore rules with ordinal string comparison instead of compiling and running a regular expression.
 - Avoided allocating folded ignore-match candidates when ASCII case folding would leave the path unchanged.
+- Cached effective language-map overrides by start directory and config-file stamps, avoiding repeated parent-directory config discovery while indexing large workspaces.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -120,4 +121,5 @@ affected:
 - 同じ ignore file から作られた basename-only rule 間で basename extraction を共有し、ignore matching 中の path work の繰り返しを減らしました。
 - literal ignore rule は regular expression の compile / match を使わず、ordinal string comparison で判定するようにしました。
 - ASCII case folding で path が変わらない ignore-match candidate では、folded string の割り当てを避けるようにしました。
+- effective language-map override を start directory と config-file stamp ごとに cache し、大規模 workspace の index 中に親ディレクトリ config discovery を繰り返さないようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

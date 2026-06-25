@@ -709,6 +709,33 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+            File.WriteAllText(configPath, "entries:\n- extension: one\n  language: ruby\n");
+            var first = LanguageMapOverrides.LoadEffectiveMap(Path.Combine(tempDir, "first.one"));
+
+            File.WriteAllText(configPath, "entries:\n- extension: two\n  language: python\n");
+            File.SetLastWriteTimeUtc(configPath, DateTime.UtcNow.AddMinutes(1));
+            var second = LanguageMapOverrides.LoadEffectiveMap(Path.Combine(tempDir, "second.two"));
+
+            Assert.Equal("ruby", first[".one"]);
+            Assert.False(second.ContainsKey(".one"));
+            Assert.Equal("python", second[".two"]);
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_OversizedFileSkipsOverridesWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_caps_{Guid.NewGuid():N}");
