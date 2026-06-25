@@ -956,10 +956,15 @@ internal static class JavaReferenceExtractor
             if (extendsIndex < 0)
                 continue;
 
-            var boundsText = rawParameter.Substring(extendsIndex + "extends".Length).Trim();
-            if (boundsText.Length == 0)
+            var boundsStart = extendsIndex + "extends".Length;
+            var boundsLeading = ReferenceExtractor.CountLeadingWhitespace(rawParameter, boundsStart, rawParameter.Length - boundsStart);
+            var boundsLength = rawParameter.Length - boundsStart - boundsLeading;
+            while (boundsLength > 0 && char.IsWhiteSpace(rawParameter[boundsStart + boundsLeading + boundsLength - 1]))
+                boundsLength--;
+            if (boundsLength == 0)
                 continue;
 
+            var boundsText = rawParameter.Substring(boundsStart + boundsLeading, boundsLength);
             foreach (var (boundStart, boundLength) in ReferenceExtractor.SplitTopLevelAmpersandSpans(boundsText))
             {
                 var rawBound = boundsText.Substring(boundStart, boundLength).Trim();
