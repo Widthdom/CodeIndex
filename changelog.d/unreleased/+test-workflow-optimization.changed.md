@@ -88,6 +88,7 @@ affected:
 - Reused shared temporary directory cleanup for reader BOM end-to-end fixtures.
 - Removed redundant `Directory.Exists` guards around file-indexer cleanup helper calls.
 - Removed remaining redundant directory-existence guards around MCP and index-command cleanup helpers.
+- Reused shared file cleanup for index-command temporary DB, lock, and outside-fixture file cleanup.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -137,3 +138,4 @@ affected:
 - reader BOM end-to-end fixture の cleanup を共通 helper に寄せました。
 - file-indexer cleanup helper 呼び出し前の重複 `Directory.Exists` guard を削除しました。
 - MCP / index-command cleanup helper 呼び出し前に残っていた重複 directory-existence guard を削除しました。
+- index-command の一時 DB、lock、outside fixture file cleanup を共通 file cleanup helper に寄せました。

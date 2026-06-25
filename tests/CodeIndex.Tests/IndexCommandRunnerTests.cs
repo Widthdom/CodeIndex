@@ -1117,8 +1117,7 @@ public class IndexCommandRunnerTests
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
             DeleteDirectory(publishDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -3998,8 +3997,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4205,8 +4203,7 @@ public sealed class Caller
             IndexCommandRunner.TimeProvider = TimeProvider.System;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4233,8 +4230,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4265,8 +4261,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4300,8 +4295,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4327,8 +4321,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4354,8 +4347,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4415,8 +4407,7 @@ public sealed class Caller
             DeleteDirectory(projectRootA);
             DeleteDirectory(projectRootB);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4511,8 +4502,7 @@ public sealed class Caller
             DeleteDirectory(projectRootA);
             DeleteDirectory(projectRootB);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4567,8 +4557,7 @@ public sealed class Caller
             DeleteDirectory(projectRootA);
             DeleteDirectory(projectRootB);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4614,8 +4603,7 @@ public sealed class Caller
             DeleteDirectory(projectRootA);
             DeleteDirectory(projectRootB);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4657,8 +4645,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4737,8 +4724,7 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -4794,8 +4780,7 @@ public sealed class Caller
         {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5015,8 +5000,7 @@ public sealed class Caller
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRootA);
             DeleteDirectory(projectRootB);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5057,8 +5041,7 @@ public sealed class Caller
         {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5214,10 +5197,8 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(missingDbPath))
-                File.Delete(missingDbPath);
+            DeleteFile(dbPath);
+            DeleteFile(missingDbPath);
         }
     }
 
@@ -5452,8 +5433,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5499,12 +5479,9 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(lockPath + ".info"))
-                File.Delete(lockPath + ".info");
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(lockPath + ".info");
+            DeleteFile(lockPath);
         }
     }
 
@@ -5552,8 +5529,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5720,8 +5696,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5792,8 +5767,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5856,8 +5830,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5939,8 +5912,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -5988,8 +5960,7 @@ public sealed class Caller
             DbWriter.FoldBackfillRowUpdatedForTesting = null;
             cts.Dispose();
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6037,8 +6008,7 @@ public sealed class Caller
             DbWriter.FoldBackfillRowUpdatedForTesting = null;
             cts.Dispose();
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6083,8 +6053,7 @@ public sealed class Caller
             DbWriter.FoldBackfillRowUpdatedForTesting = null;
             cts.Dispose();
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6130,8 +6099,7 @@ public sealed class Caller
             DbWriter.FoldBackfillRowUpdatedForTesting = null;
             cts.Dispose();
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6191,8 +6159,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6230,8 +6197,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6341,8 +6307,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -6500,8 +6465,7 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(outsideFile))
-                File.Delete(outsideFile);
+            DeleteFile(outsideFile);
             DeleteDirectory(projectRoot);
         }
     }
@@ -10535,8 +10499,7 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(outsidePath))
-                File.Delete(outsidePath);
+            DeleteFile(outsidePath);
             DeleteDirectory(projectRoot);
         }
     }
@@ -12757,6 +12720,9 @@ public sealed class Caller
     private static void DeleteDirectory(string path)
         => TestProjectHelper.DeleteDirectory(path);
 
+    private static void DeleteFile(string path)
+        => TestProjectHelper.DeleteFile(path);
+
     [Fact]
     public void IndexLock_Acquire_OnPosix_WritesPrivateInfoFile()
     {
@@ -12785,12 +12751,9 @@ public sealed class Caller
         finally
         {
             DeleteDirectory(projectRoot);
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -12828,12 +12791,9 @@ public sealed class Caller
             IndexLock.CleanupDiagnosticSinkForTesting = null;
             IndexLock.DeleteFileForTesting = File.Delete;
             DeleteDirectory(projectRoot);
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -12852,12 +12812,9 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -12880,12 +12837,9 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
+            DeleteFile(dbPath);
         }
     }
 
@@ -12919,12 +12873,9 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
         }
     }
 
@@ -12960,12 +12911,9 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
         }
     }
 
@@ -12995,12 +12943,9 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(lockPath + ".info"))
-                File.Delete(lockPath + ".info");
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(lockPath + ".info");
+            DeleteFile(lockPath);
         }
     }
 
@@ -13027,12 +12972,9 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
         }
     }
 
@@ -13064,12 +13006,9 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(infoPath);
+            DeleteFile(lockPath);
         }
     }
 
@@ -13095,10 +13034,8 @@ public sealed class Caller
         finally
         {
             DeleteDirectory(projectRoot);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
+            DeleteFile(dbPath);
+            DeleteFile(lockPath);
         }
     }
 
@@ -13119,8 +13056,7 @@ public sealed class Caller
         finally
         {
             DeleteDirectory(projectRoot);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFile(dbPath);
         }
     }
 }
