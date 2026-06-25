@@ -249,10 +249,11 @@ internal static class SwiftReferenceExtractor
             return false;
         }
 
-        foreach (var parameter in line.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        var parameters = line.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
+        var start = 0;
+        while (TryReadSwiftGenericParameterName(parameters, ref start, out var name))
         {
-            var name = parameter.Trim().Split([' ', ':', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (string.Equals(TrimSwiftBackticks(name ?? string.Empty), alias, StringComparison.Ordinal))
+            if (name.Equals(alias.AsSpan(), StringComparison.Ordinal))
                 return true;
         }
 
@@ -267,14 +268,51 @@ internal static class SwiftReferenceExtractor
         if (openAngle < 0 || closeAngle <= openAngle)
             return names;
 
-        foreach (var parameter in parameters.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        var genericParameters = parameters.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
+        var start = 0;
+        while (TryReadSwiftGenericParameterName(genericParameters, ref start, out var name))
         {
-            var name = parameter.Trim().Split([' ', ':', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(name))
-                names.Add(TrimSwiftBackticks(name));
+            names.Add(name.ToString());
         }
 
         return names;
+    }
+
+    private static bool TryReadSwiftGenericParameterName(
+        ReadOnlySpan<char> parameters,
+        ref int start,
+        out ReadOnlySpan<char> name)
+    {
+        while (start <= parameters.Length)
+        {
+            var remaining = parameters[start..];
+            var commaIndex = remaining.IndexOf(',');
+            ReadOnlySpan<char> parameter;
+            if (commaIndex < 0)
+            {
+                parameter = remaining;
+                start = parameters.Length + 1;
+            }
+            else
+            {
+                parameter = remaining[..commaIndex];
+                start += commaIndex + 1;
+            }
+
+            parameter = parameter.Trim();
+            if (parameter.IsEmpty)
+                continue;
+
+            var delimiterIndex = parameter.IndexOfAny(' ', ':', '=');
+            name = delimiterIndex < 0 ? parameter : parameter[..delimiterIndex].TrimEnd();
+            if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')
+                name = name[1..^1];
+            if (!name.IsEmpty)
+                return true;
+        }
+
+        name = default;
+        return false;
     }
 
     private static bool ContainsKeyword(string text, string keyword)
