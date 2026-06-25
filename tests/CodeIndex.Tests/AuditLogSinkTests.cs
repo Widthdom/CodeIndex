@@ -542,8 +542,7 @@ public class AuditLogSinkTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
