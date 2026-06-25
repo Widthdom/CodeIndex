@@ -4953,10 +4953,14 @@ internal static class LanguageReferenceExtractionSupport
     {
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var raw = list.Substring(segmentStart, segmentLength).Trim();
-            if (raw.Length == 0)
+            var leading = ReferenceExtractor.CountLeadingWhitespace(list, segmentStart, segmentLength);
+            var trimmedLength = segmentLength - leading;
+            while (trimmedLength > 0 && char.IsWhiteSpace(list[segmentStart + leading + trimmedLength - 1]))
+                trimmedLength--;
+            if (trimmedLength == 0)
                 continue;
-            var expressionStart = segmentStart + ReferenceExtractor.CountLeadingWhitespace(list, segmentStart, segmentLength);
+            var expressionStart = segmentStart + leading;
+            var raw = list.Substring(expressionStart, trimmedLength);
             if (language == "vb")
             {
                 var equalsIndex = list.IndexOf('=', segmentStart, segmentLength);
@@ -4966,9 +4970,13 @@ internal static class LanguageReferenceExtractionSupport
                     var rhsLength = segmentStart + segmentLength - rhsStart;
                     var rhsLeading = ReferenceExtractor.CountLeadingWhitespace(list, rhsStart, rhsLength);
                     expressionStart = rhsStart + rhsLeading;
-                    raw = list.Substring(expressionStart, rhsLength - rhsLeading).TrimEnd();
-                    if (raw.Length == 0)
+                    var rhsTrimmedLength = rhsLength - rhsLeading;
+                    while (rhsTrimmedLength > 0 && char.IsWhiteSpace(list[expressionStart + rhsTrimmedLength - 1]))
+                        rhsTrimmedLength--;
+                    if (rhsTrimmedLength == 0)
                         continue;
+
+                    raw = list.Substring(expressionStart, rhsTrimmedLength);
                 }
             }
 
