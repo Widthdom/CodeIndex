@@ -2040,10 +2040,19 @@ internal static class TypeScriptReferenceExtractor
 
         for (var lineIndex = openLineIndex - 1; lineIndex >= 0; lineIndex--)
         {
-            var previousLine = preparedLines[lineIndex].Trim();
-            if (previousLine.Length == 0)
+            var previousLineText = preparedLines[lineIndex];
+            var previousLineStart = 0;
+            while (previousLineStart < previousLineText.Length && char.IsWhiteSpace(previousLineText[previousLineStart]))
+                previousLineStart++;
+
+            var previousLineEnd = previousLineText.Length;
+            while (previousLineEnd > previousLineStart && char.IsWhiteSpace(previousLineText[previousLineEnd - 1]))
+                previousLineEnd--;
+
+            if (previousLineEnd <= previousLineStart)
                 continue;
 
+            var previousLine = previousLineText.Substring(previousLineStart, previousLineEnd - previousLineStart);
             return IsImportBracePrefix(previousLine) || IsNamedExportBracePrefix(previousLine);
         }
 
