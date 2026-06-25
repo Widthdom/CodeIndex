@@ -47,8 +47,7 @@ case "$task" in
       --configuration "$CONFIGURATION" \
       --framework "$FRAMEWORK" \
       --settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings \
-      --collect "XPlat Code Coverage" \
-      --results-directory "$RESULTS_DIRECTORY"
+      --collect "XPlat Code Coverage"
     ;;
   mcp-smoke)
     dotnet build src/CodeIndex/CodeIndex.csproj --configuration "$CONFIGURATION"
