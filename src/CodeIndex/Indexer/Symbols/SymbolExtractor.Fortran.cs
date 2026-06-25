@@ -285,7 +285,7 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(trimmedLine, "end"))
             return false;
 
-        var remainder = trimmedLine["end".Length..].TrimStart();
+        var remainder = GetFortranSuffixTrimmedStart(trimmedLine, "end".Length);
         if (!StartsWithFortranWord(remainder, "module"))
             return false;
 
