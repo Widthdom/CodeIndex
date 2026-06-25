@@ -117,6 +117,7 @@ affected:
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
 - Parsed PHP grouped import items by comma index, avoiding per-line comma split arrays during symbol extraction.
 - Parsed Python import specs by comma and dot index, avoiding split arrays while expanding import symbols.
+- Resolved Python relative import module prefixes by scanning dot segments directly, avoiding prefix split and join arrays.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -200,4 +201,5 @@ affected:
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
 - PHP grouped import item を comma index で解析し、symbol 抽出中の行ごとの comma split array を避けるようにしました。
 - Python import spec を comma / dot index で解析し、import symbol 展開中の split array を避けるようにしました。
+- Python relative import の module prefix を dot segment の直接走査で解決し、prefix split と join array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

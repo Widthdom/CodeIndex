@@ -1065,16 +1065,69 @@ public static partial class SymbolExtractor
             leadingDots++;
 
         var levelsToDrop = leadingDots - 1;
-        var packageParts = pythonModulePrefix.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        if (levelsToDrop >= packageParts.Length)
+        var packagePartCount = CountPythonModulePrefixParts(pythonModulePrefix);
+        if (levelsToDrop >= packagePartCount)
             return null;
 
-        var basePartCount = packageParts.Length - levelsToDrop;
-        var resolved = string.Join('.', packageParts.Take(basePartCount));
+        var basePartCount = packagePartCount - levelsToDrop;
+        var resolved = JoinPythonModulePrefixParts(pythonModulePrefix, basePartCount);
         var suffix = modulePart[leadingDots..].Trim('.');
         return suffix.Length == 0
             ? resolved
             : $"{resolved}.{suffix}";
+    }
+
+    private static int CountPythonModulePrefixParts(string modulePrefix)
+    {
+        var count = 0;
+        var partStart = -1;
+        for (var index = 0; index <= modulePrefix.Length; index++)
+        {
+            var atEnd = index == modulePrefix.Length;
+            if (!atEnd && modulePrefix[index] != '.')
+            {
+                if (partStart < 0)
+                    partStart = index;
+                continue;
+            }
+
+            if (partStart >= 0)
+            {
+                count++;
+                partStart = -1;
+            }
+        }
+
+        return count;
+    }
+
+    private static string JoinPythonModulePrefixParts(string modulePrefix, int maxParts)
+    {
+        var builder = new StringBuilder(modulePrefix.Length);
+        var appended = 0;
+        var partStart = -1;
+        for (var index = 0; index <= modulePrefix.Length && appended < maxParts; index++)
+        {
+            var atEnd = index == modulePrefix.Length;
+            if (!atEnd && modulePrefix[index] != '.')
+            {
+                if (partStart < 0)
+                    partStart = index;
+                continue;
+            }
+
+            if (partStart < 0)
+                continue;
+
+            if (builder.Length > 0)
+                builder.Append('.');
+
+            builder.Append(modulePrefix, partStart, index - partStart);
+            appended++;
+            partStart = -1;
+        }
+
+        return builder.ToString();
     }
 
     private static void AddPythonImportModuleEntry(
