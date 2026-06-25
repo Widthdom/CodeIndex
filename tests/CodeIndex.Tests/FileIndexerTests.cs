@@ -692,12 +692,13 @@ public partial class FileIndexerTests
                 Directory.CreateDirectory(tempDir);
                 File.WriteAllText(
                     Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
-                    "entries:\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
+                    "entries:\n  - extension: \".in\"\n    language: \"text\"\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
                 var outsideDir = Path.Combine(tempDir, "outside");
                 Directory.CreateDirectory(outsideDir);
                 Environment.CurrentDirectory = outsideDir;
 
                 Assert.Equal("kotlin", FileIndexer.DetectLanguage(Path.Combine(tempDir, "build.kts.in")));
+                Assert.Equal("text", FileIndexer.DetectLanguage(Path.Combine(tempDir, "template.in")));
                 Assert.Equal("kotlin", FileIndexer.GetLanguageExtensions()[".kts.in"]);
             }
             finally

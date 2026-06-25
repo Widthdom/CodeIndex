@@ -1225,9 +1225,9 @@ public partial class FileIndexer
         if (overrides.Count == 0)
             return false;
 
-        foreach (var (extension, mappedLanguage) in overrides)
+        for (var dotIndex = fileName.IndexOf('.'); dotIndex >= 0; dotIndex = fileName.IndexOf('.', dotIndex + 1))
         {
-            if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            if (overrides.TryGetValue(fileName[dotIndex..], out var mappedLanguage))
             {
                 language = mappedLanguage;
                 return true;

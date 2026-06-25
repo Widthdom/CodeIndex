@@ -72,6 +72,7 @@ affected:
 - Avoided allocating folded ignore-match candidates when ASCII case folding would leave the path unchanged.
 - Cached effective language-map overrides by start directory and config-file stamps, avoiding repeated parent-directory config discovery while indexing large workspaces.
 - Reused language-detection file names and skipped override suffix checks when no language-map overrides are active.
+- Looked up language-map override suffixes from filename dot positions instead of scanning every override entry per file, preserving the most-specific multi-dot match.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -124,4 +125,5 @@ affected:
 - ASCII case folding で path が変わらない ignore-match candidate では、folded string の割り当てを避けるようにしました。
 - effective language-map override を start directory と config-file stamp ごとに cache し、大規模 workspace の index 中に親ディレクトリ config discovery を繰り返さないようにしました。
 - language detection で file name を再利用し、language-map override が有効でない場合は override suffix check を省略するようにしました。
+- file ごとの全 override entry 走査を避け、filename の dot 位置から language-map override suffix を lookup し、最も具体的な multi-dot match を使うようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
