@@ -98,7 +98,7 @@ public static partial class SymbolExtractor
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
-                    Signature = line.Trim(),
+                    Signature = GetDockerfileTrimmedLine(line),
                 },
                 line);
         }
