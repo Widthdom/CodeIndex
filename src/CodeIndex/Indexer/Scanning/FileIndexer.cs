@@ -4358,6 +4358,9 @@ public partial class FileIndexer
         line = 0;
         if (string.IsNullOrEmpty(content))
             return false;
+        if (!content.Contains("<<<<<<<", StringComparison.Ordinal)
+            && !content.Contains(">>>>>>>", StringComparison.Ordinal))
+            return false;
 
         var byteCount = 0;
         var lineStart = 0;
