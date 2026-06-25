@@ -134,17 +134,20 @@ public static partial class SymbolExtractor
                 parenDepth--;
         }
 
-        var trimmed = code.TrimEnd();
+        var lastCodeIndex = GetVisualBasicLastNonWhitespaceIndex(code);
         inInitializer = parenDepth > 0
-            || trimmed.EndsWith("_", StringComparison.Ordinal)
-            || trimmed.EndsWith("=", StringComparison.Ordinal)
-            || trimmed.EndsWith("+", StringComparison.Ordinal)
-            || trimmed.EndsWith("-", StringComparison.Ordinal)
-            || trimmed.EndsWith("*", StringComparison.Ordinal)
-            || trimmed.EndsWith("/", StringComparison.Ordinal)
-            || trimmed.EndsWith("&", StringComparison.Ordinal)
-            || trimmed.EndsWith(",", StringComparison.Ordinal)
-            || trimmed.EndsWith(".", StringComparison.Ordinal);
+            || (lastCodeIndex >= 0 && code[lastCodeIndex] is '_' or '=' or '+' or '-' or '*' or '/' or '&' or ',' or '.');
+    }
+
+    private static int GetVisualBasicLastNonWhitespaceIndex(string text)
+    {
+        for (var i = text.Length - 1; i >= 0; i--)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return i;
+        }
+
+        return -1;
     }
 
     private static string StripVisualBasicComment(string line)
