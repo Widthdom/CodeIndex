@@ -99,6 +99,7 @@ affected:
 - Ran broad extractor practical-budget runaway guards only on the primary net8.0 target, keeping focused functional coverage cross-target while avoiding duplicate large-fixture work on net9.0 lanes.
 - Removed the redundant `TestResults/**/*Sequence*.xml` artifact glob because `TestResults/**/*.xml` already uploads VSTest sequence XML diagnostics.
 - Removed `dev.sh coverage`'s duplicate `--results-directory` argument so the shared runsettings file remains the only owner of the `TestResults` path for local coverage runs too.
+- Routed MCP index test database sidecar cleanup through `TestProjectHelper.DeleteSqliteDatabaseFiles`, removing a second local retry loop.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -154,3 +155,4 @@ affected:
 - extractor の broad な practical-budget runaway guard を primary の net8.0 target のみで実行し、focused な機能テストは cross-target のまま、net9.0 lane での大規模 fixture 重複実行を避けるようにしました。
 - `TestResults/**/*.xml` が VSTest の sequence XML diagnostics も upload するため、重複していた `TestResults/**/*Sequence*.xml` artifact glob を削除しました。
 - `dev.sh coverage` の重複 `--results-directory` 引数を削除し、ローカル coverage 実行でも共有 runsettings file だけが `TestResults` path を管理するようにしました。
+- MCP index test の database sidecar cleanup を `TestProjectHelper.DeleteSqliteDatabaseFiles` に寄せ、2 つ目のローカル retry loop を削除しました。
