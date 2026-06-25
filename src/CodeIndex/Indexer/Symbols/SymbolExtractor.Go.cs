@@ -1051,7 +1051,7 @@ public static partial class SymbolExtractor
             }
 
             if (trimmed.StartsWith("type", StringComparison.Ordinal)
-                && trimmed["type".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+                && GoDeclarationRemainderStartsWithOpenParen(trimmed, "type".Length))
             {
                 blockKind = "type";
                 continue;
@@ -1095,4 +1095,12 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static bool GoDeclarationRemainderStartsWithOpenParen(string trimmed, int prefixLength)
+    {
+        var index = prefixLength;
+        while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+            index++;
+
+        return index < trimmed.Length && trimmed[index] == '(';
+    }
 }

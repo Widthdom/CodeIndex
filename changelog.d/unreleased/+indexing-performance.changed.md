@@ -181,6 +181,7 @@ affected:
 - Compared Swift import-kind keywords without substring allocation during symbol name normalization.
 - Enumerated Go interface and struct body segments directly, avoiding semicolon split arrays during embedded symbol extraction.
 - Reused Go's direct segment scanner for grouped value names and trimmed segments by index, avoiding comma split arrays and intermediate trim substrings.
+- Checked Go grouped `type` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -323,6 +324,7 @@ affected:
 - Swift symbol name 正規化中の import-kind keyword 比較で substring allocation を避けるようにしました。
 - Go interface / struct body segment を直接列挙し、embedded symbol 抽出中の semicolon split array を避けるようにしました。
 - Go の direct segment scanner を grouped value name にも再利用し、segment trim を index で行うことで comma split array と中間 trim substring を避けるようにしました。
+- Go grouped `type` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。
