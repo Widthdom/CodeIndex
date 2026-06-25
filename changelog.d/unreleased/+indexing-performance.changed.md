@@ -14,6 +14,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/ChunkSplitter.cs
   - src/CodeIndex/Indexer/Scanning/GeneratedCodePatternMatcher.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.StructuralMetadata.cs
@@ -94,6 +95,7 @@ affected:
 - Collapsed C# XML doc-comment prechecks to a single slash scan during reference extraction preparation.
 - Skipped Java text-block masking allocation when source files contain no text-block delimiter candidate.
 - Deferred C# reflection-name comment sanitizer buffers until a block comment actually needs masking.
+- Avoided Pascal range string/comment sanitizer allocations on lines without strings or comments.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -164,4 +166,5 @@ affected:
 - reference extraction preparation 中の C# XML doc-comment 事前判定を、1回の slash scan にまとめました。
 - Java text block delimiter 候補を含まない source file では text-block masking allocation を省略するようにしました。
 - C# reflection-name comment sanitizer の buffer 確保を、block comment masking が実際に必要になるまで遅延しました。
+- Pascal range の string/comment sanitizer で、string や comment のない行の割り当てを避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
