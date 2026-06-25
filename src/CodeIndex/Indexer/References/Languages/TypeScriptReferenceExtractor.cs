@@ -2079,7 +2079,11 @@ internal static class TypeScriptReferenceExtractor
                 return true;
         }
 
-        return text.TrimEnd().EndsWith(",", StringComparison.Ordinal);
+        var end = text.Length;
+        while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+            end--;
+
+        return end > 0 && text[end - 1] == ',';
     }
 
     private static bool ContainsTopLevelKeyword(string text, string keyword)
