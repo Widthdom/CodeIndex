@@ -85,7 +85,7 @@ internal sealed partial class FileContentLoader
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var read = stream.Read(buffer, 0, buffer.Length);
+                var read = stream.Read(buffer, 0, GetReadLengthWithinLimit(total, maxBytes, buffer.Length));
                 if (read == 0)
                     break;
 

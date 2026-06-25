@@ -166,7 +166,10 @@ internal sealed partial class FileContentLoader
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var read = stream.Read(buffer, 0, buffer.Length);
+                var read = stream.Read(
+                    buffer,
+                    0,
+                    GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length));
                 if (read == 0)
                     return false;
 
@@ -216,7 +219,10 @@ internal sealed partial class FileContentLoader
         try
         {
             int read;
-            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            while ((read = stream.Read(
+                       buffer,
+                       0,
+                       GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length))) > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 total += read;
@@ -235,6 +241,17 @@ internal sealed partial class FileContentLoader
         }
 
         return (accumulator.ToArray(), total);
+    }
+
+    private static int GetReadLengthWithinLimit(long total, long maxBytes, int bufferLength)
+    {
+        var remaining = maxBytes - total;
+        if (remaining >= bufferLength)
+            return bufferLength;
+        if (remaining < 0)
+            return 1;
+
+        return (int)Math.Min(bufferLength, remaining + 1);
     }
 
     private static byte[] ResizeReadBuffer(byte[] bytes, int length)
