@@ -133,7 +133,10 @@ public class CiWorkflowTests
         }
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
-        Assert.Contains("dotnet tool install --global dotnet-stryker --version 4.14.0", mutationWorkflow);
+        Assert.Contains("dotnet tool update --global dotnet-stryker --version 4.14.0", mutationWorkflow);
+        Assert.Contains("if: steps.mutation-cache.outputs.cache-hit != 'true'", mutationWorkflow);
+        Assert.Contains("mutation-stryker-4.14.0", mutationWorkflow);
+        Assert.DoesNotContain("dotnet tool install --global dotnet-stryker", mutationWorkflow);
     }
 
     [Fact]

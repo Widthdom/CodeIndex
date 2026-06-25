@@ -968,8 +968,10 @@ public partial class ReleaseWorkflowTests
 
         Assert.Contains("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2", workflow);
         Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", workflow);
+        Assert.Contains("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5", workflow);
         Assert.DoesNotContain("actions/checkout@v6", workflow);
         Assert.DoesNotContain("actions/setup-dotnet@v5", workflow);
+        Assert.DoesNotContain("actions/cache@v5", workflow);
     }
 
     private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");

@@ -8,6 +8,9 @@ affected:
   - tests/CodeIndex.Tests/ConcurrencyTests.cs
   - tests/CodeIndex.Tests/BackgroundTaskObserverTests.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
+  - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
+  - .github/workflows/mutation-testing.yml
+  - DEVELOPER_GUIDE.md
   - TESTING_GUIDE.md
 ---
 
@@ -25,6 +28,7 @@ affected:
 - Shared the normal trimmed published CLI across published CLI smoke tests so each test process pays that publish cost once; single-file publish coverage remains isolated.
 - Moved CI stdout-log directory creation onto the failed-test path so clean first-pass lanes do not pre-create `TestResults` for that log file.
 - Ran the CI TRX telemetry summarizer with Release `--no-build` output so failed/pass-on-retry lanes do not rebuild the helper during diagnostics.
+- Cached the pinned Stryker global tool and NuGet packages in the weekly mutation workflow, and update/install the tool only on cache misses.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -40,3 +44,4 @@ affected:
 - published CLI smoke test 間で通常の trimmed publish output を共有し、test process あたり 1 回の publish cost に抑えました。single-file publish coverage は引き続き隔離します。
 - CI stdout log 用 directory の作成を failed-test path に移し、clean な初回成功 lane ではその log file のために `TestResults` を事前作成しないようにしました。
 - CI の TRX telemetry summarizer を Release `--no-build` output で実行し、失敗または retry 成功 lane の診断中に helper を再ビルドしないようにしました。
+- weekly mutation workflow で pinned Stryker global tool と NuGet package を cache し、cache miss のときだけ tool を update / install するようにしました。

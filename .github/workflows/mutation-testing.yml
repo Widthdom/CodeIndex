@@ -25,11 +25,24 @@ jobs:
             8.0.413
             9.0.301
 
+      - name: Cache Stryker tool and NuGet packages
+        id: mutation-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.dotnet/tools
+            ~/.nuget/packages
+          key: ${{ runner.os }}-mutation-stryker-4.14.0-${{ hashFiles('**/packages.lock.json', 'global.json') }}
+          restore-keys: |
+            ${{ runner.os }}-mutation-stryker-4.14.0-
+            ${{ runner.os }}-mutation-
+
       - name: Restore
         run: dotnet restore CodeIndex.sln --locked-mode
 
       - name: Install Stryker.NET
-        run: dotnet tool install --global dotnet-stryker --version 4.14.0
+        if: steps.mutation-cache.outputs.cache-hit != 'true'
+        run: dotnet tool update --global dotnet-stryker --version 4.14.0
 
       - name: Run DbWriter mutation tests
         run: dotnet stryker --config-file stryker-config.json
