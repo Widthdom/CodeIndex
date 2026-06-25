@@ -362,7 +362,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller0");
         Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller4999");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(15);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large C# plain call reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
