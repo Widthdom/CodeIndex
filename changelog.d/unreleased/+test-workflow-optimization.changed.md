@@ -10,7 +10,9 @@ affected:
 ## English
 - Tightened the CI NuGet cache key to avoid package-cache misses from test-only project file edits while keeping locked restore as the package-input guard.
 - Reused one trimmed publish output while checking C# Razor query aliases, eliminating a duplicate `dotnet publish` run from that test.
+- Folded the trimmed query JSON and Razor-alias smoke coverage into one publish-backed test, removing another redundant `dotnet publish` run from the suite.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
 - C# Razor query alias の検証で 1 回の trimmed publish output を再利用し、そのテストから重複する `dotnet publish` 実行を削減しました。
+- trimmed query JSON と Razor alias の smoke coverage を 1 つの publish-backed test に統合し、suite からさらに重複する `dotnet publish` 実行を削減しました。

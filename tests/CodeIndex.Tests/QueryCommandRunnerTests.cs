@@ -1519,7 +1519,7 @@ public partial class QueryCommandRunnerTests
 
 
     [SkipOnMacOsArm64Fact]
-    public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
+    public void RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_publish_{Guid.NewGuid():N}");
@@ -1528,6 +1528,16 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var queryToken = "TrimmedPublishNeedle_1a2b3c";
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", $"class App {{ void Run() {{ var {queryToken} = 1; }} }}\n");
+            var aliasToken = $"TrimmedPublishLangAliasNeedle_{Guid.NewGuid():N}";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "web/Views/Home/Index.cshtml",
+                "csharp",
+                $$"""
+                @{
+                    var marker = "{{aliasToken}}";
+                }
+                """);
 
             var publishedDll = PublishTrimmedCli(publishDir);
 
@@ -1576,39 +1586,10 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal("src/missing.cs", outlineJson.RootElement.GetProperty("path").GetString());
                 Assert.Equal("file not found in index", outlineJson.RootElement.GetProperty("error").GetString());
             }
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(publishDir);
-        }
-    }
-
-    [SkipOnMacOsArm64Fact]
-    public void RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_lang_alias_publish");
-        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_lang_alias_publish_{Guid.NewGuid():N}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = $"TrimmedPublishLangAliasNeedle_{Guid.NewGuid():N}";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "web/Views/Home/Index.cshtml",
-                "csharp",
-                $$"""
-                @{
-                    var marker = "{{queryToken}}";
-                }
-                """);
-
-            var publishedDll = PublishTrimmedCli(publishDir);
 
             foreach (var lang in new[] { "cshtml", "razor" })
             {
-                var (exitCode, stdout, stderr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--lang", lang, "--count", "--json");
+                var (exitCode, stdout, stderr) = RunPublishedCli(publishedDll, publishDir, "search", aliasToken, "--db", dbPath, "--lang", lang, "--count", "--json");
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
