@@ -31,6 +31,22 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void NormalizeIgnorePath_AlreadyNormalizedPathUsesFastPath()
+    {
+        var path = "src/CodeIndex/Indexer";
+
+        var normalized = FileIndexer.NormalizeIgnorePath(path);
+
+        Assert.Same(path, normalized);
+    }
+
+    [Fact]
+    public void NormalizeIgnorePath_TrimsTrailingSlashes()
+    {
+        Assert.Equal("src/CodeIndex", FileIndexer.NormalizeIgnorePath("src/CodeIndex///"));
+    }
+
+    [Fact]
     public void NormalizeIndexPath_AsciiForwardSlashPathUsesFastPath()
     {
         var path = "src/CodeIndex/Indexer/FileIndexer.cs";

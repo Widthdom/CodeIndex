@@ -3217,7 +3217,16 @@ public partial class FileIndexer
     }
 
     internal static string NormalizeIgnorePath(string path)
-        => NormalizePathSeparators(path).TrimEnd('/');
+    {
+        if (CanSkipIgnorePathNormalization(path))
+            return path;
+
+        return NormalizePathSeparators(path).TrimEnd('/');
+    }
+
+    private static bool CanSkipIgnorePathNormalization(string path)
+        => (path.Length == 0 || path[^1] != '/')
+            && (Path.DirectorySeparatorChar != '\\' || !path.Contains('\\'));
 
     /// <summary>
     /// Normalize OS path separators to '/' for DB storage and lookup.

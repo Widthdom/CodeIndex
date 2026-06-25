@@ -64,6 +64,7 @@ affected:
 - Cached raw prepass NUL-byte detection per scan/probe so C# static-interface candidate checks do not repeat UTF-16 eligibility scans for every token.
 - Removed C# static-interface prepass member-header substring allocations by running word-boundary checks over spans.
 - Skipped separator and Unicode normalization work for ASCII index paths that already satisfy the DB path invariant.
+- Skipped separator and trailing-slash normalization work for ignore paths that are already in the scanner's invariant form.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -108,4 +109,5 @@ affected:
 - raw prepass の NUL-byte 検出を scan/probe ごとに cache し、C# static-interface candidate 判定で token ごとに UTF-16 eligibility scan を繰り返さないようにしました。
 - C# static-interface prepass の member-header substring allocation をなくし、word-boundary check を span 上で実行するようにしました。
 - DB path invariant をすでに満たす ASCII index path では、separator と Unicode normalization の処理を省略するようにしました。
+- scanner invariant をすでに満たす ignore path では、separator と trailing-slash normalization の処理を省略するようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
