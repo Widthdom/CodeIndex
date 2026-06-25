@@ -3,8 +3,8 @@ namespace CodeIndex.Indexer;
 public partial class FileIndexer
 {
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
-    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
-    {
+    private static readonly string[] SkipDirNames =
+    [
         ".git", ".svn", ".hg",
         "node_modules", "__pycache__", ".pytest_cache",
         "venv", ".venv", "env",
@@ -19,7 +19,9 @@ public partial class FileIndexer
         ".cargo",                       // Cargo registry cache / Cargoレジストリキャッシュ
         ".pub-cache",                   // Dart pub cache / Dart pubキャッシュ
         "_build",                       // Elixir/Mix build output / Elixir/Mixビルド出力
-    };
+    ];
+
+    private static readonly HashSet<string> SkipDirs = new(SkipDirNames, StringComparer.OrdinalIgnoreCase);
 
     // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
     // スキップするファイル名（SkipDirsと同様にクロスプラットフォーム対応で大文字小文字を区別しない）
@@ -54,5 +56,16 @@ public partial class FileIndexer
         if (SkipFiles.Contains(fileName))
             return true;
         return fileName.StartsWith(AppleDoublePrefix, StringComparison.Ordinal);
+    }
+
+    private static bool IsDefaultExcludedDirectoryName(ReadOnlySpan<char> directoryName)
+    {
+        foreach (var skipDir in SkipDirNames)
+        {
+            if (directoryName.Equals(skipDir.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 }

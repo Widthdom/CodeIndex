@@ -86,6 +86,7 @@ affected:
 - Replaced Windows device-path normalization and segment splitting with allocation-free span scanning during file indexability checks.
 - Pre-sized chunk record lists from the known line count, avoiding repeated list growth while chunking long files.
 - Avoided basename extraction and path normalization allocations on generated-code pattern matcher fast paths.
+- Avoided path-segment array allocation while propagating submodule passthrough through default-excluded directory ancestors.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -151,4 +152,5 @@ affected:
 - file indexability check 中の Windows device path 判定で、path normalization と segment split を allocation-free な span 走査へ置き換えました。
 - 既知の line count から chunk record list の容量を事前見積もりし、長い file の chunking 中に list growth を繰り返さないようにしました。
 - generated-code pattern matcher の fast path で basename extraction と path normalization allocation を避けるようにしました。
+- default-excluded directory 祖先で submodule passthrough を伝播する際に path segment array を割り当てないようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

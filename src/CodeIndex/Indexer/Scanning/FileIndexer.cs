@@ -2902,12 +2902,18 @@ public partial class FileIndexer
         // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relPath のどの segment も
         // SkipDirs に該当しない場合、我々の上書き無しでも walker は通っていたはずなので
         // ここでの上書きは効いていない。
-        var segments = relPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var segment in segments)
+        var remaining = relPath.AsSpan();
+        while (!remaining.IsEmpty)
         {
-            if (SkipDirs.Contains(segment))
+            var separatorIndex = remaining.IndexOf('/');
+            var segment = separatorIndex >= 0 ? remaining[..separatorIndex] : remaining;
+            if (!segment.IsEmpty && IsDefaultExcludedDirectoryName(segment))
                 return true;
+            if (separatorIndex < 0)
+                break;
+            remaining = remaining[(separatorIndex + 1)..];
         }
+
         return false;
     }
 
