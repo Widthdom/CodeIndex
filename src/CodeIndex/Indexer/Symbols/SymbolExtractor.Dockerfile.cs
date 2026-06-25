@@ -200,34 +200,16 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        var tokenStart = -1;
-        for (var index = 6; index <= trimmed.Length; index++)
+        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmed, 6))
         {
-            var atEnd = index == trimmed.Length;
-            if (!atEnd && !char.IsWhiteSpace(trimmed[index]))
-            {
-                if (tokenStart < 0)
-                    tokenStart = index;
-                continue;
-            }
-
-            if (tokenStart < 0)
-                continue;
-
-            var tokenLength = index - tokenStart;
             if (first)
             {
                 first = false;
-                tokenStart = -1;
                 continue;
             }
 
-            var token = trimmed.Substring(tokenStart, tokenLength);
             if (!IsDockerfileExposePort(token))
-            {
-                tokenStart = -1;
                 continue;
-            }
 
             AddSymbolRecord(
                 symbols,
@@ -244,7 +226,6 @@ public static partial class SymbolExtractor
                     Signature = line.Trim(),
                 },
                 line);
-            tokenStart = -1;
         }
     }
 
@@ -290,7 +271,7 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        foreach (var token in body.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmed, 6))
         {
             if (first)
             {
@@ -319,6 +300,27 @@ public static partial class SymbolExtractor
                     Signature = line.Trim(),
                 },
                 line);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileWhitespaceTokens(string text, int startIndex)
+    {
+        var tokenStart = -1;
+        for (var index = startIndex; index <= text.Length; index++)
+        {
+            var atEnd = index == text.Length;
+            if (!atEnd && !char.IsWhiteSpace(text[index]))
+            {
+                if (tokenStart < 0)
+                    tokenStart = index;
+                continue;
+            }
+
+            if (tokenStart < 0)
+                continue;
+
+            yield return text[tokenStart..index];
+            tokenStart = -1;
         }
     }
 

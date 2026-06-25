@@ -126,6 +126,7 @@ affected:
 - Enumerated Go interface and struct body segments directly, avoiding semicolon split arrays during embedded symbol extraction.
 - Reused Go's direct segment scanner for grouped value names and trimmed segments by index, avoiding comma split arrays and intermediate trim substrings.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
+- Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Enumerated C++ same-line class body members directly, avoiding semicolon split arrays on large class declarations.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
@@ -215,5 +216,6 @@ affected:
 - Go interface / struct body segment を直接列挙し、embedded symbol 抽出中の semicolon split array を避けるようにしました。
 - Go の direct segment scanner を grouped value name にも再利用し、segment trim を index で行うことで comma split array と中間 trim substring を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
+- Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - C++ same-line class body member を直接列挙し、大きな class declaration で semicolon split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
