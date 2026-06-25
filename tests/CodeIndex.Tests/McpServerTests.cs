@@ -15934,27 +15934,8 @@ public sealed class Caller
 
     private static void DeleteFileRobust(string path)
     {
-        if (!File.Exists(path))
-            return;
-
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            SqliteConnection.ClearAllPools();
-
-            try
-            {
-                File.Delete(path);
-                return;
-            }
-            catch (IOException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-            }
-            catch (UnauthorizedAccessException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-            }
-        }
+        SqliteConnection.ClearAllPools();
+        TestProjectHelper.DeleteFile(path);
     }
 
     private void DropGraphExactFallbackIndexes()
