@@ -16,6 +16,7 @@ affected:
   - tests/CodeIndex.Tests/DataDirectorySecurityTests.cs
   - tests/CodeIndex.Tests/ExportImportCommandRunnerTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorConfiguredPatternTests.cs
+  - tests/CodeIndex.Tests/GlobalToolLogTests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -48,6 +49,7 @@ affected:
 - Reused shared temporary directory cleanup in traversal-policy and data-directory security tests.
 - Reused shared temporary directory cleanup for import/export archive test workspaces.
 - Reused shared temporary directory cleanup for configured-pattern extractor test workspaces.
+- Reused shared temporary directory cleanup for private/global log test workspaces.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -73,3 +75,4 @@ affected:
 - traversal-policy test と data-directory security test で一時ディレクトリ cleanup を共通 helper に寄せました。
 - import / export archive test の workspace cleanup を共通 helper に寄せました。
 - configured-pattern extractor test の workspace cleanup を共通 helper に寄せました。
+- private / global log test の workspace cleanup を共通 helper に寄せました。
