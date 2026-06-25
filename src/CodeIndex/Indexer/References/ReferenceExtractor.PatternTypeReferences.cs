@@ -443,10 +443,18 @@ public static partial class ReferenceExtractor
         baseList = TrimTrailingTypeListTerminator(baseList);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
         {
-            var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0 || rawSegment.Contains('('))
+            var segmentLeading = CountLeadingWhitespace(baseList, segmentStart, segmentLength);
+            var rawSegmentLength = segmentLength - segmentLeading;
+            while (rawSegmentLength > 0 && char.IsWhiteSpace(baseList[segmentStart + segmentLeading + rawSegmentLength - 1]))
+                rawSegmentLength--;
+            if (rawSegmentLength == 0)
                 continue;
-            var absoluteStart = colonIndex + 1 + segmentStart + CountLeadingWhitespace(baseList, segmentStart, segmentLength);
+
+            var rawSegment = baseList.Substring(segmentStart + segmentLeading, rawSegmentLength);
+            if (rawSegment.Contains('('))
+                continue;
+
+            var absoluteStart = colonIndex + 1 + segmentStart + segmentLeading;
             AddTypeExpressionSegments(
                 references,
                 seen,

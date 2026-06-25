@@ -135,6 +135,7 @@ affected:
 - Trimmed Java generic-bound parameter segments by index, avoiding intermediate trim substrings during bound extraction.
 - Trimmed Java generic-bound RHS text by index, avoiding intermediate trim substrings before ampersand scanning.
 - Trimmed Java generic-bound ampersand segments by index, avoiding intermediate trim substrings before type-expression parsing.
+- Trimmed C# base-list segments by index, avoiding intermediate trim substrings during inheritance reference extraction.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -243,6 +244,7 @@ affected:
 - Java generic-bound parameter segment を index 境界で trim し、bound 抽出中の中間 trim substring を避けるようにしました。
 - Java generic-bound RHS text を index 境界で trim し、ampersand 走査前の中間 trim substring を避けるようにしました。
 - Java generic-bound ampersand segment を index 境界で trim し、type-expression parse 前の中間 trim substring を避けるようにしました。
+- C# base-list segment を index 境界で trim し、継承 reference 抽出中の中間 trim substring を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
