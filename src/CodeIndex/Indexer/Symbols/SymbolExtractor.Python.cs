@@ -908,7 +908,7 @@ public static partial class SymbolExtractor
             if (commentIndex >= 0)
                 fragment = fragment[..commentIndex];
 
-            fragment = fragment.TrimEnd();
+            fragment = GetPythonPrefixTrimmedEnd(fragment, fragment.Length);
             if (fragment.Length > 0)
             {
                 var closingParenIndex = fragment.IndexOf(')');
