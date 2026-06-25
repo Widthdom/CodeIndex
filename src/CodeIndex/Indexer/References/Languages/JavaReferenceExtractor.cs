@@ -999,10 +999,14 @@ internal static class JavaReferenceExtractor
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClauseText))
         {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
+            var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClauseText, segmentStart, segmentLength);
+            var parameterLength = segmentLength - parameterLeading;
+            while (parameterLength > 0 && char.IsWhiteSpace(parameterClauseText[segmentStart + parameterLeading + parameterLength - 1]))
+                parameterLength--;
+            if (parameterLength == 0)
                 continue;
 
+            var rawParameter = parameterClauseText.Substring(segmentStart + parameterLeading, parameterLength);
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
             var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
             if (TryReadGenericParameterName(nameFragment, out var name))
