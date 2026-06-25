@@ -342,7 +342,6 @@ jobs:
             TestResults/**/*.trx
             TestResults/**/*.txt
             TestResults/**/*.xml
-            TestResults/**/*Sequence*.xml
 
       - name: Upload diagnostic dumps
         if: failure()

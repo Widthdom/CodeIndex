@@ -96,6 +96,7 @@ affected:
 - Reused MCP server file cleanup helpers for temporary DB and lock sidecar cleanup.
 - Reused shared file cleanup for program-runner cache, script, and temporary file cleanup.
 - Ran broad extractor practical-budget runaway guards only on the primary net8.0 target, keeping focused functional coverage cross-target while avoiding duplicate large-fixture work on net9.0 lanes.
+- Removed the redundant `TestResults/**/*Sequence*.xml` artifact glob because `TestResults/**/*.xml` already uploads VSTest sequence XML diagnostics.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -149,3 +150,4 @@ affected:
 - MCP server の一時 DB / lock sidecar cleanup を既存 file cleanup helper に寄せました。
 - program-runner の cache、script、一時 file cleanup を共通 file cleanup helper に寄せました。
 - extractor の broad な practical-budget runaway guard を primary の net8.0 target のみで実行し、focused な機能テストは cross-target のまま、net9.0 lane での大規模 fixture 重複実行を避けるようにしました。
+- `TestResults/**/*.xml` が VSTest の sequence XML diagnostics も upload するため、重複していた `TestResults/**/*Sequence*.xml` artifact glob を削除しました。

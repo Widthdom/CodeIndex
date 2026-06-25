@@ -73,7 +73,8 @@ public class CiWorkflowTests
         Assert.Contains("flaky-retry.txt", workflow);
         Assert.Contains("TestResults/**/*.trx", workflow);
         Assert.Contains("TestResults/**/*.txt", workflow);
-        Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
+        Assert.Contains("TestResults/**/*.xml", workflow);
+        Assert.DoesNotContain("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);
         Assert.Contains("TestResults/**/*.dump", workflow);
         Assert.Contains("if: always() && steps.lane.outputs.primary_lane == 'true'", workflow);
