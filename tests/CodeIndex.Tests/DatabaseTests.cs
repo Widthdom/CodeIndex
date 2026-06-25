@@ -566,7 +566,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -601,7 +601,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.ForeignKeyValidationBeforeCheckForTesting = null;
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -895,7 +895,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -914,7 +914,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -938,7 +938,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.MaintenanceProgressForTesting = null;
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -1044,7 +1044,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -1070,7 +1070,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.OptimizePragmaExecutedForTesting = null;
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -1095,7 +1095,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.OptimizePragmaExecutedForTesting = null;
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -2404,7 +2404,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            DeleteDbFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -3012,39 +3012,7 @@ public class DatabaseTests : IDisposable
 
     private void DeleteDbPath()
     {
-        DeleteDbFiles(_dbPath);
-    }
-
-    private static void DeleteDbFiles(string dbPath)
-    {
-        SqliteConnection.ClearAllPools();
-        foreach (var path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" })
-        {
-            if (!File.Exists(path))
-                continue;
-
-            DeleteDbFile(path);
-        }
-    }
-
-    private static void DeleteDbFile(string dbPath)
-    {
-        try
-        {
-            File.Delete(dbPath);
-        }
-        catch (IOException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
-        }
+        TestProjectHelper.DeleteSqliteDatabaseFiles(_dbPath);
     }
 
     private string ExecuteScalarString(string sql)

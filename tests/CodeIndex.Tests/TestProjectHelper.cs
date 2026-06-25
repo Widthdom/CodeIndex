@@ -82,6 +82,14 @@ internal static class TestProjectHelper
         SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
     }
 
+    internal static void DeleteSqliteDatabaseFiles(string dbPath)
+    {
+        SqlitePoolCleanup.ClearPoolsAtCollectionBoundary();
+        DeleteFile(dbPath);
+        DeleteFile(dbPath + "-wal");
+        DeleteFile(dbPath + "-shm");
+    }
+
     internal static string RunGit(string workDir, params string[] args)
     {
         var psi = new ProcessStartInfo

@@ -10,6 +10,8 @@ affected:
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
   - tests/CodeIndex.Tests/GitHelperTests.cs
   - tests/CodeIndex.Tests/McpServerTests.cs
+  - tests/CodeIndex.Tests/DatabaseTests.cs
+  - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
   - .github/workflows/mutation-testing.yml
@@ -36,6 +38,7 @@ affected:
 - Shortened post-extraction hook timeout/cancellation leak checks by lowering the artificial hook delay and using a smaller observation window that still catches un-killed workers.
 - Reused `TestProjectHelper.DeleteDirectory` in Git helper tests instead of carrying a duplicate robust cleanup loop.
 - Reused `TestProjectHelper.DeleteFile` for MCP test file cleanup while preserving the explicit SQLite pool clear.
+- Added shared SQLite database sidecar cleanup in `TestProjectHelper` and used it from database tests instead of a local delete helper.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -56,3 +59,4 @@ affected:
 - post-extraction hook の timeout / cancellation leak check で人工 hook delay と観測 window を短縮し、kill されなかった worker は引き続き検出しつつ固定待機を減らしました。
 - Git helper test で重複していた robust cleanup loop を削除し、`TestProjectHelper.DeleteDirectory` を再利用するようにしました。
 - MCP test の file cleanup で明示的な SQLite pool clear は維持しつつ、`TestProjectHelper.DeleteFile` を再利用するようにしました。
+- SQLite database sidecar cleanup を `TestProjectHelper` に追加し、database test のローカル delete helper を置き換えました。
