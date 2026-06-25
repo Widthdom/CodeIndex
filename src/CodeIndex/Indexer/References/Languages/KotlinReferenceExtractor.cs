@@ -1037,7 +1037,15 @@ internal static class KotlinReferenceExtractor
         if (endIndex < lastSegmentStart)
             endIndex = trimmed.Length;
 
-        var typeName = trimmed.Substring(lastSegmentStart, endIndex - lastSegmentStart).Trim();
+        var typeNameLeading = 0;
+        while (lastSegmentStart + typeNameLeading < endIndex && char.IsWhiteSpace(trimmed[lastSegmentStart + typeNameLeading]))
+            typeNameLeading++;
+
+        var typeNameEnd = endIndex;
+        while (typeNameEnd > lastSegmentStart + typeNameLeading && char.IsWhiteSpace(trimmed[typeNameEnd - 1]))
+            typeNameEnd--;
+
+        var typeName = trimmed.Substring(lastSegmentStart + typeNameLeading, typeNameEnd - lastSegmentStart - typeNameLeading);
         return typeName.Length > 0 ? typeName : null;
     }
 

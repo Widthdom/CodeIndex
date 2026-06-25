@@ -143,6 +143,7 @@ affected:
 - Trimmed Java module `provides` implementation segments by index, avoiding intermediate trim substrings during JPMS reference extraction.
 - Checked TypeScript function-type prefixes with spans, avoiding substring trim allocation before arrow-type parsing.
 - Trimmed Kotlin delegated type clauses by index, avoiding a substring trim chain before bare-type extraction.
+- Trimmed Kotlin bare type-name slices by index, avoiding an intermediate trim substring during reference extraction.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -258,6 +259,7 @@ affected:
 - Java module `provides` implementation segment を index 境界で trim し、JPMS reference 抽出中の中間 trim substring を避けるようにしました。
 - TypeScript function-type prefix を span で確認し、arrow-type parse 前の substring trim allocation を避けるようにしました。
 - Kotlin delegated type clause を index 境界で trim し、bare-type 抽出前の substring trim chain を避けるようにしました。
+- Kotlin bare type-name slice を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。
