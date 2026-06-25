@@ -31,6 +31,36 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void NormalizeIndexPath_AsciiForwardSlashPathUsesFastPath()
+    {
+        var path = "src/CodeIndex/Indexer/FileIndexer.cs";
+
+        var normalized = FileIndexer.NormalizeIndexPath(path);
+
+        Assert.Same(path, normalized);
+    }
+
+    [Fact]
+    public void NormalizeIndexPath_NormalizesUnicodeToNfc()
+    {
+        var normalized = FileIndexer.NormalizeIndexPath("Cafe\u0301.cs");
+
+        Assert.Equal("Caf\u00e9.cs", normalized);
+        Assert.True(normalized.IsNormalized(NormalizationForm.FormC));
+    }
+
+    [Fact]
+    public void NormalizeIndexPath_UsesPlatformSeparatorSemantics()
+    {
+        var normalized = FileIndexer.NormalizeIndexPath(@"nested\file.cs");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal("nested/file.cs", normalized);
+        else
+            Assert.Equal(@"nested\file.cs", normalized);
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");

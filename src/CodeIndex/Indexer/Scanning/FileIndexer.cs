@@ -3235,7 +3235,25 @@ public partial class FileIndexer
     /// DB 保存・lookup 用 path は区切り文字正規化に加えて Unicode NFC に正規化する。
     /// </summary>
     public static string NormalizeIndexPath(string path)
-        => NormalizePathSeparators(path).Normalize(NormalizationForm.FormC);
+    {
+        if (CanSkipIndexPathNormalization(path))
+            return path;
+
+        return NormalizePathSeparators(path).Normalize(NormalizationForm.FormC);
+    }
+
+    private static bool CanSkipIndexPathNormalization(string path)
+    {
+        foreach (var ch in path)
+        {
+            if (ch > 0x7f)
+                return false;
+            if (Path.DirectorySeparatorChar == '\\' && ch == '\\')
+                return false;
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
