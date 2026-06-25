@@ -1,12 +1,14 @@
-using System.Security.Cryptography;
 using System.Text;
 
 namespace CodeIndex.Indexer;
 
-internal sealed class FileContentLoader(long maxFileSizeBytes)
+internal sealed partial class FileContentLoader(long maxFileSizeBytes)
 {
     private const int GitLfsPointerMaxBytes = 1024;
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
+    private static ReadOnlySpan<byte> GitLfsExtensionPrefix => "ext-"u8;
+    private static ReadOnlySpan<byte> GitLfsSha256OidPrefix => "oid sha256:"u8;
+    private static ReadOnlySpan<byte> GitLfsSizePrefix => "size "u8;
 
     internal readonly record struct NormalizedIndexableContent(
         string Content,
@@ -40,7 +42,9 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
 
         var (content, warning, inspection) = DecodeIndexableContent(bytes, relativePath);
         var normalized = NormalizeForIndexing(content);
-        var checksum = ComputeChecksumFromNormalizedContent(normalized.Content);
+        var checksum = CanReuseRawBytesForNormalizedChecksum(content, warning, inspection, normalized)
+            ? ComputeRawChecksum(bytes)
+            : ComputeChecksumFromNormalizedContent(normalized.Content);
 
         return new LoadedFileContent(
             normalized.Content,
@@ -54,25 +58,21 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             inspection);
     }
 
+    internal static bool CanReuseRawBytesForNormalizedChecksum(
+        string decodedContent,
+        string? decodeWarning,
+        FileContentInspection inspection,
+        NormalizedIndexableContent normalized)
+    {
+        return decodeWarning is null
+            && !inspection.IsUtf16
+            && ReferenceEquals(normalized.Content, decodedContent);
+    }
+
     internal string LoadNormalizedContentForPrepass(
         string absolutePath,
         string normalizedRelativePath,
         string relativePath,
-        CancellationToken cancellationToken)
-    {
-        return LoadNormalizedContentForPrepass(
-            absolutePath,
-            normalizedRelativePath,
-            relativePath,
-            rawByteFilter: null,
-            cancellationToken)!;
-    }
-
-    internal string? LoadNormalizedContentForPrepass(
-        string absolutePath,
-        string normalizedRelativePath,
-        string relativePath,
-        Func<byte[], bool>? rawByteFilter,
         CancellationToken cancellationToken)
     {
         var (bytes, _, _) = ReadRawBytesWithSizeLimit(
@@ -81,207 +81,9 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             cancellationToken);
         if (IsGitLfsPointer(bytes))
             return string.Empty;
-        if (rawByteFilter != null && !rawByteFilter(bytes))
-            return null;
 
         var (content, _, _) = DecodeIndexableContent(bytes, relativePath);
         return NormalizeContentForPrepass(content);
-    }
-
-    private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
-        string absolutePath,
-        string normalizedRelativePath,
-        CancellationToken cancellationToken)
-    {
-        // Read raw bytes through a single FileStream and cap the accumulated payload at
-        // the configured max-file limit so a file that grew between the size probe and the read can no
-        // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
-        // left a TOCTOU window where an attacker (or any build/log emitter rapidly
-        // appending to a generated file) could grow a 1 MB file to multi-GB between
-        // stat and read and force the indexer into an OOM-sized allocation; reading
-        // through one open handle removes the second stat call, and the read loop's
-        // running total guarantees we never accumulate more than the configured max-file bytes
-        // regardless of how aggressively a concurrent writer extends the file.
-        // ファイルを 1 本の FileStream で開き、設定された max-file byte 上限として累積バッファを
-        // 制限することで、サイズ確認と読み込みの間にファイルが肥大化しても上限を
-        // 回避できないようにする。
-        byte[] bytes;
-        long sizeBytes;
-        DateTime modifiedUtc;
-        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
-        for (var attempt = 0; ; attempt++)
-        {
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-            using (var stream = new FileStream(
-                ioPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 81920,
-                options: FileOptions.SequentialScan))
-            {
-                var initialLength = stream.Length;
-                if (initialLength > maxFileSizeBytes)
-                    throw new FileIndexer.FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        initialLength,
-                        maxFileSizeBytes,
-                        BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
-
-                (bytes, sizeBytes) = ReadStreamBytesWithKnownInitialLength(
-                    stream,
-                    initialLength,
-                    normalizedRelativePath,
-                    cancellationToken);
-            }
-            modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
-            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
-                break;
-        }
-
-        return (bytes, sizeBytes, modifiedUtc);
-    }
-
-    private (byte[] Bytes, long SizeBytes) ReadStreamBytesWithKnownInitialLength(
-        FileStream stream,
-        long initialLength,
-        string normalizedRelativePath,
-        CancellationToken cancellationToken)
-    {
-        var expectedLength = (int)initialLength;
-        var bytes = expectedLength == 0 ? Array.Empty<byte>() : new byte[expectedLength];
-        var total = 0;
-
-        while (total < expectedLength)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var read = stream.Read(bytes, total, expectedLength - total);
-            if (read == 0)
-                return (ResizeReadBuffer(bytes, total), total);
-            total += read;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        var extra = stream.ReadByte();
-        if (extra < 0)
-            return (bytes, total);
-
-        return ReadStreamBytesAfterGrowth(
-            stream,
-            bytes,
-            total,
-            (byte)extra,
-            normalizedRelativePath,
-            cancellationToken);
-    }
-
-    private (byte[] Bytes, long SizeBytes) ReadStreamBytesAfterGrowth(
-        FileStream stream,
-        byte[] prefix,
-        int prefixLength,
-        byte firstExtraByte,
-        string normalizedRelativePath,
-        CancellationToken cancellationToken)
-    {
-        var total = (long)prefixLength + 1;
-        if (total > maxFileSizeBytes)
-            throw new FileIndexer.FileTooLargeSkippedException(
-                normalizedRelativePath,
-                total,
-                maxFileSizeBytes,
-                BuildFileTooLargeMessage(total, grewDuringRead: true));
-
-        var initialCapacity = (int)Math.Min(
-            maxFileSizeBytes,
-            Math.Max(total, prefixLength + 81920L));
-        using var accumulator = new MemoryStream(initialCapacity);
-        if (prefixLength > 0)
-            accumulator.Write(prefix, 0, prefixLength);
-        accumulator.WriteByte(firstExtraByte);
-
-        var buffer = new byte[81920];
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            total += read;
-            if (total > maxFileSizeBytes)
-                throw new FileIndexer.FileTooLargeSkippedException(
-                    normalizedRelativePath,
-                    total,
-                    maxFileSizeBytes,
-                    BuildFileTooLargeMessage(total, grewDuringRead: true));
-            accumulator.Write(buffer, 0, read);
-        }
-
-        return (accumulator.ToArray(), total);
-    }
-
-    private static byte[] ResizeReadBuffer(byte[] bytes, int length)
-    {
-        if (length == bytes.Length)
-            return bytes;
-        if (length == 0)
-            return [];
-
-        var resized = new byte[length];
-        Buffer.BlockCopy(bytes, 0, resized, 0, length);
-        return resized;
-    }
-
-    private (string Content, string? Warning, FileContentInspection Inspection) DecodeIndexableContent(byte[] bytes, string relativePath)
-    {
-        var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
-        var inspection = new FileContentInspection(
-            IsGitLfsPointer: false,
-            IsUtf16: isUtf16Encoded,
-            Utf16BigEndian: utf16BigEndian,
-            HasUtf16Bom: hasUtf16Bom);
-
-        if (!isUtf16Encoded && TryFindNullByte(bytes, out var nullByteOffset))
-            throw new FileIndexer.BinaryFileSkippedException(
-                relativePath,
-                nullByteOffset,
-                $"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
-
-        if (isUtf16Encoded)
-        {
-            var content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
-                .GetString(bytes);
-            var warning = hasUtf16Bom
-                ? null
-                : $"{relativePath}: decoded as {(utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
-            return (content, warning, inspection);
-        }
-
-        try
-        {
-            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null, inspection);
-        }
-        catch (DecoderFallbackException)
-        {
-            var content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
-            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)", inspection);
-        }
-    }
-
-    private string BuildFileTooLargeMessage(long actualBytes, bool grewDuringRead)
-    {
-        var actual = FormatBytesForError(actualBytes);
-        var limit = FormatBytesForError(maxFileSizeBytes);
-        var observed = grewDuringRead
-            ? $"File too large (> {limit} limit; grew during read)"
-            : $"File too large ({actual} > {limit} limit)";
-        return $"{observed}. Override with --max-file-bytes <bytes> or {FileIndexer.MaxFileSizeEnvironmentVariable}=<bytes> when this source file is intentionally indexable.";
-    }
-
-    private static string FormatBytesForError(long bytes)
-    {
-        if (bytes % (1024L * 1024L) == 0)
-            return $"{bytes / 1024L / 1024L} MiB";
-        if (bytes % 1024L == 0)
-            return $"{bytes / 1024L} KiB";
-        return $"{bytes} bytes";
     }
 
     internal static string NormalizeLineEndings(string content)
@@ -313,28 +115,15 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     {
         if (string.IsNullOrEmpty(content))
             return content;
-        if (!content.Contains('\uFEFF') && !content.Contains('\u200B'))
-            return content;
 
-        var firstStripIndex = -1;
-        var atLineStart = true;
-        for (var i = 0; i < content.Length; i++)
-        {
-            var c = content[i];
-            if (IsLineLeadingInvisible(c) && atLineStart)
-            {
-                firstStripIndex = i;
-                break;
-            }
-            atLineStart = c == '\n';
-        }
+        var firstStripIndex = FindFirstLineLeadingInvisible(content);
         if (firstStripIndex < 0)
             return content;
 
         var sb = new StringBuilder(content.Length - 1);
         if (firstStripIndex > 0)
             sb.Append(content, 0, firstStripIndex);
-        atLineStart = true;
+        var atLineStart = true;
         for (var i = firstStripIndex + 1; i < content.Length; i++)
         {
             var c = content[i];
@@ -344,6 +133,25 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
             atLineStart = c == '\n';
         }
         return sb.ToString();
+    }
+
+    private static int FindFirstLineLeadingInvisible(string content)
+    {
+        var searchOffset = 0;
+        while (searchOffset < content.Length)
+        {
+            var relativeIndex = content.AsSpan(searchOffset).IndexOfAny('\uFEFF', '\u200B');
+            if (relativeIndex < 0)
+                return -1;
+
+            var index = searchOffset + relativeIndex;
+            if (index == 0 || content[index - 1] == '\n')
+                return index;
+
+            searchOffset = index + 1;
+        }
+
+        return -1;
     }
 
     private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
@@ -417,7 +225,7 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
     {
         if (content.Length == 0)
             return content;
-        if (!content.Contains('\r') && !content.Contains('\uFEFF') && !content.Contains('\u200B'))
+        if (!RequiresPrepassNormalization(content))
             return content;
 
         StringBuilder? builder = null;
@@ -454,324 +262,105 @@ internal sealed class FileContentLoader(long maxFileSizeBytes)
         return builder?.ToString() ?? content;
     }
 
+    private static bool RequiresPrepassNormalization(string content)
+        => content.AsSpan().IndexOfAny('\r', '\uFEFF', '\u200B') >= 0;
+
     internal static bool IsGitLfsPointer(byte[] rawBytes)
     {
         if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
             return false;
-        if (!rawBytes.AsSpan().StartsWith(GitLfsPointerPrefix))
+
+        ReadOnlySpan<byte> remaining = rawBytes;
+        if (!remaining.StartsWith(GitLfsPointerPrefix))
             return false;
 
-        var pointerText = Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        var lines = pointerText.Split('\n');
-        if (lines.Length > 0 && lines[^1].Length == 0)
-            lines = lines[..^1];
-        if (lines.Length < 3)
-            return false;
-        if (!string.Equals(lines[0], "version https://git-lfs.github.com/spec/v1", StringComparison.Ordinal))
+        if (!TryReadGitLfsLine(ref remaining, out var line)
+            || !line.SequenceEqual(GitLfsPointerPrefix))
             return false;
 
-        var lineIndex = 1;
-        while (lineIndex < lines.Length && lines[lineIndex].StartsWith("ext-", StringComparison.Ordinal))
-            lineIndex++;
+        if (!TryReadGitLfsLine(ref remaining, out line))
+            return false;
+        while (line.StartsWith(GitLfsExtensionPrefix))
+        {
+            if (!TryReadGitLfsLine(ref remaining, out line))
+                return false;
+        }
 
-        if (lineIndex + 1 >= lines.Length)
+        if (!IsGitLfsSha256OidLine(line))
             return false;
-        if (!IsGitLfsSha256OidLine(lines[lineIndex]))
+        if (!TryReadGitLfsLine(ref remaining, out line)
+            || !IsGitLfsSizeLine(line))
+        {
             return false;
-        lineIndex++;
-        if (!IsGitLfsSizeLine(lines[lineIndex]))
-            return false;
+        }
 
-        return lineIndex == lines.Length - 1;
+        return remaining.IsEmpty;
     }
 
-    private static bool IsGitLfsSha256OidLine(string line)
+    private static bool TryReadGitLfsLine(ref ReadOnlySpan<byte> remaining, out ReadOnlySpan<byte> line)
     {
-        const string prefix = "oid sha256:";
-        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+        if (remaining.IsEmpty)
+        {
+            line = default;
+            return false;
+        }
+
+        var newlineIndex = remaining.IndexOfAny((byte)'\r', (byte)'\n');
+        if (newlineIndex < 0)
+        {
+            line = remaining;
+            remaining = ReadOnlySpan<byte>.Empty;
+            return true;
+        }
+
+        line = remaining[..newlineIndex];
+        var nextIndex = newlineIndex + 1;
+        if (remaining[newlineIndex] == (byte)'\r'
+            && nextIndex < remaining.Length
+            && remaining[nextIndex] == (byte)'\n')
+        {
+            nextIndex++;
+        }
+
+        remaining = remaining[nextIndex..];
+        return true;
+    }
+
+    private static bool IsGitLfsSha256OidLine(ReadOnlySpan<byte> line)
+    {
+        if (!line.StartsWith(GitLfsSha256OidPrefix))
             return false;
 
-        var hash = line.AsSpan(prefix.Length);
+        var hash = line[GitLfsSha256OidPrefix.Length..];
         if (hash.Length != 64)
             return false;
-        foreach (var c in hash)
+        foreach (var value in hash)
         {
-            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            if (!((value >= (byte)'0' && value <= (byte)'9')
+                  || (value >= (byte)'a' && value <= (byte)'f')))
+            {
                 return false;
+            }
         }
         return true;
     }
 
-    private static bool IsGitLfsSizeLine(string line)
+    private static bool IsGitLfsSizeLine(ReadOnlySpan<byte> line)
     {
-        const string prefix = "size ";
-        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+        if (!line.StartsWith(GitLfsSizePrefix))
             return false;
 
-        var size = line.AsSpan(prefix.Length);
+        var size = line[GitLfsSizePrefix.Length..];
         if (size.Length == 0)
             return false;
-        foreach (var c in size)
+        foreach (var value in size)
         {
-            if (c < '0' || c > '9')
+            if (value < (byte)'0' || value > (byte)'9')
                 return false;
         }
         return true;
     }
 
-    internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
-    {
-        return TryFindIndexBlockingNullByte(rawBytes, out _);
-    }
-
-    internal static bool TryFindIndexBlockingNullByte(byte[] rawBytes, out int offset)
-    {
-        offset = -1;
-        if (TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _))
-            return false;
-
-        return TryFindNullByte(rawBytes, out offset);
-    }
-
-    private static bool TryFindNullByte(byte[] rawBytes, out int offset)
-    {
-        offset = Array.IndexOf(rawBytes, (byte)0);
-        return offset >= 0;
-    }
-
-    internal static bool TryDetectUtf16Encoding(
-        byte[] rawBytes,
-        bool allowHeuristic,
-        out bool bigEndian,
-        out bool hasBom)
-    {
-        bigEndian = false;
-        hasBom = false;
-
-        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
-        {
-            bigEndian = true;
-            hasBom = true;
-            return true;
-        }
-
-        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
-            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00))
-        {
-            hasBom = true;
-            return true;
-        }
-
-        if (!allowHeuristic || rawBytes.Length < 4)
-            return false;
-
-        var sampleLength = Math.Min(rawBytes.Length, 4096);
-        sampleLength -= sampleLength % 2;
-        var pairs = sampleLength / 2;
-        if (pairs == 0)
-            return false;
-
-        var evenNulls = 0;
-        var oddNulls = 0;
-        var oddTextBytes = 0;
-        var evenTextBytes = 0;
-        for (var i = 0; i < sampleLength; i += 2)
-        {
-            if (rawBytes[i] == 0)
-                evenNulls++;
-            if (rawBytes[i + 1] == 0)
-                oddNulls++;
-            if (IsLikelyTextByte(rawBytes[i + 1]))
-                oddTextBytes++;
-            if (IsLikelyTextByte(rawBytes[i]))
-                evenTextBytes++;
-        }
-
-        const double NullParityThreshold = 0.30;
-        const double OppositeNullThreshold = 0.01;
-        const double TextByteThreshold = 0.80;
-        var beScore = (double)evenNulls / pairs;
-        var leScore = (double)oddNulls / pairs;
-        var beOppositeScore = (double)oddNulls / pairs;
-        var leOppositeScore = (double)evenNulls / pairs;
-
-        if (beScore >= NullParityThreshold
-            && beOppositeScore <= OppositeNullThreshold
-            && (double)oddTextBytes / pairs >= TextByteThreshold)
-        {
-            bigEndian = true;
-            return true;
-        }
-
-        if (leScore >= NullParityThreshold
-            && leOppositeScore <= OppositeNullThreshold
-            && (double)evenTextBytes / pairs >= TextByteThreshold)
-        {
-            bigEndian = false;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsLikelyTextByte(byte value)
-        => value is 0x09 or 0x0A or 0x0D || value >= 0x20;
-
-    internal static string ComputeChecksum(byte[] bytes)
-    {
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var pendingCarriageReturn = false;
-        AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
-        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
-        return FinishChecksum(hasher);
-    }
-
-    internal static string ComputeChecksumFromNormalizedContent(string content)
-    {
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> buffer = stackalloc byte[4096];
-        const int MaxCharsPerChunk = 1024;
-        for (var offset = 0; offset < content.Length;)
-        {
-            var charCount = Math.Min(MaxCharsPerChunk, content.Length - offset);
-            if (offset + charCount < content.Length
-                && charCount > 0
-                && char.IsHighSurrogate(content[offset + charCount - 1])
-                && char.IsLowSurrogate(content[offset + charCount]))
-            {
-                charCount--;
-            }
-
-            if (charCount == 0)
-                charCount = 1;
-
-            var written = Encoding.UTF8.GetBytes(content.AsSpan(offset, charCount), buffer);
-            if (written > 0)
-                hasher.AppendData(buffer[..written]);
-            offset += charCount;
-        }
-
-        return FinishChecksum(hasher);
-    }
-
-    internal static bool TryComputeChecksum(
-        string filePath,
-        long maxBytes,
-        out string checksum,
-        CancellationToken cancellationToken = default)
-    {
-        if (maxBytes < 0)
-            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
-
-        checksum = string.Empty;
-        using var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: 81920,
-            options: FileOptions.SequentialScan);
-        return TryComputeChecksum(stream, maxBytes, out checksum, cancellationToken);
-    }
-
-    internal static bool TryComputeChecksum(
-        Stream stream,
-        long maxBytes,
-        out string checksum,
-        CancellationToken cancellationToken = default)
-    {
-        if (maxBytes < 0)
-            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
-
-        checksum = string.Empty;
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[81920];
-        var pendingCarriageReturn = false;
-        long total = 0;
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var read = stream.Read(buffer, 0, buffer.Length);
-            if (read == 0)
-                break;
-
-            total += read;
-            if (total > maxBytes)
-                return false;
-
-            AppendNormalizedChecksumBytes(hasher, buffer.AsSpan(0, read), ref pendingCarriageReturn);
-        }
-
-        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
-        checksum = FinishChecksum(hasher);
-        return true;
-    }
-
-    private static void AppendNormalizedChecksumBytes(
-        IncrementalHash hasher,
-        ReadOnlySpan<byte> bytes,
-        ref bool pendingCarriageReturn)
-    {
-        Span<byte> normalized = stackalloc byte[4096];
-        var n = 0;
-
-        if (pendingCarriageReturn)
-        {
-            if (bytes.Length > 0 && bytes[0] == 0x0A)
-                bytes = bytes[1..];
-            normalized[n++] = 0x0A;
-            pendingCarriageReturn = false;
-        }
-
-        for (var i = 0; i < bytes.Length; i++)
-        {
-            var b = bytes[i];
-            if (b == 0x0D)
-            {
-                if (i + 1 == bytes.Length)
-                {
-                    pendingCarriageReturn = true;
-                    continue;
-                }
-
-                normalized[n++] = 0x0A;
-                if (i + 1 < bytes.Length && bytes[i + 1] == 0x0A)
-                    i++;
-            }
-            else
-            {
-                normalized[n++] = b;
-            }
-
-            if (n == normalized.Length)
-            {
-                hasher.AppendData(normalized);
-                n = 0;
-            }
-        }
-
-        if (n > 0)
-            hasher.AppendData(normalized[..n]);
-    }
-
-    private static void FlushPendingChecksumCarriageReturn(IncrementalHash hasher, ref bool pendingCarriageReturn)
-    {
-        if (!pendingCarriageReturn)
-            return;
-
-        Span<byte> lineFeed = stackalloc byte[1];
-        lineFeed[0] = 0x0A;
-        hasher.AppendData(lineFeed);
-        pendingCarriageReturn = false;
-    }
-
-    private static string FinishChecksum(IncrementalHash hasher)
-    {
-        Span<byte> hash = stackalloc byte[32];
-        if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
-            throw new InvalidOperationException("SHA256 produced an unexpected hash length");
-        return Convert.ToHexString(hash).ToLowerInvariant();
-    }
 }
 
 internal readonly record struct LoadedFileContent(

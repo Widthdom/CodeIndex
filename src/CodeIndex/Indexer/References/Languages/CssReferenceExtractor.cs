@@ -1087,16 +1087,20 @@ internal static class CssReferenceExtractor
 
     private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)
     {
-        var trimmed = preparedLine.TrimStart();
-        if (trimmed.StartsWith("$", StringComparison.Ordinal))
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        var lineTail = preparedLine.AsSpan(firstNonWhitespace);
+        if (lineTail.StartsWith("$", StringComparison.Ordinal))
         {
             var declarationColonIndex = preparedLine.IndexOf(':', variableIndex);
             if (declarationColonIndex >= 0)
                 return true;
         }
 
-        if (trimmed.StartsWith("@mixin", StringComparison.Ordinal)
-            || trimmed.StartsWith("@function", StringComparison.Ordinal))
+        if (lineTail.StartsWith("@mixin", StringComparison.Ordinal)
+            || lineTail.StartsWith("@function", StringComparison.Ordinal))
         {
             var braceIndex = preparedLine.IndexOf('{');
             if (braceIndex < 0)
@@ -1110,20 +1114,26 @@ internal static class CssReferenceExtractor
 
     private static bool ShouldSkipSassIndentedDeclarationReferences(string preparedLine)
     {
-        var trimmed = preparedLine.TrimStart();
-        return trimmed.StartsWith("=", StringComparison.Ordinal);
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        return firstNonWhitespace < preparedLine.Length && preparedLine[firstNonWhitespace] == '=';
     }
 
     private static bool ShouldSkipSassBareFunctionReference(string preparedLine, int functionIndex)
     {
-        var trimmed = preparedLine.TrimStart();
-        if (!trimmed.StartsWith("@function", StringComparison.Ordinal)
-            && !trimmed.StartsWith("@mixin", StringComparison.Ordinal))
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        var lineTail = preparedLine.AsSpan(firstNonWhitespace);
+        if (!lineTail.StartsWith("@function", StringComparison.Ordinal)
+            && !lineTail.StartsWith("@mixin", StringComparison.Ordinal))
         {
             return false;
         }
 
-        var firstNonWhitespace = preparedLine.Length - trimmed.Length;
         return functionIndex >= firstNonWhitespace;
     }
 

@@ -5970,12 +5970,18 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
+        var fileTargets = files.Select(filePath => CSharpStaticInterfacePrepass.FileTarget.Create(
+            projectPath,
+            filePath,
+            FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
+        var csharpPrepassTargets = fileTargets
+            .Where(static target => target.Language == "csharp")
+            .ToArray();
         var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
             writer,
             indexer,
-            projectPath,
-            files,
+            csharpPrepassTargets,
             cancellationToken: requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
@@ -5989,16 +5995,22 @@ public partial class McpServer
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
 
-        foreach (var filePath in files)
+        foreach (var target in fileTargets)
         {
+            var filePath = target.FilePath;
             var fileBatchMarked = false;
             try
             {
                 requestToken.ThrowIfCancellationRequested();
-                var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, requestToken);
+                var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                    filePath,
+                    target.RelativePath,
+                    target.Language,
+                    requestToken);
                 var record = loaded.Record;
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
+                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                 var existingId = writer.GetUnchangedFileId(
                     record.Path,
                     record.Modified,
@@ -6024,7 +6036,7 @@ public partial class McpServer
                     }
                 }
                 if (existingId != null
-                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
                 {
                     existingId = null;
                 }
@@ -6043,7 +6055,6 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
-                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                 if (generatedSuppressionIssue != null)
                 {
                     writer.InsertChunks(chunks, requestToken);
@@ -6137,7 +6148,7 @@ public partial class McpServer
             {
                 try
                 {
-                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath);
+                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     var fileId = writer.UpsertFile(skippedRecord);
                     writer.InsertChunks([], requestToken);

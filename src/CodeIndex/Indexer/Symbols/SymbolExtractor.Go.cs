@@ -38,7 +38,7 @@ public static partial class SymbolExtractor
             var closingParenIndex = trimmed.IndexOf(')');
             if (closingParenIndex >= 0)
             {
-                var blockImportText = trimmed[..closingParenIndex].TrimEnd();
+                var blockImportText = GetGoPrefixTrimmedEnd(trimmed, closingParenIndex);
                 if (blockImportText.Length > 0)
                     TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
 
@@ -51,16 +51,16 @@ public static partial class SymbolExtractor
 
         if (trimmed.StartsWith("import", StringComparison.Ordinal))
         {
-            var afterImport = trimmed["import".Length..].TrimStart();
+            var afterImport = GetGoDeclarationRemainder(trimmed, "import".Length);
             if (afterImport.StartsWith("(", StringComparison.Ordinal))
             {
-                var blockRemainder = afterImport[1..].TrimStart();
+                var blockRemainder = GetGoDeclarationRemainder(afterImport, 1);
                 if (blockRemainder.Length > 0)
                 {
                     var closingParenIndex = blockRemainder.IndexOf(')');
                     if (closingParenIndex >= 0)
                     {
-                        var blockImportText = blockRemainder[..closingParenIndex].TrimEnd();
+                        var blockImportText = GetGoPrefixTrimmedEnd(blockRemainder, closingParenIndex);
                         if (blockImportText.Length > 0)
                             TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
 
@@ -157,7 +157,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return true;
 
-        foreach (var name in match.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var name in EnumerateTrimmedGoSegments(match.Groups["names"].Value, ','))
         {
             if (name == "_")
                 continue;
@@ -508,7 +508,7 @@ public static partial class SymbolExtractor
             var candidate = trimmed;
             var trailingBraceIndex = candidate.IndexOf('}');
             if (trailingBraceIndex >= 0)
-                candidate = candidate[..trailingBraceIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, trailingBraceIndex);
 
             if (candidate.Length > 0 && !candidate.StartsWith("}", StringComparison.Ordinal))
                 TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, candidate);
@@ -529,20 +529,20 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         string bodyText)
     {
-        foreach (var segment in bodyText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var segment in EnumerateTrimmedGoSegments(bodyText, ';'))
         {
             var candidate = segment;
             var trailingBraceIndex = candidate.IndexOf('}');
             if (trailingBraceIndex >= 0)
-                candidate = candidate[..trailingBraceIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, trailingBraceIndex);
 
             var lineCommentIndex = candidate.IndexOf("//", StringComparison.Ordinal);
             if (lineCommentIndex >= 0)
-                candidate = candidate[..lineCommentIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, lineCommentIndex);
 
             var blockCommentIndex = candidate.IndexOf("/*", StringComparison.Ordinal);
             if (blockCommentIndex >= 0)
-                candidate = candidate[..blockCommentIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, blockCommentIndex);
 
             if (candidate.Length == 0
                 || candidate.StartsWith("//", StringComparison.Ordinal)
@@ -663,29 +663,54 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(bodyText))
             return;
 
-        foreach (var segment in bodyText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var segment in EnumerateTrimmedGoSegments(bodyText, ';'))
         {
             var candidate = segment;
             var trailingBraceIndex = candidate.IndexOf('}');
             if (trailingBraceIndex >= 0)
-                candidate = candidate[..trailingBraceIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, trailingBraceIndex);
 
             var lineCommentIndex = candidate.IndexOf("//", StringComparison.Ordinal);
             if (lineCommentIndex >= 0)
-                candidate = candidate[..lineCommentIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, lineCommentIndex);
 
             var blockCommentIndex = candidate.IndexOf("/*", StringComparison.Ordinal);
             if (blockCommentIndex >= 0)
-                candidate = candidate[..blockCommentIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, blockCommentIndex);
 
             var tagIndex = candidate.IndexOf('`');
             if (tagIndex >= 0)
-                candidate = candidate[..tagIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, tagIndex);
 
             if (candidate.Length == 0)
                 continue;
 
             TryAddGoStructEmbeddedTypeSymbol(fileId, rawLine, lineIndex, symbols, candidate);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateTrimmedGoSegments(string value, char separator)
+    {
+        var segmentStart = 0;
+        while (segmentStart <= value.Length)
+        {
+            var separatorIndex = value.IndexOf(separator, segmentStart);
+            var segmentEnd = separatorIndex >= 0 ? separatorIndex : value.Length;
+            var trimStart = segmentStart;
+            while (trimStart < segmentEnd && char.IsWhiteSpace(value[trimStart]))
+                trimStart++;
+
+            var trimEnd = segmentEnd;
+            while (trimEnd > trimStart && char.IsWhiteSpace(value[trimEnd - 1]))
+                trimEnd--;
+
+            if (trimEnd > trimStart)
+                yield return value[trimStart..trimEnd];
+
+            if (separatorIndex < 0)
+                break;
+
+            segmentStart = separatorIndex + 1;
         }
     }
 
@@ -1026,14 +1051,14 @@ public static partial class SymbolExtractor
             }
 
             if (trimmed.StartsWith("type", StringComparison.Ordinal)
-                && trimmed["type".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+                && GoDeclarationRemainderStartsWithOpenParen(trimmed, "type".Length))
             {
                 blockKind = "type";
                 continue;
             }
 
             if (trimmed.StartsWith("const", StringComparison.Ordinal)
-                && trimmed["const".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+                && GoDeclarationRemainderStartsWithOpenParen(trimmed, "const".Length))
             {
                 blockKind = "const";
                 continue;
@@ -1041,12 +1066,12 @@ public static partial class SymbolExtractor
 
             if (trimmed.StartsWith("const", StringComparison.Ordinal))
             {
-                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["const".Length..].TrimStart());
+                TryAddGoValueSymbol(fileId, line, i, symbols, GetGoDeclarationRemainder(trimmed, "const".Length));
                 continue;
             }
 
             if (trimmed.StartsWith("var", StringComparison.Ordinal)
-                && trimmed["var".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+                && GoDeclarationRemainderStartsWithOpenParen(trimmed, "var".Length))
             {
                 blockKind = "var";
                 continue;
@@ -1054,7 +1079,7 @@ public static partial class SymbolExtractor
 
             if (trimmed.StartsWith("var", StringComparison.Ordinal))
             {
-                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["var".Length..].TrimStart());
+                TryAddGoValueSymbol(fileId, line, i, symbols, GetGoDeclarationRemainder(trimmed, "var".Length));
                 continue;
             }
 
@@ -1070,4 +1095,29 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static bool GoDeclarationRemainderStartsWithOpenParen(string trimmed, int prefixLength)
+    {
+        var index = prefixLength;
+        while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+            index++;
+
+        return index < trimmed.Length && trimmed[index] == '(';
+    }
+
+    private static string GetGoDeclarationRemainder(string trimmed, int prefixLength)
+    {
+        var index = prefixLength;
+        while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+            index++;
+
+        return trimmed[index..];
+    }
+
+    private static string GetGoPrefixTrimmedEnd(string text, int endExclusive)
+    {
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return text[..endExclusive];
+    }
 }

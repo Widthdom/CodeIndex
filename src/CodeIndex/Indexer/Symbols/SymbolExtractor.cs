@@ -2392,9 +2392,7 @@ public static partial class SymbolExtractor
 
         if (!contentIsNormalized)
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingInvisibles(content);
+            content = FileIndexer.NormalizeContentForPrepass(content);
         }
         preparedContent = content;
         cancellationToken.ThrowIfCancellationRequested();
@@ -5623,9 +5621,26 @@ public static partial class SymbolExtractor
     {
         if (string.IsNullOrWhiteSpace(current))
             return addition;
-        return current.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(addition, StringComparer.Ordinal)
+        return ContainsSubKind(current, addition)
             ? current
             : current + "|" + addition;
+    }
+
+    private static bool ContainsSubKind(string current, string addition)
+    {
+        var remaining = current.AsSpan();
+        while (!remaining.IsEmpty)
+        {
+            var separatorIndex = remaining.IndexOf('|');
+            var candidate = separatorIndex < 0 ? remaining : remaining[..separatorIndex];
+            if (!candidate.IsEmpty && candidate.Equals(addition.AsSpan(), StringComparison.Ordinal))
+                return true;
+            if (separatorIndex < 0)
+                break;
+            remaining = remaining[(separatorIndex + 1)..];
+        }
+
+        return false;
     }
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
@@ -10758,7 +10773,7 @@ public static partial class SymbolExtractor
         if (startIndex < 0 || startIndex + keyword.Length > line.Length)
             return false;
 
-        if (!string.Equals(line.Substring(startIndex, keyword.Length), keyword, StringComparison.Ordinal))
+        if (string.CompareOrdinal(line, startIndex, keyword, 0, keyword.Length) != 0)
             return false;
 
         var nextIndex = startIndex + keyword.Length;
@@ -11011,10 +11026,24 @@ public static partial class SymbolExtractor
             return trimmed;
 
         var builder = new StringBuilder(trimmed.Length);
-        foreach (var token in trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        var tokenStart = -1;
+        for (var index = 0; index <= trimmed.Length; index++)
         {
-            if (token.EndsWith(':'))
-                builder.Append(token);
+            var atEnd = index == trimmed.Length;
+            if (!atEnd && !char.IsWhiteSpace(trimmed[index]))
+            {
+                if (tokenStart < 0)
+                    tokenStart = index;
+                continue;
+            }
+
+            if (tokenStart < 0)
+                continue;
+
+            if (trimmed[index - 1] == ':')
+                builder.Append(trimmed, tokenStart, index - tokenStart);
+
+            tokenStart = -1;
         }
 
         return builder.Length == 0 ? trimmed : builder.ToString();

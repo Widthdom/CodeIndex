@@ -18,8 +18,7 @@ public class SuggestionStoreTests : IDisposable
 
     public SuggestionStoreTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
+        _tempDir = TestProjectHelper.CreateTempProject("suggestion_store");
         _store = new SuggestionStore(_tempDir);
     }
 
@@ -1334,14 +1333,6 @@ public class SuggestionStoreTests : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup / ベストエフォートのクリーンアップ
-        }
+        TestProjectHelper.DeleteDirectory(_tempDir);
     }
 }

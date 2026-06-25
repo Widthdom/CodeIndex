@@ -65,18 +65,13 @@ public static class ChunkSplitter
         if (string.IsNullOrEmpty(content))
             return [];
 
-        // Defensive CRLF normalization — FileIndexer.BuildRecord already normalizes,
-        // but this method is public and may be called directly with raw content.
-        // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
-        if (content.Contains('\r'))
-            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        // Defensive line-leading invisible strip — BuildRecord already strips the
-        // leading BOM/ZWSP markers and any that follow `\n`, but this method is public
-        // and may be called directly. Mid-line markers are preserved. Closes #183/#2117.
-        // 防御的な行頭不可視文字剥離 — BuildRecord で先頭 BOM/ZWSP と `\n` 直後の marker を
-        // 既に剥がしているが、本メソッドはpublicで直接呼ばれうる。行頭以外はそのまま残す。
+        // Defensive CRLF normalization and line-leading invisible stripping —
+        // BuildRecord already normalizes, but this method is public and may be
+        // called directly with raw content. Mid-line markers are preserved.
+        // 防御的 CRLF 正規化と行頭不可視文字剥離 — BuildRecord で正規化済みだが、
+        // 本メソッドは public で直接呼ばれうる。行頭以外はそのまま残す。
         // Closes #183/#2117.
-        content = FileIndexer.StripLineLeadingInvisibles(content);
+        content = FileIndexer.NormalizeContentForPrepass(content);
         // Re-check for empty after invisible/CRLF strip so marker-only input yields no chunks,
         // matching the no-chunks contract for empty files.
         // 不可視文字/CRLF剥離後に再度空判定し、markerのみの入力が空ファイルと同じく0チャンクになるようにする。
@@ -120,8 +115,9 @@ public static class ChunkSplitter
         // ファイル全体分の string[] や chunk ごとの slice 配列を作らない。末尾改行を
         // 余分な空行として扱わない点は従来の Split('\n') 経路と同じ。
         var lineStarts = GetLineStartOffsets(content);
-        var chunks = new List<ChunkRecord>();
         int step = ChunkSize - Overlap;
+        var estimatedChunkCount = Math.Max(1, (lineStarts.Count + step - 1) / step);
+        var chunks = new List<ChunkRecord>(estimatedChunkCount);
         int chunkIndex = 0;
         var effectiveContentLength = content.EndsWith('\n') ? content.Length - 1 : content.Length;
 

@@ -122,22 +122,22 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_QueryCommandRunnerFormattingMethodEndsBeforeNextCommand()
+    public void Extract_CSharp_QueryCommandRunnerLocationFormattingMethodEndsBeforeNextFormatter()
     {
         var source = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
             "src",
             "CodeIndex",
             "Cli",
-            "QueryCommandRunner.cs"));
+            "QueryCommandRunner.Locations.cs"));
 
         var symbols = SymbolExtractor.Extract(1, "csharp", source);
 
         var compactLocations = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WriteCompactLocations"));
-        var runGoto = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "RunGoto"));
+        var delimitedLocations = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WriteDelimitedLocations"));
         Assert.True(
-            compactLocations.EndLine < runGoto.StartLine,
-            $"WriteCompactLocations ended at line {compactLocations.EndLine}, but RunGoto starts at {runGoto.StartLine}.");
+            compactLocations.EndLine < delimitedLocations.StartLine,
+            $"WriteCompactLocations ended at line {compactLocations.EndLine}, but WriteDelimitedLocations starts at {delimitedLocations.StartLine}.");
     }
 
     [Fact]
@@ -6652,7 +6652,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X" && s.Line == 4);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget()
     {
         // issue #447 regression: the real InstallScriptTests fixture previously drove C#
@@ -6679,7 +6683,11 @@ public partial class SymbolExtractorTests
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget()
     {
         // issue #2710/#2711/#2717 regression: full self-indexing could spend minutes

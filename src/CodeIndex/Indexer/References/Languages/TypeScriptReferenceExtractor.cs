@@ -124,19 +124,36 @@ internal static class TypeScriptReferenceExtractor
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
-    private static IEnumerable<string> ExtractNamedImportExportAliases(string body)
+    private static List<string> ExtractNamedImportExportAliases(string body)
     {
-        foreach (var part in body.Split(','))
+        var aliases = new List<string>();
+        var remaining = body.AsSpan();
+        while (true)
         {
-            var item = part.Trim();
+            var commaIndex = remaining.IndexOf(',');
+            var item = commaIndex < 0 ? remaining : remaining[..commaIndex];
+            item = item.Trim();
             if (item.Length == 0)
-                continue;
+            {
+                if (commaIndex < 0)
+                    break;
 
-            var asIndex = item.LastIndexOf(" as ", StringComparison.Ordinal);
+                remaining = remaining[(commaIndex + 1)..];
+                continue;
+            }
+
+            var asIndex = item.LastIndexOf(" as ".AsSpan());
             var alias = asIndex >= 0 ? item[(asIndex + 4)..].Trim() : item;
             if (IsTypeScriptIdentifier(alias))
-                yield return alias;
+                aliases.Add(alias.ToString());
+
+            if (commaIndex < 0)
+                break;
+
+            remaining = remaining[(commaIndex + 1)..];
         }
+
+        return aliases;
     }
 
     public static void EmitTypePositionReferences(
@@ -394,10 +411,11 @@ internal static class TypeScriptReferenceExtractor
             return false;
         }
 
-        foreach (var parameter in line.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        var parameters = line.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
+        var start = 0;
+        while (TryReadTypeScriptGenericParameterName(parameters, ref start, includeColonDelimiter: false, out var name))
         {
-            var name = parameter.Trim().Split([' ', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (string.Equals(name, alias, StringComparison.Ordinal))
+            if (name.Equals(alias.AsSpan(), StringComparison.Ordinal))
                 return true;
         }
 
@@ -412,14 +430,52 @@ internal static class TypeScriptReferenceExtractor
         if (openAngle < 0 || closeAngle <= openAngle)
             return names;
 
-        foreach (var parameter in parameters.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        var genericParameters = parameters.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
+        var start = 0;
+        while (TryReadTypeScriptGenericParameterName(genericParameters, ref start, includeColonDelimiter: true, out var name))
         {
-            var name = parameter.Trim().Split([' ', '=', ':'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(name))
-                names.Add(name);
+            names.Add(name.ToString());
         }
 
         return names;
+    }
+
+    private static bool TryReadTypeScriptGenericParameterName(
+        ReadOnlySpan<char> parameters,
+        ref int start,
+        bool includeColonDelimiter,
+        out ReadOnlySpan<char> name)
+    {
+        while (start <= parameters.Length)
+        {
+            var remaining = parameters[start..];
+            var commaIndex = remaining.IndexOf(',');
+            ReadOnlySpan<char> parameter;
+            if (commaIndex < 0)
+            {
+                parameter = remaining;
+                start = parameters.Length + 1;
+            }
+            else
+            {
+                parameter = remaining[..commaIndex];
+                start += commaIndex + 1;
+            }
+
+            parameter = parameter.Trim();
+            if (parameter.IsEmpty)
+                continue;
+
+            var delimiterIndex = includeColonDelimiter
+                ? parameter.IndexOfAny(' ', '=', ':')
+                : parameter.IndexOfAny(' ', '=');
+            name = delimiterIndex < 0 ? parameter : parameter[..delimiterIndex].TrimEnd();
+            if (!name.IsEmpty)
+                return true;
+        }
+
+        name = default;
+        return false;
     }
 
     private static bool ContainsKeyword(string text, string keyword)
@@ -1318,18 +1374,27 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool ParameterListDeclaresName(string parameters, string alias)
     {
-        foreach (var part in parameters.Split(','))
+        var remaining = parameters.AsSpan();
+        var aliasSpan = alias.AsSpan();
+        while (true)
         {
-            var item = part.TrimStart();
-            if (item.StartsWith("...", StringComparison.Ordinal))
+            var commaIndex = remaining.IndexOf(',');
+            var item = commaIndex < 0 ? remaining : remaining[..commaIndex];
+            item = item.TrimStart();
+            if (item.StartsWith("...".AsSpan(), StringComparison.Ordinal))
                 item = item[3..].TrimStart();
 
-            if (!item.StartsWith(alias, StringComparison.Ordinal))
-                continue;
+            if (item.StartsWith(aliasSpan, StringComparison.Ordinal))
+            {
+                var after = item.Length == alias.Length ? '\0' : item[alias.Length];
+                if (after is '\0' or ':' or '?' or '=' || char.IsWhiteSpace(after))
+                    return true;
+            }
 
-            var after = item.Length == alias.Length ? '\0' : item[alias.Length];
-            if (after is '\0' or ':' or '?' or '=' || char.IsWhiteSpace(after))
-                return true;
+            if (commaIndex < 0)
+                break;
+
+            remaining = remaining[(commaIndex + 1)..];
         }
 
         return false;
@@ -1958,16 +2023,36 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsImportExportOpeningBrace(IReadOnlyList<string> preparedLines, int openLineIndex, int openColumn)
     {
-        var sameLinePrefix = preparedLines[openLineIndex].Substring(0, openColumn).Trim();
-        if (sameLinePrefix.Length > 0)
+        var sameLine = preparedLines[openLineIndex];
+        var sameLineStart = 0;
+        while (sameLineStart < openColumn && char.IsWhiteSpace(sameLine[sameLineStart]))
+            sameLineStart++;
+
+        var sameLineEnd = openColumn;
+        while (sameLineEnd > sameLineStart && char.IsWhiteSpace(sameLine[sameLineEnd - 1]))
+            sameLineEnd--;
+
+        if (sameLineEnd > sameLineStart)
+        {
+            var sameLinePrefix = sameLine.Substring(sameLineStart, sameLineEnd - sameLineStart);
             return IsImportBracePrefix(sameLinePrefix) || IsNamedExportBracePrefix(sameLinePrefix);
+        }
 
         for (var lineIndex = openLineIndex - 1; lineIndex >= 0; lineIndex--)
         {
-            var previousLine = preparedLines[lineIndex].Trim();
-            if (previousLine.Length == 0)
+            var previousLineText = preparedLines[lineIndex];
+            var previousLineStart = 0;
+            while (previousLineStart < previousLineText.Length && char.IsWhiteSpace(previousLineText[previousLineStart]))
+                previousLineStart++;
+
+            var previousLineEnd = previousLineText.Length;
+            while (previousLineEnd > previousLineStart && char.IsWhiteSpace(previousLineText[previousLineEnd - 1]))
+                previousLineEnd--;
+
+            if (previousLineEnd <= previousLineStart)
                 continue;
 
+            var previousLine = previousLineText.Substring(previousLineStart, previousLineEnd - previousLineStart);
             return IsImportBracePrefix(previousLine) || IsNamedExportBracePrefix(previousLine);
         }
 
@@ -1994,7 +2079,11 @@ internal static class TypeScriptReferenceExtractor
                 return true;
         }
 
-        return text.TrimEnd().EndsWith(",", StringComparison.Ordinal);
+        var end = text.Length;
+        while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+            end--;
+
+        return end > 0 && text[end - 1] == ',';
     }
 
     private static bool ContainsTopLevelKeyword(string text, string keyword)
@@ -2047,7 +2136,10 @@ internal static class TypeScriptReferenceExtractor
     private static bool IsTypeScriptIdentifierPart(char ch) =>
         ch == '_' || ch == '$' || char.IsLetterOrDigit(ch);
 
-    private static bool IsTypeScriptIdentifier(string text)
+    private static bool IsTypeScriptIdentifier(string text) =>
+        IsTypeScriptIdentifier(text.AsSpan());
+
+    private static bool IsTypeScriptIdentifier(ReadOnlySpan<char> text)
     {
         if (text.Length == 0 || !IsTypeScriptIdentifierStart(text[0]))
             return false;

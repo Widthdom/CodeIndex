@@ -20,7 +20,7 @@ public class FileSystemTraversalPolicyTests
     [Fact]
     public void EnumerateHelpers_DoNotRecurseIntoChildDirectories_Issue3951()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_traversal_policy_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("traversal_policy");
         var child = Path.Combine(root, "child");
         try
         {
@@ -48,8 +48,7 @@ public class FileSystemTraversalPolicyTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 }

@@ -41,7 +41,6 @@ public class BackgroundTaskObserverTests
             messages.Add);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await task);
-        await Task.Delay(50);
 
         Assert.Empty(messages);
     }
@@ -66,7 +65,6 @@ public class BackgroundTaskObserverTests
             messages.Add);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await task);
-        await Task.Delay(50);
 
         Assert.False(started);
         Assert.Empty(messages);

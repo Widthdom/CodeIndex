@@ -88,6 +88,35 @@ public static partial class SymbolExtractor
     private static bool IsPythonClassHook(string name) =>
         name is "__init_subclass__" or "__class_getitem__" or "__set_name__" or "__class_subclasses__";
 
+    private static string TrimPythonLogicalHeaderContinuationEnd(string fragment)
+    {
+        var end = fragment.Length;
+        while (end > 0 && fragment[end - 1] == '\\')
+            end--;
+
+        while (end > 0 && char.IsWhiteSpace(fragment[end - 1]))
+            end--;
+
+        return end == fragment.Length ? fragment : fragment[..end];
+    }
+
+    private static bool EndsWithPythonLineContinuation(string line)
+    {
+        var end = line.Length;
+        while (end > 0 && char.IsWhiteSpace(line[end - 1]))
+            end--;
+
+        return end > 0 && line[end - 1] == '\\';
+    }
+
+    private static string GetPythonPrefixTrimmedEnd(string text, int endExclusive)
+    {
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive == text.Length ? text : text[..endExclusive];
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
     {
         var declarationIndent = CountIndent(lines[startLineIndex]);
@@ -129,7 +158,7 @@ public static partial class SymbolExtractor
             {
                 if (builder.Length > 0)
                     builder.Append(' ');
-                builder.Append(fragment.TrimEnd('\\').TrimEnd());
+                builder.Append(TrimPythonLogicalHeaderContinuationEnd(fragment));
             }
 
             for (var j = column; j < line.Length; j++)
@@ -167,7 +196,7 @@ public static partial class SymbolExtractor
                     return builder.ToString();
             }
 
-            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+            if (parenDepth == 0 && bracketDepth == 0 && !EndsWithPythonLineContinuation(line))
                 break;
         }
 
@@ -190,7 +219,7 @@ public static partial class SymbolExtractor
 
         var commentIndex = statement.IndexOf('#');
         if (commentIndex >= 0)
-            statement = statement[..commentIndex].TrimEnd();
+            statement = GetPythonPrefixTrimmedEnd(statement, commentIndex);
 
         if (statement.Length == 0)
             return null;
@@ -879,13 +908,13 @@ public static partial class SymbolExtractor
             if (commentIndex >= 0)
                 fragment = fragment[..commentIndex];
 
-            fragment = fragment.TrimEnd();
+            fragment = GetPythonPrefixTrimmedEnd(fragment, fragment.Length);
             if (fragment.Length > 0)
             {
                 var closingParenIndex = fragment.IndexOf(')');
                 if (closingParenIndex >= 0)
                 {
-                    fragment = fragment[..closingParenIndex].TrimEnd();
+                    fragment = GetPythonPrefixTrimmedEnd(fragment, closingParenIndex);
                     if (fragment.Length > 0)
                     {
                         AddPythonImportSpecEntries(
@@ -946,19 +975,36 @@ public static partial class SymbolExtractor
         var relativeQualifiedModulePart = treatAsFromImport
             ? ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix)
             : null;
-        foreach (var rawSpec in importedNames.Split(','))
+        var specStart = 0;
+        while (specStart <= importedNames.Length)
         {
-            var spec = rawSpec.Trim();
-            if (spec.Length == 0 || spec == "*")
-                continue;
+            var commaIndex = importedNames.IndexOf(',', specStart);
+            var specEnd = commaIndex >= 0 ? commaIndex : importedNames.Length;
+            var trimStart = specStart;
+            var trimEnd = specEnd;
+            while (trimStart < trimEnd && char.IsWhiteSpace(importedNames[trimStart]))
+                trimStart++;
+            while (trimEnd > trimStart && char.IsWhiteSpace(importedNames[trimEnd - 1]))
+                trimEnd--;
 
+            if (trimStart == trimEnd
+                || (trimEnd == trimStart + 1 && importedNames[trimStart] == '*'))
+            {
+                if (commaIndex < 0)
+                    break;
+
+                specStart = commaIndex + 1;
+                continue;
+            }
+
+            var spec = importedNames[trimStart..trimEnd];
             var aliasIndex = spec.IndexOf(" as ", StringComparison.Ordinal);
             var importedName = aliasIndex >= 0
-                ? spec[..aliasIndex].Trim()
+                ? SliceTrimmedPythonImportPart(spec, 0, aliasIndex)
                 : spec;
             var localName = aliasIndex >= 0
-                ? spec[(aliasIndex + " as ".Length)..].Trim()
-                : importedName.Split('.')[0].Trim();
+                ? SliceTrimmedPythonImportPart(spec, aliasIndex + " as ".Length, spec.Length)
+                : GetPythonImportLocalName(importedName);
 
             if (importedName.Length > 0)
             {
@@ -1016,10 +1062,7 @@ public static partial class SymbolExtractor
                 AddPythonImportEntry(line, absoluteStartColumn, localName, entries, seenNames, ref searchStartColumn);
             }
 
-            if (string.IsNullOrEmpty(pythonModulePrefix))
-                continue;
-
-            if (aliasIndex >= 0)
+            if (!string.IsNullOrEmpty(pythonModulePrefix) && aliasIndex >= 0)
             {
                 AddPythonImportEntry(
                     line,
@@ -1029,7 +1072,30 @@ public static partial class SymbolExtractor
                     seenNames,
                     ref searchStartColumn);
             }
+
+            if (commaIndex < 0)
+                break;
+
+            specStart = commaIndex + 1;
         }
+    }
+
+    private static string SliceTrimmedPythonImportPart(string value, int startIndex, int endIndex)
+    {
+        while (startIndex < endIndex && char.IsWhiteSpace(value[startIndex]))
+            startIndex++;
+        while (endIndex > startIndex && char.IsWhiteSpace(value[endIndex - 1]))
+            endIndex--;
+
+        return startIndex == endIndex ? string.Empty : value[startIndex..endIndex];
+    }
+
+    private static string GetPythonImportLocalName(string importedName)
+    {
+        var dotIndex = importedName.IndexOf('.');
+        return dotIndex >= 0
+            ? importedName[..dotIndex].Trim()
+            : importedName;
     }
 
     private static string? ResolvePythonRelativeFromImportModuleName(string? modulePart, string? pythonModulePrefix)
@@ -1046,16 +1112,69 @@ public static partial class SymbolExtractor
             leadingDots++;
 
         var levelsToDrop = leadingDots - 1;
-        var packageParts = pythonModulePrefix.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        if (levelsToDrop >= packageParts.Length)
+        var packagePartCount = CountPythonModulePrefixParts(pythonModulePrefix);
+        if (levelsToDrop >= packagePartCount)
             return null;
 
-        var basePartCount = packageParts.Length - levelsToDrop;
-        var resolved = string.Join('.', packageParts.Take(basePartCount));
+        var basePartCount = packagePartCount - levelsToDrop;
+        var resolved = JoinPythonModulePrefixParts(pythonModulePrefix, basePartCount);
         var suffix = modulePart[leadingDots..].Trim('.');
         return suffix.Length == 0
             ? resolved
             : $"{resolved}.{suffix}";
+    }
+
+    private static int CountPythonModulePrefixParts(string modulePrefix)
+    {
+        var count = 0;
+        var partStart = -1;
+        for (var index = 0; index <= modulePrefix.Length; index++)
+        {
+            var atEnd = index == modulePrefix.Length;
+            if (!atEnd && modulePrefix[index] != '.')
+            {
+                if (partStart < 0)
+                    partStart = index;
+                continue;
+            }
+
+            if (partStart >= 0)
+            {
+                count++;
+                partStart = -1;
+            }
+        }
+
+        return count;
+    }
+
+    private static string JoinPythonModulePrefixParts(string modulePrefix, int maxParts)
+    {
+        var builder = new StringBuilder(modulePrefix.Length);
+        var appended = 0;
+        var partStart = -1;
+        for (var index = 0; index <= modulePrefix.Length && appended < maxParts; index++)
+        {
+            var atEnd = index == modulePrefix.Length;
+            if (!atEnd && modulePrefix[index] != '.')
+            {
+                if (partStart < 0)
+                    partStart = index;
+                continue;
+            }
+
+            if (partStart < 0)
+                continue;
+
+            if (builder.Length > 0)
+                builder.Append('.');
+
+            builder.Append(modulePrefix, partStart, index - partStart);
+            appended++;
+            partStart = -1;
+        }
+
+        return builder.ToString();
     }
 
     private static void AddPythonImportModuleEntry(

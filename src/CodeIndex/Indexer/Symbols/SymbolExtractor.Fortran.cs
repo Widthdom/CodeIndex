@@ -65,14 +65,31 @@ public static partial class SymbolExtractor
             : (endLine, bodyStartLine, endLine);
     }
 
+    private static string GetFortranPrefixTrimmedEnd(string text, int endExclusive)
+    {
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive == text.Length ? text : text[..endExclusive];
+    }
+
+    private static string GetFortranSuffixTrimmedStart(string text, int startInclusive)
+    {
+        while (startInclusive < text.Length && char.IsWhiteSpace(text[startInclusive]))
+            startInclusive++;
+
+        return startInclusive == 0 ? text : text[startInclusive..];
+    }
+
     private static FortranContinuationMatchCandidate? TryBuildFortranContinuationMatchLine(string[] lines, int startIndex)
     {
         var firstLine = lines[startIndex];
-        var firstTrimmed = firstLine.TrimStart();
+        var firstTrimmed = GetFortranSuffixTrimmedStart(firstLine, 0);
         if (!StartsWithFortranContinuationCandidate(firstTrimmed))
             return null;
 
-        var firstCode = StripFortranComment(firstLine).TrimEnd();
+        var firstCode = StripFortranComment(firstLine);
+        firstCode = GetFortranPrefixTrimmedEnd(firstCode, firstCode.Length);
         if (!firstCode.Contains('&'))
             return null;
 
@@ -97,17 +114,18 @@ public static partial class SymbolExtractor
 
             if (builder.Length > 0)
                 builder.Append(' ');
-            builder.Append(currentLine[..continuationIndex].TrimEnd());
+            builder.Append(GetFortranPrefixTrimmedEnd(currentLine, continuationIndex));
 
             if (lastConsumedLineIndex + 1 >= lines.Length)
                 break;
 
-            var nextLine = StripFortranComment(lines[lastConsumedLineIndex + 1]).TrimStart();
+            var nextLine = StripFortranComment(lines[lastConsumedLineIndex + 1]);
+            nextLine = GetFortranSuffixTrimmedStart(nextLine, 0);
             if (nextLine.StartsWith('&'))
-                nextLine = nextLine[1..].TrimStart();
+                nextLine = GetFortranSuffixTrimmedStart(nextLine, 1);
 
             lastConsumedLineIndex++;
-            currentLine = nextLine.TrimEnd();
+            currentLine = GetFortranPrefixTrimmedEnd(nextLine, nextLine.Length);
             if (currentLine.Length == 0)
                 break;
         }
@@ -167,7 +185,7 @@ public static partial class SymbolExtractor
 
         if (StartsWithFortranWord(trimmed, "module"))
         {
-            var remainder = trimmed["module".Length..].TrimStart();
+            var remainder = GetFortranSuffixTrimmedStart(trimmed, "module".Length);
             if (StartsWithFortranWord(remainder, "procedure"))
             {
                 kind = "procedure";
@@ -201,7 +219,7 @@ public static partial class SymbolExtractor
 
         if (StartsWithFortranWord(trimmed, "block"))
         {
-            var remainder = trimmed["block".Length..].TrimStart();
+            var remainder = GetFortranSuffixTrimmedStart(trimmed, "block".Length);
             if (StartsWithFortranWord(remainder, "data"))
             {
                 kind = "block data";
@@ -235,7 +253,7 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(trimmedLine, "type"))
             return false;
 
-        var remainder = trimmedLine["type".Length..].TrimStart();
+        var remainder = GetFortranSuffixTrimmedStart(trimmedLine, "type".Length);
         if (remainder.Length == 0 || remainder.StartsWith('('))
             return false;
 
@@ -248,14 +266,14 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(trimmedLine, "end"))
             return false;
 
-        var remainder = trimmedLine["end".Length..].TrimStart();
+        var remainder = GetFortranSuffixTrimmedStart(trimmedLine, "end".Length);
         if (remainder.Length == 0)
             return blockKind is "subroutine" or "function";
 
         if (!StartsWithFortranWord(remainder, blockKind))
             return false;
 
-        var afterKind = remainder[blockKind.Length..].TrimStart();
+        var afterKind = GetFortranSuffixTrimmedStart(remainder, blockKind.Length);
         if (blockKind == "module" && StartsWithFortranWord(afterKind, "procedure"))
             return false;
 
@@ -267,11 +285,11 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(trimmedLine, "end"))
             return false;
 
-        var remainder = trimmedLine["end".Length..].TrimStart();
+        var remainder = GetFortranSuffixTrimmedStart(trimmedLine, "end".Length);
         if (!StartsWithFortranWord(remainder, "module"))
             return false;
 
-        var afterModule = remainder["module".Length..].TrimStart();
+        var afterModule = GetFortranSuffixTrimmedStart(remainder, "module".Length);
         return StartsWithFortranWord(afterModule, "procedure");
     }
 
@@ -280,7 +298,7 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(trimmedLine, "end"))
             return false;
 
-        var remainder = trimmedLine["end".Length..].TrimStart();
+        var remainder = GetFortranSuffixTrimmedStart(trimmedLine, "end".Length);
         return remainder.Length == 0
             || StartsWithFortranWord(remainder, "subroutine")
             || StartsWithFortranWord(remainder, "function")

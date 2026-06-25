@@ -28,7 +28,7 @@ public class GitHelperTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))
-            DeleteDirectoryRobust(_tempDir);
+            TestProjectHelper.DeleteDirectory(_tempDir);
     }
 
     [Fact]
@@ -1463,7 +1463,8 @@ if [ "$1" = "rev-parse" ]; then
     exit 0
   fi
   if [ "$2" = "--verify" ]; then
-    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    commit=${3%^\{commit\}}
+    printf '%s\n' "$commit"
     exit 0
   fi
 fi
@@ -1696,38 +1697,4 @@ perl -e '$|=1; while (1) { print "x" x 4096; select undef, undef, undef, 0.01 }'
         return false;
     }
 
-    private static void DeleteDirectoryRobust(string path)
-    {
-        ClearAttributes(path);
-
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                Directory.Delete(path, recursive: true);
-                return;
-            }
-            catch (UnauthorizedAccessException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-                ClearAttributes(path);
-            }
-            catch (IOException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-                ClearAttributes(path);
-            }
-        }
-    }
-
-    private static void ClearAttributes(string path)
-    {
-        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            File.SetAttributes(file, FileAttributes.Normal);
-
-        foreach (var dir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
-            File.SetAttributes(dir, FileAttributes.Normal);
-
-        File.SetAttributes(path, FileAttributes.Normal);
-    }
 }

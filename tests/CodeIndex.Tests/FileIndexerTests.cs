@@ -17,7 +17,7 @@ namespace CodeIndex.Tests;
 /// FileIndexerのテスト。
 /// </summary>
 [Collection("SQLite pool sensitive")]
-public class FileIndexerTests
+public partial class FileIndexerTests
 {
     [Fact]
     public void NormalizeIgnorePath_PosixPreservesLiteralBackslash()
@@ -28,6 +28,52 @@ public class FileIndexerTests
             Assert.Equal("weird/name.py", normalized);
         else
             Assert.Equal(@"weird\name.py", normalized);
+    }
+
+    [Fact]
+    public void NormalizeIgnorePath_AlreadyNormalizedPathUsesFastPath()
+    {
+        var path = "src/CodeIndex/Indexer";
+
+        var normalized = FileIndexer.NormalizeIgnorePath(path);
+
+        Assert.Same(path, normalized);
+    }
+
+    [Fact]
+    public void NormalizeIgnorePath_TrimsTrailingSlashes()
+    {
+        Assert.Equal("src/CodeIndex", FileIndexer.NormalizeIgnorePath("src/CodeIndex///"));
+    }
+
+    [Fact]
+    public void NormalizeIndexPath_AsciiForwardSlashPathUsesFastPath()
+    {
+        var path = "src/CodeIndex/Indexer/FileIndexer.cs";
+
+        var normalized = FileIndexer.NormalizeIndexPath(path);
+
+        Assert.Same(path, normalized);
+    }
+
+    [Fact]
+    public void NormalizeIndexPath_NormalizesUnicodeToNfc()
+    {
+        var normalized = FileIndexer.NormalizeIndexPath("Cafe\u0301.cs");
+
+        Assert.Equal("Caf\u00e9.cs", normalized);
+        Assert.True(normalized.IsNormalized(NormalizationForm.FormC));
+    }
+
+    [Fact]
+    public void NormalizeIndexPath_UsesPlatformSeparatorSemantics()
+    {
+        var normalized = FileIndexer.NormalizeIndexPath(@"nested\file.cs");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal("nested/file.cs", normalized);
+        else
+            Assert.Equal(@"nested\file.cs", normalized);
     }
 
     [Fact]
@@ -296,8 +342,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -327,8 +372,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -357,8 +401,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -390,8 +433,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -650,20 +692,47 @@ public class FileIndexerTests
                 Directory.CreateDirectory(tempDir);
                 File.WriteAllText(
                     Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
-                    "entries:\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
+                    "entries:\n  - extension: \".in\"\n    language: \"text\"\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
                 var outsideDir = Path.Combine(tempDir, "outside");
                 Directory.CreateDirectory(outsideDir);
                 Environment.CurrentDirectory = outsideDir;
 
                 Assert.Equal("kotlin", FileIndexer.DetectLanguage(Path.Combine(tempDir, "build.kts.in")));
+                Assert.Equal("text", FileIndexer.DetectLanguage(Path.Combine(tempDir, "template.in")));
                 Assert.Equal("kotlin", FileIndexer.GetLanguageExtensions()[".kts.in"]);
             }
             finally
             {
                 Environment.CurrentDirectory = originalDirectory;
-                if (Directory.Exists(tempDir))
-                    TestProjectHelper.DeleteDirectory(tempDir);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+            File.WriteAllText(configPath, "entries:\n- extension: one\n  language: ruby\n");
+            var first = LanguageMapOverrides.LoadEffectiveMap(Path.Combine(tempDir, "first.one"));
+
+            File.WriteAllText(configPath, "entries:\n- extension: two\n  language: python\n");
+            File.SetLastWriteTimeUtc(configPath, DateTime.UtcNow.AddMinutes(1));
+            var second = LanguageMapOverrides.LoadEffectiveMap(Path.Combine(tempDir, "second.two"));
+
+            Assert.Equal("ruby", first[".one"]);
+            Assert.False(second.ContainsKey(".one"));
+            Assert.Equal("python", second[".two"]);
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -936,8 +1005,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -957,8 +1025,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -983,8 +1050,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1012,8 +1078,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1049,8 +1114,7 @@ public class FileIndexerTests
         finally
         {
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1080,8 +1144,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1111,8 +1174,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1134,8 +1196,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1157,8 +1218,76 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RawFileMayContainCSharpStaticInterfaceContract_TokenSplitAcrossReadBuffer_ReturnsTrue()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Program.cs");
+            var prefix = new string('x', 81920 - "inter".Length);
+            File.WriteAllText(
+                path,
+                prefix + """
+                interface IFixture
+                {
+                    static abstract int Count { get; }
+                }
+                """);
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            Assert.True(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RawFileMayContainCSharpStaticInterfaceContract_MissingContractTokens_ReturnsFalse()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Program.cs");
+            File.WriteAllText(path, "public interface IFixture { static int Count => 0; }\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            Assert.False(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RawFileMayContainCSharpStaticInterfaceContract_OverExplicitMaxFileBytes_ThrowsActionableOverrideMessage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Program.cs");
+            File.WriteAllText(path, "public interface IFixture { static abstract int Count { get; } }\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
+
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(
+                () => indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+            Assert.Contains("File too large", ex.Message);
+            Assert.Contains("--max-file-bytes", ex.Message);
+            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1182,8 +1311,98 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void BuildLoadedRecordWithRawBytes_KnownLanguage_UsesScanResultLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "script");
+            File.WriteAllText(path, "#!/bin/sh\necho hi\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage: "python");
+
+            Assert.Equal("python", loaded.Record.Lang);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetReusableDetectedLanguage_ExtensionlessScriptReturnsNullToPreserveContentDetection()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "script");
+            File.WriteAllText(path, "#!/usr/bin/env python\nprint('hi')\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var scanResult = indexer.ScanFilesDetailed();
+            File.WriteAllText(path, "#!/usr/bin/env ruby\nputs 'hi'\n");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2));
+
+            var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage);
+
+            Assert.Equal("python", scanResult.FileLanguages[path]);
+            Assert.Null(knownLanguage);
+            Assert.Equal("ruby", loaded.Record.Lang);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetReusableDetectedLanguage_ExtensionlessFileNameMappingReusesScanResultLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "Makefile");
+            File.WriteAllText(path, "all:\n\t@echo hi\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var scanResult = indexer.ScanFilesDetailed();
+
+            Assert.Equal("makefile", FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetReusableDetectedLanguage_CHeaderReturnsNullToPreserveContentDetection()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "widget.h");
+            File.WriteAllText(path, "template <typename T>\nclass Widget {};\n");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+            var scanResult = indexer.ScanFilesDetailed();
+            var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
+            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "widget.h", knownLanguage);
+
+            Assert.Equal("c", scanResult.FileLanguages[path]);
+            Assert.Null(knownLanguage);
+            Assert.Equal("cpp", loaded.Record.Lang);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1226,6 +1445,25 @@ public class FileIndexerTests
             File.WriteAllText(path, content);
 
             Assert.Equal(expected, FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ExtensionlessUtf16ShebangScript_ReturnsLanguage()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var path = Path.Combine(tempDir, "utf16-script");
+            File.WriteAllBytes(path, Encoding.Unicode.GetPreamble()
+                .Concat(Encoding.Unicode.GetBytes("#!/usr/bin/env python\nprint('hi')\n"))
+                .ToArray());
+
+            Assert.Equal("python", FileIndexer.DetectLanguage(path));
         }
         finally
         {
@@ -1791,8 +2029,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempParentDir))
-                Directory.Delete(tempParentDir, true);
+            TestProjectHelper.DeleteDirectory(tempParentDir);
         }
     }
 
@@ -1936,6 +2173,28 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void EvaluatePathFilter_RootFileStillUsesRootIgnoreRules()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.cs\n");
+            var ignoredPath = Path.Combine(tempDir, "ignored.cs");
+            File.WriteAllText(ignoredPath, "class Ignored { }\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var filter = indexer.EvaluatePathFilter(ignoredPath);
+
+            Assert.Equal(FileIndexer.PathFilterKind.IgnoredByRules, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsAppleDoubleResourceForks()
     {
         // AppleDouble (`._*`) files masquerade as the real file's language (e.g. `._app.js`
@@ -2049,10 +2308,8 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(outsideDir))
-                Directory.Delete(outsideDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(outsideDir);
         }
     }
 
@@ -2082,8 +2339,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2124,8 +2380,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2154,8 +2409,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2191,8 +2445,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2234,10 +2487,8 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(externalDir))
-                Directory.Delete(externalDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -2276,10 +2527,8 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(externalDir))
-                Directory.Delete(externalDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -2317,8 +2566,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2326,7 +2574,9 @@ public class FileIndexerTests
     [InlineData(@"\\.\COM1")]
     [InlineData(@"\\.\NUL")]
     [InlineData(@"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1")]
+    [InlineData(@"//?/GLOBALROOT\Device/HarddiskVolumeShadowCopy1")]
     [InlineData(@"C:\repo\AUX.cs")]
+    [InlineData(@"C:/repo/NUL.txt")]
     [InlineData(@"C:\repo\con.txt")]
     [InlineData(@"C:\repo\COM9")]
     [InlineData(@"C:\repo\LPT1.log")]
@@ -2429,8 +2679,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2597,8 +2846,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2624,8 +2872,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2647,8 +2894,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2670,8 +2916,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2712,8 +2957,7 @@ public class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2755,8 +2999,7 @@ public class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2788,8 +3031,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2825,8 +3067,7 @@ public class FileIndexerTests
         {
             if (originalMode.HasValue)
                 SetUnixPermissions(projects, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2867,8 +3108,7 @@ public class FileIndexerTests
         {
             if (originalMode.HasValue && Directory.Exists(blockedDir))
                 SetUnixPermissions(blockedDir, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2898,8 +3138,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3180,8 +3419,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3209,8 +3447,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3236,8 +3473,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3713,8 +3949,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3854,8 +4089,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3970,8 +4204,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3994,8 +4227,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4025,8 +4257,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4057,8 +4288,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4143,8 +4373,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
 
         static IEnumerable<string> DeleteBeforeProbe(string path)
@@ -4179,8 +4408,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4230,8 +4458,7 @@ public class FileIndexerTests
         finally
         {
             FileIndexer.ResolveDirectoryLinkTargetForTesting = null;
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4272,10 +4499,8 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(externalDir))
-                Directory.Delete(externalDir, true);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -4312,8 +4537,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4350,8 +4574,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4430,8 +4653,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4460,8 +4682,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4502,8 +4723,7 @@ public class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4689,8 +4909,7 @@ public class FileIndexerTests
         finally
         {
             FileIndexer.ReadGitmodulesLinesForTesting = previousReader;
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4793,9 +5012,7 @@ public class FileIndexerTests
             // 文字列オーバーロードではなくコードポイントで確認する。
             Assert.DoesNotContain('\uFEFF', content);
             Assert.Equal(2, record.Lines);
-            var expectedChecksum = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+            var expectedChecksum = RawSha256Hex(Encoding.UTF8.GetBytes(content));
             Assert.Equal(expectedChecksum, record.Checksum);
         }
         finally
@@ -4837,9 +5054,7 @@ public class FileIndexerTests
             // future regression that re-introduces raw-byte hashing fails loudly.
             // 期待値も固定: LF 正規化後 payload の SHA256。生バイトハッシュへ戻ると
             // 落ちるようにしておく。
-            var expected = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes("line1\nline2\nline3\n"))).ToLowerInvariant();
+            var expected = RawSha256Hex(Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
             Assert.Equal(expected, lfRecord.Checksum);
         }
         finally
@@ -4876,105 +5091,6 @@ public class FileIndexerTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
-
-    [Theory]
-    [InlineData("", "", 0)]
-    [InlineData("a\nb\n", "a\nb\n", 2)]
-    [InlineData("\n\n", "\n\n", 2)]
-    [InlineData("a\r\n\uFEFFb\rc", "a\nb\nc", 3)]
-    [InlineData("\uFEFF\u200B", "", 0)]
-    [InlineData("a\n\uFEFF\u200Bb", "a\nb", 2)]
-    public void FileContentLoader_Load_CanonicalizesContentAndLineCountBeforeChecksum(
-        string rawContent,
-        string expectedContent,
-        int expectedLineCount)
-    {
-        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes(rawContent));
-
-        Assert.Equal(expectedContent, loaded.Content);
-        Assert.Equal(expectedLineCount, loaded.LineCount);
-        Assert.False(loaded.HasOversizeLine);
-        Assert.Equal(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(expectedContent)), loaded.Checksum);
-        Assert.Null(loaded.Warning);
-    }
-
-    [Fact]
-    public void FileContentLoader_Load_DetectsOversizeLineDuringCanonicalization()
-    {
-        var longLine = new string('a', ChunkSplitter.MaxLineLength + 1);
-        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes($"\uFEFF{longLine}\r\nb"));
-
-        Assert.Equal($"{longLine}\nb", loaded.Content);
-        Assert.Equal(2, loaded.LineCount);
-        Assert.True(loaded.HasOversizeLine);
-        Assert.Empty(ChunkSplitter.SplitNormalized(1, loaded.Content, loaded.HasOversizeLine));
-        var issues = FileIndexer.ValidateContent(
-            "sample.cs",
-            loaded.RawBytes,
-            loaded.Content,
-            "csharp",
-            loaded.Inspection,
-            loaded.HasOversizeLine);
-        Assert.Contains(issues, issue => issue.Kind == "line_too_long");
-    }
-
-    [Fact]
-    public void ComputeChecksum_MixedLineEndings_NormalizesToLf()
-    {
-        // Direct-call coverage: mixed CRLF / CR / LF lines all collapse to LF before
-        // hashing, matching the content-level normalization in BuildRecord. Pinning the
-        // helper directly catches regressions even if BuildRecord shape changes.
-        // Closes #1544.
-        // direct call の網羅: CRLF / CR / LF が混在しても全て LF に畳まれてから
-        // ハッシュ化され、BuildRecord 側の content 正規化と一致する。BuildRecord の
-        // 形が変わっても helper 単体で回帰を検知できる。Closes #1544.
-        var mixed = System.Text.Encoding.UTF8.GetBytes("a\r\nb\rc\nd\r\n");
-        var lfOnly = System.Text.Encoding.UTF8.GetBytes("a\nb\nc\nd\n");
-        Assert.Equal(
-            FileIndexer.ComputeChecksum(lfOnly),
-            FileIndexer.ComputeChecksum(mixed));
-    }
-
-    [Fact]
-    public void ComputeChecksumFromNormalizedContent_MatchesUtf8ByteChecksumAcrossChunks()
-    {
-        var content = new string('a', 1023)
-            + char.ConvertFromUtf32(0x1F680)
-            + new string('b', 4097)
-            + "\uD800";
-
-        var expected = FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(content));
-
-        Assert.Equal(expected, FileContentLoader.ComputeChecksumFromNormalizedContent(content));
-    }
-
-    [Fact]
-    public void ComputeChecksum_LongInputWithoutCr_MatchesRawByteSha256()
-    {
-        // For CR-free payloads (the common case), the checksum must still equal raw-byte
-        // SHA256 — both as a correctness anchor for existing DBs whose stored checksums
-        // were computed from raw bytes on LF-only sources, and to confirm the streaming
-        // implementation handles inputs that span multiple AppendData chunks. Closes #1544.
-        // CR を含まない payload (一般的なケース) では checksum が生バイト SHA256 と
-        // 一致する必要がある。これは LF のみのソースで生バイトから算出された既存 DB の
-        // checksum との互換性を保ち、また streaming 実装が AppendData の複数チャンクを
-        // またぐ入力でも正しく動くことを示す。Closes #1544.
-        var payload = new byte[16 * 1024];
-        for (int i = 0; i < payload.Length; i++)
-            payload[i] = (byte)(i % 95 + 32); // printable ASCII (no CR / LF)
-        var expected = Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
-        Assert.Equal(expected, FileIndexer.ComputeChecksum(payload));
-    }
-
-    [Fact]
-    public void ComputeChecksum_ReturnsLowercaseHex()
-    {
-        var checksum = FileIndexer.ComputeChecksum(System.Text.Encoding.UTF8.GetBytes("ABC\n"));
-
-        Assert.Equal(checksum.ToLowerInvariant(), checksum);
-        Assert.DoesNotContain(checksum, c => c is >= 'A' and <= 'F');
     }
 
     [Fact]
@@ -5290,6 +5406,11 @@ public class FileIndexerTests
             i.Kind == "replacement_char"
             && i.Origin == FileIssue.OriginDecodeReplacement
             && i.Severity == FileIssue.SeverityWarning);
+        var replacementLines = issues
+            .Where(i => i.Kind == "replacement_char")
+            .Select(i => i.Line)
+            .ToArray();
+        Assert.Equal([2, 3, 204, 205], replacementLines);
     }
 
     [Fact]
@@ -6022,6 +6143,22 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_NullByteAndMixedLineEndings_EmitsBothRawByteIssues()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("crlf\r\npayload\n");
+        rawBytes[6] = 0x00;
+        var content = System.Text.Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        var issues = FileIndexer.ValidateContent("mixed_binary.txt", rawBytes, content);
+
+        Assert.Contains(issues, i => i.Kind == "null_byte");
+        var mixed = Assert.Single(issues, i => i.Kind == "mixed_line_endings");
+        Assert.Equal("Mixed line endings (CRLF and LF)", mixed.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+    }
+
+    [Fact]
     public void ValidateContent_ConflictMarkers_EmitsConflictMarkerIssue()
     {
         var content = """
@@ -6130,6 +6267,20 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_OversizeUnicodeFtsToken_EmitsFtsTokenTooLongIssue()
+    {
+        var token = new string('計', CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength + 1);
+        var content = "ok\n" + token + "\n";
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("generated_unicode.py", raw, content);
+
+        var issue = Assert.Single(issues, i => i.Kind == "fts_token_too_long");
+        Assert.Equal(2, issue.Line);
+        Assert.Contains("not searchable through FTS", issue.Message);
+    }
+
+    [Fact]
     public void SymbolExtractor_Extract_OversizeLine_ReturnsEmpty()
     {
         // SymbolExtractor must mirror the ChunkSplitter oversize-line skip so
@@ -6190,111 +6341,4 @@ public class FileIndexerTests
             FileContentLoader.TryComputeChecksum(stream, long.MaxValue, out _, cancellation.Token));
     }
 
-    private static LoadedFileContent LoadFileContentForTest(byte[] bytes)
-    {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "sample.cs");
-            File.WriteAllBytes(path, bytes);
-
-            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
-            return loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
-    }
-
-    private static void WriteFileIndexerPatternConfig(string projectRoot, string fileName, string content)
-    {
-        var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, content);
-    }
-
-    private static int CountFiles(SqliteConnection connection)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM files";
-        return Convert.ToInt32(cmd.ExecuteScalar());
-    }
-
-    private static string ReadSingleChunkContent(string dbPath, string filePath)
-    {
-        using var db = new DbContext(dbPath);
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT c.content
-            FROM chunks c
-            JOIN files f ON f.id = c.file_id
-            WHERE f.path = @path
-            ORDER BY c.chunk_index
-            """;
-        cmd.Parameters.AddWithValue("@path", filePath);
-        return Assert.IsType<string>(cmd.ExecuteScalar());
-    }
-
-    private static bool HasIndexedFile(string dbPath, string filePath)
-    {
-        using var db = new DbContext(dbPath);
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
-        cmd.Parameters.AddWithValue("@path", filePath);
-        return cmd.ExecuteScalar() != null;
-    }
-
-    private static bool HasFileIssue(string dbPath, string filePath, string kind)
-    {
-        using var db = new DbContext(dbPath);
-        using var cmd = db.Connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT 1
-            FROM file_issues i
-            JOIN files f ON f.id = i.file_id
-            WHERE f.path = @path
-              AND i.kind = @kind
-            """;
-        cmd.Parameters.AddWithValue("@path", filePath);
-        cmd.Parameters.AddWithValue("@kind", kind);
-        return cmd.ExecuteScalar() != null;
-    }
-
-    private sealed class CancelAfterFirstReadStream(byte[] data, CancellationTokenSource cancellation) : Stream
-    {
-        private int offset;
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => data.Length;
-        public override long Position
-        {
-            get => offset;
-            set => throw new NotSupportedException();
-        }
-
-        public override int Read(byte[] buffer, int bufferOffset, int count)
-        {
-            if (offset >= data.Length)
-                return 0;
-
-            var read = Math.Min(count, data.Length - offset);
-            Array.Copy(data, offset, buffer, bufferOffset, read);
-            offset += read;
-            cancellation.Cancel();
-            return read;
-        }
-
-        public override void Flush()
-        {
-        }
-
-        public override long Seek(long seekOffset, SeekOrigin origin) => throw new NotSupportedException();
-
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int bufferOffset, int count) => throw new NotSupportedException();
-    }
 }

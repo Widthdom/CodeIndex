@@ -470,11 +470,13 @@ internal static class PhpReferenceExtractor
         {
             var nameGroup = match.Groups["name"];
             var rawName = nameGroup.Value;
-            var trimmedName = rawName.TrimStart('\\');
-            if (trimmedName.Length == 0)
+            var leadingBackslashCount = 0;
+            while (leadingBackslashCount < rawName.Length && rawName[leadingBackslashCount] == '\\')
+                leadingBackslashCount++;
+            if (leadingBackslashCount == rawName.Length)
                 continue;
 
-            var leadingBackslashCount = rawName.Length - trimmedName.Length;
+            var trimmedName = rawName.Substring(leadingBackslashCount);
             var qualifiedNameIndex = nameGroup.Index + leadingBackslashCount;
             if (trimmedName.Contains('\\', StringComparison.Ordinal))
             {
@@ -521,11 +523,13 @@ internal static class PhpReferenceExtractor
         {
             var nameGroup = match.Groups["name"];
             var rawName = nameGroup.Value;
-            var trimmedName = rawName.TrimStart('\\');
-            if (trimmedName.Length == 0)
+            var leadingBackslashCount = 0;
+            while (leadingBackslashCount < rawName.Length && rawName[leadingBackslashCount] == '\\')
+                leadingBackslashCount++;
+            if (leadingBackslashCount == rawName.Length)
                 continue;
 
-            var leadingBackslashCount = rawName.Length - trimmedName.Length;
+            var trimmedName = rawName.Substring(leadingBackslashCount);
             var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
             var shortName = trimmedName[shortNameStart..];
             if (shortName.Length == 0)
@@ -869,10 +873,14 @@ internal static class PhpReferenceExtractor
         SymbolRecord? container)
     {
         var prefixGroup = groupMatch.Groups["prefix"];
-        var prefix = prefixGroup.Value.TrimEnd('\\');
-        if (prefix.Length == 0)
+        var rawPrefix = prefixGroup.Value;
+        var prefixEnd = rawPrefix.Length;
+        while (prefixEnd > 0 && rawPrefix[prefixEnd - 1] == '\\')
+            prefixEnd--;
+        if (prefixEnd == 0)
             return;
 
+        var prefix = prefixEnd == rawPrefix.Length ? rawPrefix : rawPrefix.Substring(0, prefixEnd);
         var itemsGroup = groupMatch.Groups["items"];
         foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
         {
@@ -881,11 +889,13 @@ internal static class PhpReferenceExtractor
 
             var itemGroup = itemMatch.Groups["name"];
             var rawItemName = itemGroup.Value;
-            var trimmedItemName = rawItemName.TrimStart('\\');
-            if (trimmedItemName.Length == 0)
+            var leadingBackslashCount = 0;
+            while (leadingBackslashCount < rawItemName.Length && rawItemName[leadingBackslashCount] == '\\')
+                leadingBackslashCount++;
+            if (leadingBackslashCount == rawItemName.Length)
                 continue;
 
-            var leadingBackslashCount = rawItemName.Length - trimmedItemName.Length;
+            var trimmedItemName = rawItemName.Substring(leadingBackslashCount);
             var itemShortNameStart = trimmedItemName.LastIndexOf('\\') + 1;
             var shortNameIndex = itemsGroup.Index + itemGroup.Index + leadingBackslashCount + itemShortNameStart;
             AddPhpTypeReferenceFromName(
@@ -913,10 +923,14 @@ internal static class PhpReferenceExtractor
         bool requireImportKind)
     {
         var prefixGroup = groupMatch.Groups["prefix"];
-        var prefix = prefixGroup.Value.TrimEnd('\\');
-        if (prefix.Length == 0)
+        var rawPrefix = prefixGroup.Value;
+        var prefixEnd = rawPrefix.Length;
+        while (prefixEnd > 0 && rawPrefix[prefixEnd - 1] == '\\')
+            prefixEnd--;
+        if (prefixEnd == 0)
             return;
 
+        var prefix = prefixEnd == rawPrefix.Length ? rawPrefix : rawPrefix.Substring(0, prefixEnd);
         var itemsGroup = groupMatch.Groups["items"];
         foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
         {
@@ -927,11 +941,13 @@ internal static class PhpReferenceExtractor
 
             var itemGroup = itemMatch.Groups["name"];
             var rawItemName = itemGroup.Value;
-            var trimmedItemName = rawItemName.TrimStart('\\');
-            if (trimmedItemName.Length == 0)
+            var leadingBackslashCount = 0;
+            while (leadingBackslashCount < rawItemName.Length && rawItemName[leadingBackslashCount] == '\\')
+                leadingBackslashCount++;
+            if (leadingBackslashCount == rawItemName.Length)
                 continue;
 
-            var leadingBackslashCount = rawItemName.Length - trimmedItemName.Length;
+            var trimmedItemName = rawItemName.Substring(leadingBackslashCount);
             var itemShortNameStart = trimmedItemName.LastIndexOf('\\') + 1;
             var shortNameIndex = itemsGroup.Index + itemGroup.Index + leadingBackslashCount + itemShortNameStart;
             AddPhpReferenceFromName(
@@ -958,7 +974,7 @@ internal static class PhpReferenceExtractor
 
     private static bool IsPhpBuiltinTypeName(string name)
         => !name.Contains('\\', StringComparison.Ordinal)
-           && BuiltinTypeNames.Contains(name.TrimStart('\\'));
+           && BuiltinTypeNames.Contains(name);
 
     private static void AddPhpTypeReferenceFromQualifiedName(
         Capture nameGroup,
@@ -1012,11 +1028,13 @@ internal static class PhpReferenceExtractor
         SymbolRecord? container,
         int? shortNameIndexOverride = null)
     {
-        var trimmedName = rawName.TrimStart('\\');
-        if (trimmedName.Length == 0)
+        var leadingBackslashCount = 0;
+        while (leadingBackslashCount < rawName.Length && rawName[leadingBackslashCount] == '\\')
+            leadingBackslashCount++;
+        if (leadingBackslashCount == rawName.Length)
             return;
 
-        var leadingBackslashCount = rawName.Length - trimmedName.Length;
+        var trimmedName = rawName.Substring(leadingBackslashCount);
         var qualifiedNameIndex = nameIndex + leadingBackslashCount;
         if (trimmedName.Contains('\\', StringComparison.Ordinal))
         {

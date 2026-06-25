@@ -7,12 +7,12 @@ using System.Text.Json;
 namespace CodeIndex.Tests;
 
 [Collection("SQLite pool sensitive")]
-public class ReleaseWorkflowTests
+public partial class ReleaseWorkflowTests
 {
     [Fact]
     public void ReleaseWorkflow_PublishesTrimmedSelfContainedBinariesAndVerifiesCliJson()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("-p:PublishTrimmed=true", workflow);
         Assert.DoesNotContain("-p:PublishTrimmed=false", workflow);
@@ -29,7 +29,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_VerifiesPublishedInstallForTheCurrentRid()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("expected_rids=\"linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64\"", workflow);
         Assert.Contains("asset=\"CodeIndex-${rid}.zip\"", workflow);
@@ -49,7 +49,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_HomebrewFormulaInstallsNativeSqliteAssetAndTouchesSqlite()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("Download release artifacts for checksum calculation", workflow);
         Assert.Contains("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1", workflow);
@@ -84,7 +84,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_GeneratesCycloneDxSbomAndShipsItAsReleaseAsset()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         // Pin the global tool to a known version so an upstream major release
         // cannot silently shift the CLI surface (flag renames have happened
@@ -116,7 +116,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_ValidatesNuGetVersionBeforePublishing()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("Release tag must be a v-prefixed SemVer version", workflow);
         Assert.Contains("jq -r '.version // empty' version.json", workflow);
@@ -145,7 +145,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_ValidatesReleaseTagBeforePrivilegedJobs()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("preflight:", workflow);
         Assert.Contains("name: Validate release tag", workflow);
@@ -160,7 +160,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_UsesChangelogToolForTemplatedReleaseNotes()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("gh release list", workflow);
         Assert.Contains("--exclude-drafts", workflow);
@@ -185,7 +185,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_NormalizesNuGetCorePropertiesBeforePublishing()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = ReadReleaseWorkflow();
 
         Assert.Contains("Normalize NuGet package metadata part names", workflow);
         Assert.Contains("dotnet run --project tools/CodeIndex.PackageNormalize --", workflow);
@@ -886,12 +886,11 @@ public class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
-        var root = GetRepositoryRoot();
-        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
-        var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
-        var dockerignore = File.ReadAllText(Path.Combine(root, ".dockerignore"));
-        var entrypoint = File.ReadAllText(Path.Combine(root, "scripts", "docker-entrypoint.sh"));
-        var project = File.ReadAllText(Path.Combine(root, "src", "CodeIndex", "CodeIndex.csproj"));
+        var workflow = ReadReleaseWorkflow();
+        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile");
+        var dockerignore = RepositoryTestPaths.ReadText(".dockerignore");
+        var entrypoint = RepositoryTestPaths.ReadText("scripts", "docker-entrypoint.sh");
+        var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
 
         Assert.Contains("publish-container:", workflow);
         Assert.Contains("needs: [preflight, create-release]", workflow);
@@ -956,7 +955,7 @@ public class ReleaseWorkflowTests
     [Fact]
     public void Dependabot_DoesNotBumpIlLinkPastReleaseSdkMajor()
     {
-        var dependabot = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "dependabot.yml"));
+        var dependabot = RepositoryTestPaths.ReadText(".github", "dependabot.yml");
 
         Assert.Contains("dependency-name: Microsoft.NET.ILLink.Tasks", dependabot);
         Assert.Contains("version-update:semver-major", dependabot);
@@ -965,111 +964,15 @@ public class ReleaseWorkflowTests
     [Fact]
     public void MutationWorkflow_PinsActionsByCommitSha()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "mutation-testing.yml"));
+        var workflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
 
         Assert.Contains("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2", workflow);
         Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", workflow);
+        Assert.Contains("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5", workflow);
         Assert.DoesNotContain("actions/checkout@v6", workflow);
         Assert.DoesNotContain("actions/setup-dotnet@v5", workflow);
+        Assert.DoesNotContain("actions/cache@v5", workflow);
     }
 
-    private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
-
-    private static (int ExitCode, string Stdout, string Stderr) RunPackageNormalizeCli(string[] args)
-    {
-        using var stdout = new StringWriter();
-        using var stderr = new StringWriter();
-        var exitCode = PackageNormalizeCli.Run(args, stdout, stderr);
-        return (exitCode, stdout.ToString(), stderr.ToString());
-    }
-
-    private static void AssertNoNormalizeTempFiles(string projectRoot, string packagePath)
-    {
-        Assert.False(File.Exists(packagePath + ".normalize-tmp"));
-        Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-normalize-*.tmp"));
-    }
-
-    private static void CreateMinimalNuGetPackage(string packagePath, string corePropertiesFileName)
-    {
-        var corePropertiesPath = $"package/services/metadata/core-properties/{corePropertiesFileName}";
-        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
-
-        WriteZipEntry(archive, "[Content_Types].xml", $"""
-            <?xml version="1.0" encoding="utf-8"?>
-            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
-              <Override PartName="/{corePropertiesPath}" ContentType="application/vnd.openxmlformats-package.core-properties+xml" />
-            </Types>
-            """);
-        WriteZipEntry(archive, "_rels/.rels", $"""
-            <?xml version="1.0" encoding="utf-8"?>
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="R1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="/{corePropertiesPath}" />
-            </Relationships>
-            """);
-        WriteZipEntry(archive, "cdidx.nuspec", """
-            <?xml version="1.0" encoding="utf-8"?>
-            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
-              <metadata><id>cdidx</id><version>1.0.0</version></metadata>
-            </package>
-            """);
-        WriteZipEntry(archive, corePropertiesPath, """
-            <?xml version="1.0" encoding="utf-8"?>
-            <coreProperties xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" />
-            """);
-    }
-
-    private static void CreatePackageWithEntries(string packagePath, params (string EntryName, string Content)[] entries)
-    {
-        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
-        foreach (var entry in entries)
-            WriteZipEntry(archive, entry.EntryName, entry.Content);
-    }
-
-    private static void CreatePackageWithAttributedEntries(string packagePath, params (string EntryName, string Content, int ExternalAttributes)[] entries)
-    {
-        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
-        foreach (var entry in entries)
-            WriteZipEntry(archive, entry.EntryName, entry.Content, entry.ExternalAttributes);
-    }
-
-    private static void WriteZipEntry(ZipArchive archive, string entryName, string content, int? externalAttributes = null)
-    {
-        var entry = archive.CreateEntry(entryName);
-        if (externalAttributes.HasValue)
-            entry.ExternalAttributes = externalAttributes.Value;
-
-        using var stream = entry.Open();
-        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        writer.Write(content.Replace("\r\n", "\n", StringComparison.Ordinal));
-    }
-
-    private static int UnixRegularFileAttributes(int permissions)
-    {
-        return unchecked((int)((0x8000u | (uint)permissions) << 16));
-    }
-
-    private static int UnixSymlinkAttributes()
-    {
-        return unchecked((int)((0xA000u | 511u) << 16));
-    }
-
-    private static string ReadZipEntryText(ZipArchive archive, string entryName)
-    {
-        var entry = archive.GetEntry(entryName) ?? throw new InvalidOperationException($"Missing ZIP entry: {entryName}");
-        using var stream = entry.Open();
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        return reader.ReadToEnd();
-    }
+    private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
 }

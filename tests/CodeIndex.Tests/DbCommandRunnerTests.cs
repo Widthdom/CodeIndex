@@ -25,6 +25,36 @@ public class DbCommandRunnerTests
         yield return new object[] { new[] { "prune", "--dry-run" } };
     }
 
+    private static void InitializeEmptyDb(string dbPath)
+    {
+        using (var db = new DbContext(dbPath))
+            db.InitializeSchema();
+        ReleaseSqlitePools();
+    }
+
+    private static void InitializeDbWithOrphans(string dbPath)
+    {
+        using (var db = new DbContext(dbPath))
+            db.InitializeSchema();
+        SeedOrphans(dbPath);
+        ReleaseSqlitePools();
+    }
+
+    private static void ReleaseSqlitePools()
+        => SqliteConnection.ClearAllPools();
+
+    private static void DeleteDbFile(string dbPath)
+    {
+        ReleaseSqlitePools();
+        TestProjectHelper.DeleteFile(dbPath);
+    }
+
+    private static void DeleteWorkDirectory(string root)
+    {
+        ReleaseSqlitePools();
+        TestProjectHelper.DeleteDirectory(root);
+    }
+
     [Fact]
     public void ParseArgs_IntegrityCheckFlagSetsFlag()
     {
@@ -231,9 +261,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(missingDb))
-                File.Delete(missingDb);
+            DeleteDbFile(missingDb);
         }
     }
 
@@ -243,9 +271,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_display_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbUri, "--json"]);
@@ -255,9 +281,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -267,9 +291,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_schema_display_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var (exitCode, stdout, _) = RunAndCaptureStreams(["schema", "--db", dbUri]);
@@ -279,9 +301,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -304,9 +324,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_clean_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, stdout, _) = RunAndCaptureStreams(["--integrity-check", "--db", dbPath]);
 
@@ -316,9 +334,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -328,9 +344,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_clean_json_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
 
@@ -343,9 +357,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -355,9 +367,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_alias_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, json) = RunAndCaptureJson(["integrity", "--db", dbPath, "--json"]);
 
@@ -367,9 +377,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -379,9 +387,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_cancel_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
             using var cts = new CancellationTokenSource();
             cts.Cancel();
 
@@ -396,9 +402,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -409,9 +413,7 @@ public class DbCommandRunnerTests
         DbCommandRunner.IntegrityCheckRowsForTesting = () => ["simulated corruption"];
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
 
@@ -424,9 +426,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.IntegrityCheckRowsForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -436,9 +436,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
 
@@ -455,9 +453,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -467,9 +463,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_filter_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json", "--type", "table", "--name", "files"]);
 
@@ -485,9 +479,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -497,9 +489,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_summary_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json", "--type", "table", "--name", "files", "--summary-only"]);
 
@@ -514,9 +504,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -532,7 +520,7 @@ public class DbCommandRunnerTests
                 for (var i = 0; i < DbCommandRunner.SchemaEntryLimit + 5; i++)
                     Execute(connection, $"CREATE TABLE t_{i:D3}(id INTEGER PRIMARY KEY);");
             }
-            SqliteConnection.ClearAllPools();
+            ReleaseSqlitePools();
 
             var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
 
@@ -545,9 +533,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -557,10 +543,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SeedOrphans(dbPath);
-            SqliteConnection.ClearAllPools();
+            InitializeDbWithOrphans(dbPath);
 
             var (dryRunExit, dryRunJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, dryRunExit);
@@ -582,9 +565,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -594,10 +575,7 @@ public class DbCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_wal_warning_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SeedOrphans(dbPath);
-            SqliteConnection.ClearAllPools();
+            InitializeDbWithOrphans(dbPath);
             DbContext.WalCheckpointTruncateExecutedForTesting = _ => throw new IOException("simulated wal cleanup failure");
 
             var (exitCode, json) = RunAndCaptureJson(["prune", "--apply", "--db", dbPath, "--json"]);
@@ -611,9 +589,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -624,10 +600,7 @@ public class DbCommandRunnerTests
         var progress = new List<string>();
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SeedOrphans(dbPath);
-            SqliteConnection.ClearAllPools();
+            InitializeDbWithOrphans(dbPath);
             DbCommandRunner.MaintenanceProgressForTesting = (operation, phase) => progress.Add($"{operation}:{phase}");
 
             var (exitCode, json) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
@@ -643,9 +616,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.MaintenanceProgressForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -657,9 +628,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var originalBytes = File.ReadAllBytes(dbPath);
             var (checkpointExit, checkpointOut, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
@@ -677,9 +646,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -709,9 +676,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -736,9 +701,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -771,9 +734,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -797,9 +758,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -822,9 +781,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -855,9 +812,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.UtcNowForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -891,9 +846,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.UtcNowForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -919,9 +872,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.EnumerateCheckpointFileNamesForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -951,9 +902,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.EnumerateCheckpointFilesForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -966,9 +915,7 @@ public class DbCommandRunnerTests
         try
         {
             Directory.CreateDirectory(root);
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var checkpointRoot = dbPath + ".checkpoints";
             Directory.CreateDirectory(checkpointRoot);
@@ -991,9 +938,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1026,8 +971,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1065,8 +1009,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1078,9 +1021,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (checkpointExit, _) = RunAndCaptureJson(["checkpoint", "listed", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
@@ -1094,9 +1035,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1135,9 +1074,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1149,9 +1086,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var originalBytes = File.ReadAllBytes(dbPath);
             var checkpointPath = Path.Combine(root, "codeindex.db.checkpoints", "bad");
@@ -1168,9 +1103,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1182,9 +1115,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var originalBytes = File.ReadAllBytes(dbPath);
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
@@ -1205,9 +1136,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1219,9 +1148,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
@@ -1247,9 +1174,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1261,9 +1186,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
 
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
@@ -1290,9 +1213,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1332,9 +1253,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1359,9 +1278,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1396,9 +1313,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1437,9 +1352,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1454,9 +1367,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
             var originalBytes = File.ReadAllBytes(dbPath);
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
@@ -1477,9 +1388,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1494,9 +1403,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
             File.WriteAllText(dbPath + "-wal", "wal");
             File.WriteAllText(dbPath + "-shm", "shm");
             var originalBytes = File.ReadAllBytes(dbPath);
@@ -1519,9 +1426,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1534,9 +1439,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
@@ -1558,9 +1461,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1573,9 +1474,7 @@ public class DbCommandRunnerTests
         Directory.CreateDirectory(root);
         try
         {
-            using (var db = new DbContext(dbPath))
-                db.InitializeSchema();
-            SqliteConnection.ClearAllPools();
+            InitializeEmptyDb(dbPath);
             var originalBytes = File.ReadAllBytes(dbPath);
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
@@ -1605,9 +1504,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1651,9 +1548,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            DeleteWorkDirectory(root);
         }
     }
 
@@ -1683,9 +1578,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -1717,9 +1610,7 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.IntegrityCheckRowsForTesting = null;
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -1741,7 +1632,7 @@ public class DbCommandRunnerTests
                 for (var i = 0; i < DbCommandRunner.SchemaEntryLimit + 1; i++)
                     Execute(connection, $"CREATE TABLE t{i:D4}(value TEXT)");
             }
-            SqliteConnection.ClearAllPools();
+            ReleaseSqlitePools();
 
             var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
 
@@ -1758,9 +1649,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 
@@ -1780,7 +1669,7 @@ public class DbCommandRunnerTests
                 Execute(connection, "CREATE TABLE visible_table(id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT, extra TEXT)");
                 Execute(connection, "CREATE TABLE z_second(id INTEGER PRIMARY KEY, value TEXT)");
             }
-            SqliteConnection.ClearAllPools();
+            ReleaseSqlitePools();
 
             var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json", "--type", "table", "--limit", "1", "--max-sql-chars", "12", "--exclude-internal"]);
 
@@ -1798,9 +1687,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteDbFile(dbPath);
         }
     }
 

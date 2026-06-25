@@ -194,11 +194,12 @@ public class ConcurrencyTests : IDisposable
             }
         });
 
-        // Run long enough for the two threads to interleave commits and reads many times.
-        // 十分な時間動かし、コミットと読み出しの交錯機会を多数確保する。
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        cts.Cancel();
-        await Task.WhenAll(writeTask, readTask);
+        await StopAfterConcurrentExerciseAsync(
+            () => Interlocked.Read(ref readerIterations),
+            () => Interlocked.Read(ref writerIterations),
+            cts,
+            writeTask,
+            readTask);
 
         Assert.True(
             violations.IsEmpty,
@@ -347,9 +348,12 @@ public class ConcurrencyTests : IDisposable
             }
         });
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        cts.Cancel();
-        await Task.WhenAll(writeTask, readTask);
+        await StopAfterConcurrentExerciseAsync(
+            () => Interlocked.Read(ref readerIterations),
+            () => Interlocked.Read(ref writerIterations),
+            cts,
+            writeTask,
+            readTask);
 
         Assert.True(
             violations.IsEmpty,
@@ -481,9 +485,12 @@ public class ConcurrencyTests : IDisposable
             }
         });
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        cts.Cancel();
-        await Task.WhenAll(writeTask, readTask);
+        await StopAfterConcurrentExerciseAsync(
+            () => Interlocked.Read(ref readerIterations),
+            () => Interlocked.Read(ref writerIterations),
+            cts,
+            writeTask,
+            readTask);
 
         Assert.True(
             violations.IsEmpty,
@@ -593,10 +600,15 @@ public class ConcurrencyTests : IDisposable
     {
         var writer = new DbWriter(_db.Connection);
         using var txn = writer.BeginTransaction();
+        using var started = new ManualResetEventSlim(false);
 
-        var markTask = Task.Run(() => writer.MarkGraphReady());
-        await Task.Delay(100);
-        Assert.False(markTask.IsCompleted);
+        var markTask = Task.Run(() =>
+        {
+            started.Set();
+            writer.MarkGraphReady();
+        });
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+        await AssertTaskRemainsBlockedAsync(markTask);
 
         txn.Commit();
         txn.Dispose();
@@ -610,14 +622,16 @@ public class ConcurrencyTests : IDisposable
     {
         var writer = new DbWriter(_db.Connection);
         using var outer = writer.BeginTransaction();
+        using var started = new ManualResetEventSlim(false);
 
         var nestedTask = Task.Run(() =>
         {
+            started.Set();
             using var nested = writer.BeginTransaction();
             nested.Commit();
         });
-        await Task.Delay(100);
-        Assert.False(nestedTask.IsCompleted);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+        await AssertTaskRemainsBlockedAsync(nestedTask);
 
         outer.Commit();
         outer.Dispose();
@@ -640,6 +654,40 @@ public class ConcurrencyTests : IDisposable
             });
         }
         return refs;
+    }
+
+    private static async Task StopAfterConcurrentExerciseAsync(
+        Func<long> getReaderIterations,
+        Func<long> getWriterIterations,
+        CancellationTokenSource cts,
+        Task writeTask,
+        Task readTask)
+    {
+        const int minimumReaderIterations = 100;
+        const int minimumWriterIterations = 25;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (writeTask.IsCompleted || readTask.IsCompleted)
+                break;
+            if (getReaderIterations() >= minimumReaderIterations &&
+                getWriterIterations() >= minimumWriterIterations)
+            {
+                break;
+            }
+
+            await Task.Delay(10);
+        }
+
+        cts.Cancel();
+        await Task.WhenAll(writeTask, readTask);
+    }
+
+    private static async Task AssertTaskRemainsBlockedAsync(Task task)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromMilliseconds(100)));
+        Assert.NotSame(task, completed);
     }
 
     public void Dispose()

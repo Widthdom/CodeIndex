@@ -16,12 +16,11 @@ public static partial class SymbolExtractor
             var line = lines[i];
             foreach (var (tokenStart, tokenEnd) in EnumerateShellAliasDefinitions(line))
             {
-                var token = line[tokenStart..tokenEnd];
-                var equalsIndex = token.IndexOf('=');
-                if (equalsIndex <= 0)
+                var equalsIndex = line.IndexOf('=', tokenStart, tokenEnd - tokenStart);
+                if (equalsIndex <= tokenStart)
                     continue;
 
-                var name = token[..equalsIndex].Trim();
+                var name = GetShellTrimmedSlice(line, tokenStart, equalsIndex);
                 if (!IsShellAliasName(name))
                     continue;
 
@@ -37,7 +36,7 @@ public static partial class SymbolExtractor
                     StartLine = i + 1,
                     StartColumn = tokenStart,
                     EndLine = i + 1,
-                    Signature = line.Trim(),
+                    Signature = GetShellTrimmedSlice(line, 0, line.Length),
                 };
                 AddSymbolRecord(
                     symbols,
@@ -56,24 +55,25 @@ public static partial class SymbolExtractor
         while (segmentStart < line.Length)
         {
             var segmentEnd = FindShellAliasSegmentEnd(line, segmentStart);
-            var segment = line[segmentStart..segmentEnd];
-            var trimmedSegment = segment.TrimStart();
-            var trimmedOffset = segment.Length - trimmedSegment.Length;
+            var trimmedSegmentStart = segmentStart;
+            while (trimmedSegmentStart < segmentEnd && char.IsWhiteSpace(line[trimmedSegmentStart]))
+                trimmedSegmentStart++;
 
-            if (trimmedSegment.StartsWith("alias", StringComparison.Ordinal))
+            if (segmentEnd - trimmedSegmentStart >= "alias".Length
+                && string.CompareOrdinal(line, trimmedSegmentStart, "alias", 0, "alias".Length) == 0)
             {
-                var cursor = trimmedOffset + "alias".Length;
-                while (TryReadShellAliasToken(segment, ref cursor, out var tokenStart, out var tokenEnd))
+                var cursor = trimmedSegmentStart + "alias".Length;
+                while (TryReadShellAliasToken(line, segmentEnd, ref cursor, out var tokenStart, out var tokenEnd))
                 {
-                    var token = segment[tokenStart..tokenEnd];
-                    if (token.Length == 0)
+                    if (tokenEnd <= tokenStart)
                         continue;
 
-                    if (token[0] == '-' && token.IndexOf('=') < 0)
+                    var equalsIndex = line.IndexOf('=', tokenStart, tokenEnd - tokenStart);
+                    if (line[tokenStart] == '-' && equalsIndex < 0)
                         continue;
 
-                    if (token.IndexOf('=') > 0)
-                        yield return (segmentStart + tokenStart, segmentStart + tokenEnd);
+                    if (equalsIndex > tokenStart)
+                        yield return (tokenStart, tokenEnd);
                 }
             }
 
@@ -148,18 +148,18 @@ public static partial class SymbolExtractor
         return line.Length;
     }
 
-    private static bool TryReadShellAliasToken(string segment, ref int cursor, out int tokenStart, out int tokenEnd)
+    private static bool TryReadShellAliasToken(string text, int endExclusive, ref int cursor, out int tokenStart, out int tokenEnd)
     {
         tokenStart = -1;
         tokenEnd = -1;
 
-        while (cursor < segment.Length && char.IsWhiteSpace(segment[cursor]))
+        while (cursor < endExclusive && char.IsWhiteSpace(text[cursor]))
             cursor++;
 
-        if (cursor >= segment.Length)
+        if (cursor >= endExclusive)
             return false;
 
-        if (segment[cursor] is ';' or '|' or '&' or '#')
+        if (text[cursor] is ';' or '|' or '&' or '#')
             return false;
 
         tokenStart = cursor;
@@ -167,9 +167,9 @@ public static partial class SymbolExtractor
         var inDoubleQuote = false;
         var escapeNext = false;
 
-        while (cursor < segment.Length)
+        while (cursor < endExclusive)
         {
-            var ch = segment[cursor];
+            var ch = text[cursor];
             if (escapeNext)
             {
                 escapeNext = false;
@@ -229,5 +229,16 @@ public static partial class SymbolExtractor
 
     private static bool IsShellAliasName(string name) =>
         Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_-]*$", RegexOptions.CultureInvariant);
+
+    private static string GetShellTrimmedSlice(string text, int startInclusive, int endExclusive)
+    {
+        while (startInclusive < endExclusive && char.IsWhiteSpace(text[startInclusive]))
+            startInclusive++;
+
+        while (endExclusive > startInclusive && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return text[startInclusive..endExclusive];
+    }
 
 }

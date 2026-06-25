@@ -26,16 +26,17 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
-        if (trimmed.Length <= 3
-            || !trimmed.StartsWith("ENV", StringComparison.OrdinalIgnoreCase)
-            || !char.IsWhiteSpace(trimmed[3]))
+        var instructionStart = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        if (line.Length - instructionStart <= 3
+            || !line.AsSpan(instructionStart, "ENV".Length).Equals("ENV", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(line[instructionStart + "ENV".Length]))
         {
             return;
         }
 
         var first = true;
-        foreach (var name in EnumerateDockerfileKeyValueNames(trimmed[3..].TrimStart(), IsDockerfileVariableName))
+        var bodyStart = GetDockerfileFirstNonWhitespaceIndex(line, instructionStart + "ENV".Length);
+        foreach (var name in EnumerateDockerfileKeyValueNames(line, bodyStart, IsDockerfileVariableName))
         {
             if (first)
             {
@@ -55,7 +56,7 @@ public static partial class SymbolExtractor
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
-                    Signature = line.Trim(),
+                    Signature = GetDockerfileTrimmedLine(line),
                 },
                 line);
         }
@@ -67,16 +68,17 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
-        if (trimmed.Length <= 5
-            || !trimmed.StartsWith("LABEL", StringComparison.OrdinalIgnoreCase)
-            || !char.IsWhiteSpace(trimmed[5]))
+        var instructionStart = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        if (line.Length - instructionStart <= 5
+            || !line.AsSpan(instructionStart, "LABEL".Length).Equals("LABEL", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(line[instructionStart + "LABEL".Length]))
         {
             return;
         }
 
         var first = true;
-        foreach (var name in EnumerateDockerfileKeyValueNames(trimmed[5..].TrimStart(), IsDockerfileLabelName))
+        var bodyStart = GetDockerfileFirstNonWhitespaceIndex(line, instructionStart + "LABEL".Length);
+        foreach (var name in EnumerateDockerfileKeyValueNames(line, bodyStart, IsDockerfileLabelName))
         {
             if (first)
             {
@@ -96,15 +98,36 @@ public static partial class SymbolExtractor
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
-                    Signature = line.Trim(),
+                    Signature = GetDockerfileTrimmedLine(line),
                 },
                 line);
         }
     }
 
-    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, Func<string, bool> isName)
+    private static int GetDockerfileFirstNonWhitespaceIndex(string text, int startIndex)
     {
-        var index = 0;
+        while (startIndex < text.Length && char.IsWhiteSpace(text[startIndex]))
+            startIndex++;
+
+        return startIndex;
+    }
+
+    private static string GetDockerfileTrimmedLine(string line)
+    {
+        var startIndex = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        var endIndex = line.Length;
+        while (endIndex > startIndex && char.IsWhiteSpace(line[endIndex - 1]))
+            endIndex--;
+
+        return startIndex == 0 && endIndex == line.Length ? line : line[startIndex..endIndex];
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, Func<string, bool> isName)
+        => EnumerateDockerfileKeyValueNames(body, 0, isName);
+
+    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, int startIndex, Func<string, bool> isName)
+    {
+        var index = startIndex;
         while (index < body.Length)
         {
             while (index < body.Length && char.IsWhiteSpace(body[index]))
@@ -144,11 +167,10 @@ public static partial class SymbolExtractor
                 index++;
             }
 
-            var token = body[tokenStart..index];
-            var equalsIndex = token.IndexOf('=');
-            if (equalsIndex > 0)
+            var equalsIndex = body.IndexOf('=', tokenStart, index - tokenStart);
+            if (equalsIndex > tokenStart)
             {
-                var name = token[..equalsIndex];
+                var name = body[tokenStart..equalsIndex];
                 if (isName(name))
                     yield return name;
             }
@@ -200,7 +222,7 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        foreach (var token in trimmed[6..].Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmed, 6))
         {
             if (first)
             {
@@ -271,7 +293,7 @@ public static partial class SymbolExtractor
         }
 
         var first = true;
-        foreach (var token in body.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmed, 6))
         {
             if (first)
             {
@@ -300,6 +322,27 @@ public static partial class SymbolExtractor
                     Signature = line.Trim(),
                 },
                 line);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileWhitespaceTokens(string text, int startIndex)
+    {
+        var tokenStart = -1;
+        for (var index = startIndex; index <= text.Length; index++)
+        {
+            var atEnd = index == text.Length;
+            if (!atEnd && !char.IsWhiteSpace(text[index]))
+            {
+                if (tokenStart < 0)
+                    tokenStart = index;
+                continue;
+            }
+
+            if (tokenStart < 0)
+                continue;
+
+            yield return text[tokenStart..index];
+            tokenStart = -1;
         }
     }
 

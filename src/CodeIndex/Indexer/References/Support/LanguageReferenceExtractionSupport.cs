@@ -4953,10 +4953,14 @@ internal static class LanguageReferenceExtractionSupport
     {
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var raw = list.Substring(segmentStart, segmentLength).Trim();
-            if (raw.Length == 0)
+            var leading = ReferenceExtractor.CountLeadingWhitespace(list, segmentStart, segmentLength);
+            var trimmedLength = segmentLength - leading;
+            while (trimmedLength > 0 && char.IsWhiteSpace(list[segmentStart + leading + trimmedLength - 1]))
+                trimmedLength--;
+            if (trimmedLength == 0)
                 continue;
-            var expressionStart = segmentStart + ReferenceExtractor.CountLeadingWhitespace(list, segmentStart, segmentLength);
+            var expressionStart = segmentStart + leading;
+            var raw = list.Substring(expressionStart, trimmedLength);
             if (language == "vb")
             {
                 var equalsIndex = list.IndexOf('=', segmentStart, segmentLength);
@@ -4966,18 +4970,34 @@ internal static class LanguageReferenceExtractionSupport
                     var rhsLength = segmentStart + segmentLength - rhsStart;
                     var rhsLeading = ReferenceExtractor.CountLeadingWhitespace(list, rhsStart, rhsLength);
                     expressionStart = rhsStart + rhsLeading;
-                    raw = list.Substring(expressionStart, rhsLength - rhsLeading).TrimEnd();
-                    if (raw.Length == 0)
+                    var rhsTrimmedLength = rhsLength - rhsLeading;
+                    while (rhsTrimmedLength > 0 && char.IsWhiteSpace(list[expressionStart + rhsTrimmedLength - 1]))
+                        rhsTrimmedLength--;
+                    if (rhsTrimmedLength == 0)
                         continue;
+
+                    raw = list.Substring(expressionStart, rhsTrimmedLength);
                 }
             }
 
-            var name = raw.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? raw;
+            var name = GetLastWhitespaceSeparatedToken(raw);
             var offset = list.IndexOf(name, expressionStart, StringComparison.Ordinal);
             if (offset < 0)
                 offset = expressionStart;
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, name, listStart + offset, context, lineNumber, container, language);
         }
+    }
+
+    private static string GetLastWhitespaceSeparatedToken(string value)
+    {
+        var end = value.Length;
+        while (end > 0 && (value[end - 1] == ' ' || value[end - 1] == '\t'))
+            end--;
+        var start = end;
+        while (start > 0 && value[start - 1] != ' ' && value[start - 1] != '\t')
+            start--;
+
+        return start == 0 && end == value.Length ? value : value[start..end];
     }
 
     private static void EmitVbGenericConstraintReferences(

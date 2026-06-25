@@ -531,11 +531,38 @@ internal static class XamlReferenceExtractor
 
     private static IEnumerable<string> NormalizeXamlTypeArguments(string value)
     {
-        foreach (var segment in value.Split(new[] { ',', '(', ')' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        var segmentStart = 0;
+        while (segmentStart <= value.Length)
         {
+            var segmentEnd = segmentStart;
+            while (segmentEnd < value.Length && value[segmentEnd] is not (',' or '(' or ')'))
+                segmentEnd++;
+
+            var trimStart = segmentStart;
+            var trimEnd = segmentEnd;
+            while (trimStart < trimEnd && char.IsWhiteSpace(value[trimStart]))
+                trimStart++;
+            while (trimEnd > trimStart && char.IsWhiteSpace(value[trimEnd - 1]))
+                trimEnd--;
+
+            if (trimStart == trimEnd)
+            {
+                if (segmentEnd >= value.Length)
+                    break;
+
+                segmentStart = segmentEnd + 1;
+                continue;
+            }
+
+            var segment = value[trimStart..trimEnd];
             var normalized = NormalizeXamlMarkupArgument(segment);
             if (normalized.Length > 0)
                 yield return normalized;
+
+            if (segmentEnd >= value.Length)
+                break;
+
+            segmentStart = segmentEnd + 1;
         }
     }
 

@@ -15,96 +15,11 @@ namespace CodeIndex.Indexer;
 /// Scans directories for source files and builds FileRecords.
 /// ディレクトリを走査してソースファイルからFileRecordを構築する。
 /// </summary>
-public class FileIndexer
+public partial class FileIndexer
 {
     internal const int MaxDanglingFileSystemEntryScanCandidates = 4096;
     internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
     internal static Func<string, FileSystemInfo?>? ResolveDirectoryLinkTargetForTesting { get; set; }
-
-    public enum SymlinkPolicy
-    {
-        None,
-        Internal,
-        All,
-    }
-
-    internal enum FileProbeStatus
-    {
-        Supported,
-        Unsupported,
-        ProbeFailed,
-        Missing,
-    }
-
-    internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
-
-    public enum ScanIssueSeverity
-    {
-        Warning,
-        Error,
-    }
-
-    public readonly record struct ScanError(string Path, string Message, ScanIssueSeverity Severity = ScanIssueSeverity.Error)
-    {
-        public bool IsFatal => Severity == ScanIssueSeverity.Error;
-    }
-
-    internal readonly record struct FileIdentity(ulong DeviceId, ulong Inode);
-
-    public readonly record struct ScanFilesResult(
-        IReadOnlyList<string> Files,
-        IReadOnlyDictionary<string, string> FileLanguages,
-        IReadOnlyList<ScanError> Errors,
-        IReadOnlyList<string> NonIndexablePaths,
-        IReadOnlyList<string> UnknownExtensionFiles,
-        IReadOnlyList<string> ProbeFailedFilePaths,
-        IReadOnlyList<string> ListedDirectories,
-        IReadOnlyList<string> FullyScannedDirectories,
-        IReadOnlySet<string> CheckpointedDirectories,
-        IReadOnlyList<string> AncestorIgnoreDirectories,
-        IReadOnlyList<string> AttributePrunedDirectories,
-        IReadOnlyList<string> NestedRepositories,
-        IReadOnlyList<string> DanglingSymlinks)
-    {
-        public bool HadErrors => Errors.Any(error => error.IsFatal);
-    }
-
-    internal enum PathFilterKind
-    {
-        None,
-        IgnoredByRules,
-        ExcludedByDefaultDirectory,
-        ExcludedByDefaultFile,
-        OutsideProjectRoot,
-        IgnoreRulesUnavailable,
-    }
-
-    internal readonly record struct PathFilterResult(
-        PathFilterKind FilterKind,
-        IReadOnlyList<ScanError> Errors)
-    {
-        public bool ShouldSkip => FilterKind != PathFilterKind.None;
-        public bool ShouldDeleteExisting => FilterKind is
-            PathFilterKind.IgnoredByRules or
-            PathFilterKind.ExcludedByDefaultDirectory or
-            PathFilterKind.ExcludedByDefaultFile or
-            PathFilterKind.OutsideProjectRoot;
-    }
-
-    private sealed class ProjectMarkerFingerprintTraversalState
-    {
-        public int DirectoriesVisited { get; set; }
-        public int MarkerFilesCollected { get; set; }
-        public bool Truncated { get; set; }
-        public string TruncationReason { get; set; } = "unknown";
-    }
-
-    private readonly record struct ProjectMarkerFingerprintDirectory(string Path, IgnoreRuleSet IgnoreRules, bool IsProjectRoot);
-
-    internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete)
-    {
-        public IReadOnlyList<ScanError> Warnings { get; init; } = [];
-    }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
@@ -333,131 +248,6 @@ public class FileIndexer
         (".S", "assembly"),
     ];
 
-    // Exact file names (case-insensitive) mapped to language / 完全一致ファイル名→言語マッピング
-    private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Dockerfile"] = "dockerfile",
-        [".dockerfile"] = "dockerfile",
-        ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
-        [".containerfile"] = "dockerfile",
-        ["Makefile"] = "makefile",
-        ["GNUmakefile"] = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
-        ["Justfile"] = "justfile",     // Just command runner / Just コマンドランナー
-        ["CMakeLists.txt"] = "cmake",
-        ["Vagrantfile"] = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
-        ["Gemfile"] = "dependency_manifest", // Bundler dependency manifest / Bundler 依存マニフェスト
-        ["Rakefile"] = "ruby",         // Rake task runner / Rake タスクランナー
-        ["Podfile"] = "dependency_manifest", // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
-        ["Guardfile"] = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
-        ["Capfile"] = "ruby",         // Capistrano deployment / Capistrano デプロイ
-        ["NAMESPACE"] = "r",            // R package namespace directives / R パッケージ namespace ディレクティブ
-        [".Rprofile"] = "r",            // R startup profile / R 起動プロファイル
-        ["Rprofile.site"] = "r",            // Site-wide R startup profile / サイト共通 R 起動プロファイル
-        ["BUILD"] = "python",       // Bazel Starlark build file / Bazel Starlark ビルドファイル
-        ["BUILD.bazel"] = "python",
-        ["WORKSPACE"] = "python",       // Bazel workspace / Bazel ワークスペース
-        ["WORKSPACE.bazel"] = "python",
-        ["package.json"] = "dependency_manifest", // npm package manifest / npm パッケージマニフェスト
-        ["pyproject.toml"] = "dependency_manifest", // Python project manifest / Python プロジェクトマニフェスト
-        ["requirements.txt"] = "dependency_manifest", // Python dependencies manifest / Python 依存関係マニフェスト
-        ["Pipfile"] = "dependency_manifest", // Pipenv manifest / Pipenv マニフェスト
-        ["poetry.toml"] = "dependency_manifest", // Poetry configuration manifest / Poetry 設定マニフェスト
-        ["Cargo.toml"] = "dependency_manifest", // Cargo package manifest / Cargo パッケージマニフェスト
-        ["composer.json"] = "dependency_manifest", // Composer package manifest / Composer パッケージマニフェスト
-        ["go.mod"] = "dependency_manifest", // Go module manifest / Go モジュールマニフェスト
-        ["go.work"] = "dependency_manifest", // Go workspace manifest / Go ワークスペースマニフェスト
-        ["packages.config"] = "dependency_manifest", // NuGet packages.config manifest / NuGet packages.config マニフェスト
-        ["Directory.Packages.props"] = "dependency_manifest", // NuGet central package manifest / NuGet central package マニフェスト
-        ["package-lock.json"] = "dependency_lock", // npm lockfile / npm lockfile
-        ["npm-shrinkwrap.json"] = "dependency_lock", // npm shrinkwrap lockfile / npm shrinkwrap lockfile
-        ["yarn.lock"] = "dependency_lock", // Yarn lockfile / Yarn lockfile
-        ["pnpm-lock.yaml"] = "dependency_lock", // pnpm lockfile / pnpm lockfile
-        ["bun.lock"] = "dependency_lock", // Bun text lockfile / Bun text lockfile
-        ["bun.lockb"] = "dependency_lock", // Bun binary lockfile / Bun binary lockfile
-        ["Gemfile.lock"] = "dependency_lock", // Bundler lockfile / Bundler lockfile
-        ["Cargo.lock"] = "dependency_lock", // Cargo lockfile / Cargo lockfile
-        ["composer.lock"] = "dependency_lock", // Composer lockfile / Composer lockfile
-        ["poetry.lock"] = "dependency_lock", // Poetry lockfile / Poetry lockfile
-        ["Pipfile.lock"] = "dependency_lock", // Pipenv lockfile / Pipenv lockfile
-        ["go.sum"] = "dependency_lock", // Go module checksum lockfile / Go module checksum lockfile
-        ["uv.lock"] = "dependency_lock", // uv lockfile / uv lockfile
-        ["packages.lock.json"] = "dependency_lock", // NuGet lockfile / NuGet lockfile
-        [".editorconfig"] = "editorconfig",
-        [".gitignore"] = "gitignore",
-        [".gitattributes"] = "gitattributes",
-        [".dockerignore"] = "dockerignore",
-    };
-
-    // Filename prefixes (with trailing dot) mapped to language for suffixed variants like
-    // Dockerfile.dev / Makefile.common / GNUmakefile.am. The suffix must be non-empty.
-    // Dockerfile.dev / Makefile.common / GNUmakefile.am のようにサフィックス付きで使われる
-    // ファイル名のプレフィックス→言語マッピング。サフィックスは1文字以上必須。
-    private static readonly (string Prefix, string Language)[] FileNamePrefixMap =
-    [
-        ("Dockerfile.",  "dockerfile"),
-        ("Dockerfile-",  "dockerfile"),
-        ("Dockerfile_",  "dockerfile"),
-        ("Containerfile.", "dockerfile"),
-        ("Containerfile-", "dockerfile"),
-        ("Containerfile_", "dockerfile"),
-        ("Makefile.",    "makefile"),
-        ("GNUmakefile.", "makefile"),
-    ];
-
-    // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
-    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".git", ".svn", ".hg",
-        "node_modules", "__pycache__", ".pytest_cache",
-        "venv", ".venv", "env",
-        "dist", "build", ".build", "out",
-        "bin", "obj",                   // .NET build outputs / .NETビルド出力
-        "target",                       // Rust/Java/Maven build output / Rust/Java/Mavenビルド出力
-        ".gradle",                      // Gradle cache / Gradleキャッシュ
-        ".next", ".nuxt",
-        ".idea", ".vscode",
-        "coverage", "vendor",
-        ".terraform",                   // Terraform state/plugin cache / Terraformステート・プラグインキャッシュ
-        ".cargo",                       // Cargo registry cache / Cargoレジストリキャッシュ
-        ".pub-cache",                   // Dart pub cache / Dart pubキャッシュ
-        "_build",                       // Elixir/Mix build output / Elixir/Mixビルド出力
-    };
-
-    // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
-    // スキップするファイル名（SkipDirsと同様にクロスプラットフォーム対応で大文字小文字を区別しない）
-    private static readonly HashSet<string> SkipFiles = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".DS_Store", "Thumbs.db",
-    };
-
-    // macOS AppleDouble resource-fork prefix. Files written by HFS+/SMB-style metadata carriers
-    // (e.g. archives unpacked on a non-HFS volume, or macOS-mounted SMB/NFS shares) appear as
-    // `._<original>` siblings of the real file. These are binary metadata blobs that masquerade
-    // as the real file's language (so the symbol extractor wastes work on noise) and they are
-    // never under a project's source control. Skip them by filename pattern regardless of where
-    // they appear in the tree. Recognized dotfiles (e.g. .gitignore, .editorconfig, .cdidxrc.json)
-    // are not affected because they do not start with this prefix.
-    // macOS の AppleDouble (`._<原ファイル>`) 接頭辞。HFS+/SMB 系のメタデータ伝搬や macOS マウント
-    // SMB/NFS 共有経由で生成される resource fork で、原ファイルと同じ拡張子のメタデータバイナリが
-    // index/シンボル抽出に紛れ込み雑音化する。バージョン管理対象でもないためツリーのどこにあっても
-    // ファイル名パターンで除外する。`.gitignore` / `.editorconfig` / `.cdidxrc.json` のような既知
-    // dotfile はこの接頭辞を持たないため影響を受けない。
-    private const string AppleDoublePrefix = "._";
-
-    // True for filenames that the scanner must skip purely by name, independent of .gitignore
-    // / .cdidxignore. Bundles the exact-name SkipFiles list with the AppleDouble pattern so the
-    // full-scan walker and update-mode path filter share a single rule.
-    // 走査経路 (full-scan の walker と --files/--commits の path filter) が共通参照する、
-    // 既定でスキップするファイル名判定。SkipFiles の完全一致と AppleDouble 接頭辞を一括判定する。
-    internal static bool IsDefaultExcludedFileName(string fileName)
-    {
-        if (string.IsNullOrEmpty(fileName))
-            return false;
-        if (SkipFiles.Contains(fileName))
-            return true;
-        return fileName.StartsWith(AppleDoublePrefix, StringComparison.Ordinal);
-    }
-
     public const string MaxFileSizeEnvironmentVariable = "CDIDX_MAX_FILE_BYTES";
     // Default maximum file size to index (4 MiB). Larger generated/vendor payloads
     // can still be opted in with --max-file-bytes, but the default path should not
@@ -508,11 +298,15 @@ public class FileIndexer
 
         private readonly IgnoreRuleSet? _parent;
         private readonly IReadOnlyList<IgnoreRule> _rules;
+        private readonly string? _sourceDirectory;
+        private readonly bool _hasBasenameOnlyRule;
 
         private IgnoreRuleSet(IgnoreRuleSet? parent, IReadOnlyList<IgnoreRule> rules)
         {
             _parent = parent;
             _rules = rules;
+            _sourceDirectory = rules.Count == 0 ? null : rules[0].SourceDirectory;
+            _hasBasenameOnlyRule = rules.Any(static rule => rule.MatchesBasenameOnly);
         }
 
         internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
@@ -521,9 +315,17 @@ public class FileIndexer
         internal bool IsIgnored(string absolutePath, bool isDirectory)
         {
             var ignored = _parent?.IsIgnored(absolutePath, isDirectory) ?? false;
+            if (_sourceDirectory is null)
+                return ignored;
+
+            var relativePath = IgnoreRule.GetRelativeCandidatePath(_sourceDirectory, absolutePath);
+            if (relativePath is null)
+                return ignored;
+
+            var basename = _hasBasenameOnlyRule ? Path.GetFileName(relativePath) : null;
             foreach (var rule in _rules)
             {
-                if (rule.IsMatch(absolutePath, isDirectory))
+                if (rule.IsMatch(relativePath, basename, isDirectory))
                     ignored = !rule.Negated;
             }
 
@@ -556,14 +358,14 @@ public class FileIndexer
         private readonly record struct PatternToken(char Value, bool Escaped);
 
         private readonly string _sourceDirectory;
-        private readonly Regex _matcher;
+        private readonly IIgnoreMatcher _matcher;
         private readonly bool _asciiIgnoreCase;
         private readonly bool _directoryOnly;
         private readonly bool _matchBasenameOnly;
 
         private IgnoreRule(
             string sourceDirectory,
-            Regex matcher,
+            IIgnoreMatcher matcher,
             bool asciiIgnoreCase,
             bool negated,
             bool directoryOnly,
@@ -578,6 +380,10 @@ public class FileIndexer
         }
 
         internal bool Negated { get; }
+
+        internal string SourceDirectory => _sourceDirectory;
+
+        internal bool MatchesBasenameOnly => _matchBasenameOnly;
 
         internal static bool TryParse(string sourceDirectory, string rawLine, bool ignoreCase, out IgnoreRule? rule, out string? errorMessage)
         {
@@ -636,21 +442,26 @@ public class FileIndexer
             }
         }
 
-        internal bool IsMatch(string absolutePath, bool isDirectory)
+        internal static string? GetRelativeCandidatePath(string sourceDirectory, string absolutePath)
         {
-            if (_directoryOnly && !isDirectory)
-                return false;
-
-            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_sourceDirectory, absolutePath));
+            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(sourceDirectory, absolutePath));
             if (relativePath.Length == 0 ||
                 relativePath == "." ||
                 relativePath.StartsWith("../", StringComparison.Ordinal))
             {
-                return false;
+                return null;
             }
 
+            return relativePath;
+        }
+
+        internal bool IsMatch(string relativePath, string? basename, bool isDirectory)
+        {
+            if (_directoryOnly && !isDirectory)
+                return false;
+
             var candidate = _matchBasenameOnly
-                ? Path.GetFileName(relativePath)
+                ? basename
                 : relativePath;
 
             if (string.IsNullOrEmpty(candidate))
@@ -698,8 +509,42 @@ public class FileIndexer
             return tokens.Count > 0;
         }
 
-        private static Regex BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
+        private interface IIgnoreMatcher
         {
+            bool IsMatch(string candidate);
+        }
+
+        private sealed class LiteralIgnoreMatcher : IIgnoreMatcher
+        {
+            private readonly string _literal;
+
+            internal LiteralIgnoreMatcher(string literal)
+            {
+                _literal = literal;
+            }
+
+            public bool IsMatch(string candidate)
+                => string.Equals(candidate, _literal, StringComparison.Ordinal);
+        }
+
+        private sealed class RegexIgnoreMatcher : IIgnoreMatcher
+        {
+            private readonly Regex _regex;
+
+            internal RegexIgnoreMatcher(Regex regex)
+            {
+                _regex = regex;
+            }
+
+            public bool IsMatch(string candidate)
+                => _regex.IsMatch(candidate);
+        }
+
+        private static IIgnoreMatcher BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
+        {
+            if (TryBuildLiteralPattern(pattern, out var literal))
+                return new LiteralIgnoreMatcher(literal);
+
             var builder = new StringBuilder();
             builder.Append('^');
 
@@ -761,10 +606,28 @@ public class FileIndexer
             }
 
             builder.Append('$');
-            return new Regex(
+            return new RegexIgnoreMatcher(new Regex(
                 builder.ToString(),
                 RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
-                IgnoreRegexMatchTimeout);
+                IgnoreRegexMatchTimeout));
+        }
+
+        private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)
+        {
+            var builder = new StringBuilder(pattern.Count);
+            foreach (var token in pattern)
+            {
+                if (!token.Escaped && token.Value is '*' or '?' or '[')
+                {
+                    literal = string.Empty;
+                    return false;
+                }
+
+                builder.Append(token.Value);
+            }
+
+            literal = builder.ToString();
+            return true;
         }
 
         private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder, bool ignoreCase)
@@ -992,10 +855,19 @@ public class FileIndexer
 
         private static string FoldAscii(string value)
         {
-            var chars = value.ToCharArray();
-            for (var i = 0; i < chars.Length; i++)
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (value[i] is not (>= 'A' and <= 'Z'))
+                    continue;
+
+                var chars = value.ToCharArray();
                 chars[i] = FoldAsciiChar(chars[i]);
-            return new string(chars);
+                for (var j = i + 1; j < chars.Length; j++)
+                    chars[j] = FoldAsciiChar(chars[j]);
+                return new string(chars);
+            }
+
+            return value;
         }
 
         private static char FoldAsciiChar(char ch)
@@ -1247,6 +1119,44 @@ public class FileIndexer
     internal LanguageDetectionResult TryDetectLanguageForIndexing(string filePath, string? content = null)
         => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot);
 
+    internal static string? GetReusableDetectedLanguage(
+        string filePath,
+        IReadOnlyDictionary<string, string>? detectedLanguages)
+    {
+        if (detectedLanguages == null || !detectedLanguages.TryGetValue(filePath, out var language))
+            return null;
+
+        return CanReuseDetectedLanguageWithoutContent(filePath, language)
+            ? language
+            : null;
+    }
+
+    internal static bool CanReuseDetectedLanguageWithoutContent(string filePath, string? language)
+    {
+        if (string.IsNullOrEmpty(language))
+            return false;
+
+        var fileName = Path.GetFileName(filePath);
+        if (FileNameMap.TryGetValue(fileName, out var nameLanguage))
+            return string.Equals(language, nameLanguage, StringComparison.Ordinal);
+
+        foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
+        {
+            if (fileName.Length > prefix.Length &&
+                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
+            }
+        }
+
+        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLanguage))
+            return string.Equals(language, overrideLanguage, StringComparison.Ordinal);
+
+        var extension = Path.GetExtension(filePath);
+        return !string.IsNullOrEmpty(extension)
+            && !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
         => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null);
 
@@ -1278,7 +1188,7 @@ public class FileIndexer
         }
 
         var ext = Path.GetExtension(filePath);
-        if (TryDetectLanguageOverride(filePath, out var overrideLang))
+        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
         if (LangMap.TryGetValue(ext, out var lang))
@@ -1308,13 +1218,16 @@ public class FileIndexer
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot);
     }
 
-    private static bool TryDetectLanguageOverride(string filePath, out string language)
+    private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
     {
         language = string.Empty;
-        var fileName = Path.GetFileName(filePath);
-        foreach (var (extension, mappedLanguage) in LanguageMapOverrides.LoadEffectiveMap(filePath))
+        var overrides = LanguageMapOverrides.LoadEffectiveMap(filePath);
+        if (overrides.Count == 0)
+            return false;
+
+        for (var dotIndex = fileName.IndexOf('.'); dotIndex >= 0; dotIndex = fileName.IndexOf('.', dotIndex + 1))
         {
-            if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            if (overrides.TryGetValue(fileName[dotIndex..], out var mappedLanguage))
             {
                 language = mappedLanguage;
                 return true;
@@ -1394,40 +1307,89 @@ public class FileIndexer
         if (string.IsNullOrWhiteSpace(filePath))
             return false;
 
-        var normalized = filePath.Replace('\\', '/');
-        if (normalized.StartsWith("//./", StringComparison.Ordinal)
-            || normalized.StartsWith("//?/GLOBALROOT/Device/", StringComparison.OrdinalIgnoreCase))
+        var path = filePath.AsSpan();
+        if (StartsWithWindowsDeviceNamespace(path))
         {
             return true;
         }
 
-        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        for (var start = 0; start < path.Length;)
         {
-            var name = segment;
+            while (start < path.Length && IsWindowsPathSeparator(path[start]))
+                start++;
+            if (start >= path.Length)
+                break;
+
+            var end = start;
+            while (end < path.Length && !IsWindowsPathSeparator(path[end]))
+                end++;
+
+            var name = path[start..end];
             var extensionIndex = name.IndexOf('.');
             if (extensionIndex >= 0)
                 name = name[..extensionIndex];
 
             if (IsWindowsReservedDeviceName(name))
                 return true;
+
+            start = end + 1;
         }
 
         return false;
     }
 
-    private static bool IsWindowsReservedDeviceName(string name)
+    private static bool StartsWithWindowsDeviceNamespace(ReadOnlySpan<char> path)
     {
-        if (name.Equals("CON", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        if (path.Length >= 4
+            && IsWindowsPathSeparator(path[0])
+            && IsWindowsPathSeparator(path[1])
+            && path[2] == '.'
+            && IsWindowsPathSeparator(path[3]))
+        {
+            return true;
+        }
+
+        if (path.Length < 22
+            || !IsWindowsPathSeparator(path[0])
+            || !IsWindowsPathSeparator(path[1])
+            || path[2] != '?'
+            || !IsWindowsPathSeparator(path[3]))
+        {
+            return false;
+        }
+
+        var remaining = path[4..];
+        if (!remaining.StartsWith("GLOBALROOT".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        remaining = remaining["GLOBALROOT".Length..];
+        if (remaining.IsEmpty || !IsWindowsPathSeparator(remaining[0]))
+            return false;
+
+        remaining = remaining[1..];
+        if (!remaining.StartsWith("Device".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        remaining = remaining["Device".Length..];
+        return !remaining.IsEmpty && IsWindowsPathSeparator(remaining[0]);
+    }
+
+    private static bool IsWindowsPathSeparator(char value)
+        => value is '\\' or '/';
+
+    private static bool IsWindowsReservedDeviceName(ReadOnlySpan<char> name)
+    {
+        if (name.Equals("CON".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || name.Equals("PRN".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || name.Equals("AUX".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || name.Equals("NUL".AsSpan(), StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
         return name.Length == 4
-            && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+            && (name.StartsWith("COM".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("LPT".AsSpan(), StringComparison.OrdinalIgnoreCase))
             && name[3] >= '1'
             && name[3] <= '9';
     }
@@ -2109,11 +2071,9 @@ public class FileIndexer
         if (relativePath.Length == 0 || relativePath == ".")
             return new PathFilterResult(PathFilterKind.None, errors);
 
-        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
         var directoryResult = EvaluatePathFilterDirectorySegments(
-            segments,
-            directorySegmentCount,
+            relativePath,
+            isDirectory,
             errors,
             activeIgnoreRules,
             out var leafIgnoreRules,
@@ -2173,8 +2133,8 @@ public class FileIndexer
     }
 
     private PathFilterResult? EvaluatePathFilterDirectorySegments(
-        string[] segments,
-        int directorySegmentCount,
+        string relativePath,
+        bool isDirectory,
         List<ScanError> errors,
         IgnoreRuleSet activeIgnoreRules,
         out IgnoreRuleSet leafIgnoreRules,
@@ -2196,11 +2156,26 @@ public class FileIndexer
         // 更新モードのフィルタがフルスキャンと食い違わないようにする。submodule への通過のため
         // SkipDirs を上書きした場合でも、submodule に到達しないファイル・サブディレクトリは
         // 引き続き除外する。
-        for (var i = 0; i < directorySegmentCount; i++)
+        var directoryPathLength = isDirectory ? relativePath.Length : relativePath.LastIndexOf('/');
+        if (directoryPathLength < 0)
+            directoryPathLength = 0;
+
+        var cumulativeRelPath = string.Empty;
+        for (var segmentStart = 0; segmentStart < directoryPathLength;)
         {
-            var directoryName = segments[i];
+            var slashIndex = relativePath.IndexOf('/', segmentStart, directoryPathLength - segmentStart);
+            var segmentEnd = slashIndex >= 0 ? slashIndex : directoryPathLength;
+            if (segmentEnd == segmentStart)
+            {
+                segmentStart++;
+                continue;
+            }
+
+            var directoryName = relativePath.Substring(segmentStart, segmentEnd - segmentStart);
             var childDirectory = Path.Combine(currentDirectory, directoryName);
-            var cumulativeRelPath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, childDirectory));
+            cumulativeRelPath = cumulativeRelPath.Length == 0
+                ? directoryName
+                : string.Concat(cumulativeRelPath, "/", directoryName);
             var isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
             var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
 
@@ -2231,6 +2206,8 @@ public class FileIndexer
             leafIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
                 return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+
+            segmentStart = segmentEnd + 1;
         }
 
         return null;
@@ -2925,12 +2902,18 @@ public class FileIndexer
         // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relPath のどの segment も
         // SkipDirs に該当しない場合、我々の上書き無しでも walker は通っていたはずなので
         // ここでの上書きは効いていない。
-        var segments = relPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var segment in segments)
+        var remaining = relPath.AsSpan();
+        while (!remaining.IsEmpty)
         {
-            if (SkipDirs.Contains(segment))
+            var separatorIndex = remaining.IndexOf('/');
+            var segment = separatorIndex >= 0 ? remaining[..separatorIndex] : remaining;
+            if (!segment.IsEmpty && IsDefaultExcludedDirectoryName(segment))
                 return true;
+            if (separatorIndex < 0)
+                break;
+            remaining = remaining[(separatorIndex + 1)..];
         }
+
         return false;
     }
 
@@ -3389,7 +3372,16 @@ public class FileIndexer
     }
 
     internal static string NormalizeIgnorePath(string path)
-        => NormalizePathSeparators(path).TrimEnd('/');
+    {
+        if (CanSkipIgnorePathNormalization(path))
+            return path;
+
+        return NormalizePathSeparators(path).TrimEnd('/');
+    }
+
+    private static bool CanSkipIgnorePathNormalization(string path)
+        => (path.Length == 0 || path[^1] != '/')
+            && (Path.DirectorySeparatorChar != '\\' || !path.Contains('\\'));
 
     /// <summary>
     /// Normalize OS path separators to '/' for DB storage and lookup.
@@ -3407,7 +3399,25 @@ public class FileIndexer
     /// DB 保存・lookup 用 path は区切り文字正規化に加えて Unicode NFC に正規化する。
     /// </summary>
     public static string NormalizeIndexPath(string path)
-        => NormalizePathSeparators(path).Normalize(NormalizationForm.FormC);
+    {
+        if (CanSkipIndexPathNormalization(path))
+            return path;
+
+        return NormalizePathSeparators(path).Normalize(NormalizationForm.FormC);
+    }
+
+    private static bool CanSkipIndexPathNormalization(string path)
+    {
+        foreach (var ch in path)
+        {
+            if (ch > 0x7f)
+                return false;
+            if (Path.DirectorySeparatorChar == '\\' && ch == '\\')
+                return false;
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
@@ -3441,6 +3451,21 @@ public class FileIndexer
     }
 
     internal LoadedFileRecord BuildLoadedRecordWithRawBytes(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(absolutePath, relativePath, knownLanguage: null, cancellationToken);
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(absolutePath, relativePath, knownLanguage, detectGeneratedCode: true, cancellationToken);
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        bool detectGeneratedCode,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
@@ -3460,12 +3485,14 @@ public class FileIndexer
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language,
+            Lang = string.IsNullOrEmpty(knownLanguage)
+                ? TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language
+                : knownLanguage,
             Size = loaded.SizeBytes,
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
             Modified = loaded.ModifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
+            Generated = detectGeneratedCode && IsGeneratedCodeFile(normalizedRelativePath, loaded.Content),
         };
 
         return new LoadedFileRecord(
@@ -3478,17 +3505,6 @@ public class FileIndexer
     }
 
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
-        => LoadNormalizedContentForPrepass(
-            absolutePath,
-            relativePath,
-            rawByteFilter: null,
-            cancellationToken)!;
-
-    internal string? LoadNormalizedContentForPrepass(
-        string absolutePath,
-        string relativePath,
-        Func<byte[], bool>? rawByteFilter,
-        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
@@ -3503,7 +3519,28 @@ public class FileIndexer
             absolutePath,
             normalizedRelativePath,
             relativePath,
-            rawByteFilter,
+            cancellationToken);
+    }
+
+    internal bool RawFileMayContainCSharpStaticInterfaceContract(
+        string absolutePath,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
+            throw new InvalidOperationException("Only regular files can be indexed");
+
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
+        var probe = CSharpStaticInterfacePrepass.CreateRawByteContractProbe();
+        return _contentLoader.RawByteChunksMayMatch(
+            absolutePath,
+            normalizedRelativePath,
+            probe.AppendAndCheck,
             cancellationToken);
     }
 
@@ -3517,6 +3554,9 @@ public class FileIndexer
     }
 
     internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath)
+        => BuildSkippedFileRecord(absolutePath, relativePath, knownLanguage: null);
+
+    internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath, string? knownLanguage)
     {
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
@@ -3527,7 +3567,9 @@ public class FileIndexer
         return new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = TryDetectLanguageForIndexing(absolutePath).Language,
+            Lang = string.IsNullOrEmpty(knownLanguage)
+                ? TryDetectLanguageForIndexing(absolutePath).Language
+                : knownLanguage,
             Size = info.Exists ? info.Length : 0,
             Lines = 0,
             Checksum = null,
@@ -3596,8 +3638,11 @@ public class FileIndexer
 
     internal const string GeneratedCodeExtractionSkippedIssueKind = "generated_code_extraction_skipped";
 
+    internal bool IsGeneratedCodeExtractionSuppressed(string relativePath)
+        => _generatedCodePatterns.TryMatch(relativePath, out _);
+
     internal FileIssue? BuildGeneratedCodeExtractionSkippedIssue(string relativePath)
-        => _generatedCodePatterns.TryMatch(relativePath, out _)
+        => IsGeneratedCodeExtractionSuppressed(relativePath)
             ? new FileIssue
             {
                 Path = relativePath,
@@ -3666,42 +3711,46 @@ public class FileIndexer
 
     private static bool HasGeneratedCodeFileName(string relativePath)
     {
-        var fileName = Path.GetFileName(relativePath);
-        return fileName.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".g.dart", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".gen.go", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".generated.ts", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("_pb.go", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("_pb2.py", StringComparison.OrdinalIgnoreCase);
+        var fileName = Path.GetFileName(relativePath.AsSpan());
+        return fileName.EndsWith(".Designer.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".g.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".g.dart".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".gen.go".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".generated.ts".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("_pb.go".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("_pb2.py".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasGeneratedCodeHeader(string content)
     {
-        var lineStart = 0;
-        for (var lineNumber = 0; lineNumber < 20 && lineStart <= content.Length; lineNumber++)
+        var remaining = content.AsSpan();
+        for (var lineNumber = 0; lineNumber < 20 && !remaining.IsEmpty; lineNumber++)
         {
-            var lineEnd = content.IndexOf('\n', lineStart);
-            if (lineEnd < 0)
-                lineEnd = content.Length;
-
-            var line = content[lineStart..lineEnd].Trim();
-            if (line.Contains("<auto-generated", StringComparison.OrdinalIgnoreCase)
-                || line.Contains("@generated", StringComparison.OrdinalIgnoreCase)
-                || (line.Contains("generated by", StringComparison.OrdinalIgnoreCase)
-                    && line.Contains("DO NOT EDIT", StringComparison.OrdinalIgnoreCase)))
+            var newlineIndex = remaining.IndexOf('\n');
+            var line = newlineIndex < 0 ? remaining : remaining[..newlineIndex];
+            if (GeneratedHeaderLineContainsMarker(line))
                 return true;
 
-            if (lineEnd == content.Length)
+            if (newlineIndex < 0)
                 break;
-            lineStart = lineEnd + 1;
+
+            remaining = remaining[(newlineIndex + 1)..];
         }
 
         return false;
     }
 
+    private static bool GeneratedHeaderLineContainsMarker(ReadOnlySpan<char> line)
+        => line.Contains("<auto-generated".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || line.Contains("@generated".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || (line.Contains("generated by".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && line.Contains("DO NOT EDIT".AsSpan(), StringComparison.OrdinalIgnoreCase));
+
     internal static string NormalizeLineEndings(string content)
         => FileContentLoader.NormalizeLineEndings(content);
+
+    internal static string NormalizeContentForPrepass(string content)
+        => FileContentLoader.NormalizeContentForPrepass(content);
 
     /// <summary>
     /// Strip every line-leading UTF-8 BOM (U+FEFF) and zero-width space (U+200B).
@@ -4120,13 +4169,18 @@ public class FileIndexer
         if (nonUtf8Likely)
             return;
 
+        var lineNum = 1;
         for (int i = 0; i < content.Length; i++)
         {
+            if (content[i] == '\n')
+            {
+                lineNum++;
+                continue;
+            }
+
             if (content[i] != '\uFFFD')
                 continue;
 
-            // Find line number / 行番号を特定
-            var lineNum = content[..i].Count(c => c == '\n') + 1;
             var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
             issues.Add(new FileIssue
             {
@@ -4142,7 +4196,10 @@ public class FileIndexer
             // Skip to next line to avoid reporting every char on the same line
             // 同じ行の連続報告を避けるため次の行までスキップ
             var nextNewline = content.IndexOf('\n', i);
-            if (nextNewline >= 0) i = nextNewline;
+            if (nextNewline < 0)
+                break;
+            lineNum++;
+            i = nextNewline;
         }
     }
 
@@ -4162,8 +4219,10 @@ public class FileIndexer
             });
         }
 
+        var rawByteInspection = InspectRawByteContentIssues(rawBytes);
+
         // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
-        if (rawBytes.Any(b => b == 0))
+        if (rawByteInspection.HasNullByte)
         {
             issues.Add(new FileIssue
             {
@@ -4174,13 +4233,19 @@ public class FileIndexer
             });
         }
 
-        AddLineEndingIssues(issues, relativePath, rawBytes);
+        AddLineEndingIssues(issues, relativePath, rawByteInspection);
     }
 
     private static bool ShouldSuppressUtf8BomIssue(string relativePath)
         => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
 
-    private static void AddLineEndingIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    private readonly record struct RawByteContentIssueInspection(
+        bool HasNullByte,
+        bool HasCrlf,
+        bool HasLfOnly,
+        bool HasCrOnly);
+
+    private static RawByteContentIssueInspection InspectRawByteContentIssues(byte[] rawBytes)
     {
         // Line-ending classification — check raw bytes before LF normalization so
         // bare CR (legacy Mac) and three-way mixes are not silently flattened by
@@ -4191,9 +4256,16 @@ public class FileIndexer
         var hasCrlf = false;
         var hasLfOnly = false;
         var hasCrOnly = false;
+        var hasNullByte = false;
         for (int i = 0; i < rawBytes.Length; i++)
         {
-            if (rawBytes[i] == 0x0D)
+            var value = rawBytes[i];
+            if (value == 0)
+            {
+                hasNullByte = true;
+            }
+
+            if (value == 0x0D)
             {
                 if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
                 {
@@ -4205,12 +4277,22 @@ public class FileIndexer
                     hasCrOnly = true;
                 }
             }
-            else if (rawBytes[i] == 0x0A)
+            else if (value == 0x0A)
             {
                 hasLfOnly = true;
             }
         }
-        var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
+        return new RawByteContentIssueInspection(hasNullByte, hasCrlf, hasLfOnly, hasCrOnly);
+    }
+
+    private static void AddLineEndingIssues(
+        List<FileIssue> issues,
+        string relativePath,
+        RawByteContentIssueInspection inspection)
+    {
+        var distinctEndingTypes = (inspection.HasCrlf ? 1 : 0)
+            + (inspection.HasLfOnly ? 1 : 0)
+            + (inspection.HasCrOnly ? 1 : 0);
         if (distinctEndingTypes >= 3)
         {
             issues.Add(new FileIssue
@@ -4224,9 +4306,9 @@ public class FileIndexer
         else if (distinctEndingTypes == 2)
         {
             string description;
-            if (hasCrlf && hasLfOnly)
+            if (inspection.HasCrlf && inspection.HasLfOnly)
                 description = "CRLF and LF";
-            else if (hasCrlf && hasCrOnly)
+            else if (inspection.HasCrlf && inspection.HasCrOnly)
                 description = "CRLF and CR";
             else
                 description = "LF and CR";
@@ -4238,7 +4320,7 @@ public class FileIndexer
                 Message = $"Mixed line endings ({description})",
             });
         }
-        else if (hasCrOnly)
+        else if (inspection.HasCrOnly)
         {
             issues.Add(new FileIssue
             {
@@ -4330,6 +4412,9 @@ public class FileIndexer
         line = 0;
         if (string.IsNullOrEmpty(content))
             return false;
+        if (!content.Contains("<<<<<<<", StringComparison.Ordinal)
+            && !content.Contains(">>>>>>>", StringComparison.Ordinal))
+            return false;
 
         var byteCount = 0;
         var lineStart = 0;
@@ -4393,20 +4478,67 @@ public class FileIndexer
 
     private static int FindOversizeFtsTokenLine(string content, int maxTokenLength)
     {
-        if (string.IsNullOrEmpty(content))
+        if (string.IsNullOrEmpty(content) || content.Length <= maxTokenLength)
             return 0;
 
         var lineNumber = 1;
         var tokenLength = 0;
-        foreach (var rune in content.EnumerateRunes())
+        for (var index = 0; index < content.Length;)
         {
-            if (rune.Value == '\n')
+            var current = content[index];
+            if (current <= '\u007F')
             {
-                lineNumber++;
-                tokenLength = 0;
+                index++;
+                if (current == '\n')
+                {
+                    lineNumber++;
+                    tokenLength = 0;
+                    continue;
+                }
+
+                if (IsLikelyUnicode61AsciiTokenChar(current))
+                {
+                    tokenLength++;
+                    if (tokenLength > maxTokenLength)
+                        return lineNumber;
+                }
+                else
+                {
+                    tokenLength = 0;
+                }
+
                 continue;
             }
 
+            if (char.IsSurrogate(current))
+            {
+                if (!char.IsHighSurrogate(current)
+                    || index + 1 >= content.Length
+                    || !char.IsLowSurrogate(content[index + 1]))
+                {
+                    index++;
+                    tokenLength = 0;
+                    continue;
+                }
+
+                var surrogateRune = new Rune(current, content[index + 1]);
+                index += 2;
+                if (IsLikelyUnicode61TokenRune(surrogateRune))
+                {
+                    tokenLength++;
+                    if (tokenLength > maxTokenLength)
+                        return lineNumber;
+                }
+                else
+                {
+                    tokenLength = 0;
+                }
+
+                continue;
+            }
+
+            var rune = new Rune(current);
+            index++;
             if (IsLikelyUnicode61TokenRune(rune))
             {
                 tokenLength++;
@@ -4422,6 +4554,12 @@ public class FileIndexer
         return 0;
     }
 
+    private static bool IsLikelyUnicode61AsciiTokenChar(char value)
+        => value == '_'
+            || (value >= 'A' && value <= 'Z')
+            || (value >= 'a' && value <= 'z')
+            || (value >= '0' && value <= '9');
+
     private static bool IsLikelyUnicode61TokenRune(Rune rune)
         => rune.Value == '_'
             || Rune.IsLetter(rune)
@@ -4434,10 +4572,14 @@ public class FileIndexer
     /// </summary>
     private static int CountReplacementChars(string content)
     {
-        var count = 0;
-        for (int i = 0; i < content.Length; i++)
+        var firstReplacement = content.IndexOf('\uFFFD');
+        if (firstReplacement < 0)
+            return 0;
+
+        var count = 1;
+        for (int i = firstReplacement + 1; i < content.Length; i++)
         {
-            if (content[i] == '�') count++;
+            if (content[i] == '\uFFFD') count++;
         }
         return count;
     }
@@ -4526,6 +4668,9 @@ public class FileIndexer
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var preambleLength = GetShebangPreambleLength(shebangEncoding);
+            if (!HasRawShebangPrefix(bytes, shebangEncoding, preambleLength))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
             var lineEnd = FindShebangLineEnd(bytes, shebangEncoding, preambleLength);
             if (lineEnd < 0)
             {
@@ -4617,6 +4762,47 @@ public class FileIndexer
         ShebangEncoding.Utf16LittleEndian or ShebangEncoding.Utf16BigEndian => 2,
         _ => 0,
     };
+
+    private static bool HasRawShebangPrefix(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
+    {
+        var remaining = bytes[start..];
+        return encoding switch
+        {
+            ShebangEncoding.Utf16LittleEndian => StartsWithUtf16LeShebang(remaining)
+                || (remaining.Length >= 2
+                    && remaining[0] == 0xFF
+                    && remaining[1] == 0xFE
+                    && StartsWithUtf16LeShebang(remaining[2..])),
+            ShebangEncoding.Utf16BigEndian => StartsWithUtf16BeShebang(remaining)
+                || (remaining.Length >= 2
+                    && remaining[0] == 0xFE
+                    && remaining[1] == 0xFF
+                    && StartsWithUtf16BeShebang(remaining[2..])),
+            _ => StartsWithUtf8Shebang(remaining)
+                || (remaining.Length >= 3
+                    && remaining[0] == 0xEF
+                    && remaining[1] == 0xBB
+                    && remaining[2] == 0xBF
+                    && StartsWithUtf8Shebang(remaining[3..])),
+        };
+    }
+
+    private static bool StartsWithUtf8Shebang(ReadOnlySpan<byte> bytes)
+        => bytes.Length >= 2 && bytes[0] == (byte)'#' && bytes[1] == (byte)'!';
+
+    private static bool StartsWithUtf16LeShebang(ReadOnlySpan<byte> bytes)
+        => bytes.Length >= 4
+            && bytes[0] == (byte)'#'
+            && bytes[1] == 0
+            && bytes[2] == (byte)'!'
+            && bytes[3] == 0;
+
+    private static bool StartsWithUtf16BeShebang(ReadOnlySpan<byte> bytes)
+        => bytes.Length >= 4
+            && bytes[0] == 0
+            && bytes[1] == (byte)'#'
+            && bytes[2] == 0
+            && bytes[3] == (byte)'!';
 
     private static int FindShebangLineEnd(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
     {

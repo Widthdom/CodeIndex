@@ -147,8 +147,7 @@ public class MetricsSinkTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -272,7 +271,7 @@ public class MetricsSinkTests
             if (File.Exists(metricsPath))
                 File.Delete(metricsPath);
             if (Directory.Exists(metricsPath))
-                Directory.Delete(metricsPath);
+                TestProjectHelper.DeleteDirectory(metricsPath);
         }
     }
 

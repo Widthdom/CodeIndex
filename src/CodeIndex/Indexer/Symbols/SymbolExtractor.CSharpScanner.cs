@@ -1681,26 +1681,69 @@ public static partial class SymbolExtractor
     {
         yield return prefix;
 
-        var tokens = prefix.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length <= 1)
-            yield break;
-
+        var tokenCount = 0;
         var hasStatic = false;
         string? visibility = null;
-        foreach (var token in tokens)
+        var tokenStart = -1;
+        for (var index = 0; index <= prefix.Length; index++)
         {
-            if (token == "static")
+            var atEnd = index == prefix.Length;
+            if (!atEnd && prefix[index] != ' ')
+            {
+                if (tokenStart < 0)
+                    tokenStart = index;
+                continue;
+            }
+
+            if (tokenStart < 0)
+                continue;
+
+            var tokenLength = index - tokenStart;
+            tokenCount++;
+            if (IsCSharpWrappedModifierToken(prefix, tokenStart, tokenLength, "static"))
+            {
                 hasStatic = true;
-            else if (visibility == null
-                && token is "public" or "private" or "protected" or "internal" or "file")
-                visibility = token;
+            }
+            else if (visibility == null)
+            {
+                visibility = TryGetCSharpWrappedVisibilityModifier(prefix, tokenStart, tokenLength);
+            }
+
+            tokenStart = -1;
         }
+
+        if (tokenCount <= 1)
+            yield break;
 
         if (hasStatic)
             yield return "static";
         if (visibility != null)
             yield return visibility;
     }
+
+    private static string? TryGetCSharpWrappedVisibilityModifier(string text, int start, int length)
+    {
+        foreach (var modifier in CSharpWrappedVisibilityModifiers)
+        {
+            if (IsCSharpWrappedModifierToken(text, start, length, modifier))
+                return modifier;
+        }
+
+        return null;
+    }
+
+    private static bool IsCSharpWrappedModifierToken(string text, int start, int length, string modifier) =>
+        length == modifier.Length
+        && string.CompareOrdinal(text, start, modifier, 0, length) == 0;
+
+    private static readonly string[] CSharpWrappedVisibilityModifiers =
+    [
+        "public",
+        "private",
+        "protected",
+        "internal",
+        "file",
+    ];
 
     /// <summary>
     /// Track multi-line C# `[...]` bracket sections across lines and blank out any text that

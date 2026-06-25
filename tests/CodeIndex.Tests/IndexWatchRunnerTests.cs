@@ -833,21 +833,7 @@ public class IndexWatchRunnerTests
         => TestProjectHelper.CreateTempProject("cdidx_watch_runner");
 
     private static void DeleteDirectory(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
+        => TestProjectHelper.DeleteDirectory(path);
 
     private static void AssertPrivateFileMode(string path)
     {

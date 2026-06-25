@@ -75,8 +75,10 @@ internal static class TypedLanguageReferenceExtractor
         if (openParen < 0)
             return false;
 
-        var prefix = normalizedExpression.Substring(0, openParen).Trim();
-        if (prefix.Length > 0 && !string.Equals(prefix, "new", StringComparison.Ordinal))
+        var prefixLeading = CountLeadingWhitespace(normalizedExpression, 0, openParen);
+        var prefixLength = openParen - prefixLeading;
+        prefixLength -= CountTrailingWhitespace(normalizedExpression, prefixLeading, prefixLength);
+        if (prefixLength > 0 && !normalizedExpression.AsSpan(prefixLeading, prefixLength).Equals("new", StringComparison.Ordinal))
             return false;
 
         var closeParen = ReferenceExtractor.FindMatchingChar(normalizedExpression, openParen, '(', ')');
@@ -191,14 +193,13 @@ internal static class TypedLanguageReferenceExtractor
         var typeList = line.Substring(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength);
-            var leading = CountLeadingWhitespace(rawSegment, 0, rawSegment.Length);
-            var trailing = CountTrailingWhitespace(rawSegment, leading, rawSegment.Length - leading);
-            var length = rawSegment.Length - leading - trailing;
+            var leading = CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var trailing = CountTrailingWhitespace(typeList, segmentStart + leading, segmentLength - leading);
+            var length = segmentLength - leading - trailing;
             if (length <= 0)
                 continue;
 
-            var expression = rawSegment.Substring(leading, length);
+            var expression = typeList.Substring(segmentStart + leading, length);
             if (trimTopLevelCallArguments)
                 expression = TrimTopLevelCallArguments(expression);
             if (expression.Length == 0)
@@ -596,7 +597,11 @@ internal static class TypedLanguageReferenceExtractor
         if (openParen <= 0)
             return expression;
 
-        return expression.Substring(0, openParen).TrimEnd();
+        var end = openParen;
+        while (end > 0 && char.IsWhiteSpace(expression[end - 1]))
+            end--;
+
+        return expression.Substring(0, end);
     }
 
     private static bool IsTopLevelStopKeyword(string text, int index, string keyword)

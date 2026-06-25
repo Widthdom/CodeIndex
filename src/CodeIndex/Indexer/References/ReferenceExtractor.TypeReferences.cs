@@ -7,6 +7,8 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private static readonly char[] CSharpReferenceLinePreparationTriggerChars = ['"', '\'', '`', '/'];
+
     private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
     private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape, string? ReturnTypeShape);
     private sealed record CSharpImplementedInterface(string Name, IReadOnlyDictionary<string, string> TypeArguments);
@@ -238,10 +240,16 @@ public static partial class ReferenceExtractor
         if (!TryFindCallableParameterList(signature!, "csharp", out _, out var paramStart, out var paramEnd))
             return null;
 
-        var parameterList = signature!.Substring(paramStart, paramEnd - paramStart).Trim();
-        if (parameterList.Length == 0)
+        var parameterStart = paramStart;
+        while (parameterStart < paramEnd && char.IsWhiteSpace(signature![parameterStart]))
+            parameterStart++;
+        var parameterEnd = paramEnd;
+        while (parameterEnd > parameterStart && char.IsWhiteSpace(signature![parameterEnd - 1]))
+            parameterEnd--;
+        if (parameterEnd == parameterStart)
             return string.Empty;
 
+        var parameterList = signature!.Substring(parameterStart, parameterEnd - parameterStart);
         return string.Join(
             ",",
             SplitTopLevelCommaSpans(parameterList)
@@ -250,14 +258,26 @@ public static partial class ReferenceExtractor
 
     private static string NormalizeCSharpParameterTypeShape(string parameter)
     {
-        var text = TrimCSharpParameterDefaultValue(parameter).Trim();
+        var text = TrimCSharpParameterDefaultValue(parameter);
+        var textStart = 0;
+        while (textStart < text.Length && char.IsWhiteSpace(text[textStart]))
+            textStart++;
+        var textEnd = text.Length;
+        while (textEnd > textStart && char.IsWhiteSpace(text[textEnd - 1]))
+            textEnd--;
+        if (textStart > 0 || textEnd < text.Length)
+            text = text.Substring(textStart, textEnd - textStart);
+
         var refKind = string.Empty;
         foreach (var modifier in new[] { "ref", "out", "in" })
         {
             if (StartsWithCSharpWord(text, modifier))
             {
                 refKind = modifier + ":";
-                text = text.Substring(modifier.Length).TrimStart();
+                var nextStart = modifier.Length;
+                while (nextStart < text.Length && char.IsWhiteSpace(text[nextStart]))
+                    nextStart++;
+                text = text.Substring(nextStart);
                 break;
             }
         }
@@ -272,7 +292,12 @@ public static partial class ReferenceExtractor
 
         var nameStart = FindTrailingCSharpParameterNameStart(text);
         if (nameStart > 0)
-            text = text.Substring(0, nameStart).TrimEnd();
+        {
+            var typeEnd = nameStart;
+            while (typeEnd > 0 && char.IsWhiteSpace(text[typeEnd - 1]))
+                typeEnd--;
+            text = text.Substring(0, typeEnd);
+        }
 
         var compactType = RemoveWhitespace(text);
         return refKind.Length == 0 ? compactType : refKind + compactType;
@@ -283,7 +308,12 @@ public static partial class ReferenceExtractor
         foreach (var modifier in new[] { "this", "scoped" })
         {
             if (StartsWithCSharpWord(text, modifier))
-                return text.Substring(modifier.Length).TrimStart();
+            {
+                var nextStart = modifier.Length;
+                while (nextStart < text.Length && char.IsWhiteSpace(text[nextStart]))
+                    nextStart++;
+                return text.Substring(nextStart);
+            }
         }
 
         return text;
@@ -2043,9 +2073,19 @@ public static partial class ReferenceExtractor
     {
         var text = headerText.TrimEnd();
         if (text.EndsWith(";", StringComparison.Ordinal))
-            text = text.Substring(0, text.Length - 1).TrimEnd();
+        {
+            var end = text.Length - 1;
+            while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+                end--;
+            text = text.Substring(0, end);
+        }
         if (text.EndsWith("{", StringComparison.Ordinal))
-            text = text.Substring(0, text.Length - 1).TrimEnd();
+        {
+            var end = text.Length - 1;
+            while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+                end--;
+            text = text.Substring(0, end);
+        }
 
         var colonIndex = FindSignatureColonIndex(text);
         if (colonIndex < 0)
@@ -2056,7 +2096,16 @@ public static partial class ReferenceExtractor
         if (whereMatch.Success)
             baseList = baseList.Substring(0, whereMatch.Index);
 
-        var firstEntry = TakeFirstBaseEntry(baseList).Trim();
+        var firstEntryText = TakeFirstBaseEntry(baseList);
+        var firstEntryStart = 0;
+        while (firstEntryStart < firstEntryText.Length && char.IsWhiteSpace(firstEntryText[firstEntryStart]))
+            firstEntryStart++;
+
+        var firstEntryEnd = firstEntryText.Length;
+        while (firstEntryEnd > firstEntryStart && char.IsWhiteSpace(firstEntryText[firstEntryEnd - 1]))
+            firstEntryEnd--;
+
+        var firstEntry = firstEntryText.Substring(firstEntryStart, firstEntryEnd - firstEntryStart);
         // Only count a `(` that sits at generic / bracket depth 0 — a primary-ctor base call
         // always puts its argument list directly after the bare type name, whereas generic args
         // and array ranks can legally contain `(` (tuple syntax `<(int, int)>`, function types
@@ -2105,7 +2154,12 @@ public static partial class ReferenceExtractor
 
         var text = signature.TrimEnd();
         if (text.EndsWith("{", StringComparison.Ordinal))
-            text = text.Substring(0, text.Length - 1).TrimEnd();
+        {
+            var end = text.Length - 1;
+            while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+                end--;
+            text = text.Substring(0, end);
+        }
 
         var colonIndex = FindSignatureColonIndex(text);
         if (colonIndex < 0)
@@ -2116,7 +2170,16 @@ public static partial class ReferenceExtractor
         if (whereMatch.Success)
             baseList = baseList.Substring(0, whereMatch.Index);
 
-        var firstEntry = TakeFirstBaseEntry(baseList).Trim();
+        var firstEntryText = TakeFirstBaseEntry(baseList);
+        var firstEntryStart = 0;
+        while (firstEntryStart < firstEntryText.Length && char.IsWhiteSpace(firstEntryText[firstEntryStart]))
+            firstEntryStart++;
+
+        var firstEntryEnd = firstEntryText.Length;
+        while (firstEntryEnd > firstEntryStart && char.IsWhiteSpace(firstEntryText[firstEntryEnd - 1]))
+            firstEntryEnd--;
+
+        var firstEntry = firstEntryText.Substring(firstEntryStart, firstEntryEnd - firstEntryStart);
         return ExtractBareTypeName(firstEntry);
     }
 
@@ -2453,6 +2516,9 @@ public static partial class ReferenceExtractor
 
     private static string PrepareLine(string lang, string line)
     {
+        if (lang == "csharp" && line.IndexOfAny(CSharpReferenceLinePreparationTriggerChars) < 0)
+            return line;
+
         var result = line;
         if (lang == "rust")
             result = MaskRustLifetimeTokens(result);
@@ -4396,9 +4462,13 @@ public static partial class ReferenceExtractor
 
     private static string MaskJavaTextBlocks(string content)
     {
+        var firstTextBlockCandidate = content.IndexOf("\"\"\"", StringComparison.Ordinal);
+        if (firstTextBlockCandidate < 0)
+            return content;
+
         var chars = content.ToCharArray();
 
-        for (var i = 0; i + 2 < chars.Length; i++)
+        for (var i = firstTextBlockCandidate; i + 2 < chars.Length; i++)
         {
             if (!IsJavaTextBlockOpening(chars, i))
                 continue;

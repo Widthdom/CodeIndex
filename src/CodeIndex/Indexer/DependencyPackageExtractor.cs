@@ -437,7 +437,8 @@ internal static class DependencyPackageExtractor
     {
         name = string.Empty;
         version = null;
-        var normalized = spec.Split(';', 2)[0].Trim();
+        var markerIndex = spec.IndexOf(';');
+        var normalized = (markerIndex >= 0 ? spec[..markerIndex] : spec).Trim();
         if (normalized.Length == 0)
             return false;
 

@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace CodeIndex.Indexer;
 
 internal static class RustSymbolNameNormalizer
@@ -16,15 +18,45 @@ internal static class RustSymbolNameNormalizer
                 ? trimmed[2..]
                 : trimmed;
 
-        var segments = trimmed.Split("::");
-        for (var i = 0; i < segments.Length; i++)
+        var builder = new StringBuilder(trimmed.Length);
+        var segmentStart = 0;
+        while (segmentStart <= trimmed.Length)
         {
-            var segment = segments[i].Trim();
-            if (segment.StartsWith("r#", StringComparison.Ordinal))
-                segment = segment[2..];
-            segments[i] = segment;
+            var separator = trimmed.IndexOf("::", segmentStart, StringComparison.Ordinal);
+            var segmentEnd = separator >= 0 ? separator : trimmed.Length;
+            AppendRustPathSegment(builder, trimmed, segmentStart, segmentEnd - segmentStart, trim: true);
+            if (separator < 0)
+                break;
+
+            builder.Append("::");
+            segmentStart = separator + 2;
         }
 
-        return string.Join("::", segments);
+        return builder.ToString();
+    }
+
+    private static void AppendRustPathSegment(StringBuilder builder, string value, int start, int length, bool trim)
+    {
+        if (trim)
+        {
+            while (length > 0 && char.IsWhiteSpace(value[start]))
+            {
+                start++;
+                length--;
+            }
+
+            while (length > 0 && char.IsWhiteSpace(value[start + length - 1]))
+                length--;
+        }
+
+        if (length >= 2
+            && value[start] == 'r'
+            && value[start + 1] == '#')
+        {
+            start += 2;
+            length -= 2;
+        }
+
+        builder.Append(value, start, length);
     }
 }

@@ -154,7 +154,7 @@ internal static class SwiftSymbolNameNormalizer
         if (index < 0 || index + word.Length > text.Length)
             return false;
 
-        if (!string.Equals(text.Substring(index, word.Length), word, StringComparison.Ordinal))
+        if (string.CompareOrdinal(text, index, word, 0, word.Length) != 0)
             return false;
 
         var beforeOk = index == 0 || !IsWordChar(text[index - 1]);

@@ -253,6 +253,36 @@ public static partial class IndexCommandRunner
             throw new IndexInterruptedException(updated + removed, targetPaths.Count);
         }
 
+        string ToUpdateAbsolutePath(string path)
+            => Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+
+        string ToUpdateRelativePath(string path)
+            => Path.IsPathRooted(path)
+                ? Path.GetRelativePath(projectRoot, path)
+                : path;
+
+        IEnumerable<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
+            IReadOnlyDictionary<string, string>? scannedLanguages)
+        {
+            foreach (var targetPath in targetPaths)
+            {
+                var absPath = ToUpdateAbsolutePath(targetPath);
+                string? language = null;
+                if (scannedLanguages != null && scannedLanguages.TryGetValue(absPath, out var scannedLanguage))
+                {
+                    if (scannedLanguage != "csharp")
+                        continue;
+
+                    language = scannedLanguage;
+                }
+
+                yield return CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+            }
+        }
+
+        IReadOnlyDictionary<string, string>? scannedUpdateLanguages = null;
         ThrowIfUpdateCancelled();
         WriteIndexJsonLiveness(options, "checking C# workspace contracts...");
         var csharpWorkspaceHeartbeat = StartIndexJsonPhaseHeartbeat(options, "checking C# workspace contracts");
@@ -262,8 +292,7 @@ public static partial class IndexCommandRunner
             csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                 writer,
                 indexer,
-                projectRoot,
-                targetPaths,
+                BuildCSharpPrepassTargets(scannedUpdateLanguages),
                 cancellationToken: cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -281,6 +310,7 @@ public static partial class IndexCommandRunner
             try
             {
                 var scanResult = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                scannedUpdateLanguages = scanResult.FileLanguages;
                 foreach (var filePath in scanResult.Files)
                 {
                     if (scanResult.FileLanguages.TryGetValue(filePath, out var language)
@@ -291,8 +321,7 @@ public static partial class IndexCommandRunner
                 csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
-                    projectRoot,
-                    targetPaths,
+                    BuildCSharpPrepassTargets(scannedUpdateLanguages),
                     cancellationToken: cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -328,14 +357,16 @@ public static partial class IndexCommandRunner
         using var symbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
         try
         {
-            foreach (var relPath in targetPaths)
+            foreach (var targetPath in targetPaths)
             {
                 ThrowIfUpdateCancelled();
                 StartUpdateSpinnerIfNeeded();
+                var relPath = ToUpdateRelativePath(targetPath);
                 currentUpdatePath = relPath;
-                var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
+                var absPath = ToUpdateAbsolutePath(targetPath);
                 var dbPath = FileIndexer.NormalizeIndexPath(relPath);
                 var fileBatchMarked = false;
+                string? knownLanguage = null;
                 try
                 {
                     if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
@@ -569,7 +600,7 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var statReusableLanguage = TryDetectStatReusableLanguage(indexer, absPath);
+                    var statReusableLanguage = GetStatReusableLanguage(absPath, detection);
                     var statMatchedId = TryGetUnchangedFileIdFromStat(
                         writer,
                         projectRoot,
@@ -602,11 +633,19 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    var loaded = indexer.BuildLoadedRecordWithRawBytes(absPath, cancellationToken);
+                    if (scannedUpdateLanguages != null)
+                        knownLanguage = FileIndexer.GetReusableDetectedLanguage(absPath, scannedUpdateLanguages);
+
+                    var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                        absPath,
+                        relPath,
+                        knownLanguage,
+                        cancellationToken);
                     var record = loaded.Record;
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
+                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
 
                     if (warning != null && !options.Json && !options.Quiet)
                     {
@@ -634,7 +673,7 @@ public static partial class IndexCommandRunner
                         existingId = null;
                     }
                     if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
                     {
                         existingId = null;
                     }
@@ -676,7 +715,6 @@ public static partial class IndexCommandRunner
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                     var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
-                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
                         writer.InsertChunks(chunks, cancellationToken);
@@ -823,7 +861,7 @@ public static partial class IndexCommandRunner
                         DemoteReadinessOnce();
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
-                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
@@ -849,7 +887,7 @@ public static partial class IndexCommandRunner
                         DemoteReadinessOnce();
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
-                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);

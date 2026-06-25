@@ -318,8 +318,23 @@ public static partial class SymbolExtractor
 
     private static IEnumerable<string> EnumerateHtmlClassNames(string value)
     {
-        foreach (var token in value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-            yield return token;
+        var tokenStart = -1;
+        for (var index = 0; index <= value.Length; index++)
+        {
+            var atEnd = index == value.Length;
+            if (!atEnd && !char.IsWhiteSpace(value[index]))
+            {
+                if (tokenStart < 0)
+                    tokenStart = index;
+                continue;
+            }
+
+            if (tokenStart < 0)
+                continue;
+
+            yield return value[tokenStart..index];
+            tokenStart = -1;
+        }
     }
 
     private static bool IsHtmlSemanticStateAttributeName(string attrNameLower)

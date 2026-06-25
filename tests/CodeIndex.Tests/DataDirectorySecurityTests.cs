@@ -24,8 +24,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -55,8 +54,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -80,8 +78,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -116,8 +113,8 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (tempDir != null && Directory.Exists(tempDir.FullName))
-                Directory.Delete(tempDir.FullName, recursive: true);
+            if (tempDir != null)
+                TestProjectHelper.DeleteDirectory(tempDir.FullName);
         }
     }
 
@@ -220,8 +217,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -259,8 +255,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -282,8 +277,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -301,8 +295,7 @@ public class DataDirectorySecurityTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 

@@ -398,14 +398,7 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     {
         IssueDuplicatePreflight.s_httpClientOverride = null;
         _env.Dispose();
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-        }
+        TestProjectHelper.DeleteDirectory(_tempDir);
     }
 
     private sealed class RecordingOpenIssuesHandler(string json) : HttpMessageHandler

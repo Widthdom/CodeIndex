@@ -20,6 +20,17 @@ public static partial class ReferenceExtractor
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
+        if (TryExtractStructuralMetadataReferences(
+            fileId,
+            language,
+            content,
+            path,
+            request.ContentIsNormalized,
+            request.HasOversizeLine,
+            request.CancellationToken,
+            out var structuralMetadataReferences))
+            return structuralMetadataReferences;
+
         if (!TryPrepareReferenceLines(
             language,
             content,
@@ -48,12 +59,6 @@ public static partial class ReferenceExtractor
         var typeScriptTypeAliases = language == "typescript"
             ? TypeScriptReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;
-        if (language == "solution")
-            return ExtractSolutionReferences(fileId, lines);
-
-        if (language is "dependency_manifest" or "dependency_lock")
-            return DependencyPackageExtractor.ExtractReferences(fileId, content, lines, path, language);
-
         var swiftTypeAliases = language == "swift"
             ? SwiftReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;

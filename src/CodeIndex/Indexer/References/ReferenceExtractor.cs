@@ -1006,9 +1006,7 @@ public static partial class ReferenceExtractor
                 return new ReferenceExtractionResult([], []);
             if (!contentIsNormalized)
             {
-                if (content.Contains('\r'))
-                    content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-                content = FileIndexer.StripLineLeadingInvisibles(content);
+                content = FileIndexer.NormalizeContentForPrepass(content);
             }
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -2120,14 +2118,21 @@ public static partial class ReferenceExtractor
         string language)
     {
         int offset = 0;
-        foreach (var segment in arg.Split('.'))
+        var segmentStart = 0;
+        while (segmentStart <= arg.Length)
         {
-            if (segment.Length == 0)
+            var dotIndex = arg.IndexOf('.', segmentStart);
+            var segmentLength = dotIndex < 0 ? arg.Length - segmentStart : dotIndex - segmentStart;
+            if (segmentLength == 0)
             {
                 offset += 1; // '.' separator / ドット区切り分
+                if (dotIndex < 0)
+                    break;
+                segmentStart = dotIndex + 1;
                 continue;
             }
 
+            var segment = arg.Substring(segmentStart, segmentLength);
             var normalizedSegment = language == "csharp" ? NormalizeCSharpIdentifier(segment) : segment;
             var isEscapedCSharpIdentifier = language == "csharp" && segment[0] == '@';
             if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
@@ -2156,6 +2161,9 @@ public static partial class ReferenceExtractor
             }
 
             offset += segment.Length + 1; // segment + '.'
+            if (dotIndex < 0)
+                break;
+            segmentStart = dotIndex + 1;
         }
     }
 
@@ -2392,7 +2400,7 @@ public static partial class ReferenceExtractor
 
     private static string SanitizeCSharpCommentsForReflectionNameScan(string line)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
         var inRegularString = false;
         var inVerbatimString = false;
         var inChar = false;
@@ -2428,6 +2436,7 @@ public static partial class ReferenceExtractor
                 return line[..i];
             if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
+                chars ??= line.ToCharArray();
                 chars[i] = ' ';
                 chars[i + 1] = ' ';
                 i += 2;
@@ -2462,7 +2471,7 @@ public static partial class ReferenceExtractor
                 inChar = true;
         }
 
-        return new string(chars);
+        return chars == null ? line : new string(chars);
     }
 
     private static bool IsInsideCSharpStringLiteral(string line, int targetIndex)

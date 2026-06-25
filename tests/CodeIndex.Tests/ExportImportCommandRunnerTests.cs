@@ -45,7 +45,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -75,7 +75,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -101,7 +101,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -135,7 +135,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -202,7 +202,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -927,7 +927,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -955,7 +955,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1010,7 +1010,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1037,7 +1037,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1071,7 +1071,7 @@ public class ExportImportCommandRunnerTests
         finally
         {
             ExportImportCommandRunner.DeleteSqliteSidecarForTesting = null;
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1103,7 +1103,7 @@ public class ExportImportCommandRunnerTests
         finally
         {
             ExportImportCommandRunner.ApplyPrivateFileModeForTesting = null;
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1130,7 +1130,7 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 

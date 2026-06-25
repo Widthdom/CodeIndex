@@ -796,8 +796,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(tempDir);
         }
     }
 
@@ -822,8 +821,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(tempDir);
         }
     }
 
@@ -879,8 +877,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(interruptedDir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(interruptedDir);
         }
     }
 
@@ -911,8 +908,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -952,8 +948,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1014,8 +1009,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1049,8 +1043,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1083,8 +1076,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1188,8 +1180,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1237,8 +1228,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1268,7 +1258,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1331,8 +1321,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1365,8 +1354,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(completedDir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(completedDir);
         }
     }
 
@@ -1400,8 +1388,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1586,8 +1573,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1649,8 +1635,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1681,8 +1666,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1731,8 +1715,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1777,8 +1760,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1816,8 +1798,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1852,8 +1833,7 @@ public class LegacySchemaMigrationTests : IDisposable
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            DeleteDirectoryAfterClearingPools(dir);
         }
     }
 
@@ -1883,5 +1863,11 @@ public class LegacySchemaMigrationTests : IDisposable
         }
 
         return false;
+    }
+
+    private static void DeleteDirectoryAfterClearingPools(string path)
+    {
+        SqliteConnection.ClearAllPools();
+        TestProjectHelper.DeleteDirectory(path);
     }
 }

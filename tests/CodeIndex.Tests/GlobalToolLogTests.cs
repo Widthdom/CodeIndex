@@ -67,8 +67,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            TestProjectHelper.DeleteDirectory(directory);
         }
     }
 
@@ -110,8 +109,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            TestProjectHelper.DeleteDirectory(directory);
         }
     }
 
@@ -164,8 +162,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            TestProjectHelper.DeleteDirectory(directory);
         }
     }
 
@@ -208,8 +205,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            TestProjectHelper.DeleteDirectory(directory);
         }
     }
 
@@ -234,8 +230,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            TestProjectHelper.DeleteDirectory(directory);
         }
     }
 
@@ -267,8 +262,7 @@ public class GlobalToolLogTests
         finally
         {
             AtomicFileWriter.FlushParentDirectoryForTesting = null;
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            TestProjectHelper.DeleteDirectory(directory);
         }
     }
 
@@ -306,8 +300,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(logRoot))
-                Directory.Delete(logRoot, recursive: true);
+            TestProjectHelper.DeleteDirectory(logRoot);
             if (File.Exists(capturedLogPath))
                 File.Delete(capturedLogPath);
         }
@@ -572,8 +565,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -634,8 +626,7 @@ public class GlobalToolLogTests
         finally
         {
             CultureInfo.CurrentCulture = previousCulture;
-            if (Directory.Exists(logRoot))
-                Directory.Delete(logRoot, recursive: true);
+            TestProjectHelper.DeleteDirectory(logRoot);
         }
     }
 
@@ -667,8 +658,7 @@ public class GlobalToolLogTests
         finally
         {
             Console.SetError(originalError);
-            if (Directory.Exists(logRoot))
-                Directory.Delete(logRoot, recursive: true);
+            TestProjectHelper.DeleteDirectory(logRoot);
         }
     }
 
@@ -707,8 +697,7 @@ public class GlobalToolLogTests
         finally
         {
             Console.SetError(originalError);
-            if (Directory.Exists(logRoot))
-                Directory.Delete(logRoot, recursive: true);
+            TestProjectHelper.DeleteDirectory(logRoot);
         }
     }
 

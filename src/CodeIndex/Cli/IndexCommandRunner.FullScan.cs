@@ -847,7 +847,7 @@ public static partial class IndexCommandRunner
         var fileTargets = files.Select(filePath => FullScanFileTarget.Create(
             projectRoot,
             filePath,
-            scanResult.FileLanguages.TryGetValue(filePath, out var language) ? language : null)).ToArray();
+            FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
@@ -1140,12 +1140,14 @@ public static partial class IndexCommandRunner
                 () => currentCSharpWorkspaceFile);
             try
             {
-                var csharpPrepassTargets = fileTargets.Select(static target => new CSharpStaticInterfacePrepass.FileTarget(
-                    target.FilePath,
-                    target.RelativePath,
-                    target.DisplayRelativePath,
-                    target.IndexPath,
-                    target.Language));
+                var csharpPrepassTargets = fileTargets
+                    .Where(static target => target.Language == "csharp")
+                    .Select(static target => new CSharpStaticInterfacePrepass.FileTarget(
+                        target.FilePath,
+                        target.RelativePath,
+                        target.DisplayRelativePath,
+                        target.IndexPath,
+                        target.Language));
                 csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
@@ -1201,7 +1203,11 @@ public static partial class IndexCommandRunner
                         try
                         {
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
-                            var loaded = indexer.BuildLoadedRecordWithRawBytes(filePath, relativeFilePath, extractionCancellationToken);
+                            var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                                filePath,
+                                relativeFilePath,
+                                target.Language,
+                                extractionCancellationToken);
                             var record = loaded.Record;
                             var content = loaded.Content;
                             var rawBytes = loaded.RawBytes;
@@ -1225,7 +1231,17 @@ public static partial class IndexCommandRunner
                                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
                                         generatedSuppressionIssue);
                                     extractionResults.Add(
-                                        FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks, symbols, references, issues),
+                                        FullScanFileWorkItem.Precomputed(
+                                            filePath,
+                                            displayRelativePath,
+                                            record,
+                                            warning,
+                                            chunks,
+                                            symbols,
+                                            references,
+                                            issues,
+                                            generatedSuppressionIssue,
+                                            generatedSuppressionChecked: true),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1296,8 +1312,32 @@ public static partial class IndexCommandRunner
                             }
                             extractionResults.Add(
                                 parallelizeExtraction
-                                    ? FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, warning, chunks!, symbols!, references!, issues!)
-                                    : FullScanFileWorkItem.Success(filePath, displayRelativePath, record, content, rawBytes, loaded.Inspection, hasOversizeLine, warning, chunks, symbols, references, issues),
+                                    ? FullScanFileWorkItem.Precomputed(
+                                        filePath,
+                                        displayRelativePath,
+                                        record,
+                                        warning,
+                                        chunks!,
+                                        symbols!,
+                                        references!,
+                                        issues!,
+                                        generatedSuppressionIssue,
+                                        generatedSuppressionChecked: true)
+                                    : FullScanFileWorkItem.Success(
+                                        filePath,
+                                        displayRelativePath,
+                                        record,
+                                        content,
+                                        rawBytes,
+                                        loaded.Inspection,
+                                        hasOversizeLine,
+                                        warning,
+                                        chunks,
+                                        symbols,
+                                        references,
+                                        issues,
+                                        generatedSuppressionIssue,
+                                        generatedSuppressionChecked: true),
                                 extractionCancellationToken);
                         }
                         catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
@@ -1306,7 +1346,7 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
+                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
                             var issue = BuildNullByteIssue(ex);
                             extractionResults.Add(
                                 FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
@@ -1314,7 +1354,7 @@ public static partial class IndexCommandRunner
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {
-                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath);
+                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
                             var issue = new FileIssue
                             {
                                 Path = ex.RelativePath,
@@ -1427,6 +1467,9 @@ public static partial class IndexCommandRunner
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
 
+                    var generatedSuppressionIssue = item.GeneratedSuppressionChecked
+                        ? item.GeneratedSuppressionIssue
+                        : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     long? existingId = null;
                     if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                     {
@@ -1452,7 +1495,7 @@ public static partial class IndexCommandRunner
                         existingId = null;
                     }
                     if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)))
+                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
                     {
                         existingId = null;
                     }
@@ -1494,7 +1537,6 @@ public static partial class IndexCommandRunner
                             item.Content!,
                             item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!))
                         : ReassignChunkFileIds(item.Chunks, fileId);
-                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                     if (generatedSuppressionIssue != null)
                     {
                         writer.InsertChunks(chunks, cancellationToken);

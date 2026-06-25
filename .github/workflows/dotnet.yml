@@ -200,7 +200,11 @@ jobs:
           path: |
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          # Locked restore keeps package inputs honest; avoid evicting the cache for project-only test edits.
+          # locked restore がパッケージ入力を検証するため、テスト用 project だけの変更ではキャッシュを失効させない。
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
@@ -213,8 +217,16 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore CodeIndex.sln --locked-mode
 
+      - name: Select CI lane
+        id: lane
+        shell: pwsh
+        run: |
+          $primaryLane = "${{ matrix.os }}" -eq "ubuntu-latest" -and "${{ matrix.test-framework }}" -eq "net8.0"
+          $primaryLaneText = if ($primaryLane) { "true" } else { "false" }
+          "primary_lane=$primaryLaneText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Audit NuGet package vulnerabilities
-        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: steps.lane.outputs.primary_lane == 'true'
         shell: pwsh
         run: |
           $auditOutput = dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1
@@ -231,15 +243,15 @@ jobs:
           }
 
       - name: Verify Release solution build
-        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: steps.lane.outputs.primary_lane == 'true'
         run: dotnet build CodeIndex.sln --configuration Release --no-restore -p:UseSharedCompilation=false
 
       - name: Verify developer task wrapper
-        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: steps.lane.outputs.primary_lane == 'true'
         run: make lint
 
       - name: Build
-        if: matrix.os != 'ubuntu-latest' || matrix.test-framework != 'net8.0'
+        if: steps.lane.outputs.primary_lane != 'true'
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
       - name: Test
@@ -252,27 +264,46 @@ jobs:
             "--configuration", "Release",
             "--framework", "${{ matrix.test-framework }}",
             "--no-build",
-            "--no-restore",
             "--nologo",
             "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout", "5m",
-            "--logger", "trx;LogFileName=test_results.trx",
-            "--results-directory", "./TestResults"
+            "--logger", "trx;LogFileName=test_results.trx"
           )
 
-          $collectCoverage = "${{ matrix.os }}" -eq "ubuntu-latest" -and "${{ matrix.test-framework }}" -eq "net8.0"
+          $collectCoverage = "${{ steps.lane.outputs.primary_lane }}" -eq "true"
           if ($collectCoverage) {
             $testArgs += @("--collect", "XPlat Code Coverage")
           } else {
             Write-Host "Skipping XPlat Code Coverage outside ubuntu-latest/net8.0 so platform/framework matrix lanes run only the test suite."
           }
 
-          New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
+          function Invoke-TestRun {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$LogPath
+            )
+
+            $capturedOutput = [System.Collections.Generic.List[string]]::new()
+            dotnet @testArgs 2>&1 | ForEach-Object {
+              $line = [string]$_
+              $capturedOutput.Add($line)
+              Write-Host $line
+            }
+
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+              $logDirectory = Split-Path -Parent $LogPath
+              New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+              [System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)
+            }
+
+            return $exitCode
+          }
+
           $firstLogPath = Join-Path "./TestResults" "test-output-first.txt"
-          dotnet @testArgs 2>&1 | Tee-Object -FilePath $firstLogPath
-          $firstExitCode = $LASTEXITCODE
+          $firstExitCode = Invoke-TestRun -LogPath $firstLogPath
           if ($firstExitCode -eq 0) {
             exit 0
           }
@@ -286,8 +317,7 @@ jobs:
 
           Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
           $retryLogPath = Join-Path "./TestResults" "test-output-retry.txt"
-          dotnet @testArgs 2>&1 | Tee-Object -FilePath $retryLogPath
-          $retryExitCode = $LASTEXITCODE
+          $retryExitCode = Invoke-TestRun -LogPath $retryLogPath
           if ($retryExitCode -eq 0) {
             "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
               Set-Content -Encoding UTF8 ./TestResults/flaky-retry.txt
@@ -299,7 +329,7 @@ jobs:
 
       - name: Summarize TRX telemetry
         if: always() && (steps.test.outputs.summarize == 'true' || failure())
-        run: dotnet run --project tools/CodeIndex.TestTelemetry -- summarize --results-directory ./TestResults --top 10
+        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
         if: always() && (steps.test.outputs.summarize == 'true' || failure())
@@ -312,7 +342,6 @@ jobs:
             TestResults/**/*.trx
             TestResults/**/*.txt
             TestResults/**/*.xml
-            TestResults/**/*Sequence*.xml
 
       - name: Upload diagnostic dumps
         if: failure()
@@ -328,7 +357,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: always() && steps.lane.outputs.primary_lane == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
@@ -337,11 +366,11 @@ jobs:
           path: TestResults/**/coverage.cobertura.xml
 
       - name: Publish
-        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: steps.lane.outputs.primary_lane == 'true'
         run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --output publish
 
       - name: Upload build artifact
-        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        if: steps.lane.outputs.primary_lane == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CodeIndex

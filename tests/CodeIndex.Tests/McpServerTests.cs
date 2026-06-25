@@ -472,33 +472,6 @@ public sealed class Caller
         return counts;
     }
 
-    private static void DeleteSqliteDatabaseFiles(string dbPath)
-    {
-        DeleteFileWithRetry(dbPath);
-        DeleteFileWithRetry(dbPath + "-wal");
-        DeleteFileWithRetry(dbPath + "-shm");
-    }
-
-    private static void DeleteFileWithRetry(string path)
-    {
-        const int maxAttempts = 5;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                SqliteConnection.ClearAllPools();
-                if (File.Exists(path))
-                    File.Delete(path);
-                return;
-            }
-            catch (Exception ex) when (attempt < maxAttempts && ex is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50 * attempt);
-            }
-        }
-    }
-
     private void MarkFoldReady()
     {
         var writer = new DbWriter(_db.Connection);
@@ -9038,8 +9011,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -9740,8 +9712,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -9811,8 +9782,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11198,7 +11168,7 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -11228,7 +11198,7 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -11259,7 +11229,7 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -11304,7 +11274,7 @@ public sealed class Caller
         {
             McpServer.McpIndexFileCommittedForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -11358,7 +11328,7 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -11583,12 +11553,10 @@ public sealed class Caller
         finally
         {
             heldLock.Dispose();
-            File.Delete(infoPath);
-            File.Delete(lockPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11615,12 +11583,9 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11657,12 +11622,9 @@ public sealed class Caller
         {
             McpIndexRunLock.CleanupDiagnosticSinkForTesting = null;
             McpIndexRunLock.DeleteFileForTesting = File.Delete;
-            if (File.Exists(infoPath))
-                File.Delete(infoPath);
-            if (File.Exists(lockPath))
-                File.Delete(lockPath);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11706,12 +11668,10 @@ public sealed class Caller
         finally
         {
             heldLock.Dispose();
-            File.Delete(infoPath);
-            File.Delete(lockPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11758,12 +11718,10 @@ public sealed class Caller
         finally
         {
             heldLock.Dispose();
-            File.Delete(infoPath);
-            File.Delete(lockPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(infoPath);
+            TestProjectHelper.DeleteFile(lockPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -11812,8 +11770,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -11888,8 +11845,7 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
@@ -11991,8 +11947,7 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRootA);
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
@@ -12055,8 +12010,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
@@ -12103,8 +12057,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
@@ -12146,9 +12099,8 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -12379,10 +12331,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12442,10 +12392,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12482,10 +12430,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12583,10 +12529,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12675,10 +12619,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12747,10 +12689,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12831,10 +12771,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -12872,8 +12810,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -12922,8 +12859,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -12962,8 +12898,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -13313,10 +13248,8 @@ public sealed class Caller
         {
             if (originalMode.HasValue && Directory.Exists(unreadableDir))
                 File.SetUnixFileMode(unreadableDir, originalMode.Value);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -13338,9 +13271,7 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -14338,10 +14269,8 @@ public sealed class Caller
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
-            if (Directory.Exists(fixtureDir))
-                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -15677,7 +15606,7 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(500),
+            RequestTimeout = TimeSpan.FromMilliseconds(250),
         };
         using var delayStarted = new ManualResetEventSlim(false);
         using var releaseDelay = new ManualResetEventSlim(false);
@@ -15690,11 +15619,12 @@ public sealed class Caller
 
         try
         {
-            var responseText = await server.ProcessFrameAsync(
+            var responseTask = server.ProcessFrameAsync(
                 """{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}""");
             Assert.True(delayStarted.Wait(TimeSpan.FromSeconds(1)));
             server.RequestDelayForTests = null;
 
+            var responseText = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
             var response = JsonNode.Parse(responseText!)!;
             var error = response["error"]!;
             Assert.Equal(-32603, error["code"]!.GetValue<int>());
@@ -15725,24 +15655,37 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(20),
+            RequestTimeout = TimeSpan.FromMilliseconds(250),
         };
+        using var delayStarted = new ManualResetEventSlim(false);
+        using var releaseDelay = new ManualResetEventSlim(false);
         server.RequestDelayForTests = _ =>
         {
-            Thread.Sleep(TimeSpan.FromMilliseconds(200));
+            delayStarted.Set();
+            Assert.True(releaseDelay.Wait(TimeSpan.FromSeconds(5)));
             return Task.CompletedTask;
         };
 
-        var responseText = await server.ProcessFrameAsync(
-            """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
+        try
+        {
+            var responseTask = server.ProcessFrameAsync(
+                """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
+            Assert.True(delayStarted.Wait(TimeSpan.FromSeconds(1)));
+            server.RequestDelayForTests = null;
 
-        var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
-        var error = response["error"]!;
-        Assert.Equal(-32603, error["code"]!.GetValue<int>());
-        Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
-        Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
-        Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
-        Assert.Equal(123, response["id"]!.GetValue<int>());
+            var responseText = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
+            var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
+            var error = response["error"]!;
+            Assert.Equal(-32603, error["code"]!.GetValue<int>());
+            Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
+            Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+            Assert.True(error["data"]!["isolated_action_draining"]!.GetValue<bool>());
+            Assert.Equal(123, response["id"]!.GetValue<int>());
+        }
+        finally
+        {
+            releaseDelay.Set();
+        }
     }
 
     [Fact]
@@ -15934,27 +15877,8 @@ public sealed class Caller
 
     private static void DeleteFileRobust(string path)
     {
-        if (!File.Exists(path))
-            return;
-
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            SqliteConnection.ClearAllPools();
-
-            try
-            {
-                File.Delete(path);
-                return;
-            }
-            catch (IOException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-            }
-            catch (UnauthorizedAccessException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-            }
-        }
+        SqliteConnection.ClearAllPools();
+        TestProjectHelper.DeleteFile(path);
     }
 
     private void DropGraphExactFallbackIndexes()

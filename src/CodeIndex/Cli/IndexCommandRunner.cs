@@ -1120,12 +1120,13 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static string? TryDetectStatReusableLanguage(FileIndexer indexer, string absolutePath)
+    private static string? GetStatReusableLanguage(
+        string absolutePath,
+        FileIndexer.LanguageDetectionResult detection)
     {
         if (string.Equals(Path.GetExtension(absolutePath), ".h", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
         return detection.Status == FileIndexer.FileProbeStatus.Supported
             ? detection.Language
             : null;
@@ -1205,6 +1206,8 @@ public static partial class IndexCommandRunner
         IReadOnlyList<SymbolRecord>? Symbols,
         IReadOnlyList<ReferenceRecord>? References,
         IReadOnlyList<FileIssue>? Issues,
+        FileIssue? GeneratedSuppressionIssue,
+        bool GeneratedSuppressionChecked,
         Exception? Exception)
     {
         public static FullScanFileWorkItem Success(
@@ -1219,9 +1222,26 @@ public static partial class IndexCommandRunner
             IReadOnlyList<ChunkRecord>? chunks,
             IReadOnlyList<SymbolRecord>? symbols,
             IReadOnlyList<ReferenceRecord>? references,
-            IReadOnlyList<FileIssue>? issues)
+            IReadOnlyList<FileIssue>? issues,
+            FileIssue? generatedSuppressionIssue,
+            bool generatedSuppressionChecked)
         {
-            return new FullScanFileWorkItem(filePath, relativePath, record, content, rawBytes, inspection, hasOversizeLine, warning, chunks, symbols, references, issues, null);
+            return new FullScanFileWorkItem(
+                filePath,
+                relativePath,
+                record,
+                content,
+                rawBytes,
+                inspection,
+                hasOversizeLine,
+                warning,
+                chunks,
+                symbols,
+                references,
+                issues,
+                generatedSuppressionIssue,
+                generatedSuppressionChecked,
+                null);
         }
 
         public static FullScanFileWorkItem Precomputed(
@@ -1232,16 +1252,33 @@ public static partial class IndexCommandRunner
             IReadOnlyList<ChunkRecord> chunks,
             IReadOnlyList<SymbolRecord> symbols,
             IReadOnlyList<ReferenceRecord> references,
-            IReadOnlyList<FileIssue> issues)
+            IReadOnlyList<FileIssue> issues,
+            FileIssue? generatedSuppressionIssue = null,
+            bool generatedSuppressionChecked = false)
         {
-            return new FullScanFileWorkItem(filePath, relativePath, record, null, null, null, null, warning, chunks, symbols, references, issues, null);
+            return new FullScanFileWorkItem(
+                filePath,
+                relativePath,
+                record,
+                null,
+                null,
+                null,
+                null,
+                warning,
+                chunks,
+                symbols,
+                references,
+                issues,
+                generatedSuppressionIssue,
+                generatedSuppressionChecked,
+                null);
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, exception);
+            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, null, null, warning, null, null, null, null, null);
+            => new(filePath, relativePath, null, null, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

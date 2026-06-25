@@ -82,9 +82,12 @@ internal static class IndexFreshnessChecker
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                var knownLanguage = FileIndexer.GetReusableDetectedLanguage(target.AbsolutePath, scan.FileLanguages);
                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
                     target.AbsolutePath,
                     target.RelativePath,
+                    knownLanguage,
+                    detectGeneratedCode: false,
                     cancellationToken);
                 var record = loaded.Record;
                 result.WorkspaceFileCount++;

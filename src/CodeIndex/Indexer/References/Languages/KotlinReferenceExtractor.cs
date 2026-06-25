@@ -109,21 +109,58 @@ internal static class KotlinReferenceExtractor
         if (string.IsNullOrWhiteSpace(symbol.Signature))
             return false;
 
-        var tokens = symbol.Signature.Split(
-            [' ', '\t', '\r', '\n', '('],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var index = 0;
-        while (index < tokens.Length && tokens[index] is "public" or "private" or "protected" or "internal" or "expect" or "actual" or "abstract" or "sealed" or "data" or "open" or "final" or "value" or "inner")
-            index++;
+        var cursor = 0;
+        var tokenStart = 0;
+        var tokenLength = 0;
+        while (TryReadNextKotlinSignatureToken(symbol.Signature, ref cursor, out tokenStart, out tokenLength)
+               && IsKotlinConstructabilityModifier(symbol.Signature, tokenStart, tokenLength))
+        {
+        }
 
-        if (index >= tokens.Length)
+        if (tokenLength == 0)
             return true;
 
-        if (tokens[index] == "annotation" && index + 1 < tokens.Length && tokens[index + 1] == "class")
+        if (KotlinSignatureTokenEquals(symbol.Signature, tokenStart, tokenLength, "annotation")
+            && TryReadNextKotlinSignatureToken(symbol.Signature, ref cursor, out var nextTokenStart, out var nextTokenLength)
+            && KotlinSignatureTokenEquals(symbol.Signature, nextTokenStart, nextTokenLength, "class"))
             return false;
 
-        return tokens[index] is not ("object" or "companion");
+        return !KotlinSignatureTokenEquals(symbol.Signature, tokenStart, tokenLength, "object")
+               && !KotlinSignatureTokenEquals(symbol.Signature, tokenStart, tokenLength, "companion");
     }
+
+    private static bool TryReadNextKotlinSignatureToken(string signature, ref int cursor, out int tokenStart, out int tokenLength)
+    {
+        while (cursor < signature.Length && (char.IsWhiteSpace(signature[cursor]) || signature[cursor] == '('))
+            cursor++;
+
+        var start = cursor;
+        while (cursor < signature.Length && !char.IsWhiteSpace(signature[cursor]) && signature[cursor] != '(')
+            cursor++;
+
+        tokenStart = start;
+        tokenLength = cursor - start;
+        return tokenLength > 0;
+    }
+
+    private static bool IsKotlinConstructabilityModifier(string signature, int tokenStart, int tokenLength)
+        => KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "public")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "private")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "protected")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "internal")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "expect")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "actual")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "abstract")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "sealed")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "data")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "open")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "final")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "value")
+           || KotlinSignatureTokenEquals(signature, tokenStart, tokenLength, "inner");
+
+    private static bool KotlinSignatureTokenEquals(string signature, int tokenStart, int tokenLength, string value)
+        => tokenLength == value.Length
+           && string.CompareOrdinal(signature, tokenStart, value, 0, value.Length) == 0;
 
     private static bool IsBacktickConstructorDeclarationSite(string line, int nameIndex)
     {
@@ -972,7 +1009,12 @@ internal static class KotlinReferenceExtractor
 
         var callIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(trimmed, '(');
         if (callIndex > 0)
-            trimmed = trimmed.Substring(0, callIndex).TrimEnd();
+        {
+            var callEnd = callIndex;
+            while (callEnd > 0 && char.IsWhiteSpace(trimmed[callEnd - 1]))
+                callEnd--;
+            trimmed = trimmed.Substring(0, callEnd);
+        }
 
         var lastSegmentStart = 0;
         var endIndex = trimmed.Length;
@@ -1000,7 +1042,15 @@ internal static class KotlinReferenceExtractor
         if (endIndex < lastSegmentStart)
             endIndex = trimmed.Length;
 
-        var typeName = trimmed.Substring(lastSegmentStart, endIndex - lastSegmentStart).Trim();
+        var typeNameLeading = 0;
+        while (lastSegmentStart + typeNameLeading < endIndex && char.IsWhiteSpace(trimmed[lastSegmentStart + typeNameLeading]))
+            typeNameLeading++;
+
+        var typeNameEnd = endIndex;
+        while (typeNameEnd > lastSegmentStart + typeNameLeading && char.IsWhiteSpace(trimmed[typeNameEnd - 1]))
+            typeNameEnd--;
+
+        var typeName = trimmed.Substring(lastSegmentStart + typeNameLeading, typeNameEnd - lastSegmentStart - typeNameLeading);
         return typeName.Length > 0 ? typeName : null;
     }
 
@@ -1034,7 +1084,10 @@ internal static class KotlinReferenceExtractor
                      && i + 4 <= segment.Length
                      && string.CompareOrdinal(segment, i, " by ", 0, 4) == 0)
             {
-                return segment.Substring(0, i).TrimEnd();
+                var end = i;
+                while (end > 0 && char.IsWhiteSpace(segment[end - 1]))
+                    end--;
+                return segment.Substring(0, end);
             }
         }
 

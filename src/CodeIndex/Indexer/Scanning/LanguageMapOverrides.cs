@@ -11,13 +11,63 @@ internal static class LanguageMapOverrides
     private const int MaxOverrideLineChars = 16 * 1024;
     private const int MaxOverrideEntries = 4096;
     private const int MaxOverridePatterns = 8192;
+    private const int MaxEffectiveMapCacheEntries = 4096;
     private static readonly object WarningLock = new();
     private static readonly HashSet<string> ReportedWarnings = new(StringComparer.Ordinal);
+    private static readonly object EffectiveMapCacheLock = new();
+    private static readonly Dictionary<string, EffectiveMapCacheEntry> EffectiveMapCache = new(StringComparer.Ordinal);
 
     internal static Func<string, Stream>? OpenOverrideFileForTesting { get; set; }
 
+    private readonly record struct ConfigPathCandidate(string Path, bool IsUserConfig);
+
+    private readonly record struct ConfigPathStamp(
+        string Path,
+        bool IsUserConfig,
+        bool Exists,
+        DateTime LastWriteTimeUtc,
+        long Length);
+
+    private sealed record EffectiveMapCacheEntry(
+        ConfigPathStamp[] Stamps,
+        IReadOnlyDictionary<string, string> Map);
+
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMap(string? startPath = null)
-        => LoadEffectiveMapFromPaths(EnumerateConfigPaths(startPath), ReportWarningOnce);
+    {
+        var startDirectory = ResolveStartDirectory(startPath);
+        EffectiveMapCacheEntry? cached;
+
+        lock (EffectiveMapCacheLock)
+        {
+            EffectiveMapCache.TryGetValue(startDirectory, out cached);
+        }
+
+        if (cached != null)
+        {
+            var refreshedStamps = RefreshConfigPathStamps(cached.Stamps);
+            if (ConfigPathStampsEqual(cached.Stamps, refreshedStamps))
+                return cached.Map;
+        }
+
+        var candidates = EnumerateConfigPathCandidates(startDirectory).ToArray();
+        var stamps = GetConfigPathStamps(candidates);
+        var map = LoadEffectiveMapFromPaths(SelectEffectiveConfigPaths(stamps), ReportWarningOnce);
+
+        lock (EffectiveMapCacheLock)
+        {
+            if (EffectiveMapCache.Count >= MaxEffectiveMapCacheEntries)
+                EffectiveMapCache.Clear();
+            EffectiveMapCache[startDirectory] = new EffectiveMapCacheEntry(stamps, map);
+        }
+
+        return map;
+    }
+
+    internal static void ClearEffectiveMapCacheForTesting()
+    {
+        lock (EffectiveMapCacheLock)
+            EffectiveMapCache.Clear();
+    }
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromPathsForTesting(
         IEnumerable<string> configPaths,
@@ -36,24 +86,88 @@ internal static class LanguageMapOverrides
         return map;
     }
 
-    private static IEnumerable<string> EnumerateConfigPaths(string? startPath)
+    private static IEnumerable<ConfigPathCandidate> EnumerateConfigPathCandidates(string startDirectory)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
-            yield return Path.Combine(home, ".config", "cdidx", "langmap.yaml");
+            yield return new ConfigPathCandidate(Path.Combine(home, ".config", "cdidx", "langmap.yaml"), IsUserConfig: true);
 
-        var directory = ResolveStartDirectory(startPath);
+        var directory = startDirectory;
         while (!string.IsNullOrEmpty(directory))
         {
             var candidate = Path.Combine(directory, WorkspaceFileName);
-            if (File.Exists(candidate))
-            {
-                yield return candidate;
-                yield break;
-            }
+            yield return new ConfigPathCandidate(candidate, IsUserConfig: false);
 
             directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
         }
+    }
+
+    private static ConfigPathStamp[] GetConfigPathStamps(IReadOnlyList<ConfigPathCandidate> candidates)
+    {
+        var stamps = new ConfigPathStamp[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+            stamps[i] = GetConfigPathStamp(candidates[i]);
+        return stamps;
+    }
+
+    private static ConfigPathStamp[] RefreshConfigPathStamps(IReadOnlyList<ConfigPathStamp> cachedStamps)
+    {
+        var stamps = new ConfigPathStamp[cachedStamps.Count];
+        for (var i = 0; i < cachedStamps.Count; i++)
+        {
+            var cached = cachedStamps[i];
+            stamps[i] = GetConfigPathStamp(new ConfigPathCandidate(cached.Path, cached.IsUserConfig));
+        }
+
+        return stamps;
+    }
+
+    private static ConfigPathStamp GetConfigPathStamp(ConfigPathCandidate candidate)
+    {
+        try
+        {
+            var info = new FileInfo(candidate.Path);
+            return info.Exists
+                ? new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: true, info.LastWriteTimeUtc, info.Length)
+                : new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: false, DateTime.MinValue, 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: false, DateTime.MinValue, 0);
+        }
+    }
+
+    private static IEnumerable<string> SelectEffectiveConfigPaths(IReadOnlyList<ConfigPathStamp> stamps)
+    {
+        foreach (var stamp in stamps)
+        {
+            if (stamp.IsUserConfig)
+            {
+                if (stamp.Exists)
+                    yield return stamp.Path;
+                continue;
+            }
+
+            if (stamp.Exists)
+            {
+                yield return stamp.Path;
+                yield break;
+            }
+        }
+    }
+
+    private static bool ConfigPathStampsEqual(IReadOnlyList<ConfigPathStamp> left, IReadOnlyList<ConfigPathStamp> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static string ResolveStartDirectory(string? startPath)

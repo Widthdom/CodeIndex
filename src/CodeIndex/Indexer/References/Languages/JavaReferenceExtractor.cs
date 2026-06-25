@@ -774,10 +774,14 @@ internal static class JavaReferenceExtractor
         var typeList = line.Substring(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
+            var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var trimmedLength = segmentLength - leading;
+            while (trimmedLength > 0 && char.IsWhiteSpace(typeList[segmentStart + leading + trimmedLength - 1]))
+                trimmedLength--;
+            if (trimmedLength == 0)
                 continue;
-            var absoluteStart = listStart + segmentStart + ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var absoluteStart = listStart + segmentStart + leading;
+            var rawSegment = typeList.Substring(segmentStart + leading, trimmedLength);
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
                 seen,
@@ -823,8 +827,7 @@ internal static class JavaReferenceExtractor
 
         for (int i = 0; i < tokens.Count; i++)
         {
-            var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (token is not ("class" or "interface" or "enum" or "record"))
+            if (!IsNamedTypeKeyword(line.AsSpan(tokens[i].Start, tokens[i].Length)))
                 continue;
             var nameIndex = i + 1;
             if (nameIndex >= tokens.Count)
@@ -895,8 +898,7 @@ internal static class JavaReferenceExtractor
         int nameIndex = -1;
         for (int i = 0; i < tokens.Count; i++)
         {
-            var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (token is "class" or "interface" or "enum" or "record")
+            if (IsNamedTypeKeyword(line.AsSpan(tokens[i].Start, tokens[i].Length)))
             {
                 keywordIndex = i;
                 nameIndex = i + 1;
@@ -942,25 +944,38 @@ internal static class JavaReferenceExtractor
 
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClauseText))
         {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
+            var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClauseText, segmentStart, segmentLength);
+            var parameterLength = segmentLength - parameterLeading;
+            while (parameterLength > 0 && char.IsWhiteSpace(parameterClauseText[segmentStart + parameterLeading + parameterLength - 1]))
+                parameterLength--;
+            if (parameterLength == 0)
                 continue;
 
+            var rawParameter = parameterClauseText.Substring(segmentStart + parameterLeading, parameterLength);
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
             if (extendsIndex < 0)
                 continue;
 
-            var boundsText = rawParameter.Substring(extendsIndex + "extends".Length).Trim();
-            if (boundsText.Length == 0)
+            var boundsStart = extendsIndex + "extends".Length;
+            var boundsLeading = ReferenceExtractor.CountLeadingWhitespace(rawParameter, boundsStart, rawParameter.Length - boundsStart);
+            var boundsLength = rawParameter.Length - boundsStart - boundsLeading;
+            while (boundsLength > 0 && char.IsWhiteSpace(rawParameter[boundsStart + boundsLeading + boundsLength - 1]))
+                boundsLength--;
+            if (boundsLength == 0)
                 continue;
 
+            var boundsText = rawParameter.Substring(boundsStart + boundsLeading, boundsLength);
             foreach (var (boundStart, boundLength) in ReferenceExtractor.SplitTopLevelAmpersandSpans(boundsText))
             {
-                var rawBound = boundsText.Substring(boundStart, boundLength).Trim();
-                if (rawBound.Length == 0)
+                var boundLeading = ReferenceExtractor.CountLeadingWhitespace(boundsText, boundStart, boundLength);
+                var rawBoundLength = boundLength - boundLeading;
+                while (rawBoundLength > 0 && char.IsWhiteSpace(boundsText[boundStart + boundLeading + rawBoundLength - 1]))
+                    rawBoundLength--;
+                if (rawBoundLength == 0)
                     continue;
 
-                var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + ReferenceExtractor.CountLeadingWhitespace(boundsText, boundStart, boundLength);
+                var rawBound = boundsText.Substring(boundStart + boundLeading, rawBoundLength);
+                var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + boundLeading;
                 ReferenceExtractor.AddTypeExpressionSegments(
                     references,
                     seen,
@@ -976,15 +991,22 @@ internal static class JavaReferenceExtractor
         }
     }
 
+    private static bool IsNamedTypeKeyword(ReadOnlySpan<char> token) =>
+        token is "class" or "interface" or "enum" or "record";
+
     private static HashSet<string> CollectGenericParameterNames(string parameterClauseText)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClauseText))
         {
-            var rawParameter = parameterClauseText.Substring(segmentStart, segmentLength).Trim();
-            if (rawParameter.Length == 0)
+            var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClauseText, segmentStart, segmentLength);
+            var parameterLength = segmentLength - parameterLeading;
+            while (parameterLength > 0 && char.IsWhiteSpace(parameterClauseText[segmentStart + parameterLeading + parameterLength - 1]))
+                parameterLength--;
+            if (parameterLength == 0)
                 continue;
 
+            var rawParameter = parameterClauseText.Substring(segmentStart + parameterLeading, parameterLength);
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
             var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
             if (TryReadGenericParameterName(nameFragment, out var name))
@@ -1047,10 +1069,14 @@ internal static class JavaReferenceExtractor
         var typeList = line.Substring(listStart, listEnd);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
+            var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var trimmedLength = segmentLength - leading;
+            while (trimmedLength > 0 && char.IsWhiteSpace(typeList[segmentStart + leading + trimmedLength - 1]))
+                trimmedLength--;
+            if (trimmedLength == 0)
                 continue;
-            var absoluteStart = listStart + segmentStart + ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var absoluteStart = listStart + segmentStart + leading;
+            var rawSegment = typeList.Substring(segmentStart + leading, trimmedLength);
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
                 seen,
@@ -1154,13 +1180,17 @@ internal static class JavaReferenceExtractor
             var implementationsGroup = match.Groups["implementations"];
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(implementationsGroup.Value))
             {
-                var rawSegment = implementationsGroup.Value.Substring(segmentStart, segmentLength).Trim();
-                if (rawSegment.Length == 0)
+                var segmentLeading = ReferenceExtractor.CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
+                var rawSegmentLength = segmentLength - segmentLeading;
+                while (rawSegmentLength > 0 && char.IsWhiteSpace(implementationsGroup.Value[segmentStart + segmentLeading + rawSegmentLength - 1]))
+                    rawSegmentLength--;
+                if (rawSegmentLength == 0)
                     continue;
 
+                var rawSegment = implementationsGroup.Value.Substring(segmentStart + segmentLeading, rawSegmentLength);
                 var absoluteStart = implementationsGroup.Index
                     + segmentStart
-                    + ReferenceExtractor.CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
+                    + segmentLeading;
                 ReferenceExtractor.AddTypeReferenceSegment(
                     references,
                     seen,
