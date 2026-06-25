@@ -668,7 +668,7 @@ public static partial class SymbolExtractor
             var candidate = segment;
             var trailingBraceIndex = candidate.IndexOf('}');
             if (trailingBraceIndex >= 0)
-                candidate = candidate[..trailingBraceIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, trailingBraceIndex);
 
             var lineCommentIndex = candidate.IndexOf("//", StringComparison.Ordinal);
             if (lineCommentIndex >= 0)
