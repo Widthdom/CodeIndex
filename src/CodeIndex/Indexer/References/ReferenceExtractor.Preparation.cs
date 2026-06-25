@@ -71,9 +71,7 @@ public static partial class ReferenceExtractor
         // そのまま保持する。Closes #183/#2117.
         if (!contentIsNormalized)
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingInvisibles(content);
+            content = FileIndexer.NormalizeContentForPrepass(content);
         }
 
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)

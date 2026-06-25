@@ -54,9 +54,7 @@ public static partial class ReferenceExtractor
 
         if (!contentIsNormalized)
         {
-            if (content.Contains('\r'))
-                content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-            content = FileIndexer.StripLineLeadingInvisibles(content);
+            content = FileIndexer.NormalizeContentForPrepass(content);
         }
 
         normalizedContent = content;

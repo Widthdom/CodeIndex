@@ -3550,6 +3550,9 @@ public partial class FileIndexer
     internal static string NormalizeLineEndings(string content)
         => FileContentLoader.NormalizeLineEndings(content);
 
+    internal static string NormalizeContentForPrepass(string content)
+        => FileContentLoader.NormalizeContentForPrepass(content);
+
     /// <summary>
     /// Strip every line-leading UTF-8 BOM (U+FEFF) and zero-width space (U+200B).
     /// Assumes CRLF has already been normalized to LF so `\n` is the sole line
