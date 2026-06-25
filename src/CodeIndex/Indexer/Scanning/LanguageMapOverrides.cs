@@ -35,18 +35,22 @@ internal static class LanguageMapOverrides
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMap(string? startPath = null)
     {
         var startDirectory = ResolveStartDirectory(startPath);
-        var candidates = EnumerateConfigPathCandidates(startDirectory).ToArray();
-        var stamps = GetConfigPathStamps(candidates);
+        EffectiveMapCacheEntry? cached;
 
         lock (EffectiveMapCacheLock)
         {
-            if (EffectiveMapCache.TryGetValue(startDirectory, out var cached)
-                && ConfigPathStampsEqual(cached.Stamps, stamps))
-            {
-                return cached.Map;
-            }
+            EffectiveMapCache.TryGetValue(startDirectory, out cached);
         }
 
+        if (cached != null)
+        {
+            var refreshedStamps = RefreshConfigPathStamps(cached.Stamps);
+            if (ConfigPathStampsEqual(cached.Stamps, refreshedStamps))
+                return cached.Map;
+        }
+
+        var candidates = EnumerateConfigPathCandidates(startDirectory).ToArray();
+        var stamps = GetConfigPathStamps(candidates);
         var map = LoadEffectiveMapFromPaths(SelectEffectiveConfigPaths(stamps), ReportWarningOnce);
 
         lock (EffectiveMapCacheLock)
@@ -103,6 +107,18 @@ internal static class LanguageMapOverrides
         var stamps = new ConfigPathStamp[candidates.Count];
         for (var i = 0; i < candidates.Count; i++)
             stamps[i] = GetConfigPathStamp(candidates[i]);
+        return stamps;
+    }
+
+    private static ConfigPathStamp[] RefreshConfigPathStamps(IReadOnlyList<ConfigPathStamp> cachedStamps)
+    {
+        var stamps = new ConfigPathStamp[cachedStamps.Count];
+        for (var i = 0; i < cachedStamps.Count; i++)
+        {
+            var cached = cachedStamps[i];
+            stamps[i] = GetConfigPathStamp(new ConfigPathCandidate(cached.Path, cached.IsUserConfig));
+        }
+
         return stamps;
     }
 
