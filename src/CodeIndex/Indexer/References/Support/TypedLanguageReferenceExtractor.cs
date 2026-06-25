@@ -75,8 +75,10 @@ internal static class TypedLanguageReferenceExtractor
         if (openParen < 0)
             return false;
 
-        var prefix = normalizedExpression.Substring(0, openParen).Trim();
-        if (prefix.Length > 0 && !string.Equals(prefix, "new", StringComparison.Ordinal))
+        var prefixLeading = CountLeadingWhitespace(normalizedExpression, 0, openParen);
+        var prefixLength = openParen - prefixLeading;
+        prefixLength -= CountTrailingWhitespace(normalizedExpression, prefixLeading, prefixLength);
+        if (prefixLength > 0 && !normalizedExpression.AsSpan(prefixLeading, prefixLength).Equals("new", StringComparison.Ordinal))
             return false;
 
         var closeParen = ReferenceExtractor.FindMatchingChar(normalizedExpression, openParen, '(', ')');
