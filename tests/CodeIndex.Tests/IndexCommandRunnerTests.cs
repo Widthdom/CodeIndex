@@ -5403,8 +5403,7 @@ public sealed class Caller
             if (Directory.Exists(dbParent))
                 SetUnixPermissions(dbParent, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             DeleteDirectory(projectRoot);
-            if (Directory.Exists(dbParent))
-                DeleteDirectory(dbParent);
+            DeleteDirectory(dbParent);
         }
     }
 
@@ -9324,8 +9323,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(otherCwd))
-                DeleteDirectory(otherCwd);
+            DeleteDirectory(otherCwd);
             DeleteDirectory(projectRoot);
         }
     }
@@ -9367,8 +9365,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(customDbDir))
-                DeleteDirectory(customDbDir);
+            DeleteDirectory(customDbDir);
             DeleteDirectory(projectRoot);
         }
     }
@@ -10031,8 +10028,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(outsideDir))
-                DeleteDirectory(outsideDir);
+            DeleteDirectory(outsideDir);
             DeleteDirectory(projectRoot);
         }
     }
@@ -10564,8 +10560,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(parentDir))
-                DeleteDirectory(parentDir);
+            DeleteDirectory(parentDir);
         }
     }
 
@@ -10626,8 +10621,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(tempRoot))
-                DeleteDirectory(tempRoot);
+            DeleteDirectory(tempRoot);
         }
     }
 

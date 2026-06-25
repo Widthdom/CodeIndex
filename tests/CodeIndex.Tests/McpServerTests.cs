@@ -12050,8 +12050,7 @@ public sealed class Caller
         }
         finally
         {
-            if (Directory.Exists(fixtureDir))
-                TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             DeleteFileRobust(dbPath);
         }
     }
