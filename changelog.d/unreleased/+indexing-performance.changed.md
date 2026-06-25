@@ -23,6 +23,7 @@ affected:
 - Short-circuited UTF-16 heuristic detection when the sample has no NUL bytes, avoiding pair-count scans for ordinary UTF-8 source files.
 - Deferred UTF-16 heuristic text-byte counting until NUL parity passes, reducing decode preflight work on NUL-containing non-UTF-16 files.
 - Limited C# static-interface raw prepass chunk-boundary scanning to a small rolling window, avoiding large temporary buffer rents and duplicate scans for non-candidate files.
+- Stopped C# static-interface raw prepass from scanning for both `abstract` and `virtual` once either contract modifier has been found.
 - Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
@@ -53,6 +54,7 @@ affected:
 - sample に NUL byte がない場合は UTF-16 heuristic detection を即終了し、通常の UTF-8 source file で pair-count scan を避けるようにしました。
 - NUL parity が UTF-16 heuristic の閾値を満たした場合だけ text-byte counting を行い、NUL を含む非 UTF-16 file の decode preflight work を減らしました。
 - C# static-interface raw prepass の chunk-boundary scan を小さな rolling window に限定し、候補外ファイルでの大きな temporary buffer rent と duplicate scan を避けるようにしました。
+- C# static-interface raw prepass で `abstract` または `virtual` のどちらか一方が見つかった後は、もう一方の contract modifier scan を省略するようにしました。
 - C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。

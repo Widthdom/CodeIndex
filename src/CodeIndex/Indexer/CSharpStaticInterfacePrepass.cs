@@ -208,10 +208,12 @@ internal static class CSharpStaticInterfacePrepass
                 _hasInterface = ContainsAsciiTokenInCommonEncodings(bytes, CSharpInterfaceKeywordBytes, _mayContainUtf16);
             if (!_hasStatic)
                 _hasStatic = ContainsAsciiTokenInCommonEncodings(bytes, CSharpStaticKeywordBytes, _mayContainUtf16);
-            if (!_hasAbstract)
+            if (!_hasAbstract && !_hasVirtual)
+            {
                 _hasAbstract = ContainsAsciiTokenInCommonEncodings(bytes, CSharpAbstractKeywordBytes, _mayContainUtf16);
-            if (!_hasVirtual)
-                _hasVirtual = ContainsAsciiTokenInCommonEncodings(bytes, CSharpVirtualKeywordBytes, _mayContainUtf16);
+                if (!_hasAbstract)
+                    _hasVirtual = ContainsAsciiTokenInCommonEncodings(bytes, CSharpVirtualKeywordBytes, _mayContainUtf16);
+            }
         }
 
         private void CaptureTail(ReadOnlySpan<byte> bytes)
