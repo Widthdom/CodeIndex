@@ -529,7 +529,7 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         string bodyText)
     {
-        foreach (var segment in bodyText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var segment in EnumerateTrimmedGoSegments(bodyText, ';'))
         {
             var candidate = segment;
             var trailingBraceIndex = candidate.IndexOf('}');
@@ -663,7 +663,7 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(bodyText))
             return;
 
-        foreach (var segment in bodyText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var segment in EnumerateTrimmedGoSegments(bodyText, ';'))
         {
             var candidate = segment;
             var trailingBraceIndex = candidate.IndexOf('}');
@@ -686,6 +686,24 @@ public static partial class SymbolExtractor
                 continue;
 
             TryAddGoStructEmbeddedTypeSymbol(fileId, rawLine, lineIndex, symbols, candidate);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateTrimmedGoSegments(string value, char separator)
+    {
+        var segmentStart = 0;
+        while (segmentStart <= value.Length)
+        {
+            var separatorIndex = value.IndexOf(separator, segmentStart);
+            var segmentEnd = separatorIndex >= 0 ? separatorIndex : value.Length;
+            var segment = value.Substring(segmentStart, segmentEnd - segmentStart).Trim();
+            if (segment.Length > 0)
+                yield return segment;
+
+            if (separatorIndex < 0)
+                break;
+
+            segmentStart = separatorIndex + 1;
         }
     }
 
