@@ -240,10 +240,16 @@ public static partial class ReferenceExtractor
         if (!TryFindCallableParameterList(signature!, "csharp", out _, out var paramStart, out var paramEnd))
             return null;
 
-        var parameterList = signature!.Substring(paramStart, paramEnd - paramStart).Trim();
-        if (parameterList.Length == 0)
+        var parameterStart = paramStart;
+        while (parameterStart < paramEnd && char.IsWhiteSpace(signature![parameterStart]))
+            parameterStart++;
+        var parameterEnd = paramEnd;
+        while (parameterEnd > parameterStart && char.IsWhiteSpace(signature![parameterEnd - 1]))
+            parameterEnd--;
+        if (parameterEnd == parameterStart)
             return string.Empty;
 
+        var parameterList = signature!.Substring(parameterStart, parameterEnd - parameterStart);
         return string.Join(
             ",",
             SplitTopLevelCommaSpans(parameterList)
