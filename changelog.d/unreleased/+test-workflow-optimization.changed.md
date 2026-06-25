@@ -23,6 +23,7 @@ affected:
   - tests/CodeIndex.Tests/MetricsSinkTests.cs
   - tests/CodeIndex.Tests/DbCommandRunnerTests.cs
   - tests/CodeIndex.Tests/ProgramCliTests.cs
+  - tests/CodeIndex.Tests/IssueDuplicatePreflightTests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -63,6 +64,7 @@ affected:
 - Reused shared temporary directory cleanup for metrics-log private parent workspaces.
 - Reused the DB command runner test cleanup helper for temporary cleanup safety fixtures.
 - Reused shared temporary directory cleanup for suggestion CLI test fixtures.
+- Reused shared temporary directory cleanup for issue duplicate preflight fixtures.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -96,3 +98,4 @@ affected:
 - metrics log の private parent workspace cleanup を共通 helper に寄せました。
 - DB command runner test の temporary cleanup safety fixture で cleanup helper を再利用しました。
 - suggestion CLI test fixture の cleanup を共通 helper に寄せました。
+- issue duplicate preflight fixture の cleanup を共通 helper に寄せました。
