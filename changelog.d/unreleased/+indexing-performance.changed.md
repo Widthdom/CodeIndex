@@ -205,6 +205,7 @@ affected:
 - Trimmed Python parenthesized-import fragments by index, avoiding a trailing trim allocation during symbol extraction.
 - Trimmed Python parenthesized-import closing segments by index, avoiding a prefix substring/trim chain during symbol extraction.
 - Trimmed Fortran continuation first lines by index, avoiding a trailing trim allocation during symbol extraction.
+- Trimmed Fortran continuation prefix segments by index, avoiding a prefix substring/trim chain during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -370,6 +371,7 @@ affected:
 - Python parenthesized-import fragment を index 境界で trim し、symbol extraction 中の trailing trim allocation を避けるようにしました。
 - Python parenthesized-import closing segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
 - Fortran continuation first line を index 境界で trim し、symbol extraction 中の trailing trim allocation を避けるようにしました。
+- Fortran continuation prefix segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。

@@ -106,7 +106,7 @@ public static partial class SymbolExtractor
 
             if (builder.Length > 0)
                 builder.Append(' ');
-            builder.Append(currentLine[..continuationIndex].TrimEnd());
+            builder.Append(GetFortranPrefixTrimmedEnd(currentLine, continuationIndex));
 
             if (lastConsumedLineIndex + 1 >= lines.Length)
                 break;
