@@ -2023,9 +2023,20 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsImportExportOpeningBrace(IReadOnlyList<string> preparedLines, int openLineIndex, int openColumn)
     {
-        var sameLinePrefix = preparedLines[openLineIndex].Substring(0, openColumn).Trim();
-        if (sameLinePrefix.Length > 0)
+        var sameLine = preparedLines[openLineIndex];
+        var sameLineStart = 0;
+        while (sameLineStart < openColumn && char.IsWhiteSpace(sameLine[sameLineStart]))
+            sameLineStart++;
+
+        var sameLineEnd = openColumn;
+        while (sameLineEnd > sameLineStart && char.IsWhiteSpace(sameLine[sameLineEnd - 1]))
+            sameLineEnd--;
+
+        if (sameLineEnd > sameLineStart)
+        {
+            var sameLinePrefix = sameLine.Substring(sameLineStart, sameLineEnd - sameLineStart);
             return IsImportBracePrefix(sameLinePrefix) || IsNamedExportBracePrefix(sameLinePrefix);
+        }
 
         for (var lineIndex = openLineIndex - 1; lineIndex >= 0; lineIndex--)
         {
