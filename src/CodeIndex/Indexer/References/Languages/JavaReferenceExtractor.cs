@@ -823,8 +823,7 @@ internal static class JavaReferenceExtractor
 
         for (int i = 0; i < tokens.Count; i++)
         {
-            var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (token is not ("class" or "interface" or "enum" or "record"))
+            if (!IsNamedTypeKeyword(line.AsSpan(tokens[i].Start, tokens[i].Length)))
                 continue;
             var nameIndex = i + 1;
             if (nameIndex >= tokens.Count)
@@ -895,8 +894,7 @@ internal static class JavaReferenceExtractor
         int nameIndex = -1;
         for (int i = 0; i < tokens.Count; i++)
         {
-            var token = line.Substring(tokens[i].Start, tokens[i].Length);
-            if (token is "class" or "interface" or "enum" or "record")
+            if (IsNamedTypeKeyword(line.AsSpan(tokens[i].Start, tokens[i].Length)))
             {
                 keywordIndex = i;
                 nameIndex = i + 1;
@@ -975,6 +973,9 @@ internal static class JavaReferenceExtractor
             }
         }
     }
+
+    private static bool IsNamedTypeKeyword(ReadOnlySpan<char> token) =>
+        token is "class" or "interface" or "enum" or "record";
 
     private static HashSet<string> CollectGenericParameterNames(string parameterClauseText)
     {
