@@ -4115,13 +4115,18 @@ public partial class FileIndexer
         if (nonUtf8Likely)
             return;
 
+        var lineNum = 1;
         for (int i = 0; i < content.Length; i++)
         {
+            if (content[i] == '\n')
+            {
+                lineNum++;
+                continue;
+            }
+
             if (content[i] != '\uFFFD')
                 continue;
 
-            // Find line number / 行番号を特定
-            var lineNum = content[..i].Count(c => c == '\n') + 1;
             var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
             issues.Add(new FileIssue
             {
@@ -4137,7 +4142,10 @@ public partial class FileIndexer
             // Skip to next line to avoid reporting every char on the same line
             // 同じ行の連続報告を避けるため次の行までスキップ
             var nextNewline = content.IndexOf('\n', i);
-            if (nextNewline >= 0) i = nextNewline;
+            if (nextNewline < 0)
+                break;
+            lineNum++;
+            i = nextNewline;
         }
     }
 

@@ -5385,6 +5385,11 @@ public partial class FileIndexerTests
             i.Kind == "replacement_char"
             && i.Origin == FileIssue.OriginDecodeReplacement
             && i.Severity == FileIssue.SeverityWarning);
+        var replacementLines = issues
+            .Where(i => i.Kind == "replacement_char")
+            .Select(i => i.Line)
+            .ToArray();
+        Assert.Equal([2, 3, 204, 205], replacementLines);
     }
 
     [Fact]
