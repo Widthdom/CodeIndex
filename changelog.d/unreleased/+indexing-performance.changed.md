@@ -126,6 +126,7 @@ affected:
 - Trimmed Python import specs by index, avoiding intermediate trim substrings for empty and wildcard entries.
 - Trimmed Python import aliases by index, avoiding extra substring work while splitting `as` clauses.
 - Scanned XAML type-argument delimiters directly, avoiding split arrays while normalizing generic markup references.
+- Scanned trailing tokens in cross-language comma lists directly, avoiding whitespace split arrays during reference extraction.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -226,6 +227,7 @@ affected:
 - Python import spec を index 境界で trim し、空要素や wildcard 要素の中間 trim substring を避けるようにしました。
 - Python import alias を index 境界で trim し、`as` 句の分割時の余分な substring 作成を避けるようにしました。
 - XAML type-argument delimiter を直接走査し、generic markup reference の正規化中の split array を避けるようにしました。
+- cross-language comma list の末尾 token を直接走査し、reference 抽出中の whitespace split array を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。

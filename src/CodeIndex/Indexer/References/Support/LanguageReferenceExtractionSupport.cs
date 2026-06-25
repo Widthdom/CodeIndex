@@ -4972,12 +4972,24 @@ internal static class LanguageReferenceExtractionSupport
                 }
             }
 
-            var name = raw.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? raw;
+            var name = GetLastWhitespaceSeparatedToken(raw);
             var offset = list.IndexOf(name, expressionStart, StringComparison.Ordinal);
             if (offset < 0)
                 offset = expressionStart;
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, name, listStart + offset, context, lineNumber, container, language);
         }
+    }
+
+    private static string GetLastWhitespaceSeparatedToken(string value)
+    {
+        var end = value.Length;
+        while (end > 0 && (value[end - 1] == ' ' || value[end - 1] == '\t'))
+            end--;
+        var start = end;
+        while (start > 0 && value[start - 1] != ' ' && value[start - 1] != '\t')
+            start--;
+
+        return start == 0 && end == value.Length ? value : value[start..end];
     }
 
     private static void EmitVbGenericConstraintReferences(
