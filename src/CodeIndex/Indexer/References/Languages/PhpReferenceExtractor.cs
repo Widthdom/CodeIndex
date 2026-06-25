@@ -960,7 +960,7 @@ internal static class PhpReferenceExtractor
 
     private static bool IsPhpBuiltinTypeName(string name)
         => !name.Contains('\\', StringComparison.Ordinal)
-           && BuiltinTypeNames.Contains(name.TrimStart('\\'));
+           && BuiltinTypeNames.Contains(name);
 
     private static void AddPhpTypeReferenceFromQualifiedName(
         Capture nameGroup,

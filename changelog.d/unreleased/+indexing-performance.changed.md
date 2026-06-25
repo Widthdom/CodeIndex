@@ -129,6 +129,7 @@ affected:
 - Trimmed Python import aliases by index, avoiding extra substring work while splitting `as` clauses.
 - Scanned PHP grouped-use item leading backslashes by index, avoiding `TrimStart` allocation during grouped import reference extraction.
 - Scanned PHP qualified reference leading backslashes by index, avoiding `TrimStart` allocation on shared PHP reference emission paths.
+- Removed a redundant PHP builtin-type trim after qualified names are already rejected, avoiding an unnecessary trim probe during type-reference filtering.
 - Scanned XAML type-argument delimiters directly, avoiding split arrays while normalizing generic markup references.
 - Scanned trailing tokens in cross-language comma lists directly, avoiding whitespace split arrays during reference extraction.
 - Trimmed cross-language comma-list segments by index, avoiding intermediate trim substrings during reference extraction.
@@ -262,6 +263,7 @@ affected:
 - Python import alias を index 境界で trim し、`as` 句の分割時の余分な substring 作成を避けるようにしました。
 - PHP grouped-use item の leading backslash を index で走査し、grouped import reference 抽出中の `TrimStart` allocation を避けるようにしました。
 - PHP qualified reference の leading backslash を index で走査し、共有 PHP reference emission path の `TrimStart` allocation を避けるようにしました。
+- qualified name を既に除外した後の PHP builtin-type trim を削り、type-reference filtering 中の不要な trim probe を避けるようにしました。
 - XAML type-argument delimiter を直接走査し、generic markup reference の正規化中の split array を避けるようにしました。
 - cross-language comma list の末尾 token を直接走査し、reference 抽出中の whitespace split array を避けるようにしました。
 - cross-language comma-list segment を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。
