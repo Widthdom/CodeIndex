@@ -50,6 +50,24 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_IsGitLfsPointer_AcceptsAsciiPointerWithMixedLineEndings()
+    {
+        var pointer = GitLfsPointerText(new string('a', 64));
+
+        Assert.True(FileContentLoader.IsGitLfsPointer(Encoding.ASCII.GetBytes(pointer)));
+    }
+
+    [Fact]
+    public void FileContentLoader_IsGitLfsPointer_RejectsMalformedPointerLines()
+    {
+        var validPointer = GitLfsPointerText(new string('a', 64));
+        var uppercaseHashPointer = GitLfsPointerText(new string('A', 64));
+
+        Assert.False(FileContentLoader.IsGitLfsPointer(Encoding.ASCII.GetBytes(validPointer + "\n")));
+        Assert.False(FileContentLoader.IsGitLfsPointer(Encoding.ASCII.GetBytes(uppercaseHashPointer)));
+    }
+
+    [Fact]
     public void FileContentLoader_Load_DetectsOversizeLineDuringCanonicalization()
     {
         var longLine = new string('a', ChunkSplitter.MaxLineLength + 1);
@@ -125,4 +143,10 @@ public partial class FileIndexerTests
         Assert.Equal(checksum.ToLowerInvariant(), checksum);
         Assert.DoesNotContain(checksum, c => c is >= 'A' and <= 'F');
     }
+
+    private static string GitLfsPointerText(string hash)
+        => "version https://git-lfs.github.com/spec/v1\r\n"
+           + "ext-fixture metadata\r"
+           + $"oid sha256:{hash}\n"
+           + "size 123\n";
 }

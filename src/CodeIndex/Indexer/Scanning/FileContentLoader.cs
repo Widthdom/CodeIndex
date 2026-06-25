@@ -6,6 +6,9 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
 {
     private const int GitLfsPointerMaxBytes = 1024;
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
+    private static ReadOnlySpan<byte> GitLfsExtensionPrefix => "ext-"u8;
+    private static ReadOnlySpan<byte> GitLfsSha256OidPrefix => "oid sha256:"u8;
+    private static ReadOnlySpan<byte> GitLfsSizePrefix => "size "u8;
 
     internal readonly record struct NormalizedIndexableContent(
         string Content,
@@ -268,62 +271,93 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
     {
         if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
             return false;
-        if (!rawBytes.AsSpan().StartsWith(GitLfsPointerPrefix))
+
+        ReadOnlySpan<byte> remaining = rawBytes;
+        if (!remaining.StartsWith(GitLfsPointerPrefix))
             return false;
 
-        var pointerText = Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        var lines = pointerText.Split('\n');
-        if (lines.Length > 0 && lines[^1].Length == 0)
-            lines = lines[..^1];
-        if (lines.Length < 3)
-            return false;
-        if (!string.Equals(lines[0], "version https://git-lfs.github.com/spec/v1", StringComparison.Ordinal))
+        if (!TryReadGitLfsLine(ref remaining, out var line)
+            || !line.SequenceEqual(GitLfsPointerPrefix))
             return false;
 
-        var lineIndex = 1;
-        while (lineIndex < lines.Length && lines[lineIndex].StartsWith("ext-", StringComparison.Ordinal))
-            lineIndex++;
+        if (!TryReadGitLfsLine(ref remaining, out line))
+            return false;
+        while (line.StartsWith(GitLfsExtensionPrefix))
+        {
+            if (!TryReadGitLfsLine(ref remaining, out line))
+                return false;
+        }
 
-        if (lineIndex + 1 >= lines.Length)
+        if (!IsGitLfsSha256OidLine(line))
             return false;
-        if (!IsGitLfsSha256OidLine(lines[lineIndex]))
+        if (!TryReadGitLfsLine(ref remaining, out line)
+            || !IsGitLfsSizeLine(line))
+        {
             return false;
-        lineIndex++;
-        if (!IsGitLfsSizeLine(lines[lineIndex]))
-            return false;
+        }
 
-        return lineIndex == lines.Length - 1;
+        return remaining.IsEmpty;
     }
 
-    private static bool IsGitLfsSha256OidLine(string line)
+    private static bool TryReadGitLfsLine(ref ReadOnlySpan<byte> remaining, out ReadOnlySpan<byte> line)
     {
-        const string prefix = "oid sha256:";
-        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+        if (remaining.IsEmpty)
+        {
+            line = default;
+            return false;
+        }
+
+        var newlineIndex = remaining.IndexOfAny((byte)'\r', (byte)'\n');
+        if (newlineIndex < 0)
+        {
+            line = remaining;
+            remaining = ReadOnlySpan<byte>.Empty;
+            return true;
+        }
+
+        line = remaining[..newlineIndex];
+        var nextIndex = newlineIndex + 1;
+        if (remaining[newlineIndex] == (byte)'\r'
+            && nextIndex < remaining.Length
+            && remaining[nextIndex] == (byte)'\n')
+        {
+            nextIndex++;
+        }
+
+        remaining = remaining[nextIndex..];
+        return true;
+    }
+
+    private static bool IsGitLfsSha256OidLine(ReadOnlySpan<byte> line)
+    {
+        if (!line.StartsWith(GitLfsSha256OidPrefix))
             return false;
 
-        var hash = line.AsSpan(prefix.Length);
+        var hash = line[GitLfsSha256OidPrefix.Length..];
         if (hash.Length != 64)
             return false;
-        foreach (var c in hash)
+        foreach (var value in hash)
         {
-            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            if (!((value >= (byte)'0' && value <= (byte)'9')
+                  || (value >= (byte)'a' && value <= (byte)'f')))
+            {
                 return false;
+            }
         }
         return true;
     }
 
-    private static bool IsGitLfsSizeLine(string line)
+    private static bool IsGitLfsSizeLine(ReadOnlySpan<byte> line)
     {
-        const string prefix = "size ";
-        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+        if (!line.StartsWith(GitLfsSizePrefix))
             return false;
 
-        var size = line.AsSpan(prefix.Length);
+        var size = line[GitLfsSizePrefix.Length..];
         if (size.Length == 0)
             return false;
-        foreach (var c in size)
+        foreach (var value in size)
         {
-            if (c < '0' || c > '9')
+            if (value < (byte)'0' || value > (byte)'9')
                 return false;
         }
         return true;

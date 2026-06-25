@@ -12,6 +12,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - .github/workflows/dotnet.yml
+  - tests/CodeIndex.Tests/FileIndexerContentLoadingTests.cs
   - TESTING_GUIDE.md
 ---
 
@@ -24,6 +25,7 @@ affected:
 - Deferred UTF-16 heuristic text-byte counting until NUL parity passes, reducing decode preflight work on NUL-containing non-UTF-16 files.
 - Limited C# static-interface raw prepass chunk-boundary scanning to a small rolling window, avoiding large temporary buffer rents and duplicate scans for non-candidate files.
 - Stopped C# static-interface raw prepass from scanning for both `abstract` and `virtual` once either contract modifier has been found.
+- Parsed Git LFS pointer files directly from raw ASCII bytes, avoiding UTF-8 string creation, newline replacement, and split allocations during content loading.
 - Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
@@ -55,6 +57,7 @@ affected:
 - NUL parity が UTF-16 heuristic の閾値を満たした場合だけ text-byte counting を行い、NUL を含む非 UTF-16 file の decode preflight work を減らしました。
 - C# static-interface raw prepass の chunk-boundary scan を小さな rolling window に限定し、候補外ファイルでの大きな temporary buffer rent と duplicate scan を避けるようにしました。
 - C# static-interface raw prepass で `abstract` または `virtual` のどちらか一方が見つかった後は、もう一方の contract modifier scan を省略するようにしました。
+- Git LFS pointer file を raw ASCII byte から直接 parse し、content loading 中の UTF-8 string 作成、newline replacement、split allocation を避けるようにしました。
 - C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。
