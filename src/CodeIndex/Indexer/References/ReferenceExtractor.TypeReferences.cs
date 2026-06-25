@@ -274,7 +274,10 @@ public static partial class ReferenceExtractor
             if (StartsWithCSharpWord(text, modifier))
             {
                 refKind = modifier + ":";
-                text = text.Substring(modifier.Length).TrimStart();
+                var nextStart = modifier.Length;
+                while (nextStart < text.Length && char.IsWhiteSpace(text[nextStart]))
+                    nextStart++;
+                text = text.Substring(nextStart);
                 break;
             }
         }
