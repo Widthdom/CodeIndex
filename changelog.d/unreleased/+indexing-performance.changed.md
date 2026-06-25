@@ -21,9 +21,11 @@ affected:
   - src/CodeIndex/Indexer/References/ReferenceExtractor.StructuralMetadata.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
   - src/CodeIndex/Indexer/References/Languages/JavaReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/RustReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/TypeScriptReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
+  - src/CodeIndex/Indexer/Symbols/RustSymbolNameNormalizer.cs
   - .github/workflows/dotnet.yml
   - tests/CodeIndex.Tests/FileIndexerContentLoadingTests.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
@@ -108,6 +110,7 @@ affected:
 - Walked dotted type-reference arguments manually, avoiding per-reference dot split arrays.
 - Checked symbol subkind membership with spans, avoiding pipe split arrays while combining metadata.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
+- Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -187,4 +190,5 @@ affected:
 - dotted type-reference argument を手動で走査し、reference ごとの dot split array を避けるようにしました。
 - symbol subkind membership を span で確認し、metadata 結合時の pipe split array を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
+- Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

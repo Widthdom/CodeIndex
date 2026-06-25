@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Models;
@@ -2332,15 +2333,42 @@ internal static class RustReferenceExtractor
         if (identifier.Length == 0)
             return identifier;
 
-        var segments = identifier.Split("::");
-        for (var i = 0; i < segments.Length; i++)
+        if (!identifier.Contains("r#", StringComparison.Ordinal))
+            return identifier;
+
+        if (!identifier.Contains("::", StringComparison.Ordinal))
+            return identifier.StartsWith("r#", StringComparison.Ordinal)
+                ? identifier[2..]
+                : identifier;
+
+        var builder = new StringBuilder(identifier.Length);
+        var segmentStart = 0;
+        while (segmentStart <= identifier.Length)
         {
-            var segment = segments[i];
-            if (segment.StartsWith("r#", StringComparison.Ordinal))
-                segments[i] = segment[2..];
+            var separator = identifier.IndexOf("::", segmentStart, StringComparison.Ordinal);
+            var segmentEnd = separator >= 0 ? separator : identifier.Length;
+            AppendNormalizedRustIdentifierSegment(builder, identifier, segmentStart, segmentEnd - segmentStart);
+            if (separator < 0)
+                break;
+
+            builder.Append("::");
+            segmentStart = separator + 2;
         }
 
-        return string.Join("::", segments);
+        return builder.ToString();
+    }
+
+    private static void AppendNormalizedRustIdentifierSegment(StringBuilder builder, string identifier, int start, int length)
+    {
+        if (length >= 2
+            && identifier[start] == 'r'
+            && identifier[start + 1] == '#')
+        {
+            start += 2;
+            length -= 2;
+        }
+
+        builder.Append(identifier, start, length);
     }
 
     public static bool IsFunctionDeclarationCallSite(string line, int callIndex)
