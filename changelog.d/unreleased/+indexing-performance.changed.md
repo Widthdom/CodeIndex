@@ -74,6 +74,7 @@ affected:
 - Reused language-detection file names and skipped override suffix checks when no language-map overrides are active.
 - Looked up language-map override suffixes from filename dot positions instead of scanning every override entry per file, preserving the most-specific multi-dot match.
 - Reused cached language-map config path candidates on cache hits, avoiding repeated parent-directory walks while validating override stamps.
+- Combined raw-byte NUL detection and line-ending classification into one pass during content validation, reducing repeated scans on large files.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -128,4 +129,5 @@ affected:
 - language detection で file name を再利用し、language-map override が有効でない場合は override suffix check を省略するようにしました。
 - file ごとの全 override entry 走査を避け、filename の dot 位置から language-map override suffix を lookup し、最も具体的な multi-dot match を使うようにしました。
 - language-map cache hit 時は cached config path candidate を再利用し、override stamp 検証中の親ディレクトリ walk を繰り返さないようにしました。
+- content validation 中の raw-byte NUL 検出と line-ending 分類を1回の pass に統合し、大きな file での重複 scan を減らしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

@@ -6117,6 +6117,22 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_NullByteAndMixedLineEndings_EmitsBothRawByteIssues()
+    {
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes("crlf\r\npayload\n");
+        rawBytes[6] = 0x00;
+        var content = System.Text.Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        var issues = FileIndexer.ValidateContent("mixed_binary.txt", rawBytes, content);
+
+        Assert.Contains(issues, i => i.Kind == "null_byte");
+        var mixed = Assert.Single(issues, i => i.Kind == "mixed_line_endings");
+        Assert.Equal("Mixed line endings (CRLF and LF)", mixed.Message);
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
+        Assert.DoesNotContain(issues, i => i.Kind == "cr_only_line_endings");
+    }
+
+    [Fact]
     public void ValidateContent_ConflictMarkers_EmitsConflictMarkerIssue()
     {
         var content = """

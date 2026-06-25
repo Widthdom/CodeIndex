@@ -4157,8 +4157,10 @@ public partial class FileIndexer
             });
         }
 
+        var rawByteInspection = InspectRawByteContentIssues(rawBytes);
+
         // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
-        if (rawBytes.Any(b => b == 0))
+        if (rawByteInspection.HasNullByte)
         {
             issues.Add(new FileIssue
             {
@@ -4169,13 +4171,19 @@ public partial class FileIndexer
             });
         }
 
-        AddLineEndingIssues(issues, relativePath, rawBytes);
+        AddLineEndingIssues(issues, relativePath, rawByteInspection);
     }
 
     private static bool ShouldSuppressUtf8BomIssue(string relativePath)
         => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
 
-    private static void AddLineEndingIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    private readonly record struct RawByteContentIssueInspection(
+        bool HasNullByte,
+        bool HasCrlf,
+        bool HasLfOnly,
+        bool HasCrOnly);
+
+    private static RawByteContentIssueInspection InspectRawByteContentIssues(byte[] rawBytes)
     {
         // Line-ending classification — check raw bytes before LF normalization so
         // bare CR (legacy Mac) and three-way mixes are not silently flattened by
@@ -4186,9 +4194,16 @@ public partial class FileIndexer
         var hasCrlf = false;
         var hasLfOnly = false;
         var hasCrOnly = false;
+        var hasNullByte = false;
         for (int i = 0; i < rawBytes.Length; i++)
         {
-            if (rawBytes[i] == 0x0D)
+            var value = rawBytes[i];
+            if (value == 0)
+            {
+                hasNullByte = true;
+            }
+
+            if (value == 0x0D)
             {
                 if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
                 {
@@ -4200,12 +4215,22 @@ public partial class FileIndexer
                     hasCrOnly = true;
                 }
             }
-            else if (rawBytes[i] == 0x0A)
+            else if (value == 0x0A)
             {
                 hasLfOnly = true;
             }
         }
-        var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
+        return new RawByteContentIssueInspection(hasNullByte, hasCrlf, hasLfOnly, hasCrOnly);
+    }
+
+    private static void AddLineEndingIssues(
+        List<FileIssue> issues,
+        string relativePath,
+        RawByteContentIssueInspection inspection)
+    {
+        var distinctEndingTypes = (inspection.HasCrlf ? 1 : 0)
+            + (inspection.HasLfOnly ? 1 : 0)
+            + (inspection.HasCrOnly ? 1 : 0);
         if (distinctEndingTypes >= 3)
         {
             issues.Add(new FileIssue
@@ -4219,9 +4244,9 @@ public partial class FileIndexer
         else if (distinctEndingTypes == 2)
         {
             string description;
-            if (hasCrlf && hasLfOnly)
+            if (inspection.HasCrlf && inspection.HasLfOnly)
                 description = "CRLF and LF";
-            else if (hasCrlf && hasCrOnly)
+            else if (inspection.HasCrlf && inspection.HasCrOnly)
                 description = "CRLF and CR";
             else
                 description = "LF and CR";
@@ -4233,7 +4258,7 @@ public partial class FileIndexer
                 Message = $"Mixed line endings ({description})",
             });
         }
-        else if (hasCrOnly)
+        else if (inspection.HasCrOnly)
         {
             issues.Add(new FileIssue
             {
