@@ -183,6 +183,7 @@ affected:
 - Reused Go's direct segment scanner for grouped value names and trimmed segments by index, avoiding comma split arrays and intermediate trim substrings.
 - Checked Go grouped `type` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
 - Checked Go grouped `const` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
+- Checked Go grouped `var` declaration openings by index, avoiding suffix `TrimStart` allocation during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -327,6 +328,7 @@ affected:
 - Go の direct segment scanner を grouped value name にも再利用し、segment trim を index で行うことで comma split array と中間 trim substring を避けるようにしました。
 - Go grouped `type` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
 - Go grouped `const` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
+- Go grouped `var` declaration opening を index で確認し、symbol extraction 中の suffix `TrimStart` allocation を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。

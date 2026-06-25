@@ -1071,7 +1071,7 @@ public static partial class SymbolExtractor
             }
 
             if (trimmed.StartsWith("var", StringComparison.Ordinal)
-                && trimmed["var".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+                && GoDeclarationRemainderStartsWithOpenParen(trimmed, "var".Length))
             {
                 blockKind = "var";
                 continue;
