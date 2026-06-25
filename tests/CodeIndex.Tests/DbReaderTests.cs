@@ -18462,7 +18462,7 @@ public class DbReaderTests : IDisposable
         }
         finally
         {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
