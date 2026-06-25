@@ -191,14 +191,13 @@ internal static class TypedLanguageReferenceExtractor
         var typeList = line.Substring(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength);
-            var leading = CountLeadingWhitespace(rawSegment, 0, rawSegment.Length);
-            var trailing = CountTrailingWhitespace(rawSegment, leading, rawSegment.Length - leading);
-            var length = rawSegment.Length - leading - trailing;
+            var leading = CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var trailing = CountTrailingWhitespace(typeList, segmentStart + leading, segmentLength - leading);
+            var length = segmentLength - leading - trailing;
             if (length <= 0)
                 continue;
 
-            var expression = rawSegment.Substring(leading, length);
+            var expression = typeList.Substring(segmentStart + leading, length);
             if (trimTopLevelCallArguments)
                 expression = TrimTopLevelCallArguments(expression);
             if (expression.Length == 0)
