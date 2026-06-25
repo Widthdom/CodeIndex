@@ -253,7 +253,7 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranWord(trimmedLine, "type"))
             return false;
 
-        var remainder = trimmedLine["type".Length..].TrimStart();
+        var remainder = GetFortranSuffixTrimmedStart(trimmedLine, "type".Length);
         if (remainder.Length == 0 || remainder.StartsWith('('))
             return false;
 

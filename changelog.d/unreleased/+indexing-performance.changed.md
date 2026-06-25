@@ -214,6 +214,7 @@ affected:
 - Trimmed Fortran continuation first-line starts by index, avoiding a leading trim allocation during symbol extraction.
 - Trimmed Fortran module block-start remainders by index, avoiding a substring/trim chain during symbol extraction.
 - Trimmed Fortran block-data start remainders by index, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Fortran derived-type start remainders by index, avoiding a substring/trim chain during symbol extraction.
 - Scanned Shell alias segment starts by index, avoiding segment substring/trim allocations before alias detection.
 - Found Shell alias assignment separators on the original line, avoiding token substring allocation before name extraction.
 - Trimmed Shell alias names by index, avoiding a slice/trim allocation chain during symbol extraction.
@@ -395,6 +396,7 @@ affected:
 - Fortran continuation first-line start を index 境界で trim し、symbol extraction 中の leading trim allocation を避けるようにしました。
 - Fortran module block-start remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
 - Fortran block-data start remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Fortran derived-type start remainder を index 境界で trim し、symbol extraction 中の substring / trim chain を避けるようにしました。
 - Shell alias segment start を index で走査し、alias 判定前の segment substring / trim allocation を避けるようにしました。
 - Shell alias assignment separator を元の行で探索し、name 抽出前の token substring allocation を避けるようにしました。
 - Shell alias name を index 境界で trim し、symbol extraction 中の slice / trim allocation chain を避けるようにしました。
