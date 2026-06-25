@@ -188,6 +188,7 @@ affected:
 - Sliced Go standalone `var` declaration remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
 - Sliced Go `import` declaration remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
 - Sliced Go block-import remainders after index-based whitespace scanning, avoiding a substring/trim chain during symbol extraction.
+- Trimmed Go import-block closing segments by index, avoiding a prefix substring/trim chain during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -337,6 +338,7 @@ affected:
 - Go standalone `var` declaration remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
 - Go `import` declaration remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
 - Go block-import remainder を index-based whitespace scan 後に slice し、symbol extraction 中の substring / trim chain を避けるようにしました。
+- Go import-block closing segment を index 境界で trim し、symbol extraction 中の prefix substring / trim chain を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。

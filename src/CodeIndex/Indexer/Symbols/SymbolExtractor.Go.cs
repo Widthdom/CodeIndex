@@ -38,7 +38,7 @@ public static partial class SymbolExtractor
             var closingParenIndex = trimmed.IndexOf(')');
             if (closingParenIndex >= 0)
             {
-                var blockImportText = trimmed[..closingParenIndex].TrimEnd();
+                var blockImportText = GetGoPrefixTrimmedEnd(trimmed, closingParenIndex);
                 if (blockImportText.Length > 0)
                     TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
 
@@ -1111,5 +1111,13 @@ public static partial class SymbolExtractor
             index++;
 
         return trimmed[index..];
+    }
+
+    private static string GetGoPrefixTrimmedEnd(string text, int endExclusive)
+    {
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return text[..endExclusive];
     }
 }
