@@ -31,6 +31,7 @@ affected:
 - Capped streaming checksum and grew-during-read probes to the remaining byte limit plus one byte, avoiding unnecessary full-buffer reads once oversized files are already known to exceed indexing limits.
 - Reused scan-time language data when full-scan records skipped binary or oversized files, avoiding an extra language probe on skip paths.
 - Reused update-mode scan language data when binary or oversized files are converted into skipped records, avoiding another skip-path language probe.
+- Reused MCP scan language data when binary files are converted into skipped records, avoiding another skip-path language probe.
 - Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
@@ -68,6 +69,7 @@ affected:
 - streaming checksum と grew-during-read probe の読み取りを残り byte limit + 1 byte に抑え、oversized file が indexing limit を超えると分かった後の不要な full-buffer read を避けるようにしました。
 - full-scan record が binary file や oversized file を skip する path でも scan 時点の language 情報を再利用し、skip path の追加 language probe を避けるようにしました。
 - update mode で binary file や oversized file を skipped record に変換する場合も scan 時点の language 情報を再利用し、skip path の追加 language probe を避けるようにしました。
+- MCP index で binary file を skipped record に変換する場合も scan 時点の language 情報を再利用し、skip path の追加 language probe を避けるようにしました。
 - C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。

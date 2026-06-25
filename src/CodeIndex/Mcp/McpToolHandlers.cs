@@ -6148,7 +6148,7 @@ public partial class McpServer
             {
                 try
                 {
-                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath);
+                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     var fileId = writer.UpsertFile(skippedRecord);
                     writer.InsertChunks([], requestToken);
