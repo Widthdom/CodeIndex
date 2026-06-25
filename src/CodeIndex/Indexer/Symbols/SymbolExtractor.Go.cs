@@ -1079,7 +1079,7 @@ public static partial class SymbolExtractor
 
             if (trimmed.StartsWith("var", StringComparison.Ordinal))
             {
-                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["var".Length..].TrimStart());
+                TryAddGoValueSymbol(fileId, line, i, symbols, GetGoDeclarationRemainder(trimmed, "var".Length));
                 continue;
             }
 
