@@ -2126,6 +2126,28 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void EvaluatePathFilter_RootFileStillUsesRootIgnoreRules()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.cs\n");
+            var ignoredPath = Path.Combine(tempDir, "ignored.cs");
+            File.WriteAllText(ignoredPath, "class Ignored { }\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var filter = indexer.EvaluatePathFilter(ignoredPath);
+
+            Assert.Equal(FileIndexer.PathFilterKind.IgnoredByRules, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsAppleDoubleResourceForks()
     {
         // AppleDouble (`._*`) files masquerade as the real file's language (e.g. `._app.js`

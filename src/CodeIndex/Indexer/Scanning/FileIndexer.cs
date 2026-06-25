@@ -1937,11 +1937,9 @@ public partial class FileIndexer
         if (relativePath.Length == 0 || relativePath == ".")
             return new PathFilterResult(PathFilterKind.None, errors);
 
-        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
         var directoryResult = EvaluatePathFilterDirectorySegments(
-            segments,
-            directorySegmentCount,
+            relativePath,
+            isDirectory,
             errors,
             activeIgnoreRules,
             out var leafIgnoreRules,
@@ -2001,8 +1999,8 @@ public partial class FileIndexer
     }
 
     private PathFilterResult? EvaluatePathFilterDirectorySegments(
-        string[] segments,
-        int directorySegmentCount,
+        string relativePath,
+        bool isDirectory,
         List<ScanError> errors,
         IgnoreRuleSet activeIgnoreRules,
         out IgnoreRuleSet leafIgnoreRules,
@@ -2024,11 +2022,26 @@ public partial class FileIndexer
         // 更新モードのフィルタがフルスキャンと食い違わないようにする。submodule への通過のため
         // SkipDirs を上書きした場合でも、submodule に到達しないファイル・サブディレクトリは
         // 引き続き除外する。
-        for (var i = 0; i < directorySegmentCount; i++)
+        var directoryPathLength = isDirectory ? relativePath.Length : relativePath.LastIndexOf('/');
+        if (directoryPathLength < 0)
+            directoryPathLength = 0;
+
+        var cumulativeRelPath = string.Empty;
+        for (var segmentStart = 0; segmentStart < directoryPathLength;)
         {
-            var directoryName = segments[i];
+            var slashIndex = relativePath.IndexOf('/', segmentStart, directoryPathLength - segmentStart);
+            var segmentEnd = slashIndex >= 0 ? slashIndex : directoryPathLength;
+            if (segmentEnd == segmentStart)
+            {
+                segmentStart++;
+                continue;
+            }
+
+            var directoryName = relativePath.Substring(segmentStart, segmentEnd - segmentStart);
             var childDirectory = Path.Combine(currentDirectory, directoryName);
-            var cumulativeRelPath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, childDirectory));
+            cumulativeRelPath = cumulativeRelPath.Length == 0
+                ? directoryName
+                : string.Concat(cumulativeRelPath, "/", directoryName);
             var isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
             var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
 
@@ -2059,6 +2072,8 @@ public partial class FileIndexer
             leafIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
                 return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+
+            segmentStart = segmentEnd + 1;
         }
 
         return null;
