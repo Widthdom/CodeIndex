@@ -139,7 +139,7 @@ public static partial class SymbolExtractor
     private static bool TryAddFSharpRecordFields(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)
     {
         var emittedAny = false;
-        foreach (var segment in line.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var segment in EnumerateTrimmedFSharpSegments(line, ';'))
         {
             var candidate = segment.Trim().TrimStart('{').TrimEnd('}').TrimStart();
             if (candidate.Length == 0)
@@ -205,11 +205,7 @@ public static partial class SymbolExtractor
     private static bool TryAddFSharpUnionCases(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)
     {
         var emittedAny = false;
-        var segments = line.Contains('|', StringComparison.Ordinal)
-            ? line.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            : [line];
-
-        foreach (var segment in segments)
+        foreach (var segment in EnumerateTrimmedFSharpSegments(line, '|'))
         {
             var candidate = segment.Trim().TrimStart('{').TrimEnd('}').TrimStart();
             if (candidate.Length == 0)
@@ -261,11 +257,8 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return false;
 
-        var activePatternNames = match.Groups["cases"].Value
-            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
         var emittedAny = false;
-        foreach (var rawName in activePatternNames)
+        foreach (var rawName in EnumerateTrimmedFSharpSegments(match.Groups["cases"].Value, '|'))
         {
             if (rawName == "_" || !FSharpActivePatternNameRegex.IsMatch(rawName))
                 continue;
@@ -289,6 +282,24 @@ public static partial class SymbolExtractor
         }
 
         return emittedAny;
+    }
+
+    private static IEnumerable<string> EnumerateTrimmedFSharpSegments(string value, char separator)
+    {
+        var segmentStart = 0;
+        while (segmentStart <= value.Length)
+        {
+            var separatorIndex = value.IndexOf(separator, segmentStart);
+            var segmentEnd = separatorIndex >= 0 ? separatorIndex : value.Length;
+            var segment = value.Substring(segmentStart, segmentEnd - segmentStart).Trim();
+            if (segment.Length > 0)
+                yield return segment;
+
+            if (separatorIndex < 0)
+                break;
+
+            segmentStart = separatorIndex + 1;
+        }
     }
 
     private static bool TryAddFSharpOperatorSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)

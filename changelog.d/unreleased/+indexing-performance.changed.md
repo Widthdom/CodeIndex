@@ -16,6 +16,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/GeneratedCodePatternMatcher.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.CSharpScanner.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.FSharp.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
@@ -118,6 +119,7 @@ affected:
 - Parsed PHP grouped import items by comma index, avoiding per-line comma split arrays during symbol extraction.
 - Parsed Python import specs by comma and dot index, avoiding split arrays while expanding import symbols.
 - Resolved Python relative import module prefixes by scanning dot segments directly, avoiding prefix split and join arrays.
+- Enumerated F# record, union, and active-pattern segments directly, avoiding delimiter split arrays during symbol extraction.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -202,4 +204,5 @@ affected:
 - PHP grouped import item を comma index で解析し、symbol 抽出中の行ごとの comma split array を避けるようにしました。
 - Python import spec を comma / dot index で解析し、import symbol 展開中の split array を避けるようにしました。
 - Python relative import の module prefix を dot segment の直接走査で解決し、prefix split と join array を避けるようにしました。
+- F# record / union / active-pattern segment を直接列挙し、symbol 抽出中の delimiter split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
