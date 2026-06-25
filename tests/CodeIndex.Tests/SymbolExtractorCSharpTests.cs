@@ -6652,7 +6652,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X" && s.Line == 4);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget()
     {
         // issue #447 regression: the real InstallScriptTests fixture previously drove C#
@@ -6679,7 +6683,11 @@ public partial class SymbolExtractorTests
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget()
     {
         // issue #2710/#2711/#2717 regression: full self-indexing could spend minutes

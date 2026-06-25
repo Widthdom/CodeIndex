@@ -353,7 +353,11 @@ public partial class ReferenceExtractorTests
         Assert.Equal(8, expanded[0].Column);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_SwiftLargeTypealiasUseSet_CompletesWithinPracticalBudget()
     {
         var uses = string.Join('\n', Enumerable.Range(0, 5_000).Select(index => $"let v{index}: MyAlias = value"));

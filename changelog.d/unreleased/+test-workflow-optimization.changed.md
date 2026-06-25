@@ -29,6 +29,10 @@ affected:
   - tests/CodeIndex.Tests/ProgramRunnerTests.cs
   - tests/CodeIndex.Tests/ExportImportCommandRunnerIssue3818Tests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorCSharpTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorCSharpTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorRustSwiftTests.cs
+  - tests/CodeIndex.Tests/PracticalBudgetTestTarget.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
   - tests/CodeIndex.Tests/IndexWatchRunnerTests.cs
   - tests/CodeIndex.Tests/DbReaderTests.cs
@@ -91,6 +95,7 @@ affected:
 - Reused shared file cleanup for index-command temporary DB, lock, and outside-fixture file cleanup.
 - Reused MCP server file cleanup helpers for temporary DB and lock sidecar cleanup.
 - Reused shared file cleanup for program-runner cache, script, and temporary file cleanup.
+- Ran broad extractor practical-budget runaway guards only on the primary net8.0 target, keeping focused functional coverage cross-target while avoiding duplicate large-fixture work on net9.0 lanes.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -143,3 +148,4 @@ affected:
 - index-command の一時 DB、lock、outside fixture file cleanup を共通 file cleanup helper に寄せました。
 - MCP server の一時 DB / lock sidecar cleanup を既存 file cleanup helper に寄せました。
 - program-runner の cache、script、一時 file cleanup を共通 file cleanup helper に寄せました。
+- extractor の broad な practical-budget runaway guard を primary の net8.0 target のみで実行し、focused な機能テストは cross-target のまま、net9.0 lane での大規模 fixture 重複実行を避けるようにしました。

@@ -340,7 +340,11 @@ public partial class ReferenceExtractorTests
         Assert.Equal(4, pythonReference.Line);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();
@@ -3061,7 +3065,11 @@ public partial class ReferenceExtractorTests
         Assert.Equal(10, expanded[0].Column);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_TypeScriptLargeTypeAliasUseSet_CompletesWithinPracticalBudget()
     {
         var uses = string.Join('\n', Enumerable.Range(0, 5_000).Select(index => $"let v{index}: MyAlias = value;"));

@@ -9746,7 +9746,11 @@ public partial class ReferenceExtractorTests
         Assert.Equal("Run", readyRef.ContainerName);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CSharpLargeMethodWithManyLocals_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();

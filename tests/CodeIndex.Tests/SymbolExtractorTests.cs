@@ -3194,7 +3194,11 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "skipped" && s.Visibility == "export");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_TypeScriptLargeExportedVariables_CompletesWithinPracticalBudget()
     {
         var lines = string.Join('\n', Enumerable.Range(0, 5_000).Select(i => $"export const value{i} = {i};"));
@@ -7732,7 +7736,11 @@ public partial class SymbolExtractorTests
         Assert.Equal(16, after.BodyEndLine);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_ShellLargeAliasSet_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();
@@ -9763,7 +9771,11 @@ public partial class SymbolExtractorTests
         Assert.Contains("Result", imports);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_RustLargeUseSet_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();
@@ -9902,7 +9914,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GlobalConfig");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_GoLargeGroupedDeclarations_CompletesWithinPracticalBudget()
     {
         var typeLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Type{i} struct {{ Embedded{i} }}"));
@@ -10334,7 +10350,11 @@ public partial class SymbolExtractorTests
         Assert.Equal(40, pointY.Line);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_JavaLargeRecordPrimaryComponents_CompletesWithinPracticalBudget()
     {
         var componentLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    int p{i},"));
@@ -11066,7 +11086,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_KotlinLargePrimaryConstructorComponents_CompletesWithinPracticalBudget()
     {
         var components = string.Join(", ", Enumerable.Range(0, 2_000).Select(i => $"val p{i}: String"));
@@ -11758,7 +11782,11 @@ public partial class SymbolExtractorTests
         Assert.Contains("decltype(foo(42))", value.ReturnType);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_CppLargeSameLineClassBody_CompletesWithinPracticalBudget()
     {
         var members = string.Join(' ', Enumerable.Range(0, 2_000).Select(i => $"int method{i}();"));
@@ -16479,7 +16507,11 @@ public partial class SymbolExtractorTests
         Assert.Equal(6, symbols.Count);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_DockerfileLargeNamedStageChain_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();
@@ -18066,7 +18098,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "gen" && s.ContainerKind == "object");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget()
     {
         var properties = string.Join(", ", Enumerable.Range(0, 3_000).Select(i => $"p{i}: {i}"));
@@ -18084,7 +18120,11 @@ public partial class SymbolExtractorTests
             $"Large JavaScript exported object literal extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_JavaScriptLargeObjectLiteralTargets_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();
@@ -18103,7 +18143,11 @@ public partial class SymbolExtractorTests
             $"Large JavaScript object literal target extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void Extract_TypeScriptLargeClassExpressionTargets_CompletesWithinPracticalBudget()
     {
         var builder = new StringBuilder();
