@@ -20,7 +20,7 @@ public static partial class SymbolExtractor
                 if (equalsIndex <= tokenStart)
                     continue;
 
-                var name = line[tokenStart..equalsIndex].Trim();
+                var name = GetShellTrimmedSlice(line, tokenStart, equalsIndex);
                 if (!IsShellAliasName(name))
                     continue;
 
@@ -231,5 +231,16 @@ public static partial class SymbolExtractor
 
     private static bool IsShellAliasName(string name) =>
         Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_-]*$", RegexOptions.CultureInvariant);
+
+    private static string GetShellTrimmedSlice(string text, int startInclusive, int endExclusive)
+    {
+        while (startInclusive < endExclusive && char.IsWhiteSpace(text[startInclusive]))
+            startInclusive++;
+
+        while (endExclusive > startInclusive && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return text[startInclusive..endExclusive];
+    }
 
 }
