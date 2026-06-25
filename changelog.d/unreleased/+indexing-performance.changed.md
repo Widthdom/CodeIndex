@@ -154,6 +154,7 @@ affected:
 - Trimmed C# primary-constructor first base entries by index, avoiding intermediate trim substrings during base-call detection.
 - Trimmed C# base-type first entries by index, avoiding intermediate trim substrings during base type parsing.
 - Trimmed C# callable parameter lists by index, avoiding a substring trim chain before static-interface signature matching.
+- Trimmed C# callable parameter type names by index, avoiding a substring trim chain while normalizing static-interface signature shapes.
 - Trimmed shared top-level call-argument prefixes by index, avoiding a substring trim chain before type-expression parsing.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
@@ -281,6 +282,7 @@ affected:
 - C# primary-constructor first base entry を index 境界で trim し、base-call 検出中の中間 trim substring を避けるようにしました。
 - C# base-type first entry を index 境界で trim し、base type parse 中の中間 trim substring を避けるようにしました。
 - C# callable parameter list を index 境界で trim し、static-interface signature matching 前の substring trim chain を避けるようにしました。
+- C# callable parameter type name を index 境界で trim し、static-interface signature shape の正規化中の substring trim chain を避けるようにしました。
 - shared top-level call-argument prefix を index 境界で trim し、type-expression parse 前の substring trim chain を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。

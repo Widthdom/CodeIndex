@@ -280,7 +280,12 @@ public static partial class ReferenceExtractor
 
         var nameStart = FindTrailingCSharpParameterNameStart(text);
         if (nameStart > 0)
-            text = text.Substring(0, nameStart).TrimEnd();
+        {
+            var typeEnd = nameStart;
+            while (typeEnd > 0 && char.IsWhiteSpace(text[typeEnd - 1]))
+                typeEnd--;
+            text = text.Substring(0, typeEnd);
+        }
 
         var compactType = RemoveWhitespace(text);
         return refKind.Length == 0 ? compactType : refKind + compactType;
