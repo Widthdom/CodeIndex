@@ -47,7 +47,7 @@ public static partial class SymbolExtractor
                     if (attributeCloseIndex < 0)
                         continue;
 
-                    trimmed = trimmed[(attributeCloseIndex + 1)..].TrimStart();
+                    trimmed = TrimVisualBasicAttributeRemainder(trimmed, attributeCloseIndex + 1);
                     inAttributeBlock = false;
                     if (trimmed.Length == 0)
                         continue;
@@ -63,7 +63,7 @@ public static partial class SymbolExtractor
                         break;
                     }
 
-                    trimmed = trimmed[(attributeCloseIndex + 1)..].TrimStart();
+                    trimmed = TrimVisualBasicAttributeRemainder(trimmed, attributeCloseIndex + 1);
                     if (trimmed.Length == 0)
                         break;
                 }
@@ -94,6 +94,14 @@ public static partial class SymbolExtractor
                 UpdateVisualBasicEnumInitializerState(trimmed, ref initializerParenDepth, ref inInitializer);
             }
         }
+    }
+
+    private static string TrimVisualBasicAttributeRemainder(string text, int startIndex)
+    {
+        while (startIndex < text.Length && char.IsWhiteSpace(text[startIndex]))
+            startIndex++;
+
+        return startIndex < text.Length ? text[startIndex..] : string.Empty;
     }
 
     private static bool TryExtractVisualBasicEnumMemberName(string line, out string name)

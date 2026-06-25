@@ -27,6 +27,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Shell.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.VisualBasic.cs
   - src/CodeIndex/Indexer/Symbols/SwiftSymbolNameNormalizer.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -217,6 +218,7 @@ affected:
 - Trimmed Shell alias signatures by index, avoiding a full-line trim allocation during symbol extraction.
 - Scanned Shell alias tokens for assignments by index, avoiding token substring allocation during alias enumeration.
 - Read Shell alias tokens on the original line, avoiding per-alias segment substring allocation during symbol extraction.
+- Trimmed Visual Basic enum attribute remainders by index, avoiding a suffix substring/trim chain during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -393,6 +395,7 @@ affected:
 - Shell alias signature を index 境界で trim し、symbol extraction 中の full-line trim allocation を避けるようにしました。
 - Shell alias token assignment を index で走査し、alias enumeration 中の token substring allocation を避けるようにしました。
 - Shell alias token を元の行上で読み取り、symbol extraction 中の alias ごとの segment substring allocation を避けるようにしました。
+- Visual Basic enum attribute remainder を index 境界で trim し、symbol extraction 中の suffix substring / trim chain を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。
