@@ -12612,7 +12612,7 @@ public sealed class Caller
     {
         var hostDir = Path.GetDirectoryName(hostPath);
         if (!string.IsNullOrWhiteSpace(hostDir) && Directory.Exists(hostDir))
-            Directory.Delete(hostDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(hostDir);
     }
 
     private static int CountOccurrences(string text, string value)
