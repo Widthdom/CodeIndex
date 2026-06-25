@@ -1190,8 +1190,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1215,8 +1214,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1241,8 +1239,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1287,10 +1284,8 @@ public class ProgramRunnerTests
             finally
             {
                 UpdateChecker.CacheDiagnosticSinkForTesting = null;
-                if (File.Exists(cachePathWithoutDiagnostics))
-                    File.Delete(cachePathWithoutDiagnostics);
-                if (File.Exists(cachePathWithDiagnostics))
-                    File.Delete(cachePathWithDiagnostics);
+                TestProjectHelper.DeleteFile(cachePathWithoutDiagnostics);
+                TestProjectHelper.DeleteFile(cachePathWithDiagnostics);
             }
         }
     }
@@ -1352,8 +1347,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1375,8 +1369,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1464,8 +1457,7 @@ public class ProgramRunnerTests
             finally
             {
                 UpdateChecker.TimeProvider = previousTimeProvider;
-                if (File.Exists(cachePath))
-                    File.Delete(cachePath);
+                TestProjectHelper.DeleteFile(cachePath);
             }
         }
     }
@@ -1494,8 +1486,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1517,8 +1508,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1541,8 +1531,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1565,8 +1554,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1591,8 +1579,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(cachePath))
-                File.Delete(cachePath);
+            TestProjectHelper.DeleteFile(cachePath);
         }
     }
 
@@ -1651,8 +1638,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -1670,8 +1656,7 @@ public class ProgramRunnerTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -1985,8 +1970,7 @@ exit 7
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -2371,8 +2355,7 @@ exit 7
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -2680,8 +2663,7 @@ exit 7
         }
         finally
         {
-            if (File.Exists(scriptPath))
-                File.Delete(scriptPath);
+            TestProjectHelper.DeleteFile(scriptPath);
         }
     }
 
