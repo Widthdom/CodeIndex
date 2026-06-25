@@ -8,6 +8,7 @@ affected:
   - tests/CodeIndex.Tests/ConcurrencyTests.cs
   - tests/CodeIndex.Tests/BackgroundTaskObserverTests.cs
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
+  - tests/CodeIndex.Tests/GitHelperTests.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
   - .github/workflows/mutation-testing.yml
@@ -32,6 +33,7 @@ affected:
 - Cached the pinned Stryker global tool and NuGet packages in the weekly mutation workflow, and update/install the tool only on cache misses.
 - Moved published CLI subprocess execution into `TrimmedCliTestHelper`, removing duplicated process-launch helpers from index/query tests.
 - Shortened post-extraction hook timeout/cancellation leak checks by lowering the artificial hook delay and using a smaller observation window that still catches un-killed workers.
+- Reused `TestProjectHelper.DeleteDirectory` in Git helper tests instead of carrying a duplicate robust cleanup loop.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -50,3 +52,4 @@ affected:
 - weekly mutation workflow で pinned Stryker global tool と NuGet package を cache し、cache miss のときだけ tool を update / install するようにしました。
 - published CLI subprocess execution を `TrimmedCliTestHelper` に移し、index/query test の重複 process-launch helper を削除しました。
 - post-extraction hook の timeout / cancellation leak check で人工 hook delay と観測 window を短縮し、kill されなかった worker は引き続き検出しつつ固定待機を減らしました。
+- Git helper test で重複していた robust cleanup loop を削除し、`TestProjectHelper.DeleteDirectory` を再利用するようにしました。
