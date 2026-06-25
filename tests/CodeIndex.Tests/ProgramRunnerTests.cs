@@ -825,8 +825,7 @@ public class ProgramRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            if (Directory.Exists(logRoot))
-                Directory.Delete(logRoot, recursive: true);
+            TestProjectHelper.DeleteDirectory(logRoot);
         }
     }
 
@@ -869,8 +868,7 @@ public class ProgramRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            if (Directory.Exists(logRoot))
-                Directory.Delete(logRoot, recursive: true);
+            TestProjectHelper.DeleteDirectory(logRoot);
         }
     }
 
