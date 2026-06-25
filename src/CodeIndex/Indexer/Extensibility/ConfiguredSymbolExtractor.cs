@@ -27,9 +27,10 @@ internal sealed class ConfiguredSymbolExtractor(
     {
         var symbols = new List<SymbolRecord>();
         var lineNumber = 0;
-        foreach (var line in source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+        foreach (var lineMemory in EnumerateNormalizedLines(source))
         {
             lineNumber++;
+            var line = lineMemory.ToString();
             foreach (var pattern in patterns)
             {
                 if (IsPatternDisabled(pattern))
@@ -74,6 +75,24 @@ internal sealed class ConfiguredSymbolExtractor(
         }
 
         return symbols;
+    }
+
+    private static IEnumerable<ReadOnlyMemory<char>> EnumerateNormalizedLines(string source)
+    {
+        var lineStart = 0;
+        for (var i = 0; i < source.Length; i++)
+        {
+            var ch = source[i];
+            if (ch is not ('\r' or '\n'))
+                continue;
+
+            yield return source.AsMemory(lineStart, i - lineStart);
+            if (ch == '\r' && i + 1 < source.Length && source[i + 1] == '\n')
+                i++;
+            lineStart = i + 1;
+        }
+
+        yield return source.AsMemory(lineStart);
     }
 
     private bool IsPatternDisabled(PatternRule pattern)

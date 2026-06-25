@@ -175,6 +175,55 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_ConfiguredPatternYaml_NormalizesSourceLinesDuringExtraction()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_source_lines_{Guid.NewGuid():N}");
+            try
+            {
+                WritePatternConfig(
+                    tempDir,
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.ReloadForTests();
+
+                var symbols = SymbolExtractor.Extract(
+                    2,
+                    "toydsl",
+                    "noise\rentity Alpha\r\nentity Beta\nentity Gamma",
+                    "demo.toy",
+                    tempDir);
+
+                Assert.Collection(
+                    symbols,
+                    symbol =>
+                    {
+                        Assert.Equal("Alpha", symbol.Name);
+                        Assert.Equal(2, symbol.Line);
+                        Assert.Equal("entity Alpha", symbol.Signature);
+                    },
+                    symbol =>
+                    {
+                        Assert.Equal("Beta", symbol.Name);
+                        Assert.Equal(3, symbol.Line);
+                        Assert.Equal("entity Beta", symbol.Signature);
+                    },
+                    symbol =>
+                    {
+                        Assert.Equal("Gamma", symbol.Name);
+                        Assert.Equal(4, symbol.Line);
+                        Assert.Equal("entity Gamma", symbol.Signature);
+                    });
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_RejectsOversizeConfigWithDiagnostic()
     {
         lock (TestConsoleLock.Gate)
