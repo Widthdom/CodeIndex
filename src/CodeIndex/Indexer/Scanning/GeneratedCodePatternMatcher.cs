@@ -44,10 +44,12 @@ internal sealed class GeneratedCodePatternMatcher
             return false;
 
         var normalizedPath = NormalizePath(relativePath);
-        var fileName = GetFileName(normalizedPath);
+        string? fileName = null;
         foreach (var rule in _rules)
         {
-            var candidate = rule.MatchBasenameOnly ? fileName : normalizedPath;
+            var candidate = rule.MatchBasenameOnly
+                ? fileName ??= GetFileName(normalizedPath)
+                : normalizedPath;
             if (rule.Matcher.IsMatch(candidate))
             {
                 pattern = rule.Pattern;
@@ -73,10 +75,14 @@ internal sealed class GeneratedCodePatternMatcher
 
     private static string NormalizePath(string path)
     {
-        var normalized = path.Replace('\\', '/');
-        while (normalized.StartsWith("./", StringComparison.Ordinal))
-            normalized = normalized[2..];
-        return normalized;
+        var start = 0;
+        while (path.AsSpan(start).StartsWith("./".AsSpan(), StringComparison.Ordinal))
+            start += 2;
+
+        if (path.IndexOf('\\', start) < 0)
+            return start == 0 ? path : path[start..];
+
+        return path[start..].Replace('\\', '/');
     }
 
     private static string GetFileName(string normalizedPath)

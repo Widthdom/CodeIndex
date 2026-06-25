@@ -11,6 +11,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.RawBytes.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
   - src/CodeIndex/Indexer/Scanning/ChunkSplitter.cs
+  - src/CodeIndex/Indexer/Scanning/GeneratedCodePatternMatcher.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -84,6 +85,7 @@ affected:
 - Rejected extensionless non-shebang files from raw prefix bytes before line decoding and tokenization.
 - Replaced Windows device-path normalization and segment splitting with allocation-free span scanning during file indexability checks.
 - Pre-sized chunk record lists from the known line count, avoiding repeated list growth while chunking long files.
+- Avoided basename extraction and path normalization allocations on generated-code pattern matcher fast paths.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -148,4 +150,5 @@ affected:
 - 拡張子なしの非 shebang file は line decode と tokenize の前に raw prefix byte で除外するようにしました。
 - file indexability check 中の Windows device path 判定で、path normalization と segment split を allocation-free な span 走査へ置き換えました。
 - 既知の line count から chunk record list の容量を事前見積もりし、長い file の chunking 中に list growth を繰り返さないようにしました。
+- generated-code pattern matcher の fast path で basename extraction と path normalization allocation を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
