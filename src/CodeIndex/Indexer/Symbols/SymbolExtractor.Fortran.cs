@@ -73,6 +73,14 @@ public static partial class SymbolExtractor
         return endExclusive == text.Length ? text : text[..endExclusive];
     }
 
+    private static string GetFortranSuffixTrimmedStart(string text, int startInclusive)
+    {
+        while (startInclusive < text.Length && char.IsWhiteSpace(text[startInclusive]))
+            startInclusive++;
+
+        return startInclusive == 0 ? text : text[startInclusive..];
+    }
+
     private static FortranContinuationMatchCandidate? TryBuildFortranContinuationMatchLine(string[] lines, int startIndex)
     {
         var firstLine = lines[startIndex];
@@ -111,7 +119,8 @@ public static partial class SymbolExtractor
             if (lastConsumedLineIndex + 1 >= lines.Length)
                 break;
 
-            var nextLine = StripFortranComment(lines[lastConsumedLineIndex + 1]).TrimStart();
+            var nextLine = StripFortranComment(lines[lastConsumedLineIndex + 1]);
+            nextLine = GetFortranSuffixTrimmedStart(nextLine, 0);
             if (nextLine.StartsWith('&'))
                 nextLine = nextLine[1..].TrimStart();
 
