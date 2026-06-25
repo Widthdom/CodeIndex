@@ -69,6 +69,7 @@ affected:
 - Reused each ignore-rule-set relative path across all rules from the same ignore file, avoiding repeated relative-path computation in large `.gitignore` files.
 - Reused basename extraction across basename-only rules from the same ignore file, reducing repeated path work during ignore matching.
 - Matched literal ignore rules with ordinal string comparison instead of compiling and running a regular expression.
+- Avoided allocating folded ignore-match candidates when ASCII case folding would leave the path unchanged.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -118,4 +119,5 @@ affected:
 - 同じ ignore file から作られた ignore rule set 内では相対 path を各 rule で共有し、大きな `.gitignore` に対する relative-path computation の繰り返しを避けるようにしました。
 - 同じ ignore file から作られた basename-only rule 間で basename extraction を共有し、ignore matching 中の path work の繰り返しを減らしました。
 - literal ignore rule は regular expression の compile / match を使わず、ordinal string comparison で判定するようにしました。
+- ASCII case folding で path が変わらない ignore-match candidate では、folded string の割り当てを避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

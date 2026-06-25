@@ -855,10 +855,19 @@ public partial class FileIndexer
 
         private static string FoldAscii(string value)
         {
-            var chars = value.ToCharArray();
-            for (var i = 0; i < chars.Length; i++)
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (value[i] is not (>= 'A' and <= 'Z'))
+                    continue;
+
+                var chars = value.ToCharArray();
                 chars[i] = FoldAsciiChar(chars[i]);
-            return new string(chars);
+                for (var j = i + 1; j < chars.Length; j++)
+                    chars[j] = FoldAsciiChar(chars[j]);
+                return new string(chars);
+            }
+
+            return value;
         }
 
         private static char FoldAsciiChar(char ch)
