@@ -92,7 +92,7 @@ The test project mirrors the production areas closely.
 - `SourceCodeDetectorTests.cs`
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
 - `PostExtractionHookTests.cs`
-  Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
+  Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. Timed-out and canceled callback tests use a hook delay shorter than their leak-observation window, not a full one-second absence check, so worker-kill regressions still write the completion marker before the assertion exits. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
 - `GitHubIssueReporterTests.cs`
   GitHub token resolution logic (CDIDX_GITHUB_TOKEN only; generic GITHUB_TOKEN is ignored), outbound code scrubbing, idempotency checks, and rate-limit diagnostics.
 - `PackagesLockTests.cs`
@@ -329,7 +329,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SourceCodeDetectorTests.cs`
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
 - `PostExtractionHookTests.cs`
-  post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
+  post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。timeout / cancel された callback のテストは、hook delay を leak-observation window より短くし、1 秒丸ごとの absence check には戻しません。worker kill の回帰がある場合は assertion が終わる前に completion marker が書かれるようにします。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
 - `GitHubIssueReporterTests.cs`
   GitHubトークン解決ロジック（CDIDX_GITHUB_TOKENのみ。汎用GITHUB_TOKENは無視）、送信前のコード scrubbing、冪等性チェック、rate-limit diagnostics を扱います。
 - `PackagesLockTests.cs`

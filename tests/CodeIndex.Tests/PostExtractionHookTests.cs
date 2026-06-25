@@ -17,6 +17,8 @@ public class PostExtractionHookTests
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
+    private const string TimedOutHookDelayMilliseconds = "250";
+    private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(600);
 
     [Fact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
@@ -225,7 +227,7 @@ public class PostExtractionHookTests
             var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
             try
             {
-                env.Set(SlowHookDelayEnvironmentVariable, "500");
+                env.Set(SlowHookDelayEnvironmentVariable, TimedOutHookDelayMilliseconds);
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(100);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 var completionPath = Path.Combine(projectRoot, "slow-hook.done");
@@ -239,7 +241,7 @@ public class PostExtractionHookTests
                     var symbols = new List<SymbolRecord>();
 
                     runner.OnSymbolsExtracted(context, symbols);
-                    AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
+                    AssertFileDoesNotAppear(completionPath, TimedOutHookLeakObservationWindow);
 
                     Assert.DoesNotContain(symbols, symbol => symbol.Name == "SlowHookTag");
                     var diagnostic = Assert.Single(
@@ -330,7 +332,7 @@ public class PostExtractionHookTests
             var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
             try
             {
-                env.Set(CancellableHookDelayEnvironmentVariable, "500");
+                env.Set(CancellableHookDelayEnvironmentVariable, TimedOutHookDelayMilliseconds);
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromSeconds(5);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 var completionPath = Path.Combine(projectRoot, "cancellable-hook.done");
@@ -347,7 +349,7 @@ public class PostExtractionHookTests
 
                     Assert.ThrowsAny<OperationCanceledException>(() =>
                         runner.OnSymbolsExtracted(context, symbols, cancellation.Token));
-                    AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
+                    AssertFileDoesNotAppear(completionPath, TimedOutHookLeakObservationWindow);
                 }
                 CollectUnloadedHookAssemblies();
             }
