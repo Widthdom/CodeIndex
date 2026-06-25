@@ -5621,9 +5621,26 @@ public static partial class SymbolExtractor
     {
         if (string.IsNullOrWhiteSpace(current))
             return addition;
-        return current.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(addition, StringComparer.Ordinal)
+        return ContainsSubKind(current, addition)
             ? current
             : current + "|" + addition;
+    }
+
+    private static bool ContainsSubKind(string current, string addition)
+    {
+        var remaining = current.AsSpan();
+        while (!remaining.IsEmpty)
+        {
+            var separatorIndex = remaining.IndexOf('|');
+            var candidate = separatorIndex < 0 ? remaining : remaining[..separatorIndex];
+            if (!candidate.IsEmpty && candidate.Equals(addition.AsSpan(), StringComparison.Ordinal))
+                return true;
+            if (separatorIndex < 0)
+                break;
+            remaining = remaining[(separatorIndex + 1)..];
+        }
+
+        return false;
     }
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
