@@ -157,11 +157,10 @@ public static partial class SymbolExtractor
                 index++;
             }
 
-            var token = body[tokenStart..index];
-            var equalsIndex = token.IndexOf('=');
-            if (equalsIndex > 0)
+            var equalsIndex = body.IndexOf('=', tokenStart, index - tokenStart);
+            if (equalsIndex > tokenStart)
             {
-                var name = token[..equalsIndex];
+                var name = body[tokenStart..equalsIndex];
                 if (isName(name))
                     yield return name;
             }
