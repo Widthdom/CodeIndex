@@ -263,15 +263,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
     }
 
     private static bool RequiresPrepassNormalization(string content)
-    {
-        foreach (var c in content)
-        {
-            if (c is '\r' or '\uFEFF' or '\u200B')
-                return true;
-        }
-
-        return false;
-    }
+        => content.AsSpan().IndexOfAny('\r', '\uFEFF', '\u200B') >= 0;
 
     internal static bool IsGitLfsPointer(byte[] rawBytes)
     {
