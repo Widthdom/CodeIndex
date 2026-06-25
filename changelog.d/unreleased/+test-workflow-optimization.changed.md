@@ -75,6 +75,7 @@ affected:
 - Reused shared temporary directory cleanup for program-runner query trace log workspaces.
 - Reused shared temporary directory cleanup for program-runner extractor/cache directory fixtures.
 - Reused shared temporary directory cleanup for import rollback workspaces.
+- Reused shared temporary directory cleanup for audit log write-target directory fixtures.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -115,3 +116,4 @@ affected:
 - program-runner query trace log workspace の cleanup を共通 helper に寄せました。
 - program-runner extractor / cache directory fixture の cleanup を共通 helper に寄せました。
 - import rollback workspace の cleanup を共通 helper に寄せました。
+- audit log write-target directory fixture の cleanup を共通 helper に寄せました。

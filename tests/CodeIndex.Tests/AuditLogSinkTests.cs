@@ -739,7 +739,7 @@ public class AuditLogSinkTests
             }
             finally
             {
-                Directory.Delete(path, recursive: true);
+                TestProjectHelper.DeleteDirectory(path);
             }
         }
         finally
@@ -821,7 +821,7 @@ public class AuditLogSinkTests
         finally
         {
             if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
+                TestProjectHelper.DeleteDirectory(path);
         }
     }
 
