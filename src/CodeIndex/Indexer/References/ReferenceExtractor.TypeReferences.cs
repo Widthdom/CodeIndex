@@ -308,7 +308,12 @@ public static partial class ReferenceExtractor
         foreach (var modifier in new[] { "this", "scoped" })
         {
             if (StartsWithCSharpWord(text, modifier))
-                return text.Substring(modifier.Length).TrimStart();
+            {
+                var nextStart = modifier.Length;
+                while (nextStart < text.Length && char.IsWhiteSpace(text[nextStart]))
+                    nextStart++;
+                return text.Substring(nextStart);
+            }
         }
 
         return text;

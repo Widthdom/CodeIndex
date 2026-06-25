@@ -157,6 +157,7 @@ affected:
 - Trimmed C# callable parameter type names by index, avoiding a substring trim chain while normalizing static-interface signature shapes.
 - Trimmed C# callable parameter default-stripped text by index, avoiding `Trim` allocation while normalizing static-interface signature shapes.
 - Scanned C# callable ref-kind modifier tails by index, avoiding `TrimStart` allocation while normalizing static-interface signature shapes.
+- Scanned C# callable parameter modifier tails by index, avoiding `TrimStart` allocation for `this` and `scoped` parameters.
 - Trimmed shared top-level call-argument prefixes by index, avoiding a substring trim chain before type-expression parsing.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
@@ -287,6 +288,7 @@ affected:
 - C# callable parameter type name を index 境界で trim し、static-interface signature shape の正規化中の substring trim chain を避けるようにしました。
 - C# callable parameter の default-stripped text を index 境界で trim し、static-interface signature shape の正規化中の `Trim` allocation を避けるようにしました。
 - C# callable ref-kind modifier tail を index で走査し、static-interface signature shape の正規化中の `TrimStart` allocation を避けるようにしました。
+- C# callable parameter modifier tail を index で走査し、`this` / `scoped` parameter の `TrimStart` allocation を避けるようにしました。
 - shared top-level call-argument prefix を index 境界で trim し、type-expression parse 前の substring trim chain を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
