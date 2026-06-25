@@ -680,7 +680,7 @@ public static partial class SymbolExtractor
 
             var tagIndex = candidate.IndexOf('`');
             if (tagIndex >= 0)
-                candidate = candidate[..tagIndex].TrimEnd();
+                candidate = GetGoPrefixTrimmedEnd(candidate, tagIndex);
 
             if (candidate.Length == 0)
                 continue;
