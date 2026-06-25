@@ -137,6 +137,7 @@ affected:
 - Trimmed PHP grouped import prefixes by index, avoiding `TrimEnd` allocation while composing grouped import references.
 - Scanned SCSS variable skip prefixes by first non-whitespace index, avoiding `TrimStart` allocation while filtering variable declarations and mixin headers.
 - Scanned Sass indented declaration prefixes by first non-whitespace index, avoiding `TrimStart` allocation while filtering bare-function references.
+- Scanned Sass bare-function prefixes by first non-whitespace index, avoiding `TrimStart` allocation while filtering mixin and function declarations.
 - Scanned XAML type-argument delimiters directly, avoiding split arrays while normalizing generic markup references.
 - Scanned trailing tokens in cross-language comma lists directly, avoiding whitespace split arrays during reference extraction.
 - Trimmed cross-language comma-list segments by index, avoiding intermediate trim substrings during reference extraction.
@@ -278,6 +279,7 @@ affected:
 - PHP grouped import prefix を index 境界で trim し、grouped import reference の構築中の `TrimEnd` allocation を避けるようにしました。
 - SCSS variable skip prefix を最初の非空白 index で判定し、variable declaration と mixin header の filtering 中の `TrimStart` allocation を避けるようにしました。
 - Sass indented declaration prefix を最初の非空白 index で判定し、bare-function reference の filtering 中の `TrimStart` allocation を避けるようにしました。
+- Sass bare-function prefix を最初の非空白 index で判定し、mixin / function declaration の filtering 中の `TrimStart` allocation を避けるようにしました。
 - XAML type-argument delimiter を直接走査し、generic markup reference の正規化中の split array を避けるようにしました。
 - cross-language comma list の末尾 token を直接走査し、reference 抽出中の whitespace split array を避けるようにしました。
 - cross-language comma-list segment を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。

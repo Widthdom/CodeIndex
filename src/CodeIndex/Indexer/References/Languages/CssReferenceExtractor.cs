@@ -1123,14 +1123,17 @@ internal static class CssReferenceExtractor
 
     private static bool ShouldSkipSassBareFunctionReference(string preparedLine, int functionIndex)
     {
-        var trimmed = preparedLine.TrimStart();
-        if (!trimmed.StartsWith("@function", StringComparison.Ordinal)
-            && !trimmed.StartsWith("@mixin", StringComparison.Ordinal))
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        var lineTail = preparedLine.AsSpan(firstNonWhitespace);
+        if (!lineTail.StartsWith("@function", StringComparison.Ordinal)
+            && !lineTail.StartsWith("@mixin", StringComparison.Ordinal))
         {
             return false;
         }
 
-        var firstNonWhitespace = preparedLine.Length - trimmed.Length;
         return functionIndex >= firstNonWhitespace;
     }
 
