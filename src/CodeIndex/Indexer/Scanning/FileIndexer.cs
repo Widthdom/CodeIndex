@@ -299,12 +299,14 @@ public partial class FileIndexer
         private readonly IgnoreRuleSet? _parent;
         private readonly IReadOnlyList<IgnoreRule> _rules;
         private readonly string? _sourceDirectory;
+        private readonly bool _hasBasenameOnlyRule;
 
         private IgnoreRuleSet(IgnoreRuleSet? parent, IReadOnlyList<IgnoreRule> rules)
         {
             _parent = parent;
             _rules = rules;
             _sourceDirectory = rules.Count == 0 ? null : rules[0].SourceDirectory;
+            _hasBasenameOnlyRule = rules.Any(static rule => rule.MatchesBasenameOnly);
         }
 
         internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
@@ -320,9 +322,10 @@ public partial class FileIndexer
             if (relativePath is null)
                 return ignored;
 
+            var basename = _hasBasenameOnlyRule ? Path.GetFileName(relativePath) : null;
             foreach (var rule in _rules)
             {
-                if (rule.IsMatch(relativePath, isDirectory))
+                if (rule.IsMatch(relativePath, basename, isDirectory))
                     ignored = !rule.Negated;
             }
 
@@ -379,6 +382,8 @@ public partial class FileIndexer
         internal bool Negated { get; }
 
         internal string SourceDirectory => _sourceDirectory;
+
+        internal bool MatchesBasenameOnly => _matchBasenameOnly;
 
         internal static bool TryParse(string sourceDirectory, string rawLine, bool ignoreCase, out IgnoreRule? rule, out string? errorMessage)
         {
@@ -450,13 +455,13 @@ public partial class FileIndexer
             return relativePath;
         }
 
-        internal bool IsMatch(string relativePath, bool isDirectory)
+        internal bool IsMatch(string relativePath, string? basename, bool isDirectory)
         {
             if (_directoryOnly && !isDirectory)
                 return false;
 
             var candidate = _matchBasenameOnly
-                ? Path.GetFileName(relativePath)
+                ? basename
                 : relativePath;
 
             if (string.IsNullOrEmpty(candidate))

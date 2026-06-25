@@ -67,6 +67,7 @@ affected:
 - Skipped separator and trailing-slash normalization work for ignore paths that are already in the scanner's invariant form.
 - Removed per-file path segment array allocations from update-mode path filtering and reused the scanned directory prefix while checking submodule scopes.
 - Reused each ignore-rule-set relative path across all rules from the same ignore file, avoiding repeated relative-path computation in large `.gitignore` files.
+- Reused basename extraction across basename-only rules from the same ignore file, reducing repeated path work during ignore matching.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -114,4 +115,5 @@ affected:
 - scanner invariant をすでに満たす ignore path では、separator と trailing-slash normalization の処理を省略するようにしました。
 - update-mode path filtering で file ごとの path segment array allocation をなくし、submodule scope 判定では走査済み directory prefix を再利用するようにしました。
 - 同じ ignore file から作られた ignore rule set 内では相対 path を各 rule で共有し、大きな `.gitignore` に対する relative-path computation の繰り返しを避けるようにしました。
+- 同じ ignore file から作られた basename-only rule 間で basename extraction を共有し、ignore matching 中の path work の繰り返しを減らしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
