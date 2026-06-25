@@ -753,8 +753,7 @@ public partial class SymbolExtractorTests
             {
                 ExtractorPluginRegistry.ResetForTests();
                 Environment.CurrentDirectory = originalDirectory;
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
