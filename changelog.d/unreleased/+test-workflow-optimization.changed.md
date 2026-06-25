@@ -16,6 +16,7 @@ affected:
 - Added an OS-scoped NuGet cache restore key so lock-file changes can still reuse compatible package cache contents.
 - Removed the redundant explicit `--no-restore` from the CI `dotnet test` command because `--no-build` already suppresses restore.
 - Replaced fixed two-second waits in concurrent snapshot stress tests with iteration-based completion and the same two-second slow-host cap.
+- Removed post-cancellation fixed sleeps from background-task observer tests by relying on the observer's fault-only continuation contract.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -26,3 +27,4 @@ affected:
 - OS 単位の NuGet cache restore key を追加し、lock file 変更時にも互換性のある package cache 内容を再利用できるようにしました。
 - `--no-build` が restore を抑止するため、CI の `dotnet test` command から重複する明示的な `--no-restore` を削除しました。
 - concurrent snapshot stress test の固定 2 秒待機を、反復数ベースの完了判定と従来同等の 2 秒 slow-host 上限へ置き換えました。
+- background-task observer test から cancellation 後の固定 sleep を削除し、observer の fault-only continuation 契約に基づく検証へ寄せました。
