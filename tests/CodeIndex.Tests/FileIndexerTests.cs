@@ -296,8 +296,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -327,8 +326,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -357,8 +355,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -390,8 +387,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -661,8 +657,7 @@ public partial class FileIndexerTests
             finally
             {
                 Environment.CurrentDirectory = originalDirectory;
-                if (Directory.Exists(tempDir))
-                    TestProjectHelper.DeleteDirectory(tempDir);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -936,8 +931,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -957,8 +951,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -983,8 +976,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1012,8 +1004,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1049,8 +1040,7 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1080,8 +1070,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1111,8 +1100,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1134,8 +1122,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1157,8 +1144,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1185,8 +1171,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1205,8 +1190,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1229,8 +1213,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1254,8 +1237,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1275,8 +1257,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1296,8 +1277,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -1321,8 +1301,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2187,10 +2166,8 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(outsideDir))
-                TestProjectHelper.DeleteDirectory(outsideDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(outsideDir);
         }
     }
 
@@ -2220,8 +2197,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2262,8 +2238,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2292,8 +2267,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2329,8 +2303,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2372,10 +2345,8 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(externalDir))
-                TestProjectHelper.DeleteDirectory(externalDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -2414,10 +2385,8 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(externalDir))
-                TestProjectHelper.DeleteDirectory(externalDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -2455,8 +2424,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2567,8 +2535,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2735,8 +2702,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2762,8 +2728,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2785,8 +2750,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2808,8 +2772,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2850,8 +2813,7 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2893,8 +2855,7 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2926,8 +2887,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2963,8 +2923,7 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue)
                 SetUnixPermissions(projects, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3005,8 +2964,7 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue && Directory.Exists(blockedDir))
                 SetUnixPermissions(blockedDir, originalMode.Value);
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3036,8 +2994,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3318,8 +3275,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3347,8 +3303,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3374,8 +3329,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3851,8 +3805,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3992,8 +3945,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4108,8 +4060,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4132,8 +4083,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4163,8 +4113,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4195,8 +4144,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4281,8 +4229,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
 
         static IEnumerable<string> DeleteBeforeProbe(string path)
@@ -4317,8 +4264,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4368,8 +4314,7 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.ResolveDirectoryLinkTargetForTesting = null;
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4410,10 +4355,8 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
-            if (Directory.Exists(externalDir))
-                TestProjectHelper.DeleteDirectory(externalDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -4450,8 +4393,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4488,8 +4430,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4568,8 +4509,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4598,8 +4538,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4640,8 +4579,7 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4827,8 +4765,7 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.ReadGitmodulesLinesForTesting = previousReader;
-            if (Directory.Exists(tempDir))
-                TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 

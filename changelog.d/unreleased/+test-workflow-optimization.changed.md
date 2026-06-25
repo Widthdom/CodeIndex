@@ -86,6 +86,7 @@ affected:
 - Reused shared temporary directory cleanup from the watch runner test helper.
 - Reused shared temporary directory cleanup for database purge workspaces.
 - Reused shared temporary directory cleanup for reader BOM end-to-end fixtures.
+- Removed redundant `Directory.Exists` guards around file-indexer cleanup helper calls.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -133,3 +134,4 @@ affected:
 - watch runner test helper の cleanup を共通 helper に寄せました。
 - database purge workspace の cleanup を共通 helper に寄せました。
 - reader BOM end-to-end fixture の cleanup を共通 helper に寄せました。
+- file-indexer cleanup helper 呼び出し前の重複 `Directory.Exists` guard を削除しました。
