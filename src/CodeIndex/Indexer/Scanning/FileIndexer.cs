@@ -1149,7 +1149,7 @@ public partial class FileIndexer
             }
         }
 
-        if (TryDetectLanguageOverride(filePath, out var overrideLanguage))
+        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLanguage))
             return string.Equals(language, overrideLanguage, StringComparison.Ordinal);
 
         var extension = Path.GetExtension(filePath);
@@ -1188,7 +1188,7 @@ public partial class FileIndexer
         }
 
         var ext = Path.GetExtension(filePath);
-        if (TryDetectLanguageOverride(filePath, out var overrideLang))
+        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
         if (LangMap.TryGetValue(ext, out var lang))
@@ -1218,11 +1218,14 @@ public partial class FileIndexer
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot);
     }
 
-    private static bool TryDetectLanguageOverride(string filePath, out string language)
+    private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
     {
         language = string.Empty;
-        var fileName = Path.GetFileName(filePath);
-        foreach (var (extension, mappedLanguage) in LanguageMapOverrides.LoadEffectiveMap(filePath))
+        var overrides = LanguageMapOverrides.LoadEffectiveMap(filePath);
+        if (overrides.Count == 0)
+            return false;
+
+        foreach (var (extension, mappedLanguage) in overrides)
         {
             if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
             {
