@@ -67,14 +67,14 @@ public static partial class SymbolExtractor
                 var cursor = trimmedOffset + "alias".Length;
                 while (TryReadShellAliasToken(segment, ref cursor, out var tokenStart, out var tokenEnd))
                 {
-                    var token = segment[tokenStart..tokenEnd];
-                    if (token.Length == 0)
+                    if (tokenEnd <= tokenStart)
                         continue;
 
-                    if (token[0] == '-' && token.IndexOf('=') < 0)
+                    var equalsIndex = segment.IndexOf('=', tokenStart, tokenEnd - tokenStart);
+                    if (segment[tokenStart] == '-' && equalsIndex < 0)
                         continue;
 
-                    if (token.IndexOf('=') > 0)
+                    if (equalsIndex > tokenStart)
                         yield return (segmentStart + tokenStart, segmentStart + tokenEnd);
                 }
             }
