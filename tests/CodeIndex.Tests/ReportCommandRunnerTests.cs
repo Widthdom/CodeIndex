@@ -185,7 +185,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -218,7 +218,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -244,7 +244,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -281,7 +281,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -309,8 +309,8 @@ public class ReportCommandRunnerTests
         finally
         {
             Directory.SetCurrentDirectory(originalDirectory);
-            TryDeleteDirectory(workDir);
-            TryDeleteDirectory(driftDir);
+            TestProjectHelper.DeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(driftDir);
         }
     }
 
@@ -362,7 +362,7 @@ public class ReportCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -391,7 +391,7 @@ public class ReportCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -426,7 +426,7 @@ public class ReportCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -482,7 +482,7 @@ public class ReportCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -551,7 +551,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -590,7 +590,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -630,7 +630,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -659,7 +659,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -680,7 +680,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -723,7 +723,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -745,7 +745,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -770,7 +770,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -807,7 +807,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -859,7 +859,7 @@ public class ReportCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -885,7 +885,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -916,7 +916,7 @@ public class ReportCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -945,7 +945,7 @@ public class ReportCommandRunnerTests
         }
         finally
         {
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1210,7 +1210,7 @@ public class ReportCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TryDeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
@@ -1265,19 +1265,6 @@ public class ReportCommandRunnerTests
     }
 
     private static string QuoteIdentifier(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
-        }
-        catch
-        {
-            // Best-effort cleanup for tests / テスト用ベストエフォート削除。
-        }
-    }
 
     private static Dictionary<string, byte[]> ReadTarGzEntries(string path)
     {
