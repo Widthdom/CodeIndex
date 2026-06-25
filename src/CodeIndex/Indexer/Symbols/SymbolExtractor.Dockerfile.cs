@@ -56,7 +56,7 @@ public static partial class SymbolExtractor
                     Line = lineNumber,
                     StartLine = lineNumber,
                     EndLine = lineNumber,
-                    Signature = line.Trim(),
+                    Signature = GetDockerfileTrimmedLine(line),
                 },
                 line);
         }
@@ -110,6 +110,16 @@ public static partial class SymbolExtractor
             startIndex++;
 
         return startIndex;
+    }
+
+    private static string GetDockerfileTrimmedLine(string line)
+    {
+        var startIndex = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        var endIndex = line.Length;
+        while (endIndex > startIndex && char.IsWhiteSpace(line[endIndex - 1]))
+            endIndex--;
+
+        return startIndex == 0 && endIndex == line.Length ? line : line[startIndex..endIndex];
     }
 
     private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, Func<string, bool> isName)

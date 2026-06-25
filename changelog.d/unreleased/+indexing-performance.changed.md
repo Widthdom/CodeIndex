@@ -223,6 +223,7 @@ affected:
 - Scanned Dockerfile `ENV` bodies from the original line, avoiding line-start and body trim allocations during symbol extraction.
 - Scanned Dockerfile `LABEL` bodies from the original line, avoiding line-start and body trim allocations during symbol extraction.
 - Found Dockerfile key/value assignment separators by index, avoiding token substring allocation during symbol extraction.
+- Trimmed Dockerfile `ENV` signatures by index, avoiding a full-line trim allocation during symbol extraction.
 - Scanned Shell alias segment starts by index, avoiding segment substring/trim allocations before alias detection.
 - Found Shell alias assignment separators on the original line, avoiding token substring allocation before name extraction.
 - Trimmed Shell alias names by index, avoiding a slice/trim allocation chain during symbol extraction.
@@ -413,6 +414,7 @@ affected:
 - Dockerfile `ENV` body を元の行から走査し、symbol extraction 中の line-start / body trim allocation を避けるようにしました。
 - Dockerfile `LABEL` body を元の行から走査し、symbol extraction 中の line-start / body trim allocation を避けるようにしました。
 - Dockerfile key/value assignment separator を index で探し、symbol extraction 中の token substring allocation を避けるようにしました。
+- Dockerfile `ENV` signature を index 境界で trim し、symbol extraction 中の full-line trim allocation を避けるようにしました。
 - Shell alias segment start を index で走査し、alias 判定前の segment substring / trim allocation を避けるようにしました。
 - Shell alias assignment separator を元の行で探索し、name 抽出前の token substring allocation を避けるようにしました。
 - Shell alias name を index 境界で trim し、symbol extraction 中の slice / trim allocation chain を避けるようにしました。
