@@ -43,29 +43,33 @@ public static partial class SymbolExtractor
                     && symbol.ContainerName == classSymbol.Name)
                 .Select(symbol => symbol.Name)
                 .ToHashSet(StringComparer.Ordinal);
-            var segments = body.Split(';');
-            var searchStart = 0;
-            foreach (var segment in segments)
-            {
-                var trimmedSegment = segment.Trim();
-                if (trimmedSegment.Length == 0)
-                {
-                    searchStart += segment.Length + 1;
-                    continue;
-                }
+            foreach (var segment in EnumerateTrimmedCppSegments(body))
+                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, existingMemberNames);
+        }
+    }
 
-                var segmentStart = line.IndexOf(trimmedSegment, searchStart, StringComparison.Ordinal);
-                if (segmentStart < 0)
-                {
-                    searchStart += segment.Length + 1;
-                    continue;
-                }
+    private static IEnumerable<string> EnumerateTrimmedCppSegments(string body)
+    {
+        var segmentStart = 0;
+        while (segmentStart <= body.Length)
+        {
+            var delimiterIndex = body.IndexOf(';', segmentStart);
+            var segmentEnd = delimiterIndex >= 0 ? delimiterIndex : body.Length;
+            var trimStart = segmentStart;
+            while (trimStart < segmentEnd && char.IsWhiteSpace(body[trimStart]))
+                trimStart++;
 
-                if (TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, trimmedSegment, lineIndex + 1, symbols, existingMemberNames))
-                    searchStart = segmentStart + trimmedSegment.Length + 1;
-                else
-                    searchStart = segmentStart + trimmedSegment.Length + 1;
-            }
+            var trimEnd = segmentEnd;
+            while (trimEnd > trimStart && char.IsWhiteSpace(body[trimEnd - 1]))
+                trimEnd--;
+
+            if (trimEnd > trimStart)
+                yield return body[trimStart..trimEnd];
+
+            if (delimiterIndex < 0)
+                yield break;
+
+            segmentStart = delimiterIndex + 1;
         }
     }
 

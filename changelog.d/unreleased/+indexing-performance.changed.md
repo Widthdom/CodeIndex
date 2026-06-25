@@ -15,6 +15,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/ChunkSplitter.cs
   - src/CodeIndex/Indexer/Scanning/GeneratedCodePatternMatcher.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Cpp.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.CSharpScanner.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.FSharp.cs
@@ -124,6 +125,7 @@ affected:
 - Enumerated F# record, union, and active-pattern segments directly, avoiding delimiter split arrays during symbol extraction.
 - Enumerated Go interface and struct body segments directly, avoiding semicolon split arrays during embedded symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
+- Enumerated C++ same-line class body members directly, avoiding semicolon split arrays on large class declarations.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -211,4 +213,5 @@ affected:
 - F# record / union / active-pattern segment を直接列挙し、symbol 抽出中の delimiter split array を避けるようにしました。
 - Go interface / struct body segment を直接列挙し、embedded symbol 抽出中の semicolon split array を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
+- C++ same-line class body member を直接列挙し、大きな class declaration で semicolon split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
