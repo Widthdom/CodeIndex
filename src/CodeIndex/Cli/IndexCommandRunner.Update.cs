@@ -366,6 +366,7 @@ public static partial class IndexCommandRunner
                 var absPath = ToUpdateAbsolutePath(targetPath);
                 var dbPath = FileIndexer.NormalizeIndexPath(relPath);
                 var fileBatchMarked = false;
+                string? knownLanguage = null;
                 try
                 {
                     if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
@@ -632,7 +633,6 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    string? knownLanguage = null;
                     if (scannedUpdateLanguages != null)
                         knownLanguage = FileIndexer.GetReusableDetectedLanguage(absPath, scannedUpdateLanguages);
 
@@ -861,7 +861,7 @@ public static partial class IndexCommandRunner
                         DemoteReadinessOnce();
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
-                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
@@ -887,7 +887,7 @@ public static partial class IndexCommandRunner
                         DemoteReadinessOnce();
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
-                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
