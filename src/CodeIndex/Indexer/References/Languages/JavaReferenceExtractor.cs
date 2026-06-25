@@ -967,11 +967,15 @@ internal static class JavaReferenceExtractor
             var boundsText = rawParameter.Substring(boundsStart + boundsLeading, boundsLength);
             foreach (var (boundStart, boundLength) in ReferenceExtractor.SplitTopLevelAmpersandSpans(boundsText))
             {
-                var rawBound = boundsText.Substring(boundStart, boundLength).Trim();
-                if (rawBound.Length == 0)
+                var boundLeading = ReferenceExtractor.CountLeadingWhitespace(boundsText, boundStart, boundLength);
+                var rawBoundLength = boundLength - boundLeading;
+                while (rawBoundLength > 0 && char.IsWhiteSpace(boundsText[boundStart + boundLeading + rawBoundLength - 1]))
+                    rawBoundLength--;
+                if (rawBoundLength == 0)
                     continue;
 
-                var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + ReferenceExtractor.CountLeadingWhitespace(boundsText, boundStart, boundLength);
+                var rawBound = boundsText.Substring(boundStart + boundLeading, rawBoundLength);
+                var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + boundLeading;
                 ReferenceExtractor.AddTypeExpressionSegments(
                     references,
                     seen,
