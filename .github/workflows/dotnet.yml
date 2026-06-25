@@ -294,13 +294,14 @@ jobs:
 
             $exitCode = $LASTEXITCODE
             if ($exitCode -ne 0) {
+              $logDirectory = Split-Path -Parent $LogPath
+              New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
               [System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)
             }
 
             return $exitCode
           }
 
-          New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
           $firstLogPath = Join-Path "./TestResults" "test-output-first.txt"
           $firstExitCode = Invoke-TestRun -LogPath $firstLogPath
           if ($firstExitCode -eq 0) {

@@ -45,7 +45,10 @@ public class CiWorkflowTests
         Assert.Contains("test-output-first.txt", workflow);
         Assert.Contains("[System.Collections.Generic.List[string]]::new()", workflow);
         Assert.Contains("if ($exitCode -ne 0)", workflow);
+        Assert.Contains("$logDirectory = Split-Path -Parent $LogPath", workflow);
+        Assert.Contains("New-Item -ItemType Directory -Force -Path $logDirectory", workflow);
         Assert.Contains("[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)", workflow);
+        Assert.DoesNotContain("New-Item -ItemType Directory -Force -Path ./TestResults", workflow);
         Assert.DoesNotContain("Tee-Object", workflow);
         Assert.Contains("id: test", workflow);
         Assert.Contains("\"summarize=true\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
