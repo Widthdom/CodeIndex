@@ -46,10 +46,8 @@ public partial class SymbolExtractorTests
             finally
             {
                 Environment.CurrentDirectory = originalDirectory;
-                if (Directory.Exists(projectRoot))
-                    Directory.Delete(projectRoot, recursive: true);
-                if (Directory.Exists(cwdRoot))
-                    Directory.Delete(cwdRoot, recursive: true);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+                TestProjectHelper.DeleteDirectory(cwdRoot);
             }
         }
     }
@@ -83,8 +81,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -114,8 +111,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -145,8 +141,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -174,8 +169,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -203,8 +197,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -247,8 +240,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -291,8 +283,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -337,8 +328,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -383,8 +373,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -418,8 +407,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -458,8 +446,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -502,8 +489,7 @@ public partial class SymbolExtractorTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
