@@ -2118,14 +2118,21 @@ public static partial class ReferenceExtractor
         string language)
     {
         int offset = 0;
-        foreach (var segment in arg.Split('.'))
+        var segmentStart = 0;
+        while (segmentStart <= arg.Length)
         {
-            if (segment.Length == 0)
+            var dotIndex = arg.IndexOf('.', segmentStart);
+            var segmentLength = dotIndex < 0 ? arg.Length - segmentStart : dotIndex - segmentStart;
+            if (segmentLength == 0)
             {
                 offset += 1; // '.' separator / ドット区切り分
+                if (dotIndex < 0)
+                    break;
+                segmentStart = dotIndex + 1;
                 continue;
             }
 
+            var segment = arg.Substring(segmentStart, segmentLength);
             var normalizedSegment = language == "csharp" ? NormalizeCSharpIdentifier(segment) : segment;
             var isEscapedCSharpIdentifier = language == "csharp" && segment[0] == '@';
             if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
@@ -2154,6 +2161,9 @@ public static partial class ReferenceExtractor
             }
 
             offset += segment.Length + 1; // segment + '.'
+            if (dotIndex < 0)
+                break;
+            segmentStart = dotIndex + 1;
         }
     }
 
