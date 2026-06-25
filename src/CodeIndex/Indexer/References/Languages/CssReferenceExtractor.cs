@@ -1087,16 +1087,20 @@ internal static class CssReferenceExtractor
 
     private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)
     {
-        var trimmed = preparedLine.TrimStart();
-        if (trimmed.StartsWith("$", StringComparison.Ordinal))
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < preparedLine.Length && char.IsWhiteSpace(preparedLine[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        var lineTail = preparedLine.AsSpan(firstNonWhitespace);
+        if (lineTail.StartsWith("$", StringComparison.Ordinal))
         {
             var declarationColonIndex = preparedLine.IndexOf(':', variableIndex);
             if (declarationColonIndex >= 0)
                 return true;
         }
 
-        if (trimmed.StartsWith("@mixin", StringComparison.Ordinal)
-            || trimmed.StartsWith("@function", StringComparison.Ordinal))
+        if (lineTail.StartsWith("@mixin", StringComparison.Ordinal)
+            || lineTail.StartsWith("@function", StringComparison.Ordinal))
         {
             var braceIndex = preparedLine.IndexOf('{');
             if (braceIndex < 0)
