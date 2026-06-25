@@ -2052,7 +2052,12 @@ public static partial class ReferenceExtractor
             text = text.Substring(0, end);
         }
         if (text.EndsWith("{", StringComparison.Ordinal))
-            text = text.Substring(0, text.Length - 1).TrimEnd();
+        {
+            var end = text.Length - 1;
+            while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+                end--;
+            text = text.Substring(0, end);
+        }
 
         var colonIndex = FindSignatureColonIndex(text);
         if (colonIndex < 0)
