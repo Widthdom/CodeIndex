@@ -2390,7 +2390,7 @@ public static partial class ReferenceExtractor
 
     private static string SanitizeCSharpCommentsForReflectionNameScan(string line)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
         var inRegularString = false;
         var inVerbatimString = false;
         var inChar = false;
@@ -2426,6 +2426,7 @@ public static partial class ReferenceExtractor
                 return line[..i];
             if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
+                chars ??= line.ToCharArray();
                 chars[i] = ' ';
                 chars[i + 1] = ' ';
                 i += 2;
@@ -2460,7 +2461,7 @@ public static partial class ReferenceExtractor
                 inChar = true;
         }
 
-        return new string(chars);
+        return chars == null ? line : new string(chars);
     }
 
     private static bool IsInsideCSharpStringLiteral(string line, int targetIndex)
