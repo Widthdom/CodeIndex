@@ -1374,18 +1374,27 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool ParameterListDeclaresName(string parameters, string alias)
     {
-        foreach (var part in parameters.Split(','))
+        var remaining = parameters.AsSpan();
+        var aliasSpan = alias.AsSpan();
+        while (true)
         {
-            var item = part.TrimStart();
-            if (item.StartsWith("...", StringComparison.Ordinal))
+            var commaIndex = remaining.IndexOf(',');
+            var item = commaIndex < 0 ? remaining : remaining[..commaIndex];
+            item = item.TrimStart();
+            if (item.StartsWith("...".AsSpan(), StringComparison.Ordinal))
                 item = item[3..].TrimStart();
 
-            if (!item.StartsWith(alias, StringComparison.Ordinal))
-                continue;
+            if (item.StartsWith(aliasSpan, StringComparison.Ordinal))
+            {
+                var after = item.Length == alias.Length ? '\0' : item[alias.Length];
+                if (after is '\0' or ':' or '?' or '=' || char.IsWhiteSpace(after))
+                    return true;
+            }
 
-            var after = item.Length == alias.Length ? '\0' : item[alias.Length];
-            if (after is '\0' or ':' or '?' or '=' || char.IsWhiteSpace(after))
-                return true;
+            if (commaIndex < 0)
+                break;
+
+            remaining = remaining[(commaIndex + 1)..];
         }
 
         return false;

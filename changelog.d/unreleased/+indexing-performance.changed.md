@@ -103,6 +103,7 @@ affected:
 - Parsed TypeScript generic parameter names with spans, avoiding substring and split arrays during alias shadow checks.
 - Compared Java named-type declaration tokens as spans while collecting generic parameter context.
 - Parsed TypeScript named import/export aliases with spans, avoiding comma split arrays.
+- Checked TypeScript parameter shadow names with spans, avoiding comma split arrays in scoped alias analysis.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -178,4 +179,5 @@ affected:
 - TypeScript generic parameter 名を span で parse し、alias shadow check 中の substring と split array を避けるようにしました。
 - Java generic parameter context の収集中に、named-type declaration token を span で比較するようにしました。
 - TypeScript named import/export alias を span で parse し、comma split array を避けるようにしました。
+- TypeScript scoped alias analysis で parameter shadow 名を span で確認し、comma split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
