@@ -774,10 +774,14 @@ internal static class JavaReferenceExtractor
         var typeList = line.Substring(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (rawSegment.Length == 0)
+            var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var trimmedLength = segmentLength - leading;
+            while (trimmedLength > 0 && char.IsWhiteSpace(typeList[segmentStart + leading + trimmedLength - 1]))
+                trimmedLength--;
+            if (trimmedLength == 0)
                 continue;
-            var absoluteStart = listStart + segmentStart + ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            var absoluteStart = listStart + segmentStart + leading;
+            var rawSegment = typeList.Substring(segmentStart + leading, trimmedLength);
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
                 seen,
