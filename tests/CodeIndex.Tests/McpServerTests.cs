@@ -15606,7 +15606,7 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(20),
+            RequestTimeout = TimeSpan.FromMilliseconds(250),
         };
         using var delayStarted = new ManualResetEventSlim(false);
         using var releaseDelay = new ManualResetEventSlim(false);
@@ -15619,11 +15619,12 @@ public sealed class Caller
 
         try
         {
-            var responseText = await server.ProcessFrameAsync(
+            var responseTask = server.ProcessFrameAsync(
                 """{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}""");
             Assert.True(delayStarted.Wait(TimeSpan.FromSeconds(1)));
             server.RequestDelayForTests = null;
 
+            var responseText = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
             var response = JsonNode.Parse(responseText!)!;
             var error = response["error"]!;
             Assert.Equal(-32603, error["code"]!.GetValue<int>());
@@ -15654,7 +15655,7 @@ public sealed class Caller
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(20),
+            RequestTimeout = TimeSpan.FromMilliseconds(250),
         };
         using var delayStarted = new ManualResetEventSlim(false);
         using var releaseDelay = new ManualResetEventSlim(false);
@@ -15667,11 +15668,12 @@ public sealed class Caller
 
         try
         {
-            var responseText = await server.ProcessFrameAsync(
+            var responseTask = server.ProcessFrameAsync(
                 """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
             Assert.True(delayStarted.Wait(TimeSpan.FromSeconds(1)));
             server.RequestDelayForTests = null;
 
+            var responseText = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
             var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
             var error = response["error"]!;
             Assert.Equal(-32603, error["code"]!.GetValue<int>());
