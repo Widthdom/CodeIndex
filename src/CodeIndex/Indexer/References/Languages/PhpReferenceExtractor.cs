@@ -523,11 +523,13 @@ internal static class PhpReferenceExtractor
         {
             var nameGroup = match.Groups["name"];
             var rawName = nameGroup.Value;
-            var trimmedName = rawName.TrimStart('\\');
-            if (trimmedName.Length == 0)
+            var leadingBackslashCount = 0;
+            while (leadingBackslashCount < rawName.Length && rawName[leadingBackslashCount] == '\\')
+                leadingBackslashCount++;
+            if (leadingBackslashCount == rawName.Length)
                 continue;
 
-            var leadingBackslashCount = rawName.Length - trimmedName.Length;
+            var trimmedName = rawName.Substring(leadingBackslashCount);
             var shortNameStart = trimmedName.LastIndexOf('\\') + 1;
             var shortName = trimmedName[shortNameStart..];
             if (shortName.Length == 0)
