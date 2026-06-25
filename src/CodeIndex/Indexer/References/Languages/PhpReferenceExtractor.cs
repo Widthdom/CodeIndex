@@ -1014,11 +1014,13 @@ internal static class PhpReferenceExtractor
         SymbolRecord? container,
         int? shortNameIndexOverride = null)
     {
-        var trimmedName = rawName.TrimStart('\\');
-        if (trimmedName.Length == 0)
+        var leadingBackslashCount = 0;
+        while (leadingBackslashCount < rawName.Length && rawName[leadingBackslashCount] == '\\')
+            leadingBackslashCount++;
+        if (leadingBackslashCount == rawName.Length)
             return;
 
-        var leadingBackslashCount = rawName.Length - trimmedName.Length;
+        var trimmedName = rawName.Substring(leadingBackslashCount);
         var qualifiedNameIndex = nameIndex + leadingBackslashCount;
         if (trimmedName.Contains('\\', StringComparison.Ordinal))
         {
