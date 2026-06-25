@@ -3673,7 +3673,6 @@ public partial class FileIndexer
         {
             var newlineIndex = remaining.IndexOf('\n');
             var line = newlineIndex < 0 ? remaining : remaining[..newlineIndex];
-            line = line.Trim();
             if (GeneratedHeaderLineContainsMarker(line))
                 return true;
 
