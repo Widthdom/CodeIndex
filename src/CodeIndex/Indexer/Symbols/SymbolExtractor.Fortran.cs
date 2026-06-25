@@ -219,7 +219,7 @@ public static partial class SymbolExtractor
 
         if (StartsWithFortranWord(trimmed, "block"))
         {
-            var remainder = trimmed["block".Length..].TrimStart();
+            var remainder = GetFortranSuffixTrimmedStart(trimmed, "block".Length);
             if (StartsWithFortranWord(remainder, "data"))
             {
                 kind = "block data";
