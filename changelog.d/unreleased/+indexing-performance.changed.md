@@ -24,6 +24,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
+  - src/CodeIndex/Indexer/Symbols/SwiftSymbolNameNormalizer.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.StructuralMetadata.cs
@@ -125,6 +126,7 @@ affected:
 - Resolved Python relative import module prefixes by scanning dot segments directly, avoiding prefix split and join arrays.
 - Enumerated F# record, union, and active-pattern segments directly, avoiding delimiter split arrays during symbol extraction.
 - Trimmed F# segments by index, avoiding intermediate trim substrings during record, union, and active-pattern extraction.
+- Compared Swift import-kind keywords without substring allocation during symbol name normalization.
 - Enumerated Go interface and struct body segments directly, avoiding semicolon split arrays during embedded symbol extraction.
 - Reused Go's direct segment scanner for grouped value names and trimmed segments by index, avoiding comma split arrays and intermediate trim substrings.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
@@ -218,6 +220,7 @@ affected:
 - Python relative import の module prefix を dot segment の直接走査で解決し、prefix split と join array を避けるようにしました。
 - F# record / union / active-pattern segment を直接列挙し、symbol 抽出中の delimiter split array を避けるようにしました。
 - F# segment trim も index 境界で行い、record / union / active-pattern 抽出中の中間 trim substring を避けるようにしました。
+- Swift symbol name 正規化中の import-kind keyword 比較で substring allocation を避けるようにしました。
 - Go interface / struct body segment を直接列挙し、embedded symbol 抽出中の semicolon split array を避けるようにしました。
 - Go の direct segment scanner を grouped value name にも再利用し、segment trim を index で行うことで comma split array と中間 trim substring を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
