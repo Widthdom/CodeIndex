@@ -1100,9 +1100,9 @@ public class IndexCommandRunnerTests
                 Path.Combine(projectRoot, "App.cs"),
                 "public class PublishedSingleFileApp { public void Run() { } }\n");
 
-            var publishedCli = PublishTrimmedCli(publishDir, publishSingleFile: true);
+            var publishedCli = TrimmedCliTestHelper.PublishTrimmedCli(publishDir, publishSingleFile: true);
 
-            var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
+            var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli.EntryPointPath, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("cdidx: scanning files...", stderr);
@@ -5120,7 +5120,6 @@ public sealed class Caller
     [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
-        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_publish_{Guid.NewGuid():N}");
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_backfill_{Guid.NewGuid():N}.db");
         var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_missing_{Guid.NewGuid():N}.db");
         try
@@ -5158,7 +5157,7 @@ public sealed class Caller
                 writer.MarkIssuesReady();
             }
 
-            var publishedDll = PublishTrimmedCli(publishDir);
+            var publishedCli = TrimmedCliTestHelper.SharedTrimmedCli;
 
             JsonElement successJson;
             int successExitCode;
@@ -5169,7 +5168,7 @@ public sealed class Caller
                 try
                 {
                     Console.SetOut(stdout);
-                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedDll, publishDir, "backfill-fold", "--db", dbPath, "--json");
+                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "backfill-fold", "--db", dbPath, "--json");
                     successExitCode = exitCode;
                     Assert.True(!string.IsNullOrWhiteSpace(stdoutText), $"published backfill-fold produced no stdout. stderr={stderrText}");
                     using var document = JsonDocument.Parse(stdoutText);
@@ -5195,7 +5194,7 @@ public sealed class Caller
                 try
                 {
                     Console.SetOut(stdout);
-                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedDll, publishDir, "backfill-fold", "--db", missingDbPath, "--json");
+                    var (exitCode, stdoutText, stderrText) = RunPublishedCli(publishedCli.EntryPointPath, publishedCli.PublishDirectory, "backfill-fold", "--db", missingDbPath, "--json");
                     errorExitCode = exitCode;
                     Assert.True(!string.IsNullOrWhiteSpace(stdoutText), $"published backfill-fold error path produced no stdout. stderr={stderrText}");
                     using var document = JsonDocument.Parse(stdoutText);
@@ -5215,7 +5214,6 @@ public sealed class Caller
         finally
         {
             SqliteConnection.ClearAllPools();
-            DeleteDirectory(publishDir);
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
             if (File.Exists(missingDbPath))
@@ -12423,60 +12421,6 @@ public sealed class Caller
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
-    }
-
-    private static string PublishTrimmedCli(string outputDir, bool publishSingleFile = false)
-    {
-        Directory.CreateDirectory(outputDir);
-        var buildOutputDir = Path.Combine(outputDir, "bin", "publish") + Path.DirectorySeparatorChar;
-        var intermediateDir = Path.Combine(outputDir, "obj", "publish") + Path.DirectorySeparatorChar;
-        Directory.CreateDirectory(intermediateDir);
-        var lockFilePath = Path.Combine(intermediateDir, "packages.lock.json");
-
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = GetRepositoryRoot(),
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("publish");
-        psi.ArgumentList.Add(Path.Combine("src", "CodeIndex", "CodeIndex.csproj"));
-        psi.ArgumentList.Add("--configuration");
-        psi.ArgumentList.Add("Debug");
-        psi.ArgumentList.Add("--runtime");
-        psi.ArgumentList.Add(RuntimeInformation.RuntimeIdentifier);
-        psi.ArgumentList.Add("--output");
-        psi.ArgumentList.Add(outputDir);
-        psi.ArgumentList.Add("-p:PublishTrimmed=true");
-        psi.ArgumentList.Add("-p:SelfContained=true");
-        psi.ArgumentList.Add($"-p:PublishSingleFile={publishSingleFile.ToString().ToLowerInvariant()}");
-        psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
-        psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
-        psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
-        psi.ArgumentList.Add("-p:NuGetAudit=false");
-        psi.ArgumentList.Add("-p:UseSharedCompilation=false");
-
-        using var process = System.Diagnostics.Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet publish / dotnet publish の起動に失敗");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
-
-        var publishedAppHost = Path.Combine(outputDir, OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
-        if (File.Exists(publishedAppHost))
-            return publishedAppHost;
-
-        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
-        if (File.Exists(publishedDll))
-            return publishedDll;
-
-        throw new InvalidOperationException(
-            $"Published cdidx entry point not found. Expected {publishedDll} or {publishedAppHost}");
     }
 
     private static (int ExitCode, string StdOut, string StdErr, bool TimedOut) RunCliInSubprocessWithTimeout(string[] args, string workingDirectory, TimeSpan timeout)

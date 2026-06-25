@@ -4,8 +4,10 @@ affected:
   - .github/workflows/dotnet.yml
   - tests/CodeIndex.Tests/CiWorkflowTests.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
+  - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
   - tests/CodeIndex.Tests/ConcurrencyTests.cs
   - tests/CodeIndex.Tests/BackgroundTaskObserverTests.cs
+  - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - TESTING_GUIDE.md
 ---
 
@@ -20,6 +22,7 @@ affected:
 - Replaced fixed two-second waits in concurrent snapshot stress tests with iteration-based completion and the same two-second slow-host cap.
 - Removed post-cancellation fixed sleeps from background-task observer tests by relying on the observer's fault-only continuation contract.
 - Replaced shared-writer blocking test grace sleeps with explicit task-start signals.
+- Shared the normal trimmed published CLI across published CLI smoke tests so each test process pays that publish cost once; single-file publish coverage remains isolated.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -32,3 +35,4 @@ affected:
 - concurrent snapshot stress test の固定 2 秒待機を、反復数ベースの完了判定と従来同等の 2 秒 slow-host 上限へ置き換えました。
 - background-task observer test から cancellation 後の固定 sleep を削除し、observer の fault-only continuation 契約に基づく検証へ寄せました。
 - shared-writer blocking test の grace sleep を、明示的な task-start signal に置き換えました。
+- published CLI smoke test 間で通常の trimmed publish output を共有し、test process あたり 1 回の publish cost に抑えました。single-file publish coverage は引き続き隔離します。

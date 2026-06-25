@@ -54,6 +54,7 @@ The test project mirrors the production areas closely.
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunnerTests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
   CLI parsing, command execution, and installer behavior. Query command coverage is split by command family with partial `QueryCommandRunnerTests` classes so shared console and fixture helpers stay centralized. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, while `InstallScriptTests.cs` runs focused bash snippets against `install.sh` in library mode to lock in release-installer regressions without performing real network installs.
+  `TrimmedCliTestHelper` owns trimmed publish setup. Use its shared non-single-file publish for published CLI smoke coverage so a test process pays that publish cost once; keep single-file tests on an explicit per-test publish because they verify a distinct apphost shape.
   `InstallScriptTests.RunInstallerSnippet` enforces a bounded timeout and kills the snippet process tree on timeout, so installer regressions fail with captured output instead of hanging the suite.
 - `CiWorkflowTests.cs`, `ReleaseWorkflowTests.cs`, `ReleaseWorkflowTests.PackageHelpers.cs`
   CI and release workflow contract tests. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
@@ -292,6 +293,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunnerTests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
   CLI の引数解析、コマンド実行、installer 挙動のテスト。Query command coverage は command family ごとの partial `QueryCommandRunnerTests` class に分割し、共有 console / fixture helper は一箇所に保ちます。`ProgramCliTests.cs` はグローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱い、`InstallScriptTests.cs` は `install.sh` を library mode で source した bash snippet を実行して、実ネットワーク install を行わずに release installer の回帰を固定する。
+  `TrimmedCliTestHelper` が trimmed publish setup を所有します。published CLI smoke coverage は共有の non-single-file publish を使い、test process あたり 1 回の publish cost に抑えてください。single-file test は apphost shape が別なので、明示的な per-test publish のままにします。
   `InstallScriptTests.RunInstallerSnippet` は bounded timeout を強制し、timeout 時は snippet の process tree を kill するため、installer 回帰は suite を hang させずに captured output 付きで失敗します。
 - `CiWorkflowTests.cs`、`ReleaseWorkflowTests.cs`、`ReleaseWorkflowTests.PackageHelpers.cs`
   CI と release workflow の契約テスト。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
