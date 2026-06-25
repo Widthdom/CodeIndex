@@ -24,6 +24,7 @@ affected:
 - Replaced shared-writer blocking test grace sleeps with explicit task-start signals.
 - Shared the normal trimmed published CLI across published CLI smoke tests so each test process pays that publish cost once; single-file publish coverage remains isolated.
 - Moved CI stdout-log directory creation onto the failed-test path so clean first-pass lanes do not pre-create `TestResults` for that log file.
+- Ran the CI TRX telemetry summarizer with Release `--no-build` output so failed/pass-on-retry lanes do not rebuild the helper during diagnostics.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -38,3 +39,4 @@ affected:
 - shared-writer blocking test の grace sleep を、明示的な task-start signal に置き換えました。
 - published CLI smoke test 間で通常の trimmed publish output を共有し、test process あたり 1 回の publish cost に抑えました。single-file publish coverage は引き続き隔離します。
 - CI stdout log 用 directory の作成を failed-test path に移し、clean な初回成功 lane ではその log file のために `TestResults` を事前作成しないようにしました。
+- CI の TRX telemetry summarizer を Release `--no-build` output で実行し、失敗または retry 成功 lane の診断中に helper を再ビルドしないようにしました。
