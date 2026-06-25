@@ -20,6 +20,7 @@ affected:
   - tests/CodeIndex.Tests/SuggestionStoreTests.cs
   - tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs
   - tests/CodeIndex.Tests/AuditLogSinkTests.cs
+  - tests/CodeIndex.Tests/MetricsSinkTests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -57,6 +58,7 @@ affected:
 - Centralized SQLite-pool-cleared temporary directory cleanup in legacy schema migration tests.
 - Reused shared temporary directory cleanup for MCP indexing fixture workspaces.
 - Reused shared temporary directory cleanup for audit-log private parent workspaces.
+- Reused shared temporary directory cleanup for metrics-log private parent workspaces.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -87,3 +89,4 @@ affected:
 - legacy schema migration test の SQLite pool clear 付き一時ディレクトリ cleanup を集約しました。
 - MCP indexing fixture workspace の cleanup を共通 helper に寄せました。
 - audit log の private parent workspace cleanup を共通 helper に寄せました。
+- metrics log の private parent workspace cleanup を共通 helper に寄せました。
