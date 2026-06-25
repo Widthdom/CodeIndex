@@ -134,6 +134,7 @@ affected:
 - Scanned PHP static-access reference leading backslashes by index, avoiding `TrimStart` allocation while emitting class and member references.
 - Trimmed PHP grouped-use prefixes by index, avoiding `TrimEnd` allocation while composing grouped import reference names.
 - Scanned PHP grouped import item leading backslashes by index, avoiding `TrimStart` allocation while composing grouped import references.
+- Trimmed PHP grouped import prefixes by index, avoiding `TrimEnd` allocation while composing grouped import references.
 - Scanned XAML type-argument delimiters directly, avoiding split arrays while normalizing generic markup references.
 - Scanned trailing tokens in cross-language comma lists directly, avoiding whitespace split arrays during reference extraction.
 - Trimmed cross-language comma-list segments by index, avoiding intermediate trim substrings during reference extraction.
@@ -272,6 +273,7 @@ affected:
 - PHP static-access reference の leading backslash を index で走査し、class / member reference の emission 中の `TrimStart` allocation を避けるようにしました。
 - PHP grouped-use prefix を index 境界で trim し、grouped import reference name の構築中の `TrimEnd` allocation を避けるようにしました。
 - PHP grouped import item の leading backslash を index で走査し、grouped import reference の構築中の `TrimStart` allocation を避けるようにしました。
+- PHP grouped import prefix を index 境界で trim し、grouped import reference の構築中の `TrimEnd` allocation を避けるようにしました。
 - XAML type-argument delimiter を直接走査し、generic markup reference の正規化中の split array を避けるようにしました。
 - cross-language comma list の末尾 token を直接走査し、reference 抽出中の whitespace split array を避けるようにしました。
 - cross-language comma-list segment を index 境界で trim し、reference 抽出中の中間 trim substring を避けるようにしました。

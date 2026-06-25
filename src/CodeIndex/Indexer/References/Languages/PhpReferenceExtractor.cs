@@ -923,10 +923,14 @@ internal static class PhpReferenceExtractor
         bool requireImportKind)
     {
         var prefixGroup = groupMatch.Groups["prefix"];
-        var prefix = prefixGroup.Value.TrimEnd('\\');
-        if (prefix.Length == 0)
+        var rawPrefix = prefixGroup.Value;
+        var prefixEnd = rawPrefix.Length;
+        while (prefixEnd > 0 && rawPrefix[prefixEnd - 1] == '\\')
+            prefixEnd--;
+        if (prefixEnd == 0)
             return;
 
+        var prefix = prefixEnd == rawPrefix.Length ? rawPrefix : rawPrefix.Substring(0, prefixEnd);
         var itemsGroup = groupMatch.Groups["items"];
         foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
         {
