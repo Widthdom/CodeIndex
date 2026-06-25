@@ -323,8 +323,7 @@ public class ProgramRunnerTests
             }
             finally
             {
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -1323,8 +1322,7 @@ public class ProgramRunnerTests
             finally
             {
                 UpdateChecker.CacheDiagnosticSinkForTesting = null;
-                if (Directory.Exists(cachePath))
-                    Directory.Delete(cachePath);
+                TestProjectHelper.DeleteDirectory(cachePath);
             }
         }
     }

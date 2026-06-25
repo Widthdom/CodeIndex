@@ -72,6 +72,7 @@ affected:
 - Reused shared temporary directory cleanup for file-indexer skipped-root fixtures.
 - Reused shared temporary directory cleanup for file-indexer symlink target fixtures.
 - Reused shared temporary directory cleanup for program-runner query trace log workspaces.
+- Reused shared temporary directory cleanup for program-runner extractor/cache directory fixtures.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -110,3 +111,4 @@ affected:
 - file-indexer skipped-root fixture の cleanup を共通 helper に寄せました。
 - file-indexer symlink target fixture の cleanup を共通 helper に寄せました。
 - program-runner query trace log workspace の cleanup を共通 helper に寄せました。
+- program-runner extractor / cache directory fixture の cleanup を共通 helper に寄せました。
