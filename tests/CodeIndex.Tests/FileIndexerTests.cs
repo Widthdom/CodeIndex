@@ -2190,7 +2190,7 @@ public partial class FileIndexerTests
             if (Directory.Exists(tempDir))
                 TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(outsideDir))
-                Directory.Delete(outsideDir, true);
+                TestProjectHelper.DeleteDirectory(outsideDir);
         }
     }
 
@@ -2375,7 +2375,7 @@ public partial class FileIndexerTests
             if (Directory.Exists(tempDir))
                 TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(externalDir))
-                Directory.Delete(externalDir, true);
+                TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -2417,7 +2417,7 @@ public partial class FileIndexerTests
             if (Directory.Exists(tempDir))
                 TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(externalDir))
-                Directory.Delete(externalDir, true);
+                TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
@@ -4413,7 +4413,7 @@ public partial class FileIndexerTests
             if (Directory.Exists(tempDir))
                 TestProjectHelper.DeleteDirectory(tempDir);
             if (Directory.Exists(externalDir))
-                Directory.Delete(externalDir, true);
+                TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 

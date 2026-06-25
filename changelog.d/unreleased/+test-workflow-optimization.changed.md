@@ -69,6 +69,7 @@ affected:
 - Reused shared temporary directory cleanup for issue duplicate preflight fixtures.
 - Reused shared temporary directory cleanup for changelog tool test repositories.
 - Reused shared temporary directory cleanup for file-indexer skipped-root fixtures.
+- Reused shared temporary directory cleanup for file-indexer symlink target fixtures.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -105,3 +106,4 @@ affected:
 - issue duplicate preflight fixture の cleanup を共通 helper に寄せました。
 - changelog tool test repository の cleanup を共通 helper に寄せました。
 - file-indexer skipped-root fixture の cleanup を共通 helper に寄せました。
+- file-indexer symlink target fixture の cleanup を共通 helper に寄せました。
