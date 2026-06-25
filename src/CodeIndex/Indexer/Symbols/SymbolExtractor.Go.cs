@@ -54,7 +54,7 @@ public static partial class SymbolExtractor
             var afterImport = GetGoDeclarationRemainder(trimmed, "import".Length);
             if (afterImport.StartsWith("(", StringComparison.Ordinal))
             {
-                var blockRemainder = afterImport[1..].TrimStart();
+                var blockRemainder = GetGoDeclarationRemainder(afterImport, 1);
                 if (blockRemainder.Length > 0)
                 {
                     var closingParenIndex = blockRemainder.IndexOf(')');
