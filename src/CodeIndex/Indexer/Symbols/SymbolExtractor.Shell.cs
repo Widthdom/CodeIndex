@@ -56,12 +56,15 @@ public static partial class SymbolExtractor
         while (segmentStart < line.Length)
         {
             var segmentEnd = FindShellAliasSegmentEnd(line, segmentStart);
-            var segment = line[segmentStart..segmentEnd];
-            var trimmedSegment = segment.TrimStart();
-            var trimmedOffset = segment.Length - trimmedSegment.Length;
+            var trimmedSegmentStart = segmentStart;
+            while (trimmedSegmentStart < segmentEnd && char.IsWhiteSpace(line[trimmedSegmentStart]))
+                trimmedSegmentStart++;
 
-            if (trimmedSegment.StartsWith("alias", StringComparison.Ordinal))
+            if (segmentEnd - trimmedSegmentStart >= "alias".Length
+                && string.CompareOrdinal(line, trimmedSegmentStart, "alias", 0, "alias".Length) == 0)
             {
+                var segment = line[segmentStart..segmentEnd];
+                var trimmedOffset = trimmedSegmentStart - segmentStart;
                 var cursor = trimmedOffset + "alias".Length;
                 while (TryReadShellAliasToken(segment, ref cursor, out var tokenStart, out var tokenEnd))
                 {
