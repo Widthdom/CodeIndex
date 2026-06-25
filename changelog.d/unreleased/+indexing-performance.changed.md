@@ -78,6 +78,7 @@ affected:
 - Tracked line numbers incrementally while emitting U+FFFD replacement-character issues, avoiding repeated prefix scans on large decoded files.
 - Used an optimized replacement-character absence check before counting U+FFFD diagnostics, speeding the common clean-content validation path.
 - Skipped FTS oversize-token rune scanning when the whole decoded file is no longer than the token cap.
+- Added an ASCII fast path to FTS oversize-token validation while preserving rune-aware Unicode fallback detection.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -136,4 +137,5 @@ affected:
 - U+FFFD replacement-character issue を出す際の行番号を逐次追跡し、大きな decoded file で prefix scan を繰り返さないようにしました。
 - U+FFFD diagnostic の count 前に最適化された replacement-character 不在確認を使い、問題のない content validation の共通経路を高速化しました。
 - decoded file 全体が token cap 以下の場合は FTS oversize-token の rune scan を省略するようにしました。
+- FTS oversize-token validation に ASCII fast path を追加しつつ、Unicode は rune-aware fallback で検出するよう維持しました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

@@ -4426,15 +4426,62 @@ public partial class FileIndexer
 
         var lineNumber = 1;
         var tokenLength = 0;
-        foreach (var rune in content.EnumerateRunes())
+        for (var index = 0; index < content.Length;)
         {
-            if (rune.Value == '\n')
+            var current = content[index];
+            if (current <= '\u007F')
             {
-                lineNumber++;
-                tokenLength = 0;
+                index++;
+                if (current == '\n')
+                {
+                    lineNumber++;
+                    tokenLength = 0;
+                    continue;
+                }
+
+                if (IsLikelyUnicode61AsciiTokenChar(current))
+                {
+                    tokenLength++;
+                    if (tokenLength > maxTokenLength)
+                        return lineNumber;
+                }
+                else
+                {
+                    tokenLength = 0;
+                }
+
                 continue;
             }
 
+            if (char.IsSurrogate(current))
+            {
+                if (!char.IsHighSurrogate(current)
+                    || index + 1 >= content.Length
+                    || !char.IsLowSurrogate(content[index + 1]))
+                {
+                    index++;
+                    tokenLength = 0;
+                    continue;
+                }
+
+                var surrogateRune = new Rune(current, content[index + 1]);
+                index += 2;
+                if (IsLikelyUnicode61TokenRune(surrogateRune))
+                {
+                    tokenLength++;
+                    if (tokenLength > maxTokenLength)
+                        return lineNumber;
+                }
+                else
+                {
+                    tokenLength = 0;
+                }
+
+                continue;
+            }
+
+            var rune = new Rune(current);
+            index++;
             if (IsLikelyUnicode61TokenRune(rune))
             {
                 tokenLength++;
@@ -4449,6 +4496,12 @@ public partial class FileIndexer
 
         return 0;
     }
+
+    private static bool IsLikelyUnicode61AsciiTokenChar(char value)
+        => value == '_'
+            || (value >= 'A' && value <= 'Z')
+            || (value >= 'a' && value <= 'z')
+            || (value >= '0' && value <= '9');
 
     private static bool IsLikelyUnicode61TokenRune(Rune rune)
         => rune.Value == '_'
