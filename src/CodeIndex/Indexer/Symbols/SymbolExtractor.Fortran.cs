@@ -84,7 +84,7 @@ public static partial class SymbolExtractor
     private static FortranContinuationMatchCandidate? TryBuildFortranContinuationMatchLine(string[] lines, int startIndex)
     {
         var firstLine = lines[startIndex];
-        var firstTrimmed = firstLine.TrimStart();
+        var firstTrimmed = GetFortranSuffixTrimmedStart(firstLine, 0);
         if (!StartsWithFortranContinuationCandidate(firstTrimmed))
             return null;
 

@@ -209,6 +209,7 @@ affected:
 - Trimmed Fortran continuation next-line starts by index, avoiding a leading trim allocation during symbol extraction.
 - Trimmed Fortran continuation ampersand suffixes by index, avoiding a suffix substring/trim chain during symbol extraction.
 - Trimmed Fortran continuation next-line endings by index, avoiding a trailing trim allocation during symbol extraction.
+- Trimmed Fortran continuation first-line starts by index, avoiding a leading trim allocation during symbol extraction.
 - Scanned Dockerfile `EXPOSE` tokens by index, avoiding whitespace split arrays while adding extra expose symbols.
 - Shared Dockerfile whitespace token scanning with `VOLUME` extraction, avoiding split arrays while preserving primary-token handling.
 - Normalized Smalltalk keyword selectors by scanning whitespace tokens directly, avoiding split arrays and token strings.
@@ -378,6 +379,7 @@ affected:
 - Fortran continuation next-line start を index 境界で trim し、symbol extraction 中の leading trim allocation を避けるようにしました。
 - Fortran continuation ampersand suffix を index 境界で trim し、symbol extraction 中の suffix substring / trim chain を避けるようにしました。
 - Fortran continuation next-line ending を index 境界で trim し、symbol extraction 中の trailing trim allocation を避けるようにしました。
+- Fortran continuation first-line start を index 境界で trim し、symbol extraction 中の leading trim allocation を避けるようにしました。
 - Dockerfile `EXPOSE` token を index で走査し、追加 expose symbol 登録時の whitespace split array を避けるようにしました。
 - Dockerfile whitespace token scan を `VOLUME` 抽出にも共有し、primary token の扱いを保ったまま split array を避けるようにしました。
 - Smalltalk keyword selector 正規化で whitespace token を直接走査し、split array と token string を避けるようにしました。
