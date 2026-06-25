@@ -65,6 +65,14 @@ public static partial class SymbolExtractor
             : (endLine, bodyStartLine, endLine);
     }
 
+    private static string GetFortranPrefixTrimmedEnd(string text, int endExclusive)
+    {
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive == text.Length ? text : text[..endExclusive];
+    }
+
     private static FortranContinuationMatchCandidate? TryBuildFortranContinuationMatchLine(string[] lines, int startIndex)
     {
         var firstLine = lines[startIndex];
@@ -72,7 +80,8 @@ public static partial class SymbolExtractor
         if (!StartsWithFortranContinuationCandidate(firstTrimmed))
             return null;
 
-        var firstCode = StripFortranComment(firstLine).TrimEnd();
+        var firstCode = StripFortranComment(firstLine);
+        firstCode = GetFortranPrefixTrimmedEnd(firstCode, firstCode.Length);
         if (!firstCode.Contains('&'))
             return null;
 
