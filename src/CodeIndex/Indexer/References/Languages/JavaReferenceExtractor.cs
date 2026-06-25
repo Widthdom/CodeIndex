@@ -1180,13 +1180,17 @@ internal static class JavaReferenceExtractor
             var implementationsGroup = match.Groups["implementations"];
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(implementationsGroup.Value))
             {
-                var rawSegment = implementationsGroup.Value.Substring(segmentStart, segmentLength).Trim();
-                if (rawSegment.Length == 0)
+                var segmentLeading = ReferenceExtractor.CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
+                var rawSegmentLength = segmentLength - segmentLeading;
+                while (rawSegmentLength > 0 && char.IsWhiteSpace(implementationsGroup.Value[segmentStart + segmentLeading + rawSegmentLength - 1]))
+                    rawSegmentLength--;
+                if (rawSegmentLength == 0)
                     continue;
 
+                var rawSegment = implementationsGroup.Value.Substring(segmentStart + segmentLeading, rawSegmentLength);
                 var absoluteStart = implementationsGroup.Index
                     + segmentStart
-                    + ReferenceExtractor.CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
+                    + segmentLeading;
                 ReferenceExtractor.AddTypeReferenceSegment(
                     references,
                     seen,
