@@ -68,16 +68,17 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
-        if (trimmed.Length <= 5
-            || !trimmed.StartsWith("LABEL", StringComparison.OrdinalIgnoreCase)
-            || !char.IsWhiteSpace(trimmed[5]))
+        var instructionStart = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        if (line.Length - instructionStart <= 5
+            || !line.AsSpan(instructionStart, "LABEL".Length).Equals("LABEL", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(line[instructionStart + "LABEL".Length]))
         {
             return;
         }
 
         var first = true;
-        foreach (var name in EnumerateDockerfileKeyValueNames(trimmed[5..].TrimStart(), IsDockerfileLabelName))
+        var bodyStart = GetDockerfileFirstNonWhitespaceIndex(line, instructionStart + "LABEL".Length);
+        foreach (var name in EnumerateDockerfileKeyValueNames(line, bodyStart, IsDockerfileLabelName))
         {
             if (first)
             {
