@@ -14,6 +14,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/ChunkSplitter.cs
   - src/CodeIndex/Indexer/Scanning/GeneratedCodePatternMatcher.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.CSharpScanner.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -106,6 +107,7 @@ affected:
 - Checked TypeScript parameter shadow names with spans, avoiding comma split arrays in scoped alias analysis.
 - Walked dotted type-reference arguments manually, avoiding per-reference dot split arrays.
 - Checked symbol subkind membership with spans, avoiding pipe split arrays while combining metadata.
+- Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -184,4 +186,5 @@ affected:
 - TypeScript scoped alias analysis で parameter shadow 名を span で確認し、comma split array を避けるようにしました。
 - dotted type-reference argument を手動で走査し、reference ごとの dot split array を避けるようにしました。
 - symbol subkind membership を span で確認し、metadata 結合時の pipe split array を避けるようにしました。
+- wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
