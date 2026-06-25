@@ -914,7 +914,7 @@ public static partial class SymbolExtractor
                 var closingParenIndex = fragment.IndexOf(')');
                 if (closingParenIndex >= 0)
                 {
-                    fragment = fragment[..closingParenIndex].TrimEnd();
+                    fragment = GetPythonPrefixTrimmedEnd(fragment, closingParenIndex);
                     if (fragment.Length > 0)
                     {
                         AddPythonImportSpecEntries(
