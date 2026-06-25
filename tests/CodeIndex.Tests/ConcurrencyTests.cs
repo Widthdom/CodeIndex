@@ -194,11 +194,12 @@ public class ConcurrencyTests : IDisposable
             }
         });
 
-        // Run long enough for the two threads to interleave commits and reads many times.
-        // 十分な時間動かし、コミットと読み出しの交錯機会を多数確保する。
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        cts.Cancel();
-        await Task.WhenAll(writeTask, readTask);
+        await StopAfterConcurrentExerciseAsync(
+            () => Interlocked.Read(ref readerIterations),
+            () => Interlocked.Read(ref writerIterations),
+            cts,
+            writeTask,
+            readTask);
 
         Assert.True(
             violations.IsEmpty,
@@ -347,9 +348,12 @@ public class ConcurrencyTests : IDisposable
             }
         });
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        cts.Cancel();
-        await Task.WhenAll(writeTask, readTask);
+        await StopAfterConcurrentExerciseAsync(
+            () => Interlocked.Read(ref readerIterations),
+            () => Interlocked.Read(ref writerIterations),
+            cts,
+            writeTask,
+            readTask);
 
         Assert.True(
             violations.IsEmpty,
@@ -481,9 +485,12 @@ public class ConcurrencyTests : IDisposable
             }
         });
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        cts.Cancel();
-        await Task.WhenAll(writeTask, readTask);
+        await StopAfterConcurrentExerciseAsync(
+            () => Interlocked.Read(ref readerIterations),
+            () => Interlocked.Read(ref writerIterations),
+            cts,
+            writeTask,
+            readTask);
 
         Assert.True(
             violations.IsEmpty,
@@ -640,6 +647,34 @@ public class ConcurrencyTests : IDisposable
             });
         }
         return refs;
+    }
+
+    private static async Task StopAfterConcurrentExerciseAsync(
+        Func<long> getReaderIterations,
+        Func<long> getWriterIterations,
+        CancellationTokenSource cts,
+        Task writeTask,
+        Task readTask)
+    {
+        const int minimumReaderIterations = 100;
+        const int minimumWriterIterations = 25;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (writeTask.IsCompleted || readTask.IsCompleted)
+                break;
+            if (getReaderIterations() >= minimumReaderIterations &&
+                getWriterIterations() >= minimumWriterIterations)
+            {
+                break;
+            }
+
+            await Task.Delay(10);
+        }
+
+        cts.Cancel();
+        await Task.WhenAll(writeTask, readTask);
     }
 
     public void Dispose()

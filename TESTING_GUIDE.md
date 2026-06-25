@@ -42,6 +42,12 @@ The test project mirrors the production areas closely.
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
+- `ConcurrencyTests.cs`
+  WAL snapshot and shared-writer stress tests. The concurrent reader/writer
+  snapshot tests stop after enough reader and writer iterations are observed,
+  with a two-second cap as the slow-host fallback; do not replace that with a
+  fixed sleep because fast lanes should not spend the full cap once the race has
+  already been exercised.
 - `LegacySchemaMigrationTests.cs`
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunnerTests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
@@ -269,6 +275,11 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `DatabaseTests.cs`、`DbReaderTests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
+- `ConcurrencyTests.cs`
+  WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
+  テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に
+  2 秒上限だけを fallback として残します。race が既に十分 exercised された fast lane
+  で上限時間を使い切らないよう、固定 sleep に戻さないでください。
 - `LegacySchemaMigrationTests.cs`
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunnerTests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
