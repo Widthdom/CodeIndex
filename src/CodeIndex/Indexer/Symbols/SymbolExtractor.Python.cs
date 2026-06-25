@@ -109,6 +109,14 @@ public static partial class SymbolExtractor
         return end > 0 && line[end - 1] == '\\';
     }
 
+    private static string GetPythonPrefixTrimmedEnd(string text, int endExclusive)
+    {
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive == text.Length ? text : text[..endExclusive];
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
     {
         var declarationIndent = CountIndent(lines[startLineIndex]);
@@ -211,7 +219,7 @@ public static partial class SymbolExtractor
 
         var commentIndex = statement.IndexOf('#');
         if (commentIndex >= 0)
-            statement = statement[..commentIndex].TrimEnd();
+            statement = GetPythonPrefixTrimmedEnd(statement, commentIndex);
 
         if (statement.Length == 0)
             return null;
