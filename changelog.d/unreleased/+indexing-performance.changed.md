@@ -26,6 +26,7 @@ affected:
 - Limited C# static-interface raw prepass chunk-boundary scanning to a small rolling window, avoiding large temporary buffer rents and duplicate scans for non-candidate files.
 - Stopped C# static-interface raw prepass from scanning for both `abstract` and `virtual` once either contract modifier has been found.
 - Parsed Git LFS pointer files directly from raw ASCII bytes, avoiding UTF-8 string creation, newline replacement, and split allocations during content loading.
+- Reused pooled buffers for streaming raw-byte reads, reducing per-file 80 KiB allocations during C# static-interface prepass and grew-during-read handling.
 - Changed the C# static-interface prepass to stream raw token checks before decoding, avoiding whole-file byte-array allocation for non-candidate C# files in large workspaces.
 - Reused scan-time language detection while building full-scan records, avoiding a second language probe for every indexed file.
 - Reused scan-time file targets in MCP project indexing as well, avoiding repeated relative-path and language work during MCP-triggered large workspace indexes.
@@ -58,6 +59,7 @@ affected:
 - C# static-interface raw prepass の chunk-boundary scan を小さな rolling window に限定し、候補外ファイルでの大きな temporary buffer rent と duplicate scan を避けるようにしました。
 - C# static-interface raw prepass で `abstract` または `virtual` のどちらか一方が見つかった後は、もう一方の contract modifier scan を省略するようにしました。
 - Git LFS pointer file を raw ASCII byte から直接 parse し、content loading 中の UTF-8 string 作成、newline replacement、split allocation を避けるようにしました。
+- streaming raw-byte read で pooled buffer を再利用し、C# static-interface prepass と grew-during-read handling 中の file ごとの 80 KiB allocation を減らしました。
 - C# static-interface prepass は decode 前に raw token 判定を streaming 実行するようになり、大規模 workspace の候補外 C# ファイルでファイル全体の byte-array 割り当てを避けます。
 - full scan record の構築時に scan 時点の言語判定を再利用し、index 対象ファイルごとの二度目の language probe を避けるようになりました。
 - MCP project index でも scan 時点の file target を再利用し、MCP から大規模 workspace を index する際の相対パス計算と言語判定の繰り返しを避けます。

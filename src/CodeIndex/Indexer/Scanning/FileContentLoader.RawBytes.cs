@@ -1,7 +1,11 @@
+using System.Buffers;
+
 namespace CodeIndex.Indexer;
 
 internal sealed partial class FileContentLoader
 {
+    private const int StreamBufferSize = 81920;
+
     internal delegate bool RawByteChunkPredicate(ReadOnlySpan<byte> bytes);
 
     private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
@@ -33,7 +37,7 @@ internal sealed partial class FileContentLoader
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: 81920,
+                bufferSize: StreamBufferSize,
                 options: FileOptions.SequentialScan))
             {
                 var initialLength = stream.Length;
@@ -74,7 +78,7 @@ internal sealed partial class FileContentLoader
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: 81920,
+                bufferSize: StreamBufferSize,
                 options: FileOptions.SequentialScan))
             {
                 var initialLength = stream.Length;
@@ -139,41 +143,48 @@ internal sealed partial class FileContentLoader
         RawByteChunkPredicate chunkPredicate,
         CancellationToken cancellationToken)
     {
-        var buffer = new byte[81920];
-        long total = 0;
-
-        while (total < initialLength)
+        var buffer = ArrayPool<byte>.Shared.Rent(StreamBufferSize);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var read = stream.Read(
-                buffer,
-                0,
-                (int)Math.Min(buffer.Length, initialLength - total));
-            if (read == 0)
-                return false;
+            long total = 0;
 
-            total += read;
-            if (chunkPredicate(buffer.AsSpan(0, read)))
-                return true;
+            while (total < initialLength)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = stream.Read(
+                    buffer,
+                    0,
+                    (int)Math.Min(buffer.Length, initialLength - total));
+                if (read == 0)
+                    return false;
+
+                total += read;
+                if (chunkPredicate(buffer.AsSpan(0, read)))
+                    return true;
+            }
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = stream.Read(buffer, 0, buffer.Length);
+                if (read == 0)
+                    return false;
+
+                total += read;
+                if (total > maxFileSizeBytes)
+                    throw new FileIndexer.FileTooLargeSkippedException(
+                        normalizedRelativePath,
+                        total,
+                        maxFileSizeBytes,
+                        BuildFileTooLargeMessage(total, grewDuringRead: true));
+
+                if (chunkPredicate(buffer.AsSpan(0, read)))
+                    return true;
+            }
         }
-
-        while (true)
+        finally
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var read = stream.Read(buffer, 0, buffer.Length);
-            if (read == 0)
-                return false;
-
-            total += read;
-            if (total > maxFileSizeBytes)
-                throw new FileIndexer.FileTooLargeSkippedException(
-                    normalizedRelativePath,
-                    total,
-                    maxFileSizeBytes,
-                    BuildFileTooLargeMessage(total, grewDuringRead: true));
-
-            if (chunkPredicate(buffer.AsSpan(0, read)))
-                return true;
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -195,25 +206,32 @@ internal sealed partial class FileContentLoader
 
         var initialCapacity = (int)Math.Min(
             maxFileSizeBytes,
-            Math.Max(total, prefixLength + 81920L));
+            Math.Max(total, prefixLength + (long)StreamBufferSize));
         using var accumulator = new MemoryStream(initialCapacity);
         if (prefixLength > 0)
             accumulator.Write(prefix, 0, prefixLength);
         accumulator.WriteByte(firstExtraByte);
 
-        var buffer = new byte[81920];
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        var buffer = ArrayPool<byte>.Shared.Rent(StreamBufferSize);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            total += read;
-            if (total > maxFileSizeBytes)
-                throw new FileIndexer.FileTooLargeSkippedException(
-                    normalizedRelativePath,
-                    total,
-                    maxFileSizeBytes,
-                    BuildFileTooLargeMessage(total, grewDuringRead: true));
-            accumulator.Write(buffer, 0, read);
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                total += read;
+                if (total > maxFileSizeBytes)
+                    throw new FileIndexer.FileTooLargeSkippedException(
+                        normalizedRelativePath,
+                        total,
+                        maxFileSizeBytes,
+                        BuildFileTooLargeMessage(total, grewDuringRead: true));
+                accumulator.Write(buffer, 0, read);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
 
         return (accumulator.ToArray(), total);
