@@ -60,7 +60,7 @@ public static partial class SymbolExtractor
                     var closingParenIndex = blockRemainder.IndexOf(')');
                     if (closingParenIndex >= 0)
                     {
-                        var blockImportText = blockRemainder[..closingParenIndex].TrimEnd();
+                        var blockImportText = GetGoPrefixTrimmedEnd(blockRemainder, closingParenIndex);
                         if (blockImportText.Length > 0)
                             TryAddGoImportSymbol(fileId, line, lineIndex, symbols, blockImportText);
 
