@@ -27,6 +27,7 @@ affected:
   - tests/CodeIndex.Tests/ChangelogToolTests.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/ProgramRunnerTests.cs
+  - tests/CodeIndex.Tests/ExportImportCommandRunnerIssue3818Tests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -73,6 +74,7 @@ affected:
 - Reused shared temporary directory cleanup for file-indexer symlink target fixtures.
 - Reused shared temporary directory cleanup for program-runner query trace log workspaces.
 - Reused shared temporary directory cleanup for program-runner extractor/cache directory fixtures.
+- Reused shared temporary directory cleanup for import rollback workspaces.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -112,3 +114,4 @@ affected:
 - file-indexer symlink target fixture の cleanup を共通 helper に寄せました。
 - program-runner query trace log workspace の cleanup を共通 helper に寄せました。
 - program-runner extractor / cache directory fixture の cleanup を共通 helper に寄せました。
+- import rollback workspace の cleanup を共通 helper に寄せました。

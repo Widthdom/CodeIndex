@@ -45,7 +45,7 @@ public class ExportImportCommandRunnerIssue3818Tests
         finally
         {
             ExportImportCommandRunner.ApplyPrivateFileModeForTesting = null;
-            Directory.Delete(workDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(workDir);
         }
     }
 
