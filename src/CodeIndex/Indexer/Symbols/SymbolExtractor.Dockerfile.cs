@@ -26,16 +26,17 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
-        if (trimmed.Length <= 3
-            || !trimmed.StartsWith("ENV", StringComparison.OrdinalIgnoreCase)
-            || !char.IsWhiteSpace(trimmed[3]))
+        var instructionStart = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        if (line.Length - instructionStart <= 3
+            || !line.AsSpan(instructionStart, "ENV".Length).Equals("ENV", StringComparison.OrdinalIgnoreCase)
+            || !char.IsWhiteSpace(line[instructionStart + "ENV".Length]))
         {
             return;
         }
 
         var first = true;
-        foreach (var name in EnumerateDockerfileKeyValueNames(trimmed[3..].TrimStart(), IsDockerfileVariableName))
+        var bodyStart = GetDockerfileFirstNonWhitespaceIndex(line, instructionStart + "ENV".Length);
+        foreach (var name in EnumerateDockerfileKeyValueNames(line, bodyStart, IsDockerfileVariableName))
         {
             if (first)
             {
@@ -102,9 +103,20 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, Func<string, bool> isName)
+    private static int GetDockerfileFirstNonWhitespaceIndex(string text, int startIndex)
     {
-        var index = 0;
+        while (startIndex < text.Length && char.IsWhiteSpace(text[startIndex]))
+            startIndex++;
+
+        return startIndex;
+    }
+
+    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, Func<string, bool> isName)
+        => EnumerateDockerfileKeyValueNames(body, 0, isName);
+
+    private static IEnumerable<string> EnumerateDockerfileKeyValueNames(string body, int startIndex, Func<string, bool> isName)
+    {
+        var index = startIndex;
         while (index < body.Length)
         {
             while (index < body.Length && char.IsWhiteSpace(body[index]))
