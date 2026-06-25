@@ -157,7 +157,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return true;
 
-        foreach (var name in match.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var name in EnumerateTrimmedGoSegments(match.Groups["names"].Value, ','))
         {
             if (name == "_")
                 continue;
@@ -696,9 +696,16 @@ public static partial class SymbolExtractor
         {
             var separatorIndex = value.IndexOf(separator, segmentStart);
             var segmentEnd = separatorIndex >= 0 ? separatorIndex : value.Length;
-            var segment = value.Substring(segmentStart, segmentEnd - segmentStart).Trim();
-            if (segment.Length > 0)
-                yield return segment;
+            var trimStart = segmentStart;
+            while (trimStart < segmentEnd && char.IsWhiteSpace(value[trimStart]))
+                trimStart++;
+
+            var trimEnd = segmentEnd;
+            while (trimEnd > trimStart && char.IsWhiteSpace(value[trimEnd - 1]))
+                trimEnd--;
+
+            if (trimEnd > trimStart)
+                yield return value[trimStart..trimEnd];
 
             if (separatorIndex < 0)
                 break;
