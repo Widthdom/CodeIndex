@@ -115,8 +115,9 @@ public static class ChunkSplitter
         // ファイル全体分の string[] や chunk ごとの slice 配列を作らない。末尾改行を
         // 余分な空行として扱わない点は従来の Split('\n') 経路と同じ。
         var lineStarts = GetLineStartOffsets(content);
-        var chunks = new List<ChunkRecord>();
         int step = ChunkSize - Overlap;
+        var estimatedChunkCount = Math.Max(1, (lineStarts.Count + step - 1) / step);
+        var chunks = new List<ChunkRecord>(estimatedChunkCount);
         int chunkIndex = 0;
         var effectiveContentLength = content.EndsWith('\n') ? content.Length - 1 : content.Length;
 
