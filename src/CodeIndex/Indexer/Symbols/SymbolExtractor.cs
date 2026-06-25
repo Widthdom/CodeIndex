@@ -11026,10 +11026,24 @@ public static partial class SymbolExtractor
             return trimmed;
 
         var builder = new StringBuilder(trimmed.Length);
-        foreach (var token in trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        var tokenStart = -1;
+        for (var index = 0; index <= trimmed.Length; index++)
         {
-            if (token.EndsWith(':'))
-                builder.Append(token);
+            var atEnd = index == trimmed.Length;
+            if (!atEnd && !char.IsWhiteSpace(trimmed[index]))
+            {
+                if (tokenStart < 0)
+                    tokenStart = index;
+                continue;
+            }
+
+            if (tokenStart < 0)
+                continue;
+
+            if (trimmed[index - 1] == ':')
+                builder.Append(trimmed, tokenStart, index - tokenStart);
+
+            tokenStart = -1;
         }
 
         return builder.Length == 0 ? trimmed : builder.ToString();
