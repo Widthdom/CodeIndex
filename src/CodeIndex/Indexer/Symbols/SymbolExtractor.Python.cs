@@ -88,6 +88,18 @@ public static partial class SymbolExtractor
     private static bool IsPythonClassHook(string name) =>
         name is "__init_subclass__" or "__class_getitem__" or "__set_name__" or "__class_subclasses__";
 
+    private static string TrimPythonLogicalHeaderContinuationEnd(string fragment)
+    {
+        var end = fragment.Length;
+        while (end > 0 && fragment[end - 1] == '\\')
+            end--;
+
+        while (end > 0 && char.IsWhiteSpace(fragment[end - 1]))
+            end--;
+
+        return end == fragment.Length ? fragment : fragment[..end];
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
     {
         var declarationIndent = CountIndent(lines[startLineIndex]);
@@ -129,7 +141,7 @@ public static partial class SymbolExtractor
             {
                 if (builder.Length > 0)
                     builder.Append(' ');
-                builder.Append(fragment.TrimEnd('\\').TrimEnd());
+                builder.Append(TrimPythonLogicalHeaderContinuationEnd(fragment));
             }
 
             for (var j = column; j < line.Length; j++)
