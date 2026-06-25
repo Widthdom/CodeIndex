@@ -64,8 +64,14 @@ public static partial class SymbolExtractor
             {
                 var commaIndex = items.IndexOf(',', itemStart);
                 var itemEnd = commaIndex >= 0 ? commaIndex : items.Length;
-                var item = items.Substring(itemStart, itemEnd - itemStart).Trim();
-                if (item.Length == 0)
+                var trimStart = itemStart;
+                var trimEnd = itemEnd;
+                while (trimStart < trimEnd && char.IsWhiteSpace(items[trimStart]))
+                    trimStart++;
+                while (trimEnd > trimStart && char.IsWhiteSpace(items[trimEnd - 1]))
+                    trimEnd--;
+
+                if (trimStart == trimEnd)
                 {
                     if (commaIndex < 0)
                         break;
@@ -74,6 +80,7 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
+                var item = items[trimStart..trimEnd];
                 var importedName = item;
                 var alias = string.Empty;
                 var aliasMatch = PhpUseGroupItemAliasRegex.Match(item);
