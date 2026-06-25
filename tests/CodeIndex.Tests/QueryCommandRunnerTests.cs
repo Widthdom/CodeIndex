@@ -1585,10 +1585,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [SkipOnMacOsArm64Theory]
-    [InlineData("cshtml")]
-    [InlineData("razor")]
-    public void RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases(string lang)
+    [SkipOnMacOsArm64Fact]
+    public void RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_lang_alias_publish");
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_query_trimmed_lang_alias_publish_{Guid.NewGuid():N}");
@@ -1608,14 +1606,17 @@ public partial class QueryCommandRunnerTests
 
             var publishedDll = PublishTrimmedCli(publishDir);
 
-            var (exitCode, stdout, stderr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--lang", lang, "--count", "--json");
+            foreach (var lang in new[] { "cshtml", "razor" })
+            {
+                var (exitCode, stdout, stderr) = RunPublishedCli(publishedDll, publishDir, "search", queryToken, "--db", dbPath, "--lang", lang, "--count", "--json");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
 
-            using var document = JsonDocument.Parse(stdout);
-            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
-            Assert.Equal(1, document.RootElement.GetProperty("files").GetInt32());
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(1, document.RootElement.GetProperty("files").GetInt32());
+            }
         }
         finally
         {

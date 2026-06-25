@@ -67,7 +67,7 @@ The test project mirrors the production areas closely.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson`
   uses the trimmed RID-specific publish path for query JSON coverage, writes publish-specific lock files under the test's temporary intermediate directory, disables NuGet vulnerability auditing for the publish smoke, and runs whichever `cdidx` entry point the SDK emits so the test does not depend on source-tree lock-file mutation, advisory-feed availability, or a DLL-only publish layout. If `dotnet publish` reaches an SDK/ILLink tool that requires an unavailable `Microsoft.NETCore.App` runtime, the test is reported as skipped with that missing-runtime diagnostic instead of failing before it can exercise `cdidx` (#3571). It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx` (#2586).
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
-  uses the same trimmed RID-specific publish path to verify C# Razor language aliases. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
+  publishes one trimmed RID-specific CLI and reuses it to verify both `cshtml` and `razor` C# Razor language aliases. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `HttpMcpTransportTests.cs`
@@ -294,7 +294,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson`
   は query JSON coverage のために trimmed な RID 固有 publish 経路を使い、publish 専用の lock file をテストの一時 intermediate directory 配下に書き、publish smoke の NuGet 脆弱性監査を無効化し、SDK が生成した `cdidx` entry point を実行します。source tree の lock file 変更、advisory feed の可用性、DLL 固定の publish layout には依存しません。`dotnet publish` が、利用できない `Microsoft.NETCore.App` runtime を必要とする SDK/ILLink tool に到達した場合は、`cdidx` を実行する前に失敗させるのではなく、その missing-runtime diagnostic を付けて skipped として報告します（#3571）。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます（#2586）。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
-  は同じ trimmed RID 固有 publish 経路で C# Razor の言語 alias を検証します。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
+  は 1 回 publish した trimmed RID 固有 CLI を再利用し、`cshtml` と `razor` の C# Razor 言語 alias を両方検証します。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
 - `McpServerTests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。
 - `HttpMcpTransportTests.cs`
