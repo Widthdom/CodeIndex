@@ -152,6 +152,7 @@ affected:
 - Trimmed C# primary-constructor body-open terminators by index, avoiding a substring trim chain before base-call detection.
 - Trimmed C# base-type body-open terminators by index, avoiding a substring trim chain before base type parsing.
 - Trimmed C# primary-constructor first base entries by index, avoiding intermediate trim substrings during base-call detection.
+- Trimmed C# base-type first entries by index, avoiding intermediate trim substrings during base type parsing.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -276,6 +277,7 @@ affected:
 - C# primary-constructor body-open terminator を index 境界で trim し、base-call 検出前の substring trim chain を避けるようにしました。
 - C# base-type body-open terminator を index 境界で trim し、base type parse 前の substring trim chain を避けるようにしました。
 - C# primary-constructor first base entry を index 境界で trim し、base-call 検出中の中間 trim substring を避けるようにしました。
+- C# base-type first entry を index 境界で trim し、base type parse 中の中間 trim substring を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。

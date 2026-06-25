@@ -2142,7 +2142,16 @@ public static partial class ReferenceExtractor
         if (whereMatch.Success)
             baseList = baseList.Substring(0, whereMatch.Index);
 
-        var firstEntry = TakeFirstBaseEntry(baseList).Trim();
+        var firstEntryText = TakeFirstBaseEntry(baseList);
+        var firstEntryStart = 0;
+        while (firstEntryStart < firstEntryText.Length && char.IsWhiteSpace(firstEntryText[firstEntryStart]))
+            firstEntryStart++;
+
+        var firstEntryEnd = firstEntryText.Length;
+        while (firstEntryEnd > firstEntryStart && char.IsWhiteSpace(firstEntryText[firstEntryEnd - 1]))
+            firstEntryEnd--;
+
+        var firstEntry = firstEntryText.Substring(firstEntryStart, firstEntryEnd - firstEntryStart);
         return ExtractBareTypeName(firstEntry);
     }
 
