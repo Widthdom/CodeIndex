@@ -1307,40 +1307,89 @@ public partial class FileIndexer
         if (string.IsNullOrWhiteSpace(filePath))
             return false;
 
-        var normalized = filePath.Replace('\\', '/');
-        if (normalized.StartsWith("//./", StringComparison.Ordinal)
-            || normalized.StartsWith("//?/GLOBALROOT/Device/", StringComparison.OrdinalIgnoreCase))
+        var path = filePath.AsSpan();
+        if (StartsWithWindowsDeviceNamespace(path))
         {
             return true;
         }
 
-        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        for (var start = 0; start < path.Length;)
         {
-            var name = segment;
+            while (start < path.Length && IsWindowsPathSeparator(path[start]))
+                start++;
+            if (start >= path.Length)
+                break;
+
+            var end = start;
+            while (end < path.Length && !IsWindowsPathSeparator(path[end]))
+                end++;
+
+            var name = path[start..end];
             var extensionIndex = name.IndexOf('.');
             if (extensionIndex >= 0)
                 name = name[..extensionIndex];
 
             if (IsWindowsReservedDeviceName(name))
                 return true;
+
+            start = end + 1;
         }
 
         return false;
     }
 
-    private static bool IsWindowsReservedDeviceName(string name)
+    private static bool StartsWithWindowsDeviceNamespace(ReadOnlySpan<char> path)
     {
-        if (name.Equals("CON", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        if (path.Length >= 4
+            && IsWindowsPathSeparator(path[0])
+            && IsWindowsPathSeparator(path[1])
+            && path[2] == '.'
+            && IsWindowsPathSeparator(path[3]))
+        {
+            return true;
+        }
+
+        if (path.Length < 22
+            || !IsWindowsPathSeparator(path[0])
+            || !IsWindowsPathSeparator(path[1])
+            || path[2] != '?'
+            || !IsWindowsPathSeparator(path[3]))
+        {
+            return false;
+        }
+
+        var remaining = path[4..];
+        if (!remaining.StartsWith("GLOBALROOT".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        remaining = remaining["GLOBALROOT".Length..];
+        if (remaining.IsEmpty || !IsWindowsPathSeparator(remaining[0]))
+            return false;
+
+        remaining = remaining[1..];
+        if (!remaining.StartsWith("Device".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        remaining = remaining["Device".Length..];
+        return !remaining.IsEmpty && IsWindowsPathSeparator(remaining[0]);
+    }
+
+    private static bool IsWindowsPathSeparator(char value)
+        => value is '\\' or '/';
+
+    private static bool IsWindowsReservedDeviceName(ReadOnlySpan<char> name)
+    {
+        if (name.Equals("CON".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || name.Equals("PRN".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || name.Equals("AUX".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || name.Equals("NUL".AsSpan(), StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
         return name.Length == 4
-            && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+            && (name.StartsWith("COM".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("LPT".AsSpan(), StringComparison.OrdinalIgnoreCase))
             && name[3] >= '1'
             && name[3] <= '9';
     }
