@@ -1066,7 +1066,7 @@ public static partial class SymbolExtractor
 
             if (trimmed.StartsWith("const", StringComparison.Ordinal))
             {
-                TryAddGoValueSymbol(fileId, line, i, symbols, trimmed["const".Length..].TrimStart());
+                TryAddGoValueSymbol(fileId, line, i, symbols, GetGoDeclarationRemainder(trimmed, "const".Length));
                 continue;
             }
 
@@ -1102,5 +1102,14 @@ public static partial class SymbolExtractor
             index++;
 
         return index < trimmed.Length && trimmed[index] == '(';
+    }
+
+    private static string GetGoDeclarationRemainder(string trimmed, int prefixLength)
+    {
+        var index = prefixLength;
+        while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+            index++;
+
+        return trimmed[index..];
     }
 }
