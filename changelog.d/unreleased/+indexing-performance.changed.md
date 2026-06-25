@@ -90,6 +90,7 @@ affected:
 - Avoided basename extraction and path normalization allocations on generated-code pattern matcher fast paths.
 - Avoided path-segment array allocation while propagating submodule passthrough through default-excluded directory ancestors.
 - Streamed configured symbol extraction over normalized source lines, avoiding whole-file replacement strings and line arrays.
+- Collapsed C# XML doc-comment prechecks to a single slash scan during reference extraction preparation.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
 
 ## 日本語
@@ -157,4 +158,5 @@ affected:
 - generated-code pattern matcher の fast path で basename extraction と path normalization allocation を避けるようにしました。
 - default-excluded directory 祖先で submodule passthrough を伝播する際に path segment array を割り当てないようにしました。
 - configured symbol extraction で正規化済み source line を逐次処理し、file 全体の replacement string と line array を作らないようにしました。
+- reference extraction preparation 中の C# XML doc-comment 事前判定を、1回の slash scan にまとめました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。

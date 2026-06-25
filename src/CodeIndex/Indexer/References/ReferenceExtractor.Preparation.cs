@@ -140,9 +140,19 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static bool MightContainCSharpXmlDocComment(string content) =>
-        content.Contains("///", StringComparison.Ordinal)
-        || content.Contains("/**", StringComparison.Ordinal);
+    private static bool MightContainCSharpXmlDocComment(string content)
+    {
+        var index = content.IndexOf('/');
+        while (index >= 0 && index + 2 < content.Length)
+        {
+            var next = content[index + 1];
+            if ((next == '/' || next == '*') && content[index + 2] == next)
+                return true;
+            index = content.IndexOf('/', index + 1);
+        }
+
+        return false;
+    }
 
     private static string[] PrepareReferenceLines(string language, string[] referenceStructuralLines)
     {
