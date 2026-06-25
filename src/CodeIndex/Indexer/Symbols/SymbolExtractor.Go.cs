@@ -1058,7 +1058,7 @@ public static partial class SymbolExtractor
             }
 
             if (trimmed.StartsWith("const", StringComparison.Ordinal)
-                && trimmed["const".Length..].TrimStart().StartsWith("(", StringComparison.Ordinal))
+                && GoDeclarationRemainderStartsWithOpenParen(trimmed, "const".Length))
             {
                 blockKind = "const";
                 continue;
