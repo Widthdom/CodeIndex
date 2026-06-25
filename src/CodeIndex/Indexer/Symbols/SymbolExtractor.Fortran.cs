@@ -125,7 +125,7 @@ public static partial class SymbolExtractor
                 nextLine = GetFortranSuffixTrimmedStart(nextLine, 1);
 
             lastConsumedLineIndex++;
-            currentLine = nextLine.TrimEnd();
+            currentLine = GetFortranPrefixTrimmedEnd(nextLine, nextLine.Length);
             if (currentLine.Length == 0)
                 break;
         }
