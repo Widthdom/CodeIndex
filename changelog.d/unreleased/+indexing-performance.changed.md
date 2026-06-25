@@ -122,6 +122,7 @@ affected:
 - Compared C# symbol-name keywords without substring allocation during symbol normalization.
 - Compared shared symbol keyword probes without substring allocation during extraction.
 - Trimmed PHP grouped-use items by index, avoiding intermediate trim substrings during import extraction.
+- Trimmed Python import specs by index, avoiding intermediate trim substrings for empty and wildcard entries.
 - Scanned wrapped C# modifier prefixes by index, avoiding space split arrays during constructor recovery.
 - Normalized Rust raw identifiers by scanning path segments directly, avoiding `::` split arrays on symbol and reference extraction paths.
 - Parsed dependency package environment markers with `IndexOf`, avoiding bounded semicolon split arrays while indexing manifests.
@@ -219,6 +220,7 @@ affected:
 - C# symbol name 正規化中の keyword 比較で substring allocation を避けるようにしました。
 - shared symbol keyword probe で substring allocation を避けるようにしました。
 - PHP grouped-use item を index 境界で trim し、import 抽出中の中間 trim substring を避けるようにしました。
+- Python import spec を index 境界で trim し、空要素や wildcard 要素の中間 trim substring を避けるようにしました。
 - wrapped C# modifier prefix を index で走査し、constructor recovery 中の space split array を避けるようにしました。
 - Rust raw identifier を path segment の直接走査で正規化し、symbol / reference 抽出経路の `::` split array を避けるようにしました。
 - dependency package の environment marker を `IndexOf` で解析し、manifest index 時の bounded semicolon split array を避けるようにしました。

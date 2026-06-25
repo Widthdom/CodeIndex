@@ -951,8 +951,15 @@ public static partial class SymbolExtractor
         {
             var commaIndex = importedNames.IndexOf(',', specStart);
             var specEnd = commaIndex >= 0 ? commaIndex : importedNames.Length;
-            var spec = importedNames.Substring(specStart, specEnd - specStart).Trim();
-            if (spec.Length == 0 || spec == "*")
+            var trimStart = specStart;
+            var trimEnd = specEnd;
+            while (trimStart < trimEnd && char.IsWhiteSpace(importedNames[trimStart]))
+                trimStart++;
+            while (trimEnd > trimStart && char.IsWhiteSpace(importedNames[trimEnd - 1]))
+                trimEnd--;
+
+            if (trimStart == trimEnd
+                || (trimEnd == trimStart + 1 && importedNames[trimStart] == '*'))
             {
                 if (commaIndex < 0)
                     break;
@@ -961,6 +968,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            var spec = importedNames[trimStart..trimEnd];
             var aliasIndex = spec.IndexOf(" as ", StringComparison.Ordinal);
             var importedName = aliasIndex >= 0
                 ? spec[..aliasIndex].Trim()
