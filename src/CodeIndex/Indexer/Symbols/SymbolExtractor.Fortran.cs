@@ -122,7 +122,7 @@ public static partial class SymbolExtractor
             var nextLine = StripFortranComment(lines[lastConsumedLineIndex + 1]);
             nextLine = GetFortranSuffixTrimmedStart(nextLine, 0);
             if (nextLine.StartsWith('&'))
-                nextLine = nextLine[1..].TrimStart();
+                nextLine = GetFortranSuffixTrimmedStart(nextLine, 1);
 
             lastConsumedLineIndex++;
             currentLine = nextLine.TrimEnd();
