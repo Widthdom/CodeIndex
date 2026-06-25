@@ -30,6 +30,7 @@ affected:
   - tests/CodeIndex.Tests/ExportImportCommandRunnerIssue3818Tests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
+  - tests/CodeIndex.Tests/IndexWatchRunnerTests.cs
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TrimmedCliTestHelper.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowTests.cs
@@ -81,6 +82,7 @@ affected:
 - Reused shared temporary directory cleanup for metrics write-target directory fixtures.
 - Reused shared temporary directory cleanup for configured-pattern out-of-tree language fixtures.
 - Reused shared temporary directory cleanup for temporary dotnet host fixtures.
+- Reused shared temporary directory cleanup from the watch runner test helper.
 
 ## 日本語
 - CI の NuGet キャッシュキーを調整し、テスト用 project file だけの変更で package cache が失効しないようにしました。package 入力の検証は locked restore に任せます。
@@ -125,3 +127,4 @@ affected:
 - metrics write-target directory fixture の cleanup を共通 helper に寄せました。
 - configured-pattern out-of-tree language fixture の cleanup を共通 helper に寄せました。
 - temporary dotnet host fixture の cleanup を共通 helper に寄せました。
+- watch runner test helper の cleanup を共通 helper に寄せました。
