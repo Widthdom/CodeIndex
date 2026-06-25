@@ -115,28 +115,15 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
     {
         if (string.IsNullOrEmpty(content))
             return content;
-        if (!content.Contains('\uFEFF') && !content.Contains('\u200B'))
-            return content;
 
-        var firstStripIndex = -1;
-        var atLineStart = true;
-        for (var i = 0; i < content.Length; i++)
-        {
-            var c = content[i];
-            if (IsLineLeadingInvisible(c) && atLineStart)
-            {
-                firstStripIndex = i;
-                break;
-            }
-            atLineStart = c == '\n';
-        }
+        var firstStripIndex = FindFirstLineLeadingInvisible(content);
         if (firstStripIndex < 0)
             return content;
 
         var sb = new StringBuilder(content.Length - 1);
         if (firstStripIndex > 0)
             sb.Append(content, 0, firstStripIndex);
-        atLineStart = true;
+        var atLineStart = true;
         for (var i = firstStripIndex + 1; i < content.Length; i++)
         {
             var c = content[i];
@@ -146,6 +133,25 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             atLineStart = c == '\n';
         }
         return sb.ToString();
+    }
+
+    private static int FindFirstLineLeadingInvisible(string content)
+    {
+        var searchOffset = 0;
+        while (searchOffset < content.Length)
+        {
+            var relativeIndex = content.AsSpan(searchOffset).IndexOfAny('\uFEFF', '\u200B');
+            if (relativeIndex < 0)
+                return -1;
+
+            var index = searchOffset + relativeIndex;
+            if (index == 0 || content[index - 1] == '\n')
+                return index;
+
+            searchOffset = index + 1;
+        }
+
+        return -1;
     }
 
     private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';

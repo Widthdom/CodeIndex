@@ -50,6 +50,7 @@ affected:
 - Avoided allocating generated-code suppression issue objects during the C# static-interface prepass, where only the suppression decision is needed.
 - Added an allocation-free word-boundary precheck before C# static-interface comment/string masking, avoiding large masks for obvious non-candidates.
 - Collapsed C# prepass content-normalization probing to one scan instead of separate CR/BOM/zero-width-space checks.
+- Collapsed line-leading invisible stripping probes to a single `IndexOfAny` pass, avoiding separate BOM and zero-width-space scans on direct normalization callers.
 - Cached raw prepass NUL-byte detection per scan/probe so C# static-interface candidate checks do not repeat UTF-16 eligibility scans for every token.
 - Removed C# static-interface prepass member-header substring allocations by running word-boundary checks over spans.
 - Consolidated the primary CI lane predicate so package audit, primary build/lint, coverage, publish, and build-artifact upload steps share one workflow decision point.
@@ -88,6 +89,7 @@ affected:
 - C# static-interface prepass では suppression 判定だけが必要なため、generated-code suppression issue object の割り当てを避けるようにしました。
 - C# static-interface の comment/string masking 前に allocation-free の word-boundary precheck を追加し、明らかな候補外ファイルで大きな mask を作らないようにしました。
 - C# prepass content normalization の事前判定を、CR / BOM / zero-width-space の個別 scan ではなく1回の scan にまとめました。
+- 行頭不可視文字 stripping の事前判定を単一の `IndexOfAny` pass にまとめ、direct normalization caller で BOM と zero-width-space を別々に scan しないようにしました。
 - raw prepass の NUL-byte 検出を scan/probe ごとに cache し、C# static-interface candidate 判定で token ごとに UTF-16 eligibility scan を繰り返さないようにしました。
 - C# static-interface prepass の member-header substring allocation をなくし、word-boundary check を span 上で実行するようにしました。
 - package audit、primary build/lint、coverage、publish、build artifact upload が同じ workflow 判定を使うように、primary CI lane の条件を集約しました。
