@@ -358,14 +358,14 @@ public partial class FileIndexer
         private readonly record struct PatternToken(char Value, bool Escaped);
 
         private readonly string _sourceDirectory;
-        private readonly Regex _matcher;
+        private readonly IIgnoreMatcher _matcher;
         private readonly bool _asciiIgnoreCase;
         private readonly bool _directoryOnly;
         private readonly bool _matchBasenameOnly;
 
         private IgnoreRule(
             string sourceDirectory,
-            Regex matcher,
+            IIgnoreMatcher matcher,
             bool asciiIgnoreCase,
             bool negated,
             bool directoryOnly,
@@ -509,8 +509,42 @@ public partial class FileIndexer
             return tokens.Count > 0;
         }
 
-        private static Regex BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
+        private interface IIgnoreMatcher
         {
+            bool IsMatch(string candidate);
+        }
+
+        private sealed class LiteralIgnoreMatcher : IIgnoreMatcher
+        {
+            private readonly string _literal;
+
+            internal LiteralIgnoreMatcher(string literal)
+            {
+                _literal = literal;
+            }
+
+            public bool IsMatch(string candidate)
+                => string.Equals(candidate, _literal, StringComparison.Ordinal);
+        }
+
+        private sealed class RegexIgnoreMatcher : IIgnoreMatcher
+        {
+            private readonly Regex _regex;
+
+            internal RegexIgnoreMatcher(Regex regex)
+            {
+                _regex = regex;
+            }
+
+            public bool IsMatch(string candidate)
+                => _regex.IsMatch(candidate);
+        }
+
+        private static IIgnoreMatcher BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
+        {
+            if (TryBuildLiteralPattern(pattern, out var literal))
+                return new LiteralIgnoreMatcher(literal);
+
             var builder = new StringBuilder();
             builder.Append('^');
 
@@ -572,10 +606,28 @@ public partial class FileIndexer
             }
 
             builder.Append('$');
-            return new Regex(
+            return new RegexIgnoreMatcher(new Regex(
                 builder.ToString(),
                 RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
-                IgnoreRegexMatchTimeout);
+                IgnoreRegexMatchTimeout));
+        }
+
+        private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)
+        {
+            var builder = new StringBuilder(pattern.Count);
+            foreach (var token in pattern)
+            {
+                if (!token.Escaped && token.Value is '*' or '?' or '[')
+                {
+                    literal = string.Empty;
+                    return false;
+                }
+
+                builder.Append(token.Value);
+            }
+
+            literal = builder.ToString();
+            return true;
         }
 
         private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder, bool ignoreCase)
