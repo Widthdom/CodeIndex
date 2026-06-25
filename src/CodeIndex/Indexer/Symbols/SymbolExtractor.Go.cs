@@ -51,7 +51,7 @@ public static partial class SymbolExtractor
 
         if (trimmed.StartsWith("import", StringComparison.Ordinal))
         {
-            var afterImport = trimmed["import".Length..].TrimStart();
+            var afterImport = GetGoDeclarationRemainder(trimmed, "import".Length);
             if (afterImport.StartsWith("(", StringComparison.Ordinal))
             {
                 var blockRemainder = afterImport[1..].TrimStart();
