@@ -2316,6 +2316,37 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_FullScanAfterDerivedTypeScriptConfigDelete_ReprocessesUnchangedTypeScriptFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_base_delete");
+        var loadedPaths = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.base.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\" } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(Path.Combine(projectRoot, "tsconfig.base.json"));
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Contains("app.ts", loadedPaths);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScanWithSequentialExtraction_PersistsValidationIssues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_sequential_validation");

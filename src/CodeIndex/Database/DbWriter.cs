@@ -1064,10 +1064,14 @@ public class DbWriter
         cmd.CommandText = """
             SELECT path
             FROM files
-            WHERE path = 'jsconfig.json'
-               OR path = 'tsconfig.json'
-               OR path LIKE '%/jsconfig.json'
-               OR path LIKE '%/tsconfig.json'
+            WHERE lower(path) = 'jsconfig.json'
+               OR lower(path) = 'tsconfig.json'
+               OR lower(path) LIKE '%/jsconfig.json'
+               OR lower(path) LIKE '%/tsconfig.json'
+               OR lower(path) LIKE 'jsconfig.%.json'
+               OR lower(path) LIKE 'tsconfig.%.json'
+               OR lower(path) LIKE '%/jsconfig.%.json'
+               OR lower(path) LIKE '%/tsconfig.%.json'
             ORDER BY path
             """;
         var paths = new List<string>();
