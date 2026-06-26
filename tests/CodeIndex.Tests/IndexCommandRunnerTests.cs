@@ -2325,9 +2325,11 @@ public sealed class Caller
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_update_non_csharp_no_csharp_metadata");
         var resolvedMetadataTargets = false;
+        var rebuiltTypeScriptAugmentation = false;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "interface AppApi { run(): void; }\n");
             File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
@@ -2337,16 +2339,19 @@ public sealed class Caller
             File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tool.py"), DateTime.UtcNow.AddSeconds(2));
 
             IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
 
             var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "tool.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.False(resolvedMetadataTargets);
+            Assert.False(rebuiltTypeScriptAugmentation);
         }
         finally
         {
             IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = null;
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

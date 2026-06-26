@@ -132,6 +132,8 @@ public static partial class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
+            && (!projectRootWritten || !writer.TypeScriptAugmentationVersionMatchesCurrent());
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
@@ -593,6 +595,7 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
+                            typeScriptAugmentationNeedsRefresh = true;
                         }
                         else
                         {
@@ -690,6 +693,7 @@ public static partial class IndexCommandRunner
                             purgeTxn.Commit();
                             removed += purged;
                             ftsMutated = true;
+                            typeScriptAugmentationNeedsRefresh = true;
                         }
                         skipped++;
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -708,10 +712,14 @@ public static partial class IndexCommandRunner
                     fileBatchMarked = true;
                     if (record.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
+                    if (record.Lang == "typescript")
+                        typeScriptAugmentationNeedsRefresh = true;
                     using var txn = writer.BeginTransaction(cancellationToken, "update file");
-                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     if (projectRootWritten)
-                        writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                        stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                    if (stalePurged > 0)
+                        typeScriptAugmentationNeedsRefresh = true;
                     WriteProjectRootOnce();
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
@@ -863,9 +871,11 @@ public static partial class IndexCommandRunner
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
-                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
-                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                            stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        if (stalePurged > 0)
+                            typeScriptAugmentationNeedsRefresh = true;
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
@@ -889,9 +899,11 @@ public static partial class IndexCommandRunner
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
-                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
-                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                            stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        if (stalePurged > 0)
+                            typeScriptAugmentationNeedsRefresh = true;
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
@@ -940,6 +952,7 @@ public static partial class IndexCommandRunner
                                 deleteTxn.Commit();
                                 removed++;
                                 ftsMutated = true;
+                                typeScriptAugmentationNeedsRefresh = true;
                             }
                         }
                         else
@@ -1074,7 +1087,11 @@ public static partial class IndexCommandRunner
             // family_key/container_qualified_name state as authoritative (#1488).
             using (var hotspotFamilyTxn = writer.BeginTransaction(cancellationToken, "update hotspot-family restamp"))
             {
-                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                if (typeScriptAugmentationNeedsRefresh)
+                {
+                    UpdateTypeScriptAugmentationRebuildForTesting?.Invoke();
+                    writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                }
                 RestampHotspotFamilyTrustForUpdate(
                     writer,
                     priorHotspotFamilyVersions,

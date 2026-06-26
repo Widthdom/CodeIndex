@@ -55,6 +55,7 @@ public static partial class IndexCommandRunner
     internal static Action? FullScanCSharpMetadataResolveForTesting { get; set; }
     internal static Action? FullScanTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Action? UpdateCSharpMetadataResolveForTesting { get; set; }
+    internal static Action? UpdateTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
