@@ -965,6 +965,7 @@ public static partial class IndexCommandRunner
 
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
+        var ftsMutated = purged > 0;
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = false;
 
@@ -1510,6 +1511,7 @@ public static partial class IndexCommandRunner
                             using var deleteTxn = writer.BeginTransaction(cancellationToken, "full scan delete skipped file");
                             if (writer.DeleteFileByPath(currentJsonIndexFile))
                             {
+                                ftsMutated = true;
                                 WriteProjectRootOnce();
                                 deleteTxn.Commit();
                             }
@@ -1573,7 +1575,8 @@ public static partial class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
-                        writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                        if (writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum) > 0)
+                            ftsMutated = true;
                         skipped++;
                         processed++;
                         if (!string.IsNullOrWhiteSpace(record.Lang))
@@ -1600,8 +1603,12 @@ public static partial class IndexCommandRunner
 
                     using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
                     if (!startedWithNoIndexedFiles)
-                        writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    {
+                        if (writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum) > 0)
+                            ftsMutated = true;
+                    }
                     var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
+                    ftsMutated = true;
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.SplitNormalized(
@@ -1832,15 +1839,19 @@ public static partial class IndexCommandRunner
             }
         }
         ThrowIfFullScanCancelled(processed, files.Count);
-        WriteFullScanJsonLiveness(options, "optimizing index...");
-        var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
-        try
+        if (ftsMutated)
         {
-            writer.OptimizeFts();
-        }
-        finally
-        {
-            StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
+            WriteFullScanJsonLiveness(options, "optimizing index...");
+            var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
+            try
+            {
+                FullScanFtsOptimizeForTesting?.Invoke();
+                writer.OptimizeFts();
+            }
+            finally
+            {
+                StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
+            }
         }
         ThrowIfFullScanCancelled(processed, files.Count);
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error

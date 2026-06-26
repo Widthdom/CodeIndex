@@ -2281,6 +2281,35 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_NoOpFullScan_DoesNotOptimizeFts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");
+        var optimized = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () => optimized = true;
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.False(optimized);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_NotifyFlag_ParsesCompletionNotificationMode()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--notify=osc9"]);
