@@ -1027,7 +1027,7 @@ public static partial class IndexCommandRunner
                     DemoteReadinessOnce();
                     if (fileBatchMarked)
                         writer.ClearBatchInProgress();
-                    GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
+                    LogIndexFileFailure("index_update_file_failed", relPath, ex);
 
                     errors++;
                     var errorMessage = FormatIndexFileException(ex);

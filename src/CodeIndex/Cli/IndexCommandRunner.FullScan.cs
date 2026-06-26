@@ -19,6 +19,9 @@ public static partial class IndexCommandRunner
     internal static string FormatPerFileErrorLine(string label, string path, Exception ex, string message) =>
         $"  [{label}] {CollapseLineBreaks(path)}: {CollapseLineBreaks(message)}";
 
+    internal static void LogIndexFileFailure(string eventName, string path, Exception ex) =>
+        GlobalToolLog.Error($"{eventName} path={CollapseLineBreaks(path)}", ex);
+
     internal static string FormatIndexFileException(Exception ex) =>
         ex switch
         {
@@ -1926,7 +1929,7 @@ public static partial class IndexCommandRunner
                     }
                     catch (Exception ex)
                     {
-                        GlobalToolLog.Error($"index_file_failed path={CollapseLineBreaks(item.FilePath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
+                        LogIndexFileFailure("index_file_failed", item.FilePath, ex);
                         errors++;
                         var errorMessage = FormatIndexFileException(ex);
                         errorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
