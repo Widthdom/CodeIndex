@@ -6044,15 +6044,19 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        var fileTargets = files.Select(filePath => CSharpStaticInterfacePrepass.FileTarget.Create(
-            projectPath,
-            filePath,
-            FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
+        var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
+        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        for (var i = 0; i < files.Count; i++)
+        {
+            var filePath = files[i];
+            var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
+            var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectPath, filePath, language);
+            fileTargets[i] = target;
+            if (language == "csharp")
+                csharpPrepassTargets.Add(target);
+        }
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
-        var csharpPrepassTargets = fileTargets
-            .Where(static target => target.Language == "csharp")
-            .ToArray();
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -6078,7 +6082,7 @@ public partial class McpServer
         }
 
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
-        if (csharpPrepassTargets.Length == 0)
+        if (csharpPrepassTargets.Count == 0)
         {
             csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
         }
