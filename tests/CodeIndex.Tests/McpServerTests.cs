@@ -11234,6 +11234,34 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ToolsCall_Index_WithoutCSharpSkipsCSharpPrepass()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_no_csharp_prepass_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_no_csharp_prepass_{Guid.NewGuid():N}.db");
+        var ranCSharpPrepass = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.ts"), "interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "tool.py"), "def run():\n    return 1\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            McpServer.McpIndexCSharpPrepassForTesting = () => ranCSharpPrepass = true;
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(ranCSharpPrepass);
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpPrepassForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NoOpSkipsUnchangedFinalizers()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}");

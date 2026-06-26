@@ -50,6 +50,7 @@ public partial class McpServer
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
     internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
+    internal static Action? McpIndexCSharpPrepassForTesting { get; set; }
     internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
     internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }
@@ -6060,12 +6061,21 @@ public partial class McpServer
                 indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
         }
 
-        var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-            writer,
-            indexer,
-            csharpPrepassTargets,
-            canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
-            cancellationToken: requestToken);
+        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
+        if (csharpPrepassTargets.Length == 0)
+        {
+            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+        }
+        else
+        {
+            McpIndexCSharpPrepassForTesting?.Invoke();
+            csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                writer,
+                indexer,
+                csharpPrepassTargets,
+                canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                cancellationToken: requestToken);
+        }
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         var fatalScanErrors = scanResult.Errors

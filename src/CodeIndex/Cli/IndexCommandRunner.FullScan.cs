@@ -1200,15 +1200,24 @@ public static partial class IndexCommandRunner
                         target.RelativePath,
                         target.DisplayRelativePath,
                         target.IndexPath,
-                        target.Language));
-                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                    writer,
-                    indexer,
-                    csharpPrepassTargets,
-                    includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
-                    canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
-                    reportCurrentFile: path => currentCSharpWorkspaceFile = path,
-                    cancellationToken: cancellationToken);
+                        target.Language))
+                    .ToArray();
+                if (csharpPrepassTargets.Length == 0)
+                {
+                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+                }
+                else
+                {
+                    FullScanCSharpPrepassForTesting?.Invoke();
+                    csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                        writer,
+                        indexer,
+                        csharpPrepassTargets,
+                        includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
+                        canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                        reportCurrentFile: path => currentCSharpWorkspaceFile = path,
+                        cancellationToken: cancellationToken);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

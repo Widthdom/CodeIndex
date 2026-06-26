@@ -2283,6 +2283,32 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_FullScanWithoutCSharp_DoesNotRunCSharpPrepass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_no_csharp_prepass");
+        var ranCSharpPrepass = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = () => ranCSharpPrepass = true;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(ranCSharpPrepass);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NoOpFullScan_DoesNotOptimizeFts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");
