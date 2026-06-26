@@ -100,33 +100,12 @@ public static partial class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen)
     {
-        var interfaceMembersByType = workspaceSymbols
-            .Where(IsCSharpStaticInterfaceMemberContract)
-            .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group
-                    .Select(symbol => new CSharpStaticInterfaceMemberContract(
-                        symbol.Name,
-                        symbol.Kind,
-                        GetCSharpCallableParameterShape(symbol.Signature),
-                        NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)))
-                    .ToList(),
-                StringComparer.Ordinal);
+        var interfaceMembersByType = BuildCSharpStaticInterfaceMemberContractsByType(workspaceSymbols);
         if (interfaceMembersByType.Count == 0)
             return;
 
         var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(workspaceSymbols);
-        var staticMembersByContainer = symbols
-            .Where(symbol => symbol.Kind is "function" or "operator" or "property"
-                             && !string.IsNullOrWhiteSpace(symbol.ContainerName)
-                             && !string.IsNullOrWhiteSpace(symbol.Signature)
-                             && ContainsCSharpWord(symbol.Signature!, "static"))
-            .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.ToList(),
-                StringComparer.Ordinal);
+        var staticMembersByContainer = BuildCSharpStaticMembersByContainer(symbols);
 
         foreach (var typeSymbol in symbols)
         {
@@ -156,7 +135,7 @@ public static partial class ReferenceExtractor
                     if (!IsCSharpStaticMemberImplementationCandidate(typeSymbol, implementation))
                         continue;
 
-                    if (!interfaceMembers.Any(contract => MatchesCSharpStaticInterfaceMemberContract(contract, implementation, implementedInterface.TypeArguments)))
+                    if (!AnyCSharpStaticInterfaceMemberContractMatches(interfaceMembers, implementation, implementedInterface.TypeArguments))
                         continue;
 
                     var lineIndex = implementation.StartLine - 1;
@@ -177,6 +156,72 @@ public static partial class ReferenceExtractor
                 }
             }
         }
+    }
+
+    private static Dictionary<string, List<CSharpStaticInterfaceMemberContract>> BuildCSharpStaticInterfaceMemberContractsByType(
+        IReadOnlyList<SymbolRecord> workspaceSymbols)
+    {
+        var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
+        foreach (var symbol in workspaceSymbols)
+        {
+            if (!IsCSharpStaticInterfaceMemberContract(symbol))
+                continue;
+
+            var containerName = symbol.ContainerName!;
+            if (!contractsByType.TryGetValue(containerName, out var contracts))
+            {
+                contracts = new List<CSharpStaticInterfaceMemberContract>();
+                contractsByType.Add(containerName, contracts);
+            }
+
+            contracts.Add(new CSharpStaticInterfaceMemberContract(
+                symbol.Name,
+                symbol.Kind,
+                GetCSharpCallableParameterShape(symbol.Signature),
+                NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
+        }
+
+        return contractsByType;
+    }
+
+    private static Dictionary<string, List<SymbolRecord>> BuildCSharpStaticMembersByContainer(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var staticMembersByContainer = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("function" or "operator" or "property")
+                || string.IsNullOrWhiteSpace(symbol.ContainerName)
+                || string.IsNullOrWhiteSpace(symbol.Signature)
+                || !ContainsCSharpWord(symbol.Signature!, "static"))
+            {
+                continue;
+            }
+
+            var containerName = symbol.ContainerName!;
+            if (!staticMembersByContainer.TryGetValue(containerName, out var staticMembers))
+            {
+                staticMembers = new List<SymbolRecord>();
+                staticMembersByContainer.Add(containerName, staticMembers);
+            }
+
+            staticMembers.Add(symbol);
+        }
+
+        return staticMembersByContainer;
+    }
+
+    private static bool AnyCSharpStaticInterfaceMemberContractMatches(
+        IReadOnlyList<CSharpStaticInterfaceMemberContract> interfaceMembers,
+        SymbolRecord implementation,
+        IReadOnlyDictionary<string, string> typeArguments)
+    {
+        foreach (var contract in interfaceMembers)
+        {
+            if (MatchesCSharpStaticInterfaceMemberContract(contract, implementation, typeArguments))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsCSharpStaticInterfaceMemberContract(SymbolRecord symbol)
