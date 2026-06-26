@@ -82,12 +82,23 @@ public class SqliteDynamicSqlTests
     {
         using var connection = CreateInMemoryConnection();
         using var cmd = connection.CreateCommand();
-        var method = typeof(DbWriter).GetMethod(
-            "BuildSupportedLanguageParameters",
+        var buildNames = typeof(DbWriter).GetMethod(
+            "BuildSupportedLanguageParameterNames",
             BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException(nameof(DbWriter), "BuildSupportedLanguageParameters");
+            ?? throw new MissingMethodException(nameof(DbWriter), "BuildSupportedLanguageParameterNames");
+        var addParameters = typeof(DbWriter).GetMethod(
+            "AddSupportedLanguageParameters",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException(nameof(DbWriter), "AddSupportedLanguageParameters");
+        var bindValues = typeof(DbWriter).GetMethod(
+            "BindSupportedLanguageParameterValues",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException(nameof(DbWriter), "BindSupportedLanguageParameterValues");
 
-        var names = Assert.IsType<List<string>>(method.Invoke(null, new object?[] { cmd, new[] { "csharp", "python" } }));
+        var languages = new[] { "csharp", "python" };
+        var names = Assert.IsType<List<string>>(buildNames.Invoke(null, new object?[] { languages.Length }));
+        addParameters.Invoke(null, new object?[] { cmd, languages.Length });
+        bindValues.Invoke(null, new object?[] { cmd, languages });
 
         Assert.Equal(new[] { "@lang0", "@lang1" }, names);
         Assert.Equal("csharp", cmd.Parameters["@lang0"].Value);
