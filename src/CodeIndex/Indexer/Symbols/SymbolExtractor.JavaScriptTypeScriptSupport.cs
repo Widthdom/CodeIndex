@@ -128,10 +128,8 @@ public static partial class SymbolExtractor
                 targets.Add(candidate);
         }
 
-        return targets
-            .OrderBy(t => t.StartIndex)
-            .ThenByDescending(t => t.ScanEndExclusive)
-            .ToList();
+        SortJavaScriptTypeScriptClassScanTargets(targets);
+        return targets;
     }
 
     private static void ExtractJavaScriptTypeScriptExportSurfaceSymbols(
@@ -6455,20 +6453,30 @@ public static partial class SymbolExtractor
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
     {
-        return symbols
-            .Where(s => s.Kind is "class" or "interface" && s.BodyStartLine != null && s.BodyEndLine != null)
-            .OrderBy(s => s.StartLine)
-            .ThenByDescending(s => s.EndLine)
-            .Select(s => CreateJavaScriptClassScanTarget(
+        var classSymbols = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is "class" or "interface" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                classSymbols.Add(symbol);
+        }
+
+        classSymbols.Sort(CompareJavaScriptTypeScriptClassSymbols);
+
+        var targets = new List<JavaScriptClassScanTarget>(classSymbols.Count);
+        foreach (var symbol in classSymbols)
+        {
+            targets.Add(CreateJavaScriptClassScanTarget(
                 lines,
                 lang,
-                s.StartLine - 1,
-                FindJavaScriptTypeScriptSymbolStartColumn(lines[s.StartLine - 1], s.Signature),
-                s.BodyStartLine,
-                s.BodyEndLine,
-                s.Kind,
-                s.Name))
-            .ToList();
+                symbol.StartLine - 1,
+                FindJavaScriptTypeScriptSymbolStartColumn(lines[symbol.StartLine - 1], symbol.Signature),
+                symbol.BodyStartLine,
+                symbol.BodyEndLine,
+                symbol.Kind,
+                symbol.Name));
+        }
+
+        return targets;
     }
 
     private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
@@ -6490,10 +6498,27 @@ public static partial class SymbolExtractor
             }
         }
 
-        return targets
-            .OrderBy(t => t.StartIndex)
-            .ThenByDescending(t => t.ScanEndExclusive)
-            .ToList();
+        SortJavaScriptTypeScriptClassScanTargets(targets);
+        return targets;
+    }
+
+    private static void SortJavaScriptTypeScriptClassScanTargets(List<JavaScriptClassScanTarget> targets)
+        => targets.Sort(CompareJavaScriptTypeScriptClassScanTargets);
+
+    private static int CompareJavaScriptTypeScriptClassSymbols(SymbolRecord left, SymbolRecord right)
+    {
+        var startLineComparison = left.StartLine.CompareTo(right.StartLine);
+        return startLineComparison != 0
+            ? startLineComparison
+            : right.EndLine.CompareTo(left.EndLine);
+    }
+
+    private static int CompareJavaScriptTypeScriptClassScanTargets(JavaScriptClassScanTarget left, JavaScriptClassScanTarget right)
+    {
+        var startIndexComparison = left.StartIndex.CompareTo(right.StartIndex);
+        return startIndexComparison != 0
+            ? startIndexComparison
+            : right.ScanEndExclusive.CompareTo(left.ScanEndExclusive);
     }
 
     private static bool IsInsideJavaScriptTypeScriptPrivateScope(Stack<JavaScriptScopeKind> scopeStack)
