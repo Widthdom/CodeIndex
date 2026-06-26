@@ -4648,17 +4648,34 @@ public static partial class SymbolExtractor
 
     private static void ClassifyScalaCompanions(List<SymbolRecord> symbols)
     {
-        var topLevelClasses = symbols
-            .Where(symbol => symbol.Kind == "class"
-                && string.IsNullOrWhiteSpace(symbol.ContainerKind)
-                && !string.IsNullOrWhiteSpace(symbol.Name))
-            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
-
-        foreach (var scalaObject in symbols.Where(symbol => symbol.Kind == "object"
-                     && string.IsNullOrWhiteSpace(symbol.ContainerKind)
-                     && !string.IsNullOrWhiteSpace(symbol.Name)))
+        var topLevelClasses = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
         {
+            if (symbol.Kind != "class"
+                || !string.IsNullOrWhiteSpace(symbol.ContainerKind)
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (!topLevelClasses.TryGetValue(symbol.Name, out var companionClasses))
+            {
+                companionClasses = new List<SymbolRecord>();
+                topLevelClasses.Add(symbol.Name, companionClasses);
+            }
+
+            companionClasses.Add(symbol);
+        }
+
+        foreach (var scalaObject in symbols)
+        {
+            if (scalaObject.Kind != "object"
+                || !string.IsNullOrWhiteSpace(scalaObject.ContainerKind)
+                || string.IsNullOrWhiteSpace(scalaObject.Name))
+            {
+                continue;
+            }
+
             if (!topLevelClasses.TryGetValue(scalaObject.Name, out var companionClasses))
                 continue;
 
