@@ -2245,7 +2245,7 @@ public partial class FileIndexer
         cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
         var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
-        var errors = new List<ScanError>();
+        var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
