@@ -1313,7 +1313,7 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_symbols", i, symbols.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, symbols.Count);
-            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 1);
             try
             {
                 // Only create a batch transaction when not already inside an outer transaction
@@ -1348,7 +1348,7 @@ public class DbWriter
     private void InsertSymbolsWithRowSkip(IReadOnlyList<SymbolRecord> symbols, int start, int end, SqliteException batchException, CancellationToken cancellationToken)
     {
         using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert symbols row skip") : null;
-        var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var foldedNameCache = CreateFoldedNameCache(end - start, namesPerRow: 1);
         for (int i = start; i < end; i++)
         {
             CheckBatchCancellationAndReportProgress("insert_symbols_row_skip", i, end, cancellationToken);
@@ -1617,7 +1617,7 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, references.Count);
-            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 2);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
@@ -4094,6 +4094,17 @@ public class DbWriter
         }
 
         return (object?)folded ?? DBNull.Value;
+    }
+
+    private static Dictionary<string, string?> CreateFoldedNameCache(int rowCount, int namesPerRow)
+    {
+        if (rowCount <= 0 || namesPerRow <= 0)
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        var capacity = rowCount > int.MaxValue / namesPerRow
+            ? int.MaxValue
+            : rowCount * namesPerRow;
+        return new Dictionary<string, string?>(capacity, StringComparer.Ordinal);
     }
 
     private static int GetRowsPerInsertStatement(int columnCount)
