@@ -11,16 +11,28 @@ internal sealed partial class FileContentLoader
     private static readonly UnicodeEncoding Utf16BeBomEncoding = new(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: false);
     private static readonly UnicodeEncoding Utf16BeNoBomEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: false);
 
-    private (string Content, string? Warning, FileContentInspection Inspection) DecodeIndexableContent(byte[] bytes, string relativePath)
+    private (string Content, string? Warning, FileContentInspection Inspection) DecodeIndexableContent(
+        byte[] bytes,
+        string relativePath,
+        bool inspectRawByteContent = true)
     {
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+        var rawByteContentInspected = !isUtf16Encoded && inspectRawByteContent;
+        var rawByteContent = rawByteContentInspected
+            ? RawByteContentInspection.Inspect(bytes)
+            : RawByteContentInspection.Empty;
         var inspection = new FileContentInspection(
             IsGitLfsPointer: false,
             IsUtf16: isUtf16Encoded,
             Utf16BigEndian: utf16BigEndian,
-            HasUtf16Bom: hasUtf16Bom);
+            HasUtf16Bom: hasUtf16Bom,
+            RawByteContent: rawByteContent);
 
-        if (!isUtf16Encoded && TryFindNullByte(bytes, out var nullByteOffset))
+        if (!isUtf16Encoded && TryFindIndexBlockingNullByte(
+            bytes,
+            rawByteContent,
+            rawByteContentInspected,
+            out var nullByteOffset))
             throw new FileIndexer.BinaryFileSkippedException(
                 relativePath,
                 nullByteOffset,
@@ -63,6 +75,21 @@ internal sealed partial class FileContentLoader
         offset = -1;
         if (TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _))
             return false;
+
+        return TryFindNullByte(rawBytes, out offset);
+    }
+
+    private static bool TryFindIndexBlockingNullByte(
+        byte[] rawBytes,
+        RawByteContentInspection inspection,
+        bool inspectionIsCurrent,
+        out int offset)
+    {
+        if (inspectionIsCurrent)
+        {
+            offset = inspection.NullByteOffset;
+            return inspection.HasNullByte;
+        }
 
         return TryFindNullByte(rawBytes, out offset);
     }

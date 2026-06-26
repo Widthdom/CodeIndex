@@ -82,7 +82,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         if (IsGitLfsPointer(bytes))
             return string.Empty;
 
-        var (content, _, _) = DecodeIndexableContent(bytes, relativePath);
+        var (content, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
         return NormalizeContentForPrepass(content);
     }
 

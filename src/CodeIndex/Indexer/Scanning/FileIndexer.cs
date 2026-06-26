@@ -3861,7 +3861,7 @@ public partial class FileIndexer
         // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
         // ためスキップする。
         if (!isUtf16)
-            AddRawByteContentIssues(issues, relativePath, rawBytes);
+            AddRawByteContentIssues(issues, relativePath, inspection.RawByteContent);
 
         AddOversizeContentIssues(issues, relativePath, content, hasOversizeLine);
         var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
@@ -4227,10 +4227,13 @@ public partial class FileIndexer
         }
     }
 
-    private static void AddRawByteContentIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    private static void AddRawByteContentIssues(
+        List<FileIssue> issues,
+        string relativePath,
+        RawByteContentInspection rawByteInspection)
     {
         // BOM marker / BOMマーカー
-        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF && !ShouldSuppressUtf8BomIssue(relativePath))
+        if (rawByteInspection.HasUtf8Bom && !ShouldSuppressUtf8BomIssue(relativePath))
         {
             issues.Add(new FileIssue
             {
@@ -4242,8 +4245,6 @@ public partial class FileIndexer
                 Severity = FileIssue.SeverityWarning,
             });
         }
-
-        var rawByteInspection = InspectRawByteContentIssues(rawBytes);
 
         // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
         if (rawByteInspection.HasNullByte)
@@ -4263,56 +4264,10 @@ public partial class FileIndexer
     private static bool ShouldSuppressUtf8BomIssue(string relativePath)
         => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
 
-    private readonly record struct RawByteContentIssueInspection(
-        bool HasNullByte,
-        bool HasCrlf,
-        bool HasLfOnly,
-        bool HasCrOnly);
-
-    private static RawByteContentIssueInspection InspectRawByteContentIssues(byte[] rawBytes)
-    {
-        // Line-ending classification — check raw bytes before LF normalization so
-        // bare CR (legacy Mac) and three-way mixes are not silently flattened by
-        // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
-        // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
-        // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
-        // と 3 種混在を見分ける。
-        var hasCrlf = false;
-        var hasLfOnly = false;
-        var hasCrOnly = false;
-        var hasNullByte = false;
-        for (int i = 0; i < rawBytes.Length; i++)
-        {
-            var value = rawBytes[i];
-            if (value == 0)
-            {
-                hasNullByte = true;
-            }
-
-            if (value == 0x0D)
-            {
-                if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
-                {
-                    hasCrlf = true;
-                    i++; // skip the LF after CR
-                }
-                else
-                {
-                    hasCrOnly = true;
-                }
-            }
-            else if (value == 0x0A)
-            {
-                hasLfOnly = true;
-            }
-        }
-        return new RawByteContentIssueInspection(hasNullByte, hasCrlf, hasLfOnly, hasCrOnly);
-    }
-
     private static void AddLineEndingIssues(
         List<FileIssue> issues,
         string relativePath,
-        RawByteContentIssueInspection inspection)
+        RawByteContentInspection inspection)
     {
         var distinctEndingTypes = (inspection.HasCrlf ? 1 : 0)
             + (inspection.HasLfOnly ? 1 : 0)
