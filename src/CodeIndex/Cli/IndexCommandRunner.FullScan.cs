@@ -898,6 +898,7 @@ public static partial class IndexCommandRunner
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var retainedPaths = fileTargets.Select(target => target.IndexPath).ToHashSet(StringComparer.Ordinal);
+        var indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
         if (scanResult.HadErrors)
         {
             SaveScanCheckpoint(
@@ -1029,6 +1030,11 @@ public static partial class IndexCommandRunner
         if (purged > 0 || (options.SymbolsOnly && purgedRefs > 0))
             RequireTypeScriptAugmentationRefresh();
 
+        var javaScriptTypeScriptRefreshRequired = forceJavaScriptTypeScriptRefresh
+            || (!options.Rebuild
+                && !startedWithNoIndexedFiles
+                && FullScanJavaScriptTypeScriptConfigChanged());
+
         void StartIndexSpinnerIfNeeded()
         {
             if (!interactiveIndexSpinner || indexCts != null)
@@ -1158,6 +1164,33 @@ public static partial class IndexCommandRunner
             jsonHeartbeatTask = null;
         }
 
+        bool FullScanJavaScriptTypeScriptConfigChanged()
+        {
+            foreach (var indexedConfigPath in indexedJavaScriptTypeScriptConfigPathsBeforePurge)
+            {
+                if (!retainedPaths.Contains(indexedConfigPath))
+                    return true;
+            }
+
+            foreach (var target in fileTargets)
+            {
+                if (!IsJavaScriptTypeScriptConfigPath(target.IndexPath))
+                    continue;
+
+                var existingId = TryGetUnchangedFileIdFromStat(
+                    writer,
+                    target.FilePath,
+                    target.IndexPath,
+                    target.Language,
+                    allowReuse: true,
+                    out _);
+                if (existingId == null)
+                    return true;
+            }
+
+            return false;
+        }
+
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (options.Rebuild || startedWithNoIndexedFiles || !symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -1241,7 +1274,7 @@ public static partial class IndexCommandRunner
 
             var target = fileTargets[fileIndex];
             var language = target.Language;
-            var languageRequiresRefresh = forceJavaScriptTypeScriptRefresh
+            var languageRequiresRefresh = javaScriptTypeScriptRefreshRequired
                 && IsJavaScriptTypeScriptLanguage(language);
             var allowReuse = symbolKindFilterMatchesPrior
                 && !languageRequiresRefresh
@@ -1633,7 +1666,7 @@ public static partial class IndexCommandRunner
                         long? existingId = null;
                         if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                         {
-                            var languageRequiresRefresh = forceJavaScriptTypeScriptRefresh
+                            var languageRequiresRefresh = javaScriptTypeScriptRefreshRequired
                                 && IsJavaScriptTypeScriptLanguage(record.Lang);
                             existingId = writer.GetUnchangedFileId(
                                 record.Path,

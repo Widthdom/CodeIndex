@@ -1058,6 +1058,25 @@ public class DbWriter
         }
     }
 
+    public IReadOnlyList<string> GetIndexedJavaScriptTypeScriptConfigPaths()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT path
+            FROM files
+            WHERE path = 'jsconfig.json'
+               OR path = 'tsconfig.json'
+               OR path LIKE '%/jsconfig.json'
+               OR path LIKE '%/tsconfig.json'
+            ORDER BY path
+            """;
+        var paths = new List<string>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            paths.Add(reader.GetString(0));
+        return paths;
+    }
+
     /// <summary>
     /// Upsert a file record and return its ID.
     /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids

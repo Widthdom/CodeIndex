@@ -2283,6 +2283,39 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_FullScanAfterTypeScriptConfigChange_ReprocessesUnchangedTypeScriptFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_refresh");
+        var loadedPaths = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\" } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\", \"paths\": {} } }\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tsconfig.json"), DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Contains("app.ts", loadedPaths);
+            Assert.Contains("tsconfig.json", loadedPaths);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScanWithSequentialExtraction_PersistsValidationIssues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_sequential_validation");
