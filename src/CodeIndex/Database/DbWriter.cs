@@ -3739,21 +3739,40 @@ public class DbWriter
 
     private void SetMetaCore(string key, string? value)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.Transaction = _activeTransaction;
-        cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
-                            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        cmd.Parameters.Add("@key", SqliteType.Text).Value = key;
-        cmd.Parameters.Add("@value", SqliteType.Text).Value = (object?)value ?? DBNull.Value;
-        cmd.ExecuteNonQuery();
+        var cmd = RentCommand(
+            @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
+                            ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            static c =>
+            {
+                c.Parameters.Add("@key", SqliteType.Text);
+                c.Parameters.Add("@value", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@key"].Value = key;
+            cmd.Parameters["@value"].Value = (object?)value ?? DBNull.Value;
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     private string? GetMetaString(string key)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-        SqliteCommandPolicy.Add(cmd, "@key", key);
-        return cmd.ExecuteScalar() as string;
+        var cmd = RentCommand(
+            "SELECT value FROM codeindex_meta WHERE key = @key",
+            static c => c.Parameters.Add("@key", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@key"].Value = key;
+            return cmd.ExecuteScalar() as string;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
     public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
 
@@ -3761,10 +3780,18 @@ public class DbWriter
 
     private bool TableExists(string name)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
-        SqliteCommandPolicy.Add(cmd, "@name", name);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name",
+            static c => c.Parameters.Add("@name", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@name"].Value = name;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>

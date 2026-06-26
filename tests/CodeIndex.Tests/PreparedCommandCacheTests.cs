@@ -735,6 +735,27 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_MetaHelpersReuseCommandsAcrossKeys()
+    {
+        var writer = new DbWriter(_db);
+        var currentTypeScriptAugmentationVersion =
+            DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        writer.SetMeta(DbContext.TypeScriptAugmentationVersionMetaKey, currentTypeScriptAugmentationVersion);
+        Assert.True(writer.TypeScriptAugmentationVersionMatchesCurrent());
+        Assert.True(writer.HasMetaTable());
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.SetMeta("prepared_cache_meta_a", "1");
+        writer.SetMeta(DbContext.TypeScriptAugmentationVersionMetaKey, currentTypeScriptAugmentationVersion);
+        Assert.True(writer.TypeScriptAugmentationVersionMatchesCurrent());
+        Assert.True(writer.HasMetaTable());
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 6);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one
