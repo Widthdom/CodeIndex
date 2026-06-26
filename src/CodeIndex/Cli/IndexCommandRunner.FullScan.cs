@@ -780,7 +780,6 @@ public static partial class IndexCommandRunner
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
         var actualMode = options.Rebuild ? "rebuild" : "incremental";
-        _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions, cancellationToken);
         if (unresolvedMergeExitCode != null)
             return unresolvedMergeExitCode.Value;
@@ -792,6 +791,8 @@ public static partial class IndexCommandRunner
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
@@ -987,6 +988,10 @@ public static partial class IndexCommandRunner
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var existingFileCount = writer.GetCounts().files;
         var startedWithNoIndexedFiles = existingFileCount == 0;
+        var csharpMetadataTargetsNeedRefresh = options.Rebuild
+            || startedWithNoIndexedFiles
+            || purged > 0
+            || !priorMetadataTargetCsharpMatchesCurrent;
         var parallelizeExtraction = (options.Rebuild || startedWithNoIndexedFiles)
             && !options.SymbolKindFilter.IsActive
             && !hasPostExtractionHooks;
@@ -1512,6 +1517,7 @@ public static partial class IndexCommandRunner
                             if (writer.DeleteFileByPath(currentJsonIndexFile))
                             {
                                 ftsMutated = true;
+                                csharpMetadataTargetsNeedRefresh = true;
                                 WriteProjectRootOnce();
                                 deleteTxn.Commit();
                             }
@@ -1575,8 +1581,12 @@ public static partial class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
-                        if (writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum) > 0)
+                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                        if (stalePurged > 0)
+                        {
                             ftsMutated = true;
+                            csharpMetadataTargetsNeedRefresh = true;
+                        }
                         skipped++;
                         processed++;
                         if (!string.IsNullOrWhiteSpace(record.Lang))
@@ -1601,11 +1611,18 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
+                    if (record.Lang == "csharp")
+                        csharpMetadataTargetsNeedRefresh = true;
+
                     using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
                     if (!startedWithNoIndexedFiles)
                     {
-                        if (writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum) > 0)
+                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                        if (stalePurged > 0)
+                        {
                             ftsMutated = true;
+                            csharpMetadataTargetsNeedRefresh = true;
+                        }
                     }
                     var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
                     ftsMutated = true;
@@ -1885,14 +1902,13 @@ public static partial class IndexCommandRunner
                 writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, "true");
             }
             writer.MarkCSharpSymbolNameContractReady();
-            // Issue #435: resolve every C# class-like row and stamp readiness. Full-scan
-            // touches the entire repo, so the resolver output is authoritative regardless
-            // of which individual files were reparsed.
-            // Issue #435: full-scan は全リポジトリを touch するため resolver の出力は
-            // 全行 authoritative。必ず再解決して stamp する。
             if (writer.HasAnyFilesWithLanguage("csharp"))
             {
-                writer.ResolveCSharpMetadataTargets();
+                if (csharpMetadataTargetsNeedRefresh)
+                {
+                    FullScanCSharpMetadataResolveForTesting?.Invoke();
+                    writer.ResolveCSharpMetadataTargets();
+                }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;
             }

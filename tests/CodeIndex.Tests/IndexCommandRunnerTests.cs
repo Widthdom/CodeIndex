@@ -2285,6 +2285,7 @@ public sealed class Caller
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");
         var optimized = false;
+        var resolvedMetadataTargets = false;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
@@ -2293,6 +2294,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             IndexCommandRunner.FullScanFtsOptimizeForTesting = () => optimized = true;
+            IndexCommandRunner.FullScanCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
 
             var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -2300,10 +2302,12 @@ public sealed class Caller
             Assert.Equal("success", refreshJson.GetProperty("status").GetString());
             Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
             Assert.False(optimized);
+            Assert.False(resolvedMetadataTargets);
         }
         finally
         {
             IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
+            IndexCommandRunner.FullScanCSharpMetadataResolveForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
