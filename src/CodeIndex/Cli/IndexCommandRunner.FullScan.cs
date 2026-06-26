@@ -1294,7 +1294,7 @@ public static partial class IndexCommandRunner
                             if (parallelizeExtraction)
                             {
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
-                                chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine);
+                                chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
                                 if (generatedSuppressionIssue != null)
                                 {
                                     symbols = [];
@@ -1614,7 +1614,8 @@ public static partial class IndexCommandRunner
                         ? ChunkSplitter.SplitNormalized(
                             fileId,
                             item.Content!,
-                            item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!))
+                            item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
+                            record.Lines)
                         : ReassignChunkFileIds(item.Chunks, fileId);
                     if (generatedSuppressionIssue != null)
                     {

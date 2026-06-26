@@ -6054,7 +6054,7 @@ public partial class McpServer
                 MarkSymbolKindFilterMetaIncompleteOnce();
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 var fileId = writer.UpsertFile(record);
-                var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
+                var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                 if (generatedSuppressionIssue != null)
                 {
                     writer.InsertChunks(chunks, requestToken);

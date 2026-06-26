@@ -81,7 +81,7 @@ public static class ChunkSplitter
         return SplitNormalized(fileId, content, HasOversizeLine(content));
     }
 
-    internal static List<ChunkRecord> SplitNormalized(long fileId, string content, bool hasOversizeLine)
+    internal static List<ChunkRecord> SplitNormalized(long fileId, string content, bool hasOversizeLine, int? lineCount = null)
     {
         if (string.IsNullOrEmpty(content))
             return [];
@@ -100,10 +100,10 @@ public static class ChunkSplitter
         if (hasOversizeLine)
             return [];
 
-        return SplitNormalizedCore(fileId, content);
+        return SplitNormalizedCore(fileId, content, lineCount);
     }
 
-    private static List<ChunkRecord> SplitNormalizedCore(long fileId, string content)
+    private static List<ChunkRecord> SplitNormalizedCore(long fileId, string content, int? lineCount)
     {
         // Track line start offsets instead of materializing every line string. Large
         // source files can still be valid and under the file-size cap, and chunking
@@ -114,7 +114,7 @@ public static class ChunkSplitter
         // でも file-size 上限内なら有効なため、chunking では永続化する chunk 本文以外に
         // ファイル全体分の string[] や chunk ごとの slice 配列を作らない。末尾改行を
         // 余分な空行として扱わない点は従来の Split('\n') 経路と同じ。
-        var lineStarts = GetLineStartOffsets(content);
+        var lineStarts = GetLineStartOffsets(content, lineCount);
         int step = ChunkSize - Overlap;
         var estimatedChunkCount = Math.Max(1, (lineStarts.Count + step - 1) / step);
         var chunks = new List<ChunkRecord>(estimatedChunkCount);
@@ -149,9 +149,12 @@ public static class ChunkSplitter
         return chunks;
     }
 
-    private static List<int> GetLineStartOffsets(string content)
+    private static List<int> GetLineStartOffsets(string content, int? lineCount)
     {
-        var lineStarts = new List<int> { 0 };
+        var lineStarts = lineCount is > 0
+            ? new List<int>(lineCount.Value)
+            : [];
+        lineStarts.Add(0);
         for (var i = 0; i < content.Length; i++)
         {
             if (content[i] == '\n' && i + 1 < content.Length)
