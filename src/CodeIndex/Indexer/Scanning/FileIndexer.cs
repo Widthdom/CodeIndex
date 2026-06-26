@@ -2283,16 +2283,40 @@ public partial class FileIndexer
             scanState.Results,
             scanState.FileLanguages,
             scanState.Errors,
-            scanState.NonIndexablePaths.ToList(),
-            scanState.UnknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            scanState.ProbeFailedFilePaths.ToList(),
-            scanState.ListedDirectories.ToList(),
-            scanState.FullyScannedDirectories.ToList(),
-            scanState.CheckpointedDirectories.Concat(scanState.FullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
-            _ancestorIgnoreDirectories.ToList(),
-            scanState.AttributePrunedDirectories.ToList(),
-            scanState.NestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            scanState.DanglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
+            MaterializePathSet(scanState.NonIndexablePaths),
+            MaterializeSortedPathSet(scanState.UnknownExtensionFiles),
+            MaterializePathSet(scanState.ProbeFailedFilePaths),
+            MaterializePathSet(scanState.ListedDirectories),
+            MaterializePathSet(scanState.FullyScannedDirectories),
+            MaterializeCheckpointedDirectorySet(scanState.CheckpointedDirectories, scanState.FullyScannedDirectories),
+            new List<string>(_ancestorIgnoreDirectories),
+            MaterializePathSet(scanState.AttributePrunedDirectories),
+            MaterializeSortedPathSet(scanState.NestedRepositories),
+            MaterializeSortedPathSet(scanState.DanglingSymlinks));
+    }
+
+    private static List<string> MaterializePathSet(HashSet<string> paths) => paths.Count == 0 ? [] : new List<string>(paths);
+
+    private static List<string> MaterializeSortedPathSet(HashSet<string> paths)
+    {
+        if (paths.Count == 0)
+            return [];
+
+        var sorted = new List<string>(paths);
+        sorted.Sort(StringComparer.Ordinal);
+        return sorted;
+    }
+
+    private static HashSet<string> MaterializeCheckpointedDirectorySet(
+        HashSet<string> checkpointedDirectories,
+        HashSet<string> fullyScannedDirectories)
+    {
+        var result = new HashSet<string>(
+            checkpointedDirectories.Count + fullyScannedDirectories.Count,
+            StringComparer.Ordinal);
+        result.UnionWith(checkpointedDirectories);
+        result.UnionWith(fullyScannedDirectories);
+        return result;
     }
 
     private bool ScanDirectory(
