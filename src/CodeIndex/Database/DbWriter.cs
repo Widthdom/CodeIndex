@@ -1698,7 +1698,8 @@ public class DbWriter
 
     private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)
     {
-        var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>();
+        var batchCount = end - start;
+        var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>(batchCount);
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1732,14 +1733,15 @@ public class DbWriter
             cmd.ExecuteNonQuery();
         }
 
-        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>();
+        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(rows.Length);
         int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var predicates = new List<string>(keyEnd - i);
+            var predicateCount = keyEnd - i;
+            var predicates = new List<string>(predicateCount);
             for (int j = i; j < keyEnd; j++)
             {
                 var suffix = j - i;
