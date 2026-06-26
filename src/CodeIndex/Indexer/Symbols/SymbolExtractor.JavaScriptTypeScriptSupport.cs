@@ -2647,10 +2647,7 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
-        var exportedSymbolNames = symbols
-            .Where(symbol => symbol.Visibility == "export")
-            .Select(symbol => symbol.Name)
-            .ToHashSet(StringComparer.Ordinal);
+        var exportedSymbolNames = BuildJavaScriptTypeScriptExportedSymbolNameSet(symbols);
 
         for (int i = 0; i < sanitizedLines.Length; i++)
         {
@@ -2722,6 +2719,18 @@ public static partial class SymbolExtractor
                 sanitizedLine = sanitizedLines[i];
             }
         }
+    }
+
+    private static HashSet<string> BuildJavaScriptTypeScriptExportedSymbolNameSet(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var exportedSymbolNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Visibility == "export")
+                exportedSymbolNames.Add(symbol.Name);
+        }
+
+        return exportedSymbolNames;
     }
 
     private static bool TryCollectJavaScriptTypeScriptExportedVariableNames(
@@ -4697,18 +4706,16 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
-        foreach (var target in objectLiteralTargets.Where(t => t.IsExported))
+        foreach (var target in objectLiteralTargets)
         {
+            if (!target.IsExported)
+                continue;
+
             var braceDepth = 0;
             var parenDepth = 0;
             var bracketDepth = 0;
             var skippingPropertyValue = false;
-            var existingContainerSymbolNames = symbols
-                .Where(symbol =>
-                    symbol.ContainerKind == "object"
-                    && symbol.ContainerName == target.ContainerName)
-                .Select(symbol => symbol.Name)
-                .ToHashSet(StringComparer.Ordinal);
+            var existingContainerSymbolNames = BuildJavaScriptTypeScriptObjectContainerSymbolNameSet(symbols, target.ContainerName);
 
             for (int lineIndex = target.ScanStartIndex; lineIndex < target.ScanEndExclusive; lineIndex++)
             {
@@ -4909,6 +4916,20 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static HashSet<string> BuildJavaScriptTypeScriptObjectContainerSymbolNameSet(
+        IReadOnlyList<SymbolRecord> symbols,
+        string? containerName)
+    {
+        var existingContainerSymbolNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.ContainerKind == "object" && symbol.ContainerName == containerName)
+                existingContainerSymbolNames.Add(symbol.Name);
+        }
+
+        return existingContainerSymbolNames;
     }
 
     private static void AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
