@@ -126,11 +126,24 @@ public static partial class IndexCommandRunner
         int maxSymbolsPerFile,
         int maxReferencesPerFile,
         FileIssue? generatedSuppressionIssue) =>
-        writer.HasReusableFileBlockingIssueForFile(
+        ExistingFileBlocksReuse(
+            writer,
             fileId,
             maxSymbolsPerFile,
             maxReferencesPerFile,
             generatedSuppressionIssue != null);
+
+    private static bool ExistingFileBlocksReuse(
+        DbWriter writer,
+        long fileId,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool generatedExtractionSuppressed) =>
+        writer.HasReusableFileBlockingIssueForFile(
+            fileId,
+            maxSymbolsPerFile,
+            maxReferencesPerFile,
+            generatedExtractionSuppressed);
 
     internal static IReadOnlyList<FileIssue> AppendIssue(IReadOnlyList<FileIssue> issues, FileIssue issue)
     {
@@ -1162,7 +1175,7 @@ public static partial class IndexCommandRunner
                 existingId.Value,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath));
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
         }
 
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
@@ -1235,7 +1248,7 @@ public static partial class IndexCommandRunner
                 existingId.Value,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath)))
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
             {
                 return false;
             }

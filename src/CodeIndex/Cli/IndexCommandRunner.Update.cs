@@ -622,7 +622,7 @@ public static partial class IndexCommandRunner
                             statMatchedId.Value,
                             options.MaxSymbolsPerFile,
                             options.MaxReferencesPerFile,
-                            indexer.BuildGeneratedCodeExtractionSkippedIssue(dbPath)))
+                            indexer.IsGeneratedCodeExtractionSuppressed(dbPath)))
                     {
                         statMatchedId = null;
                     }

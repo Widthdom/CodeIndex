@@ -6057,7 +6057,7 @@ public partial class McpServer
                 existingId.Value,
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
-                indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null);
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
         }
 
         var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
@@ -6102,7 +6102,7 @@ public partial class McpServer
                         statMatchedId.Value,
                         maxSymbolsPerFile,
                         maxReferencesPerFile,
-                        indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null))
+                        indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
                 {
                     statMatchedId = null;
                 }
