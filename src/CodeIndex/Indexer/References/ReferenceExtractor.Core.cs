@@ -153,9 +153,12 @@ public static partial class ReferenceExtractor
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
         var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, lines, structuralLines);
-        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols);
-        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
+        IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
+            ? BuildCSharpNamespaceScopes(symbols)
+            : Array.Empty<(int StartLine, int EndLine)>();
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
+        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols, csharpNamespaceScopes);
+        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols, csharpNamespaceScopes);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
             language,

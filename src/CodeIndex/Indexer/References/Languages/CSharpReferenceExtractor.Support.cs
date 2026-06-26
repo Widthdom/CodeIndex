@@ -20,14 +20,13 @@ public static partial class ReferenceExtractor
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
         IReadOnlyList<string>? lines = null,
         IReadOnlyList<string>? aliasScanLines = null)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
             return aliases;
-
-        var namespaceScopes = BuildCSharpNamespaceScopes(symbols);
 
         foreach (var symbol in symbols)
         {
@@ -148,13 +147,14 @@ public static partial class ReferenceExtractor
         return trimmed;
     }
 
-    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
     {
         var imports = new List<CSharpUsingNamespaceRecord>();
         if (language != "csharp")
             return imports;
-
-        var namespaceScopes = BuildCSharpNamespaceScopes(symbols);
 
         foreach (var symbol in symbols)
         {
@@ -194,13 +194,14 @@ public static partial class ReferenceExtractor
         return imports;
     }
 
-    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
     {
         var imports = new List<CSharpUsingStaticRecord>();
         if (language != "csharp")
             return imports;
-
-        var namespaceScopes = BuildCSharpNamespaceScopes(symbols);
 
         foreach (var symbol in symbols)
         {
