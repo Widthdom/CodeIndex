@@ -10420,20 +10420,12 @@ public static partial class SymbolExtractor
         string[]? rawLines = null,
         CSharpLexState[]? csharpLineStartStates = null)
     {
-        var ordered = symbols
-            .Select((symbol, originalIndex) => new { Symbol = symbol, OriginalIndex = originalIndex })
-            .OrderBy(entry => entry.Symbol.StartLine)
-            .ThenBy(entry => entry.Symbol.StartColumn.HasValue ? 0 : 1)
-            .ThenBy(entry => entry.Symbol.StartColumn ?? int.MaxValue)
-            .ThenByDescending(entry => entry.Symbol.EndLine)
-            .ThenByDescending(entry => entry.Symbol.Signature?.Length ?? 0)
-            .ThenBy(entry => entry.OriginalIndex)
-            .Select(entry => entry.Symbol)
-            .ToList();
+        var ordered = BuildContainerAssignmentOrder(symbols);
 
         var stack = new Stack<SymbolRecord>();
-        foreach (var symbol in ordered)
+        foreach (var orderedSymbol in ordered)
         {
+            var symbol = orderedSymbol.Symbol;
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
@@ -10497,6 +10489,45 @@ public static partial class SymbolExtractor
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
         }
+    }
+
+    private readonly record struct ContainerAssignmentSortEntry(SymbolRecord Symbol, int OriginalIndex);
+
+    private static List<ContainerAssignmentSortEntry> BuildContainerAssignmentOrder(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var ordered = new List<ContainerAssignmentSortEntry>(symbols.Count);
+        for (var i = 0; i < symbols.Count; i++)
+            ordered.Add(new ContainerAssignmentSortEntry(symbols[i], i));
+
+        ordered.Sort(CompareContainerAssignmentSortEntries);
+        return ordered;
+    }
+
+    private static int CompareContainerAssignmentSortEntries(ContainerAssignmentSortEntry left, ContainerAssignmentSortEntry right)
+    {
+        var compare = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (compare != 0)
+            return compare;
+
+        var leftStartColumnRank = left.Symbol.StartColumn.HasValue ? 0 : 1;
+        var rightStartColumnRank = right.Symbol.StartColumn.HasValue ? 0 : 1;
+        compare = leftStartColumnRank.CompareTo(rightStartColumnRank);
+        if (compare != 0)
+            return compare;
+
+        compare = (left.Symbol.StartColumn ?? int.MaxValue).CompareTo(right.Symbol.StartColumn ?? int.MaxValue);
+        if (compare != 0)
+            return compare;
+
+        compare = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+        if (compare != 0)
+            return compare;
+
+        compare = (right.Symbol.Signature?.Length ?? 0).CompareTo(left.Symbol.Signature?.Length ?? 0);
+        if (compare != 0)
+            return compare;
+
+        return left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
     private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(
