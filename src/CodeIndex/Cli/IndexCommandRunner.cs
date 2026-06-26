@@ -50,6 +50,7 @@ public static partial class IndexCommandRunner
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
+    internal static Action<string>? FullScanFileContentLoadForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }

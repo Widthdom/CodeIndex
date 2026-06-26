@@ -1125,6 +1125,29 @@ public static partial class IndexCommandRunner
             jsonHeartbeatTask = null;
         }
 
+        bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
+        {
+            if (options.Rebuild || startedWithNoIndexedFiles || !symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
+                return false;
+            if (target.Language != "csharp")
+                return false;
+
+            var existingId = TryGetUnchangedFileIdFromStat(
+                writer,
+                projectRoot,
+                target.FilePath,
+                target.Language,
+                allowReuse: true);
+            if (existingId == null)
+                return false;
+            if (ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
+                return false;
+            return !ExistingFileGeneratedSuppressionMismatch(
+                writer,
+                existingId.Value,
+                indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath));
+        }
+
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         if (options.SymbolsOnly)
         {
@@ -1153,8 +1176,9 @@ public static partial class IndexCommandRunner
                     indexer,
                     csharpPrepassTargets,
                     includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
-                    path => currentCSharpWorkspaceFile = path,
-                    cancellationToken);
+                    canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                    reportCurrentFile: path => currentCSharpWorkspaceFile = path,
+                    cancellationToken: cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1165,6 +1189,52 @@ public static partial class IndexCommandRunner
                 currentCSharpWorkspaceFile = null;
                 StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
             }
+        }
+
+        bool TrySkipFullScanTargetBeforeContentLoad(int fileIndex)
+        {
+            if (options.Rebuild || startedWithNoIndexedFiles || options.SymbolsOnly)
+                return false;
+
+            var target = fileTargets[fileIndex];
+            var language = target.Language;
+            var allowReuse = symbolKindFilterMatchesPrior
+                && !priorSymbolsOnlyGraphOmitted
+                && language is not ("javascript" or "typescript")
+                && (language != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                && (language != "sql" || sqlGraphContractMatchesCurrent)
+                && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
+            var existingId = TryGetUnchangedFileIdFromStat(
+                writer,
+                projectRoot,
+                target.FilePath,
+                language,
+                allowReuse);
+            if (existingId == null)
+                return false;
+            if (ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
+                return false;
+            if (ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath)))
+                return false;
+
+            skipped++;
+            processed++;
+            if (!string.IsNullOrWhiteSpace(language))
+                skippedSymbolExtractorLanguages.Add(language);
+            if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)
+                reusedHotspotFamilyLanguages.Add(language);
+            if (options.Verbose && !options.Json && !options.Quiet)
+                Console.WriteLine($"  [SKIP] {target.IndexPath} (unchanged)");
+            return true;
+        }
+
+        var extractionFileIndexes = new List<int>(fileTargets.Length);
+        for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
+        {
+            ThrowIfFullScanCancelled(processed, files.Count);
+            if (!TrySkipFullScanTargetBeforeContentLoad(fileIndex))
+                extractionFileIndexes.Add(fileIndex);
         }
 
         EnsureIndexingActivityVisible();
@@ -1184,7 +1254,7 @@ public static partial class IndexCommandRunner
             using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
             var extractionCancellationToken = extractionStallCts.Token;
-            var nextFileIndex = -1;
+            var nextExtractionIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
@@ -1192,10 +1262,11 @@ public static partial class IndexCommandRunner
                     while (true)
                     {
                         extractionCancellationToken.ThrowIfCancellationRequested();
-                        var fileIndex = Interlocked.Increment(ref nextFileIndex);
-                        if (fileIndex >= files.Count)
+                        var extractionIndex = Interlocked.Increment(ref nextExtractionIndex);
+                        if (extractionIndex >= extractionFileIndexes.Count)
                             break;
 
+                        var fileIndex = extractionFileIndexes[extractionIndex];
                         var target = fileTargets[fileIndex];
                         var filePath = target.FilePath;
                         var relativeFilePath = target.RelativePath;
@@ -1203,6 +1274,7 @@ public static partial class IndexCommandRunner
                         try
                         {
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
+                            FullScanFileContentLoadForTesting?.Invoke(displayRelativePath);
                             var loaded = indexer.BuildLoadedRecordWithRawBytes(
                                 filePath,
                                 relativeFilePath,

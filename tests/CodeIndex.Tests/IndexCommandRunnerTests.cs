@@ -2238,6 +2238,7 @@ public sealed class Caller
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_skip_before_extract");
         bool? parallelized = null;
         string? reason = null;
+        var loadedPaths = new List<string>();
         try
         {
             RunGit(projectRoot, "init");
@@ -2257,6 +2258,7 @@ public sealed class Caller
                 parallelized = enabled;
                 reason = why;
             };
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
 
             var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -2266,10 +2268,13 @@ public sealed class Caller
             Assert.False(parallelized);
             Assert.Null(reason);
             Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.DoesNotContain("app.cs", loadedPaths);
+            Assert.Contains("feature.cs", loadedPaths);
         }
         finally
         {
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
