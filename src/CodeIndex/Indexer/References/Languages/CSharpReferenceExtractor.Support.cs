@@ -339,6 +339,21 @@ public static partial class ReferenceExtractor
         return names;
     }
 
+    private static HashSet<string> BuildCSharpNonEnumTypeNames(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "delegate"))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(symbol.Name))
+                names.Add(symbol.Name);
+        }
+
+        return names;
+    }
+
     private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "csharp")
@@ -595,12 +610,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return lookup;
 
-        var conflictingNonEnumTypeNames = new HashSet<string>(
-            symbols
-                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
-                .Select(symbol => symbol.Name)
-                .Where(name => !string.IsNullOrWhiteSpace(name))!,
-            StringComparer.Ordinal);
+        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
 
         foreach (var symbol in symbols)
         {
@@ -644,12 +654,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return lookup;
 
-        var conflictingNonEnumTypeNames = new HashSet<string>(
-            symbols
-                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
-                .Select(symbol => symbol.Name)
-                .Where(name => !string.IsNullOrWhiteSpace(name))!,
-            StringComparer.Ordinal);
+        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
 
         foreach (var symbol in symbols)
         {
