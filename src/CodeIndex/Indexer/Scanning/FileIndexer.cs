@@ -22,6 +22,8 @@ public partial class FileIndexer
     internal static Func<string, FileSystemInfo?>? ResolveDirectoryLinkTargetForTesting { get; set; }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
+    private const string ConflictStartMarker = "<<<<<<<";
+    private const string ConflictEndMarker = ">>>>>>>";
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private const int DockerfileJsonFormIssueLimit = 32;
     private const int MaxDirectoryTraversalDepth = 128;
@@ -4391,8 +4393,7 @@ public partial class FileIndexer
         line = 0;
         if (string.IsNullOrEmpty(content))
             return false;
-        if (!content.Contains("<<<<<<<", StringComparison.Ordinal)
-            && !content.Contains(">>>>>>>", StringComparison.Ordinal))
+        if (!ContainsConflictMarkerCandidate(content))
             return false;
 
         var byteCount = 0;
@@ -4414,8 +4415,8 @@ public partial class FileIndexer
             if (lineLength > 0 && content[lineStart + lineLength - 1] == '\r')
                 lineLength--;
             var currentLine = content.AsSpan(lineStart, lineLength);
-            if (currentLine.StartsWith("<<<<<<<", StringComparison.Ordinal)
-                || currentLine.StartsWith(">>>>>>>", StringComparison.Ordinal))
+            if (currentLine.StartsWith(ConflictStartMarker, StringComparison.Ordinal)
+                || currentLine.StartsWith(ConflictEndMarker, StringComparison.Ordinal))
             {
                 line = lineNumber;
                 return true;
@@ -4423,6 +4424,29 @@ public partial class FileIndexer
 
             lineStart = i + 1;
             lineNumber++;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsConflictMarkerCandidate(string content)
+    {
+        var searchStart = 0;
+        while (searchStart < content.Length)
+        {
+            var relativeIndex = content.AsSpan(searchStart).IndexOfAny('<', '>');
+            if (relativeIndex < 0)
+                return false;
+
+            var candidateIndex = searchStart + relativeIndex;
+            var marker = content[candidateIndex];
+            var candidate = content.AsSpan(candidateIndex);
+            if (marker == '<' && candidate.StartsWith(ConflictStartMarker, StringComparison.Ordinal))
+                return true;
+            if (marker == '>' && candidate.StartsWith(ConflictEndMarker, StringComparison.Ordinal))
+                return true;
+
+            searchStart = candidateIndex + 1;
         }
 
         return false;
