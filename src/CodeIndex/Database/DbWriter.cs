@@ -816,10 +816,18 @@ public class DbWriter
     /// </summary>
     public bool HasAnyFilesWithLanguage(string lang)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM files WHERE lang = @lang LIMIT 1";
-        SqliteCommandPolicy.AddText(cmd, "@lang", lang);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM files WHERE lang = @lang LIMIT 1",
+            static c => c.Parameters.Add("@lang", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@lang"].Value = lang;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public int CountSymbolsForFile(long fileId)
@@ -1130,8 +1138,8 @@ public class DbWriter
 
     public IReadOnlyList<string> GetIndexedJavaScriptTypeScriptConfigPaths()
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = """
+        var cmd = RentCommand(
+            """
             SELECT path
             FROM files
             WHERE lower(path) = 'jsconfig.json'
@@ -1143,12 +1151,20 @@ public class DbWriter
                OR lower(path) LIKE '%/jsconfig.%.json'
                OR lower(path) LIKE '%/tsconfig.%.json'
             ORDER BY path
-            """;
-        var paths = new List<string>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            paths.Add(reader.GetString(0));
-        return paths;
+            """,
+            static _ => { });
+        try
+        {
+            var paths = new List<string>();
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                paths.Add(reader.GetString(0));
+            return paths;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>

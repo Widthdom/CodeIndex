@@ -503,6 +503,70 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_HasAnyFilesWithLanguageReusesCacheAcrossLanguages()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/lang-a.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/lang-b.sql",
+            Lang = "sql",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.True(writer.HasAnyFilesWithLanguage("csharp"));
+        Assert.True(writer.HasAnyFilesWithLanguage("sql"));
+        Assert.False(writer.HasAnyFilesWithLanguage("python"));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_GetIndexedJavaScriptTypeScriptConfigPathsReusesCache()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "tsconfig.json",
+            Lang = "json",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "packages/app/jsconfig.build.json",
+            Lang = "json",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        var first = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+        var hitsBefore = _db.PreparedCommands.HitCount;
+        var second = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+
+        Assert.Equal(first, second);
+        Assert.Equal(
+            new[] { "packages/app/jsconfig.build.json", "tsconfig.json" },
+            second);
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one
