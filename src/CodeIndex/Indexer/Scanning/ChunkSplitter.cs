@@ -105,6 +105,9 @@ public static class ChunkSplitter
 
     private static List<ChunkRecord> SplitNormalizedCore(long fileId, string content, int? lineCount)
     {
+        if (lineCount is > 0 and <= ChunkSize)
+            return CreateSingleChunk(fileId, content, lineCount.Value);
+
         // Track line start offsets instead of materializing every line string. Large
         // source files can still be valid and under the file-size cap, and chunking
         // should only allocate the persisted chunk bodies rather than a duplicate
@@ -147,6 +150,26 @@ public static class ChunkSplitter
         }
 
         return chunks;
+    }
+
+    private static List<ChunkRecord> CreateSingleChunk(long fileId, string content, int lineCount)
+    {
+        var effectiveContentLength = content.EndsWith('\n') ? content.Length - 1 : content.Length;
+        var chunkContent = effectiveContentLength == content.Length
+            ? content
+            : content[..effectiveContentLength];
+
+        return
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = lineCount,
+                Content = chunkContent,
+            },
+        ];
     }
 
     private static List<int> GetLineStartOffsets(string content, int? lineCount)
