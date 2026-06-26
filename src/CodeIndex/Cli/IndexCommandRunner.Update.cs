@@ -603,8 +603,8 @@ public static partial class IndexCommandRunner
                     var statReusableLanguage = GetStatReusableLanguage(absPath, detection);
                     var statMatchedId = TryGetUnchangedFileIdFromStat(
                         writer,
-                        projectRoot,
                         absPath,
+                        dbPath,
                         statReusableLanguage,
                         allowReuse: symbolKindFilterMatchesPrior
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)

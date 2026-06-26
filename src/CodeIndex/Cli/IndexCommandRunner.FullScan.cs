@@ -1137,8 +1137,8 @@ public static partial class IndexCommandRunner
 
             var existingId = TryGetUnchangedFileIdFromStat(
                 writer,
-                projectRoot,
                 target.FilePath,
+                target.IndexPath,
                 target.Language,
                 allowReuse: true);
             if (existingId == null)
@@ -1209,8 +1209,8 @@ public static partial class IndexCommandRunner
                 && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
             var existingId = TryGetUnchangedFileIdFromStat(
                 writer,
-                projectRoot,
                 target.FilePath,
+                target.IndexPath,
                 language,
                 allowReuse);
             if (existingId == null)

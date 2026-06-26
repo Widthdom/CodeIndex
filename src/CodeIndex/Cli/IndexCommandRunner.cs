@@ -1137,8 +1137,8 @@ public static partial class IndexCommandRunner
 
     private static long? TryGetUnchangedFileIdFromStat(
         DbWriter writer,
-        string projectRoot,
         string absolutePath,
+        string relativePath,
         string? language,
         bool allowReuse)
     {
@@ -1151,7 +1151,6 @@ public static partial class IndexCommandRunner
             if (!info.Exists)
                 return null;
 
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
             return writer.GetUnchangedFileId(
                 relativePath,
                 info.LastWriteTimeUtc,
