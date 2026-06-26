@@ -123,6 +123,7 @@ public static partial class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
+        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         warnings += AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();
@@ -613,7 +614,8 @@ public static partial class IndexCommandRunner
                         allowReuse: symbolKindFilterMatchesPrior
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
+                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent),
+                        out var statSize);
                     if (statMatchedId != null
                         && ExistingFileBlocksReuse(
                             writer,
@@ -627,6 +629,8 @@ public static partial class IndexCommandRunner
                     if (statMatchedId != null)
                     {
                         skipped++;
+                        if (statSize.HasValue)
+                            knownReadableFileSizes[absPath] = statSize.Value;
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
@@ -645,6 +649,7 @@ public static partial class IndexCommandRunner
                         knownLanguage,
                         cancellationToken);
                     var record = loaded.Record;
+                    knownReadableFileSizes[absPath] = record.Size;
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
@@ -871,6 +876,7 @@ public static partial class IndexCommandRunner
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
+                        knownReadableFileSizes[absPath] = skippedRecord.Size;
                         var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
@@ -899,6 +905,7 @@ public static partial class IndexCommandRunner
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
+                        knownReadableFileSizes[absPath] = skippedRecord.Size;
                         var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
@@ -1132,9 +1139,10 @@ public static partial class IndexCommandRunner
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
             var bytesRead = MeasureReadableFileBytes(
-                targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar))),
+                targetPaths.Select(ToUpdateAbsolutePath),
                 projectRoot,
-                indexRunDiagnostics);
+                indexRunDiagnostics,
+                knownReadableFileSizes);
             StampLastIndexRunMetadata(
                 writer,
                 "update",

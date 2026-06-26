@@ -652,12 +652,22 @@ public static partial class IndexCommandRunner
         }
     }
 
-    internal static FileByteReadSummary MeasureReadableFileBytes(IEnumerable<string> paths, string? projectRoot = null, List<string>? diagnostics = null)
+    internal static FileByteReadSummary MeasureReadableFileBytes(
+        IEnumerable<string> paths,
+        string? projectRoot = null,
+        List<string>? diagnostics = null,
+        IReadOnlyDictionary<string, long>? knownFileSizes = null)
     {
         long total = 0;
         long skipped = 0;
         foreach (var path in paths)
         {
+            if (knownFileSizes != null && knownFileSizes.TryGetValue(path, out var knownSize))
+            {
+                total += knownSize;
+                continue;
+            }
+
             try
             {
                 var info = new FileInfo(path);
@@ -1143,8 +1153,10 @@ public static partial class IndexCommandRunner
         string absolutePath,
         string relativePath,
         string? language,
-        bool allowReuse)
+        bool allowReuse,
+        out long? size)
     {
+        size = null;
         if (!allowReuse || language == null)
             return null;
 
@@ -1154,6 +1166,7 @@ public static partial class IndexCommandRunner
             if (!info.Exists)
                 return null;
 
+            size = info.Length;
             return writer.GetUnchangedFileId(
                 relativePath,
                 info.LastWriteTimeUtc,

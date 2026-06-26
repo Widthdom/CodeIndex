@@ -4234,6 +4234,24 @@ public sealed class Caller
     }
 
     [Fact]
+    public void MeasureReadableFileBytes_UsesKnownSizeWithoutProbingPath()
+    {
+        var diagnostics = new List<string>();
+
+        var summary = IndexCommandRunner.MeasureReadableFileBytes(
+            ["bad\0path.txt"],
+            diagnostics: diagnostics,
+            knownFileSizes: new Dictionary<string, long>(StringComparer.Ordinal)
+            {
+                ["bad\0path.txt"] = 7,
+            });
+
+        Assert.Equal(7, summary.BytesRead);
+        Assert.Equal(0, summary.SkippedFileCount);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
     public void FormatIndexRunDiagnostic_CollapsesAndBoundsExceptionMessages()
     {
         var message = "first line\n" + new string('x', 700);

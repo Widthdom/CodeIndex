@@ -852,6 +852,7 @@ public static partial class IndexCommandRunner
             projectRoot,
             filePath,
             FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
+        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
@@ -1152,7 +1153,8 @@ public static partial class IndexCommandRunner
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true);
+                allowReuse: true,
+                out _);
             if (existingId == null)
                 return false;
             return !ExistingFileBlocksReuse(
@@ -1224,7 +1226,8 @@ public static partial class IndexCommandRunner
                 target.FilePath,
                 target.IndexPath,
                 language,
-                allowReuse);
+                allowReuse,
+                out var statSize);
             if (existingId == null)
                 return false;
             if (ExistingFileBlocksReuse(
@@ -1239,6 +1242,8 @@ public static partial class IndexCommandRunner
 
             skipped++;
             processed++;
+            if (statSize.HasValue)
+                knownReadableFileSizes[target.FilePath] = statSize.Value;
             if (!string.IsNullOrWhiteSpace(language))
                 skippedSymbolExtractorLanguages.Add(language);
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)
@@ -1554,6 +1559,7 @@ public static partial class IndexCommandRunner
                     }
 
                     var record = item.Record!;
+                    knownReadableFileSizes[item.FilePath] = record.Size;
                     if (item.Warning != null && !options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
@@ -2031,7 +2037,7 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics);
+            var bytesRead = MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics, knownReadableFileSizes);
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
