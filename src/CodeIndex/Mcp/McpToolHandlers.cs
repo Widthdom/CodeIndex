@@ -6322,9 +6322,11 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
-        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
-        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
-        var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
+        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
+        var hasSqlFilesAfter = writer.HasAnyFilesWithLanguage("sql");
+        var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
+        var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter;
+        var sqlGraphContractReadyAfter = !hasSqlFilesAfter;
         var foldReadyAfter = false;
         string? foldReadyReason = null;
         if (!scanResult.HadErrors && errors == 0)
@@ -6337,7 +6339,7 @@ public partial class McpServer
             writer.MarkSqlGraphContractReady();
             writer.MarkCSharpSymbolNameContractReady();
             csharpSymbolNameReadyAfter = true;
-            if (writer.HasAnyFilesWithLanguage("csharp"))
+            if (hasCSharpFilesAfter)
             {
                 if (csharpMetadataTargetsNeedRefresh)
                 {

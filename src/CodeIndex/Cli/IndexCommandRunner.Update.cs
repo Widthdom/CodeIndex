@@ -1002,15 +1002,17 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // readiness was demoted before the first committed mutation.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
+        var hasSqlFilesAfter = writer.HasAnyFilesWithLanguage("sql");
         var graphTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.GraphReadyFlag) != 0
             : false;
         var issuesTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
             : false;
-        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp")
+        var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter
             || (!readinessDemoted && csharpSymbolNameContractMatchesCurrent);
-        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp")
+        var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter
             || (!readinessDemoted && priorMetadataTargetCsharpMatchesCurrent);
         var foldReadyAfter = !readinessDemoted
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
@@ -1052,9 +1054,9 @@ public static partial class IndexCommandRunner
                 writer.MarkIssuesReady();
                 issuesTableAvailableAfter = true;
             }
-            if (sqlGraphContractMatchesCurrent || !writer.HasAnyFilesWithLanguage("sql"))
+            if (sqlGraphContractMatchesCurrent || !hasSqlFilesAfter)
                 writer.MarkSqlGraphContractReady();
-            if (csharpSymbolNameContractMatchesCurrent || !writer.HasAnyFilesWithLanguage("csharp"))
+            if (csharpSymbolNameContractMatchesCurrent || !hasCSharpFilesAfter)
             {
                 writer.MarkCSharpSymbolNameContractReady();
                 csharpSymbolNameReadyAfter = true;
@@ -1067,7 +1069,7 @@ public static partial class IndexCommandRunner
             // Issue #435: 成功 update の末尾で全 csharp class 行を resolver で再分類する。
             // resolver は全行を書き直すので pre-#435 DB の NULL 行と未更新行の両方が
             // authoritative になる。csharp ファイルがある場合のみ readiness も立てる。
-            if (writer.HasAnyFilesWithLanguage("csharp"))
+            if (hasCSharpFilesAfter)
             {
                 if (csharpMetadataTargetsNeedRefresh)
                 {

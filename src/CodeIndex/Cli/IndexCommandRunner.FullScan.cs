@@ -1893,10 +1893,11 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
         var graphTableAvailableAfter = false;
         var issuesTableAvailableAfter = false;
-        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
-        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
+        var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter;
         var foldReadyAfter = false;
         string? foldReadyReasonAfter = null;
         if (errors == 0)
@@ -1918,7 +1919,7 @@ public static partial class IndexCommandRunner
                 writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, "true");
             }
             writer.MarkCSharpSymbolNameContractReady();
-            if (writer.HasAnyFilesWithLanguage("csharp"))
+            if (hasCSharpFilesAfter)
             {
                 if (csharpMetadataTargetsNeedRefresh)
                 {
