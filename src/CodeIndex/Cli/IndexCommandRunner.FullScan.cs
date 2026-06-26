@@ -991,6 +991,12 @@ public static partial class IndexCommandRunner
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var existingFileCount = writer.GetCounts().files;
         var startedWithNoIndexedFiles = existingFileCount == 0;
+        var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
+            && (options.Rebuild
+                || startedWithNoIndexedFiles
+                || purged > 0
+                || !projectRootWritten
+                || !writer.TypeScriptAugmentationVersionMatchesCurrent());
         var csharpMetadataTargetsNeedRefresh = options.Rebuild
             || startedWithNoIndexedFiles
             || purged > 0
@@ -1525,6 +1531,7 @@ public static partial class IndexCommandRunner
                             {
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
+                                typeScriptAugmentationNeedsRefresh = true;
                                 WriteProjectRootOnce();
                                 deleteTxn.Commit();
                             }
@@ -1592,6 +1599,7 @@ public static partial class IndexCommandRunner
                         {
                             ftsMutated = true;
                             csharpMetadataTargetsNeedRefresh = true;
+                            typeScriptAugmentationNeedsRefresh = true;
                         }
                         skipped++;
                         processed++;
@@ -1619,6 +1627,8 @@ public static partial class IndexCommandRunner
 
                     if (record.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
+                    if (record.Lang == "typescript")
+                        typeScriptAugmentationNeedsRefresh = true;
 
                     using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
                     if (!startedWithNoIndexedFiles)
@@ -1927,7 +1937,11 @@ public static partial class IndexCommandRunner
             csharpSymbolNameReadyAfter = true;
             if (!options.SymbolsOnly)
             {
-                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                if (typeScriptAugmentationNeedsRefresh)
+                {
+                    FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
+                    writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                }
             }
             RestampHotspotFamilyTrustForFullScan(
                 writer,

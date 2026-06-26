@@ -1777,6 +1777,9 @@ public class DbWriter
         }
 
         InsertReferences(references);
+        SetMeta(
+            DbContext.TypeScriptAugmentationVersionMetaKey,
+            DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
         transaction.Commit();
         return references.Count;
     }
@@ -2443,6 +2446,14 @@ public class DbWriter
         SetMeta(
             DbContext.GetMetadataTargetVersionMetaKey(lang),
             DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public bool TypeScriptAugmentationVersionMatchesCurrent()
+    {
+        return string.Equals(
+            GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey),
+            DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
