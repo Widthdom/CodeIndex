@@ -2315,6 +2315,9 @@ public sealed class Caller
         var optimized = false;
         var resolvedMetadataTargets = false;
         var rebuiltTypeScriptAugmentation = false;
+        var startedExtractionWork = false;
+        bool? parallelized = null;
+        string? parallelizeReason = null;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
@@ -2326,12 +2329,21 @@ public sealed class Caller
             IndexCommandRunner.FullScanFtsOptimizeForTesting = () => optimized = true;
             IndexCommandRunner.FullScanCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            IndexCommandRunner.FullScanExtractionWorkStartedForTesting = () => startedExtractionWork = true;
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, reason) =>
+            {
+                parallelized = enabled;
+                parallelizeReason = reason;
+            };
 
             var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
             Assert.Equal("success", refreshJson.GetProperty("status").GetString());
             Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.False(parallelized);
+            Assert.Null(parallelizeReason);
+            Assert.False(startedExtractionWork);
             Assert.False(optimized);
             Assert.False(resolvedMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
@@ -2341,6 +2353,8 @@ public sealed class Caller
             IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
             IndexCommandRunner.FullScanCSharpMetadataResolveForTesting = null;
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
+            IndexCommandRunner.FullScanExtractionWorkStartedForTesting = null;
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

@@ -998,12 +998,7 @@ public static partial class IndexCommandRunner
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
-            options.MaxFileSizeBytes,
-            maxSymbolCount: options.MaxSymbolsPerFile + 1,
-            maxReferenceCount: options.MaxReferencesPerFile + 1);
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var existingFileCount = writer.GetCounts().files;
         var startedWithNoIndexedFiles = existingFileCount == 0;
         var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
@@ -1018,15 +1013,6 @@ public static partial class IndexCommandRunner
             || startedWithNoIndexedFiles
             || purged > 0
             || !priorMetadataTargetCsharpMatchesCurrent;
-        var parallelizeExtraction = (options.Rebuild || startedWithNoIndexedFiles)
-            && !options.SymbolKindFilter.IsActive
-            && !hasPostExtractionHooks;
-        var parallelizeExtractionReason = parallelizeExtraction
-            ? options.Rebuild ? "rebuild" : "empty_index"
-            : null;
-        FullScanExtractionSchedulingForTesting?.Invoke(
-            parallelizeExtraction,
-            parallelizeExtractionReason);
 
         void RequireTypeScriptAugmentationRefresh()
         {
@@ -1304,76 +1290,196 @@ public static partial class IndexCommandRunner
                 extractionFileIndexes.Add(fileIndex);
         }
 
-        EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
-        StartJsonHeartbeatIfNeeded();
 
-        try
+        PostExtractionHookRunner? postExtractionHooks = null;
+        if (extractionFileIndexes.Count == 0)
         {
-            if (!options.Json && !options.Quiet)
+            FullScanExtractionSchedulingForTesting?.Invoke(false, null);
+        }
+        else
+        {
+            postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
+                options.MaxFileSizeBytes,
+                maxSymbolCount: options.MaxSymbolsPerFile + 1,
+                maxReferenceCount: options.MaxReferencesPerFile + 1);
+            var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
+            var parallelizeExtraction = (options.Rebuild || startedWithNoIndexedFiles)
+                && !options.SymbolKindFilter.IsActive
+                && !hasPostExtractionHooks;
+            var parallelizeExtractionReason = parallelizeExtraction
+                ? options.Rebuild ? "rebuild" : "empty_index"
+                : null;
+            FullScanExtractionSchedulingForTesting?.Invoke(
+                parallelizeExtraction,
+                parallelizeExtractionReason);
+
+            EnsureIndexingActivityVisible();
+            StartJsonHeartbeatIfNeeded();
+
+            try
             {
-                PauseIndexSpinnerForConsoleWrite();
-                indexProgressVisible = true;
-                ConsoleUi.PrintProgress(0, files.Count);
-            }
-
-            using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
-            using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
-            var extractionCancellationToken = extractionStallCts.Token;
-            var nextExtractionIndex = -1;
-            var workers = Enumerable.Range(0, extractionParallelism)
-                .Select(workerIndex => Task.Factory.StartNew(() =>
+                if (!options.Json && !options.Quiet)
                 {
-                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
-                    while (true)
-                    {
-                        extractionCancellationToken.ThrowIfCancellationRequested();
-                        var extractionIndex = Interlocked.Increment(ref nextExtractionIndex);
-                        if (extractionIndex >= extractionFileIndexes.Count)
-                            break;
+                    PauseIndexSpinnerForConsoleWrite();
+                    indexProgressVisible = true;
+                    ConsoleUi.PrintProgress(0, files.Count);
+                }
 
-                        var fileIndex = extractionFileIndexes[extractionIndex];
-                        var target = fileTargets[fileIndex];
-                        var filePath = target.FilePath;
-                        var relativeFilePath = target.RelativePath;
-                        var displayRelativePath = target.DisplayRelativePath;
-                        try
+                FullScanExtractionWorkStartedForTesting?.Invoke();
+                using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
+                using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+                var extractionCancellationToken = extractionStallCts.Token;
+                var nextExtractionIndex = -1;
+                var workers = Enumerable.Range(0, extractionParallelism)
+                    .Select(workerIndex => Task.Factory.StartNew(() =>
+                    {
+                        using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+                        while (true)
                         {
-                            activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
-                            FullScanFileContentLoadForTesting?.Invoke(displayRelativePath);
-                            var loaded = indexer.BuildLoadedRecordWithRawBytes(
-                                filePath,
-                                relativeFilePath,
-                                target.Language,
-                                extractionCancellationToken);
-                            var record = loaded.Record;
-                            var content = loaded.Content;
-                            var rawBytes = loaded.RawBytes;
-                            var warning = loaded.Warning;
-                            var hasOversizeLine = loaded.HasOversizeLine;
-                            IReadOnlyList<ChunkRecord>? chunks = null;
-                            IReadOnlyList<SymbolRecord>? symbols = null;
-                            IReadOnlyList<ReferenceRecord>? references = null;
-                            IReadOnlyList<FileIssue>? issues = null;
-                            var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
-                            if (parallelizeExtraction)
+                            extractionCancellationToken.ThrowIfCancellationRequested();
+                            var extractionIndex = Interlocked.Increment(ref nextExtractionIndex);
+                            if (extractionIndex >= extractionFileIndexes.Count)
+                                break;
+
+                            var fileIndex = extractionFileIndexes[extractionIndex];
+                            var target = fileTargets[fileIndex];
+                            var filePath = target.FilePath;
+                            var relativeFilePath = target.RelativePath;
+                            var displayRelativePath = target.DisplayRelativePath;
+                            try
                             {
-                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
-                                chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
-                                if (generatedSuppressionIssue != null)
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
+                                FullScanFileContentLoadForTesting?.Invoke(displayRelativePath);
+                                var loaded = indexer.BuildLoadedRecordWithRawBytes(
+                                    filePath,
+                                    relativeFilePath,
+                                    target.Language,
+                                    extractionCancellationToken);
+                                var record = loaded.Record;
+                                var content = loaded.Content;
+                                var rawBytes = loaded.RawBytes;
+                                var warning = loaded.Warning;
+                                var hasOversizeLine = loaded.HasOversizeLine;
+                                IReadOnlyList<ChunkRecord>? chunks = null;
+                                IReadOnlyList<SymbolRecord>? symbols = null;
+                                IReadOnlyList<ReferenceRecord>? references = null;
+                                IReadOnlyList<FileIssue>? issues = null;
+                                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                                if (parallelizeExtraction)
                                 {
-                                    symbols = [];
-                                    references = [];
+                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
+                                    chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
+                                    if (generatedSuppressionIssue != null)
+                                    {
+                                        symbols = [];
+                                        references = [];
+                                        activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                        issues = AppendIssueIfMissing(
+                                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
+                                            generatedSuppressionIssue);
+                                        extractionResults.Add(
+                                            FullScanFileWorkItem.Precomputed(
+                                                filePath,
+                                                displayRelativePath,
+                                                record,
+                                                warning,
+                                                chunks,
+                                                symbols,
+                                                references,
+                                                issues,
+                                                generatedSuppressionIssue,
+                                                generatedSuppressionChecked: true),
+                                            extractionCancellationToken);
+                                        continue;
+                                    }
+                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
+                                    var symbolExtraction = ExtractSymbolsWithStallTimeout(
+                                        0,
+                                        record.Lang,
+                                        content,
+                                        filePath,
+                                        Path.GetFullPath(options.ProjectPath!),
+                                        record.Path,
+                                        activeJsonExtractionPhases[workerIndex],
+                                        true,
+                                        hasOversizeLine,
+                                        workerSymbolExtractionWorker,
+                                        extractionCancellationToken);
+                                    symbols = symbolExtraction.Symbols;
+                                    var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
+                                    if (symbols.Count > options.MaxSymbolsPerFile)
+                                    {
+                                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                                            ? [issue]
+                                            : AppendIssue([symbolRegexTimeoutIssue], issue);
+                                        extractionResults.Add(
+                                            FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, issue.Message, [], [], [], capIssues),
+                                            extractionCancellationToken);
+                                        continue;
+                                    }
+                                    SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                                    FileIssue? referenceRegexTimeoutIssue = null;
+                                    ReferenceExtractionResult? referenceExtraction = null;
+                                    if (options.SymbolsOnly)
+                                    {
+                                        references = [];
+                                    }
+                                    else
+                                    {
+                                        activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
+                                        using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
+                                        referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
+                                            0,
+                                            record.Lang,
+                                            content,
+                                            hasOversizeLine,
+                                            symbols,
+                                            record.Path,
+                                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                            extractionCancellationToken,
+                                            maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                        references = referenceExtraction.References;
+                                        referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                                    }
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                    issues = AppendIssueIfMissing(
-                                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
-                                        generatedSuppressionIssue);
-                                    extractionResults.Add(
-                                        FullScanFileWorkItem.Precomputed(
+                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
+                                    if (symbolRegexTimeoutIssue != null)
+                                        issues = AppendIssue(issues, symbolRegexTimeoutIssue);
+                                    if (referenceRegexTimeoutIssue != null)
+                                        issues = AppendIssue(issues, referenceRegexTimeoutIssue);
+                                    if (referenceExtraction != null)
+                                        issues = AppendReferenceExtractionDiagnosticIssues(issues, record.Path, referenceExtraction.Diagnostics);
+                                    if (references.Count > options.MaxReferencesPerFile)
+                                    {
+                                        var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                                        references = [];
+                                        issues = AppendIssue(issues, issue);
+                                    }
+                                }
+                                extractionResults.Add(
+                                    parallelizeExtraction
+                                        ? FullScanFileWorkItem.Precomputed(
                                             filePath,
                                             displayRelativePath,
                                             record,
+                                            warning,
+                                            chunks!,
+                                            symbols!,
+                                            references!,
+                                            issues!,
+                                            generatedSuppressionIssue,
+                                            generatedSuppressionChecked: true)
+                                        : FullScanFileWorkItem.Success(
+                                            filePath,
+                                            displayRelativePath,
+                                            record,
+                                            content,
+                                            rawBytes,
+                                            loaded.Inspection,
+                                            hasOversizeLine,
                                             warning,
                                             chunks,
                                             symbols,
@@ -1381,531 +1487,437 @@ public static partial class IndexCommandRunner
                                             issues,
                                             generatedSuppressionIssue,
                                             generatedSuppressionChecked: true),
-                                        extractionCancellationToken);
-                                    continue;
-                                }
-                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
-                                var symbolExtraction = ExtractSymbolsWithStallTimeout(
-                                    0,
-                                    record.Lang,
-                                    content,
-                                    filePath,
-                                    Path.GetFullPath(options.ProjectPath!),
-                                    record.Path,
-                                    activeJsonExtractionPhases[workerIndex],
-                                    true,
-                                    hasOversizeLine,
-                                    workerSymbolExtractionWorker,
                                     extractionCancellationToken);
-                                symbols = symbolExtraction.Symbols;
-                                var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
-                                if (symbols.Count > options.MaxSymbolsPerFile)
+                            }
+                            catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                            catch (FileIndexer.BinaryFileSkippedException ex)
+                            {
+                                var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
+                                var issue = BuildNullByteIssue(ex);
+                                extractionResults.Add(
+                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
+                                    extractionCancellationToken);
+                            }
+                            catch (FileIndexer.FileTooLargeSkippedException ex)
+                            {
+                                var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
+                                var issue = new FileIssue
                                 {
-                                    var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                                    IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
-                                        ? [issue]
-                                        : AppendIssue([symbolRegexTimeoutIssue], issue);
-                                    extractionResults.Add(
-                                        FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, issue.Message, [], [], [], capIssues),
-                                        extractionCancellationToken);
-                                    continue;
-                                }
-                                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
-                                FileIssue? referenceRegexTimeoutIssue = null;
-                                ReferenceExtractionResult? referenceExtraction = null;
-                                if (options.SymbolsOnly)
+                                    Path = ex.RelativePath,
+                                    Kind = "file_too_large",
+                                    Line = 0,
+                                    Message = ex.Message,
+                                };
+                                extractionResults.Add(
+                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
+                                    extractionCancellationToken);
+                            }
+                            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                            {
+                                extractionResults.Add(
+                                    FullScanFileWorkItem.Skipped(filePath, displayRelativePath, $"{displayRelativePath}: skipped because it was deleted during indexing."),
+                                    extractionCancellationToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                extractionResults.Add(FullScanFileWorkItem.Failure(filePath, displayRelativePath, ex), extractionCancellationToken);
+                            }
+                            finally
+                            {
+                                activeJsonExtractionPhases.TryRemove(workerIndex, out _);
+                            }
+                        }
+                    }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
+                    .ToArray();
+
+                _ = Task.WhenAll(workers).ContinueWith(
+                    task =>
+                    {
+                        extractionResults.CompleteAdding();
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+                var extractionStallTimeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
+                var lastExtractionProgressAt = Stopwatch.GetTimestamp();
+                while (!extractionResults.IsCompleted)
+                {
+                    ThrowIfFullScanCancelled(processed, files.Count);
+                    if (!extractionResults.TryTake(out var item, millisecondsTimeout: 100))
+                    {
+                        ThrowIfFullScanExtractionStalled(
+                            processed,
+                            files.Count,
+                            extractionStallTimeout,
+                            lastExtractionProgressAt,
+                            currentJsonIndexFile,
+                            activeJsonExtractionPhases,
+                            extractionStallCts.Cancel);
+                        continue;
+                    }
+
+                    lastExtractionProgressAt = Stopwatch.GetTimestamp();
+                    currentJsonIndexFile = item.RelativePath;
+                    EnsureIndexingActivityVisible();
+                    if (item.Exception is IndexExtractionStalledException stalledException)
+                        throw stalledException;
+
+                    try
+                    {
+                        if (item.Exception != null)
+                            throw item.Exception;
+
+                        if (item.Record == null)
+                        {
+                            warnings++;
+                            warningList.Add(new CliJsonMessage(currentJsonIndexFile, item.Warning ?? "File skipped"));
+                            if (!options.Json && !options.Quiet && item.Warning != null)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.PrintWarning(item.Warning);
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+
+                            if (writer.HasFileAtPath(currentJsonIndexFile))
+                            {
+                                using var deleteTxn = writer.BeginTransaction(cancellationToken, "full scan delete skipped file");
+                                if (writer.DeleteFileByPath(currentJsonIndexFile))
                                 {
-                                    references = [];
-                                }
-                                else
-                                {
-                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
-                                    using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
-                                    referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
-                                        0,
-                                        record.Lang,
-                                        content,
-                                        hasOversizeLine,
-                                        symbols,
-                                        record.Path,
-                                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                        extractionCancellationToken,
-                                        maxReferenceCount: options.MaxReferencesPerFile + 1);
-                                    references = referenceExtraction.References;
-                                    referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
-                                }
-                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
-                                if (symbolRegexTimeoutIssue != null)
-                                    issues = AppendIssue(issues, symbolRegexTimeoutIssue);
-                                if (referenceRegexTimeoutIssue != null)
-                                    issues = AppendIssue(issues, referenceRegexTimeoutIssue);
-                                if (referenceExtraction != null)
-                                    issues = AppendReferenceExtractionDiagnosticIssues(issues, record.Path, referenceExtraction.Diagnostics);
-                                if (references.Count > options.MaxReferencesPerFile)
-                                {
-                                    var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
-                                    references = [];
-                                    issues = AppendIssue(issues, issue);
+                                    ftsMutated = true;
+                                    csharpMetadataTargetsNeedRefresh = true;
+                                    RequireTypeScriptAugmentationRefresh();
+                                    WriteProjectRootOnce();
+                                    deleteTxn.Commit();
                                 }
                             }
-                            extractionResults.Add(
-                                parallelizeExtraction
-                                    ? FullScanFileWorkItem.Precomputed(
-                                        filePath,
-                                        displayRelativePath,
-                                        record,
-                                        warning,
-                                        chunks!,
-                                        symbols!,
-                                        references!,
-                                        issues!,
-                                        generatedSuppressionIssue,
-                                        generatedSuppressionChecked: true)
-                                    : FullScanFileWorkItem.Success(
-                                        filePath,
-                                        displayRelativePath,
-                                        record,
-                                        content,
-                                        rawBytes,
-                                        loaded.Inspection,
-                                        hasOversizeLine,
-                                        warning,
-                                        chunks,
-                                        symbols,
-                                        references,
-                                        issues,
-                                        generatedSuppressionIssue,
-                                        generatedSuppressionChecked: true),
-                                extractionCancellationToken);
-                        }
-                        catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
-                        {
-                            throw;
-                        }
-                        catch (FileIndexer.BinaryFileSkippedException ex)
-                        {
-                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
-                            var issue = BuildNullByteIssue(ex);
-                            extractionResults.Add(
-                                FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
-                                extractionCancellationToken);
-                        }
-                        catch (FileIndexer.FileTooLargeSkippedException ex)
-                        {
-                            var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
-                            var issue = new FileIssue
+                            else
                             {
-                                Path = ex.RelativePath,
-                                Kind = "file_too_large",
-                                Line = 0,
-                                Message = ex.Message,
-                            };
-                            extractionResults.Add(
-                                FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
-                                extractionCancellationToken);
+                                skipped++;
+                            }
+                            processed++;
+                            currentJsonIndexFile = null;
+                            ThrowIfFullScanCancelled(processed, files.Count);
+                            ReportJsonIndexProgressIfNeeded();
+                            if (!options.Json && !options.Quiet)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.PrintProgress(processed, files.Count);
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+                            continue;
                         }
-                        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-                        {
-                            extractionResults.Add(
-                                FullScanFileWorkItem.Skipped(filePath, displayRelativePath, $"{displayRelativePath}: skipped because it was deleted during indexing."),
-                                extractionCancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, displayRelativePath, ex), extractionCancellationToken);
-                        }
-                        finally
-                        {
-                            activeJsonExtractionPhases.TryRemove(workerIndex, out _);
-                        }
-                    }
-                }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
-                .ToArray();
 
-            _ = Task.WhenAll(workers).ContinueWith(
-                task =>
-                {
-                    extractionResults.CompleteAdding();
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-
-            var extractionStallTimeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
-            var lastExtractionProgressAt = Stopwatch.GetTimestamp();
-            while (!extractionResults.IsCompleted)
-            {
-                ThrowIfFullScanCancelled(processed, files.Count);
-                if (!extractionResults.TryTake(out var item, millisecondsTimeout: 100))
-                {
-                    ThrowIfFullScanExtractionStalled(
-                        processed,
-                        files.Count,
-                        extractionStallTimeout,
-                        lastExtractionProgressAt,
-                        currentJsonIndexFile,
-                        activeJsonExtractionPhases,
-                        extractionStallCts.Cancel);
-                    continue;
-                }
-
-                lastExtractionProgressAt = Stopwatch.GetTimestamp();
-                currentJsonIndexFile = item.RelativePath;
-                EnsureIndexingActivityVisible();
-                if (item.Exception is IndexExtractionStalledException stalledException)
-                    throw stalledException;
-
-                try
-                {
-                    if (item.Exception != null)
-                        throw item.Exception;
-
-                    if (item.Record == null)
-                    {
-                        warnings++;
-                        warningList.Add(new CliJsonMessage(currentJsonIndexFile, item.Warning ?? "File skipped"));
-                        if (!options.Json && !options.Quiet && item.Warning != null)
+                        var record = item.Record!;
+                        knownReadableFileSizes[item.FilePath] = record.Size;
+                        if (item.Warning != null && !options.Json && !options.Quiet)
                         {
                             PauseIndexSpinnerForConsoleWrite();
                             ConsoleUi.PrintWarning(item.Warning);
                             ResumeIndexSpinnerAfterConsoleWrite();
                         }
 
-                        if (writer.HasFileAtPath(currentJsonIndexFile))
+                        var generatedSuppressionIssue = item.GeneratedSuppressionChecked
+                            ? item.GeneratedSuppressionIssue
+                            : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                        long? existingId = null;
+                        if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                         {
-                            using var deleteTxn = writer.BeginTransaction(cancellationToken, "full scan delete skipped file");
-                            if (writer.DeleteFileByPath(currentJsonIndexFile))
+                            var languageRequiresRefresh = forceJavaScriptTypeScriptRefresh
+                                && IsJavaScriptTypeScriptLanguage(record.Lang);
+                            existingId = writer.GetUnchangedFileId(
+                                record.Path,
+                                record.Modified,
+                                record.Checksum,
+                                size: record.Size,
+                                lines: record.Lines,
+                                language: record.Lang,
+                                generated: record.Generated,
+                                allowReuse: symbolKindFilterMatchesPrior
+                                    && !languageRequiresRefresh
+                                    && !priorSymbolsOnlyGraphOmitted
+                                    && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                                    && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                                    && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                                    && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
+                        }
+                        if (existingId != null
+                            && ExistingFileBlocksReuse(
+                                writer,
+                                existingId.Value,
+                                options.MaxSymbolsPerFile,
+                                options.MaxReferencesPerFile,
+                                generatedSuppressionIssue))
+                        {
+                            existingId = null;
+                        }
+                        if (existingId != null)
+                        {
+                            var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                            if (stalePurged > 0)
                             {
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
                                 RequireTypeScriptAugmentationRefresh();
-                                WriteProjectRootOnce();
-                                deleteTxn.Commit();
                             }
+                            skipped++;
+                            processed++;
+                            if (!string.IsNullOrWhiteSpace(record.Lang))
+                                skippedSymbolExtractorLanguages.Add(record.Lang);
+                            if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                                reusedHotspotFamilyLanguages.Add(record.Lang);
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.ClearProgressLine();
+                                Console.WriteLine($"  [SKIP] {record.Path}");
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+                            if (!options.Json && !options.Quiet)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.PrintProgress(processed, files.Count);
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+                            ReportJsonIndexProgressIfNeeded();
+                            currentJsonIndexFile = null;
+                            continue;
+                        }
+
+                        if (record.Lang == "csharp")
+                            csharpMetadataTargetsNeedRefresh = true;
+                        if (record.Lang == "typescript")
+                            RequireTypeScriptAugmentationRefresh();
+
+                        using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
+                        if (!startedWithNoIndexedFiles)
+                        {
+                            var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                            if (stalePurged > 0)
+                            {
+                                ftsMutated = true;
+                                csharpMetadataTargetsNeedRefresh = true;
+                            }
+                        }
+                        var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
+                        ftsMutated = true;
+                        currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
+                        var chunks = item.Chunks == null
+                            ? ChunkSplitter.SplitNormalized(
+                                fileId,
+                                item.Content!,
+                                item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
+                                record.Lines)
+                            : ReassignChunkFileIds(item.Chunks, fileId);
+                        if (generatedSuppressionIssue != null)
+                        {
+                            writer.InsertChunks(chunks, cancellationToken);
+                            writer.InsertSymbols([], cancellationToken);
+                            writer.InsertReferences([], cancellationToken);
+                            var generatedIssues = AppendIssueIfMissing(
+                                item.Issues ?? ValidateWorkItemContent(item, record),
+                                generatedSuppressionIssue);
+                            writer.InsertIssues(fileId, generatedIssues);
+                            if (options.Verbose)
+                                WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
+                            currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
+                            WriteProjectRootOnce();
+                            txn.Commit();
+
+                            processed++;
+                            if (!options.Json && !options.Quiet)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.PrintProgress(processed, files.Count);
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+                            ReportJsonIndexProgressIfNeeded();
+                            currentJsonIndexFile = null;
+                            continue;
+                        }
+                        currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
+                        SymbolExtractionResult? symbolExtraction = null;
+                        var symbols = item.Symbols == null
+                            ? (symbolExtraction = ExtractSymbolsWithStallTimeout(
+                                fileId,
+                                record.Lang,
+                                item.Content!,
+                                item.FilePath,
+                                Path.GetFullPath(options.ProjectPath!),
+                                record.Path,
+                                currentJsonIndexFile,
+                                true,
+                                item.HasOversizeLine,
+                                mainSymbolExtractionWorker,
+                                cancellationToken)).Symbols
+                            : ReassignSymbolFileIds(item.Symbols, fileId);
+                        var symbolRegexTimeoutIssue = symbolExtraction?.RegexTimeoutIssue;
+                        if (symbols.Count > options.MaxSymbolsPerFile)
+                        {
+                            var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                            IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                                ? [issue]
+                                : AppendIssue([symbolRegexTimeoutIssue], issue);
+                            writer.InsertSymbols([], cancellationToken);
+                            writer.InsertReferences([], cancellationToken);
+                            writer.InsertIssues(fileId, capIssues);
+                            if (options.Verbose)
+                                WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
+                            txn.Commit();
+                            processed++;
+                            if (!options.Json && !options.Quiet)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.PrintProgress(processed, files.Count);
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+                            ReportJsonIndexProgressIfNeeded();
+                            currentJsonIndexFile = null;
+                            continue;
+                        }
+                        if (item.Symbols == null)
+                            SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
+                        var fileContext = new FileContext(projectRoot, record.Path, item.FilePath, record.Lang);
+                        var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
+                        postExtractionHooks.OnSymbolsExtracted(fileContext, mutableSymbols);
+                        symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(mutableSymbols);
+                        symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
+                        if (symbols.Count > options.MaxSymbolsPerFile)
+                        {
+                            var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                            IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
+                                ? [issue]
+                                : AppendIssue([symbolRegexTimeoutIssue], issue);
+                            writer.InsertSymbols([], cancellationToken);
+                            writer.InsertReferences([], cancellationToken);
+                            writer.InsertIssues(fileId, capIssues);
+                            if (options.Verbose)
+                                WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
+                            txn.Commit();
+                            processed++;
+                            if (!options.Json && !options.Quiet)
+                            {
+                                PauseIndexSpinnerForConsoleWrite();
+                                ConsoleUi.PrintProgress(processed, files.Count);
+                                ResumeIndexSpinnerAfterConsoleWrite();
+                            }
+                            ReportJsonIndexProgressIfNeeded();
+                            currentJsonIndexFile = null;
+                            continue;
+                        }
+                        writer.InsertChunks(chunks, cancellationToken);
+                        FileIndexer.ValidateSymbolLineRanges(record, symbols);
+                        writer.InsertSymbols(symbols, cancellationToken);
+                        if (symbolRegexTimeoutIssue != null)
+                        {
+                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                            item = item with { Issues = AppendIssue(baseIssues, symbolRegexTimeoutIssue) };
+                        }
+                        currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
+                        IReadOnlyList<ReferenceRecord> references;
+                        if (options.SymbolsOnly)
+                        {
+                            references = [];
                         }
                         else
                         {
-                            skipped++;
+                            FileIssue? regexTimeoutIssue = null;
+                            ReferenceExtractionResult? referenceExtraction = null;
+                            if (item.References == null)
+                            {
+                                using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
+                                referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
+                                    fileId,
+                                    record.Lang,
+                                    item.Content!,
+                                    item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
+                                    symbols,
+                                    record.Path,
+                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                    cancellationToken,
+                                    maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                references = referenceExtraction.References;
+                                regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                            }
+                            else
+                            {
+                                references = ReassignReferenceFileIds(item.References, fileId);
+                            }
+                            postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
+                            if (regexTimeoutIssue != null)
+                            {
+                                var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                                item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
+                            }
+                            if (referenceExtraction != null)
+                            {
+                                var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                                item = item with
+                                {
+                                    Issues = AppendReferenceExtractionDiagnosticIssues(baseIssues, record.Path, referenceExtraction.Diagnostics),
+                                };
+                            }
+                            if (references.Count > options.MaxReferencesPerFile)
+                            {
+                                var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
+                                references = [];
+                                var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                                item = item with { Issues = AppendIssue(baseIssues, issue) };
+                            }
                         }
-                        processed++;
-                        currentJsonIndexFile = null;
-                        ThrowIfFullScanCancelled(processed, files.Count);
-                        ReportJsonIndexProgressIfNeeded();
-                        if (!options.Json && !options.Quiet)
-                        {
-                            PauseIndexSpinnerForConsoleWrite();
-                            ConsoleUi.PrintProgress(processed, files.Count);
-                            ResumeIndexSpinnerAfterConsoleWrite();
-                        }
-                        continue;
-                    }
-
-                    var record = item.Record!;
-                    knownReadableFileSizes[item.FilePath] = record.Size;
-                    if (item.Warning != null && !options.Json && !options.Quiet)
-                    {
-                        PauseIndexSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning(item.Warning);
-                        ResumeIndexSpinnerAfterConsoleWrite();
-                    }
-
-                    var generatedSuppressionIssue = item.GeneratedSuppressionChecked
-                        ? item.GeneratedSuppressionIssue
-                        : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
-                    long? existingId = null;
-                    if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
-                    {
-                        var languageRequiresRefresh = forceJavaScriptTypeScriptRefresh
-                            && IsJavaScriptTypeScriptLanguage(record.Lang);
-                        existingId = writer.GetUnchangedFileId(
-                            record.Path,
-                            record.Modified,
-                            record.Checksum,
-                            size: record.Size,
-                            lines: record.Lines,
-                            language: record.Lang,
-                            generated: record.Generated,
-                            allowReuse: symbolKindFilterMatchesPrior
-                                && !languageRequiresRefresh
-                                && !priorSymbolsOnlyGraphOmitted
-                                && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                                && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                                && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
-                                && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                    }
-                    if (existingId != null
-                        && ExistingFileBlocksReuse(
-                            writer,
-                            existingId.Value,
-                            options.MaxSymbolsPerFile,
-                            options.MaxReferencesPerFile,
-                            generatedSuppressionIssue))
-                    {
-                        existingId = null;
-                    }
-                    if (existingId != null)
-                    {
-                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
-                        if (stalePurged > 0)
-                        {
-                            ftsMutated = true;
-                            csharpMetadataTargetsNeedRefresh = true;
-                            RequireTypeScriptAugmentationRefresh();
-                        }
-                        skipped++;
-                        processed++;
-                        if (!string.IsNullOrWhiteSpace(record.Lang))
-                            skippedSymbolExtractorLanguages.Add(record.Lang);
-                        if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
-                            reusedHotspotFamilyLanguages.Add(record.Lang);
-                        if (options.Verbose && !options.Json && !options.Quiet)
-                        {
-                            PauseIndexSpinnerForConsoleWrite();
-                            ConsoleUi.ClearProgressLine();
-                            Console.WriteLine($"  [SKIP] {record.Path}");
-                            ResumeIndexSpinnerAfterConsoleWrite();
-                        }
-                        if (!options.Json && !options.Quiet)
-                        {
-                            PauseIndexSpinnerForConsoleWrite();
-                            ConsoleUi.PrintProgress(processed, files.Count);
-                            ResumeIndexSpinnerAfterConsoleWrite();
-                        }
-                        ReportJsonIndexProgressIfNeeded();
-                        currentJsonIndexFile = null;
-                        continue;
-                    }
-
-                    if (record.Lang == "csharp")
-                        csharpMetadataTargetsNeedRefresh = true;
-                    if (record.Lang == "typescript")
-                        RequireTypeScriptAugmentationRefresh();
-
-                    using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
-                    if (!startedWithNoIndexedFiles)
-                    {
-                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
-                        if (stalePurged > 0)
-                        {
-                            ftsMutated = true;
-                            csharpMetadataTargetsNeedRefresh = true;
-                        }
-                    }
-                    var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
-                    ftsMutated = true;
-                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
-                    var chunks = item.Chunks == null
-                        ? ChunkSplitter.SplitNormalized(
-                            fileId,
-                            item.Content!,
-                            item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
-                            record.Lines)
-                        : ReassignChunkFileIds(item.Chunks, fileId);
-                    if (generatedSuppressionIssue != null)
-                    {
-                        writer.InsertChunks(chunks, cancellationToken);
-                        writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
-                        var generatedIssues = AppendIssueIfMissing(
-                            item.Issues ?? ValidateWorkItemContent(item, record),
-                            generatedSuppressionIssue);
-                        writer.InsertIssues(fileId, generatedIssues);
-                        if (options.Verbose)
-                            WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
+                        writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
+                        if (references.Count > 0)
+                            mutualRecursionRefreshNeeded = true;
+                        currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
+                        var issues = item.Issues ?? ValidateWorkItemContent(item, record);
+                        writer.InsertIssues(fileId, issues);
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
                         txn.Commit();
 
-                        processed++;
-                        if (!options.Json && !options.Quiet)
+                        WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                    }
+                    catch (IndexExtractionStalledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        GlobalToolLog.Error($"index_file_failed path={CollapseLineBreaks(item.FilePath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
+                        errors++;
+                        var errorMessage = FormatIndexFileException(ex);
+                        errorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
+                        if (!options.Json)
                         {
                             PauseIndexSpinnerForConsoleWrite();
-                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ConsoleUi.ClearProgressLine();
+                            ConsoleUi.TryWriteErrorLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
                             ResumeIndexSpinnerAfterConsoleWrite();
                         }
-                        ReportJsonIndexProgressIfNeeded();
-                        currentJsonIndexFile = null;
-                        continue;
                     }
-                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
-                    SymbolExtractionResult? symbolExtraction = null;
-                    var symbols = item.Symbols == null
-                        ? (symbolExtraction = ExtractSymbolsWithStallTimeout(
-                            fileId,
-                            record.Lang,
-                            item.Content!,
-                            item.FilePath,
-                            Path.GetFullPath(options.ProjectPath!),
-                            record.Path,
-                            currentJsonIndexFile,
-                            true,
-                            item.HasOversizeLine,
-                            mainSymbolExtractionWorker,
-                            cancellationToken)).Symbols
-                        : ReassignSymbolFileIds(item.Symbols, fileId);
-                    var symbolRegexTimeoutIssue = symbolExtraction?.RegexTimeoutIssue;
-                    if (symbols.Count > options.MaxSymbolsPerFile)
-                    {
-                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
-                            ? [issue]
-                            : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
-                        writer.InsertIssues(fileId, capIssues);
-                        if (options.Verbose)
-                            WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
-                        txn.Commit();
-                        processed++;
-                        if (!options.Json && !options.Quiet)
-                        {
-                            PauseIndexSpinnerForConsoleWrite();
-                            ConsoleUi.PrintProgress(processed, files.Count);
-                            ResumeIndexSpinnerAfterConsoleWrite();
-                        }
-                        ReportJsonIndexProgressIfNeeded();
-                        currentJsonIndexFile = null;
-                        continue;
-                    }
-                    if (item.Symbols == null)
-                        SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
-                    var fileContext = new FileContext(projectRoot, record.Path, item.FilePath, record.Lang);
-                    var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
-                    postExtractionHooks.OnSymbolsExtracted(fileContext, mutableSymbols);
-                    symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(mutableSymbols);
-                    symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
-                    if (symbols.Count > options.MaxSymbolsPerFile)
-                    {
-                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
-                            ? [issue]
-                            : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
-                        writer.InsertIssues(fileId, capIssues);
-                        if (options.Verbose)
-                            WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
-                        txn.Commit();
-                        processed++;
-                        if (!options.Json && !options.Quiet)
-                        {
-                            PauseIndexSpinnerForConsoleWrite();
-                            ConsoleUi.PrintProgress(processed, files.Count);
-                            ResumeIndexSpinnerAfterConsoleWrite();
-                        }
-                        ReportJsonIndexProgressIfNeeded();
-                        currentJsonIndexFile = null;
-                        continue;
-                    }
-                    writer.InsertChunks(chunks, cancellationToken);
-                    FileIndexer.ValidateSymbolLineRanges(record, symbols);
-                    writer.InsertSymbols(symbols, cancellationToken);
-                    if (symbolRegexTimeoutIssue != null)
-                    {
-                        var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
-                        item = item with { Issues = AppendIssue(baseIssues, symbolRegexTimeoutIssue) };
-                    }
-                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
-                    IReadOnlyList<ReferenceRecord> references;
-                    if (options.SymbolsOnly)
-                    {
-                        references = [];
-                    }
-                    else
-                    {
-                        FileIssue? regexTimeoutIssue = null;
-                        ReferenceExtractionResult? referenceExtraction = null;
-                        if (item.References == null)
-                        {
-                            using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
-                            referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
-                                fileId,
-                                record.Lang,
-                                item.Content!,
-                                item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
-                                symbols,
-                                record.Path,
-                                record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                cancellationToken,
-                                maxReferenceCount: options.MaxReferencesPerFile + 1);
-                            references = referenceExtraction.References;
-                            regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
-                        }
-                        else
-                        {
-                            references = ReassignReferenceFileIds(item.References, fileId);
-                        }
-                        postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
-                        if (regexTimeoutIssue != null)
-                        {
-                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
-                            item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
-                        }
-                        if (referenceExtraction != null)
-                        {
-                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
-                            item = item with
-                            {
-                                Issues = AppendReferenceExtractionDiagnosticIssues(baseIssues, record.Path, referenceExtraction.Diagnostics),
-                            };
-                        }
-                        if (references.Count > options.MaxReferencesPerFile)
-                        {
-                            var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
-                            references = [];
-                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
-                            item = item with { Issues = AppendIssue(baseIssues, issue) };
-                        }
-                    }
-                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
-                    if (references.Count > 0)
-                        mutualRecursionRefreshNeeded = true;
-                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
-                    var issues = item.Issues ?? ValidateWorkItemContent(item, record);
-                    writer.InsertIssues(fileId, issues);
-                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
-                    WriteProjectRootOnce();
-                    txn.Commit();
 
-                    WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
-                }
-                catch (IndexExtractionStalledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    GlobalToolLog.Error($"index_file_failed path={CollapseLineBreaks(item.FilePath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
-                    errors++;
-                    var errorMessage = FormatIndexFileException(ex);
-                    errorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
-                    if (!options.Json)
+                    processed++;
+                    currentJsonIndexFile = null;
+                    ThrowIfFullScanCancelled(processed, files.Count);
+                    ReportJsonIndexProgressIfNeeded();
+                    if (!options.Json && !options.Quiet)
                     {
                         PauseIndexSpinnerForConsoleWrite();
-                        ConsoleUi.ClearProgressLine();
-                        ConsoleUi.TryWriteErrorLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
+                        ConsoleUi.PrintProgress(processed, files.Count);
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
                 }
-
-                processed++;
-                currentJsonIndexFile = null;
-                ThrowIfFullScanCancelled(processed, files.Count);
-                ReportJsonIndexProgressIfNeeded();
-                if (!options.Json && !options.Quiet)
-                {
-                    PauseIndexSpinnerForConsoleWrite();
-                    ConsoleUi.PrintProgress(processed, files.Count);
-                    ResumeIndexSpinnerAfterConsoleWrite();
-                }
+                Task.WaitAll(workers, cancellationToken);
             }
-            Task.WaitAll(workers, cancellationToken);
-        }
-        finally
-        {
-            currentJsonIndexFile = null;
-            StopJsonHeartbeat();
+            finally
+            {
+                currentJsonIndexFile = null;
+                StopJsonHeartbeat();
+                postExtractionHooks?.Dispose();
+            }
         }
 
         PauseIndexSpinnerForConsoleWrite();
@@ -2316,8 +2328,11 @@ public static partial class IndexCommandRunner
             : FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
     }
 
-    private static int AddPostExtractionHookWarnings(PostExtractionHookRunner runner, List<CliJsonMessage> warningList)
+    private static int AddPostExtractionHookWarnings(PostExtractionHookRunner? runner, List<CliJsonMessage> warningList)
     {
+        if (runner == null)
+            return 0;
+
         var added = 0;
         foreach (var diagnostic in runner.Diagnostics)
         {
