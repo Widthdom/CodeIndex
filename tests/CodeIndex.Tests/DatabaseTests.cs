@@ -1774,6 +1774,8 @@ public class DatabaseTests : IDisposable
         });
 
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
+        Assert.False(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: false));
+        Assert.True(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: true));
 
         _writer.InsertSymbols(
         [
@@ -1803,6 +1805,28 @@ public class DatabaseTests : IDisposable
         ]);
 
         Assert.True(_writer.HasExtractionCapViolationForFile(issueFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10));
+
+        var generatedFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generated.g.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+        });
+        _writer.InsertIssues(generatedFileId,
+        [
+            new FileIssue
+            {
+                Path = "src/generated.g.cs",
+                Kind = FileIndexer.GeneratedCodeExtractionSkippedIssueKind,
+                Line = 0,
+                Message = "generated extraction skipped",
+            },
+        ]);
+
+        Assert.False(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: true));
+        Assert.True(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: false));
     }
 
     [Fact]

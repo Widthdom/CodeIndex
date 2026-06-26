@@ -611,12 +611,12 @@ public static partial class IndexCommandRunner
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
                     if (statMatchedId != null
-                        && ExistingFileViolatesExtractionCaps(writer, statMatchedId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
-                    {
-                        statMatchedId = null;
-                    }
-                    if (statMatchedId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, statMatchedId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(dbPath)))
+                        && ExistingFileBlocksReuse(
+                            writer,
+                            statMatchedId.Value,
+                            options.MaxSymbolsPerFile,
+                            options.MaxReferencesPerFile,
+                            indexer.BuildGeneratedCodeExtractionSkippedIssue(dbPath)))
                     {
                         statMatchedId = null;
                     }
@@ -666,12 +666,12 @@ public static partial class IndexCommandRunner
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                     if (existingId != null
-                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
-                    {
-                        existingId = null;
-                    }
-                    if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
+                        && ExistingFileBlocksReuse(
+                            writer,
+                            existingId.Value,
+                            options.MaxSymbolsPerFile,
+                            options.MaxReferencesPerFile,
+                            generatedSuppressionIssue))
                     {
                         existingId = null;
                     }

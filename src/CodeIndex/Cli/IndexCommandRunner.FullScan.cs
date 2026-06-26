@@ -120,11 +120,17 @@ public static partial class IndexCommandRunner
         };
     }
 
-    private static bool ExistingFileViolatesExtractionCaps(DbWriter writer, long fileId, int maxSymbolsPerFile, int maxReferencesPerFile) =>
-        writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile, maxReferencesPerFile);
-
-    internal static bool ExistingFileGeneratedSuppressionMismatch(DbWriter writer, long fileId, FileIssue? generatedSuppressionIssue)
-        => writer.HasIssueForFile(fileId, FileIndexer.GeneratedCodeExtractionSkippedIssueKind) != (generatedSuppressionIssue != null);
+    private static bool ExistingFileBlocksReuse(
+        DbWriter writer,
+        long fileId,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        FileIssue? generatedSuppressionIssue) =>
+        writer.HasReusableFileBlockingIssueForFile(
+            fileId,
+            maxSymbolsPerFile,
+            maxReferencesPerFile,
+            generatedSuppressionIssue != null);
 
     internal static IReadOnlyList<FileIssue> AppendIssue(IReadOnlyList<FileIssue> issues, FileIssue issue)
     {
@@ -1143,11 +1149,11 @@ public static partial class IndexCommandRunner
                 allowReuse: true);
             if (existingId == null)
                 return false;
-            if (ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
-                return false;
-            return !ExistingFileGeneratedSuppressionMismatch(
+            return !ExistingFileBlocksReuse(
                 writer,
                 existingId.Value,
+                options.MaxSymbolsPerFile,
+                options.MaxReferencesPerFile,
                 indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath));
         }
 
@@ -1215,10 +1221,15 @@ public static partial class IndexCommandRunner
                 allowReuse);
             if (existingId == null)
                 return false;
-            if (ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
+            if (ExistingFileBlocksReuse(
+                writer,
+                existingId.Value,
+                options.MaxSymbolsPerFile,
+                options.MaxReferencesPerFile,
+                indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath)))
+            {
                 return false;
-            if (ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath)))
-                return false;
+            }
 
             skipped++;
             processed++;
@@ -1565,12 +1576,12 @@ public static partial class IndexCommandRunner
                                 && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                     }
                     if (existingId != null
-                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
-                    {
-                        existingId = null;
-                    }
-                    if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
+                        && ExistingFileBlocksReuse(
+                            writer,
+                            existingId.Value,
+                            options.MaxSymbolsPerFile,
+                            options.MaxReferencesPerFile,
+                            generatedSuppressionIssue))
                     {
                         existingId = null;
                     }

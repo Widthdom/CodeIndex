@@ -6024,18 +6024,12 @@ public partial class McpServer
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                if (existingId != null)
-                {
-                    if (writer.CountSymbolsForFile(existingId.Value) > maxSymbolsPerFile
-                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded")
-                        || writer.CountReferencesForFile(existingId.Value) > maxReferencesPerFile
-                        || writer.HasIssueForFile(existingId.Value, "reference_count_exceeded"))
-                    {
-                        existingId = null;
-                    }
-                }
                 if (existingId != null
-                    && IndexCommandRunner.ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
+                    && writer.HasReusableFileBlockingIssueForFile(
+                        existingId.Value,
+                        maxSymbolsPerFile,
+                        maxReferencesPerFile,
+                        generatedSuppressionIssue != null))
                 {
                     existingId = null;
                 }

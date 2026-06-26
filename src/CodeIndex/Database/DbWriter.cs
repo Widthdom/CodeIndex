@@ -786,6 +786,13 @@ public class DbWriter
     }
 
     public bool HasExtractionCapViolationForFile(long fileId, int maxSymbolsPerFile, int maxReferencesPerFile)
+        => HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile, maxReferencesPerFile, generatedExtractionSuppressed: null);
+
+    public bool HasReusableFileBlockingIssueForFile(
+        long fileId,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
@@ -804,11 +811,24 @@ public class DbWriter
                     WHERE file_id = @file_id
                       AND kind = 'reference_count_exceeded'
                 )
+                OR (
+                    @generated_suppressed IS NOT NULL
+                    AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM file_issues
+                            WHERE file_id = @file_id
+                              AND kind = @generated_issue_kind
+                        )
+                    ) <> @generated_suppressed
+                )
             THEN 1 ELSE 0 END";
         SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
         SqliteCommandPolicy.AddInt32(cmd, "@max_symbols", maxSymbolsPerFile);
         SqliteCommandPolicy.AddInt32(cmd, "@max_references", maxReferencesPerFile);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "file extraction cap violation") != 0;
+        SqliteCommandPolicy.AddNullableBoolean(cmd, "@generated_suppressed", generatedExtractionSuppressed);
+        SqliteCommandPolicy.AddText(cmd, "@generated_issue_kind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "reusable file blocking issue") != 0;
     }
 
     public bool HasIssueForFile(long fileId, string kind)
