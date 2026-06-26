@@ -631,6 +631,51 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void LogIndexFileFailure_WritesSanitizedStackTraceToPersistentLog()
+    {
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_index_failure_{Guid.NewGuid():N}");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            using (GlobalToolLog.TryStartForTesting(["index", "."], "test"))
+            {
+                try
+                {
+                    ThrowForIndexFileFailureLogTest();
+                }
+                catch (Exception ex)
+                {
+                    IndexCommandRunner.LogIndexFileFailure("index_file_failed", "src/bad\nfile.js", ex);
+                }
+            }
+
+            var logPath = Assert.Single(Directory.GetFiles(logRoot, "stderr-*.log"));
+            var log = File.ReadAllText(logPath);
+            Assert.Contains("index_file_failed path=src/bad file.js", log);
+            Assert.Contains("exception[0] type=System.ArgumentException message=\"argument_error\"", log);
+            Assert.Contains("  stack: ", log);
+            Assert.Contains(nameof(ThrowForIndexFileFailureLogTest), log);
+            Assert.DoesNotContain("secret-token", log);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logRoot);
+        }
+    }
+
+    private static void ThrowForIndexFileFailureLogTest()
+    {
+        throw new ArgumentException("secret-token");
+    }
+
+    [Fact]
     public void TryStart_ErrorMirrorIgnoresDisposedOriginalConsoleWriter()
     {
         var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_disposed_{Guid.NewGuid():N}");
