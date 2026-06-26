@@ -5419,21 +5419,39 @@ public static partial class SymbolExtractor
            && IsJavaScriptTypeScriptIdentifierStart(name[3])
            && char.IsUpper(name[3]);
 
+    private static HashSet<string> BuildSymbolLineKeySet(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var existing = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            existing.Add($"{symbol.Kind}:{symbol.Name}:{symbol.Line}");
+        return existing;
+    }
+
+    private static List<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
+    {
+        var properties = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "property"
+                && symbol.Line >= 1
+                && symbol.Line <= lineCount)
+            {
+                properties.Add(symbol);
+            }
+        }
+
+        return properties;
+    }
+
     private static void ExtractPhpPropertyHookSupplementalSymbols(
         long fileId,
         string[] lines,
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(
-            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}:{symbol.Line}"),
-            StringComparer.Ordinal);
+        var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in symbols
-                     .Where(symbol => symbol.Kind == "property"
-                                      && symbol.Line >= 1
-                                      && symbol.Line <= lines.Length)
-                     .ToArray())
+        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
         {
             var lineIndex = property.Line - 1;
             var openBraceColumn = structuralLines[lineIndex].IndexOf('{', StringComparison.Ordinal);
@@ -5502,15 +5520,9 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(
-            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}:{symbol.Line}"),
-            StringComparer.Ordinal);
+        var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in symbols
-                     .Where(symbol => symbol.Kind == "property"
-                                      && symbol.Line >= 1
-                                      && symbol.Line <= lines.Length)
-                     .ToArray())
+        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
         {
             var lineIndex = property.Line - 1;
             var propertyLine = lines[lineIndex];
