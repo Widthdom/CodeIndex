@@ -121,10 +121,7 @@ public static partial class IndexCommandRunner
     }
 
     private static bool ExistingFileViolatesExtractionCaps(DbWriter writer, long fileId, int maxSymbolsPerFile, int maxReferencesPerFile) =>
-        writer.CountSymbolsForFile(fileId) > maxSymbolsPerFile
-        || writer.HasIssueForFile(fileId, "symbol_count_exceeded")
-        || writer.CountReferencesForFile(fileId) > maxReferencesPerFile
-        || writer.HasIssueForFile(fileId, "reference_count_exceeded");
+        writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile, maxReferencesPerFile);
 
     internal static bool ExistingFileGeneratedSuppressionMismatch(DbWriter writer, long fileId, FileIssue? generatedSuppressionIssue)
         => writer.HasIssueForFile(fileId, FileIndexer.GeneratedCodeExtractionSkippedIssueKind) != (generatedSuppressionIssue != null);

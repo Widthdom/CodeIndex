@@ -785,6 +785,32 @@ public class DbWriter
         return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
     }
 
+    public bool HasExtractionCapViolationForFile(long fileId, int maxSymbolsPerFile, int maxReferencesPerFile)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT CASE WHEN
+                (SELECT COUNT(*) FROM symbols WHERE file_id = @file_id) > @max_symbols
+                OR EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = @file_id
+                      AND kind = 'symbol_count_exceeded'
+                )
+                OR (SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id) > @max_references
+                OR EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = @file_id
+                      AND kind = 'reference_count_exceeded'
+                )
+            THEN 1 ELSE 0 END";
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        SqliteCommandPolicy.AddInt32(cmd, "@max_symbols", maxSymbolsPerFile);
+        SqliteCommandPolicy.AddInt32(cmd, "@max_references", maxReferencesPerFile);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "file extraction cap violation") != 0;
+    }
+
     public bool HasIssueForFile(long fileId, string kind)
     {
         using var cmd = _conn.CreateCommand();
