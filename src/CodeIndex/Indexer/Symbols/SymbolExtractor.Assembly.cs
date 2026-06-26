@@ -263,13 +263,19 @@ public static partial class SymbolExtractor
         List<SymbolRecord> sectionSymbols,
         int lineCount)
     {
-        var sections = sectionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
-        var functions = functionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
+        var sections = new List<SymbolRecord>(sectionSymbols);
+        sections.Sort(CompareAssemblyRangeSymbols);
+        var functions = new List<SymbolRecord>(functionSymbols);
+        functions.Sort(CompareAssemblyRangeSymbols);
+
+        var sectionIndex = 0;
         for (var i = 0; i < functions.Count; i++)
         {
             var current = functions[i];
             var nextFunctionStartLine = i + 1 < functions.Count ? functions[i + 1].StartLine : lineCount + 1;
-            var nextSectionStartLine = sections.FirstOrDefault(symbol => symbol.StartLine > current.StartLine)?.StartLine ?? lineCount + 1;
+            while (sectionIndex < sections.Count && sections[sectionIndex].StartLine <= current.StartLine)
+                sectionIndex++;
+            var nextSectionStartLine = sectionIndex < sections.Count ? sections[sectionIndex].StartLine : lineCount + 1;
             var nextStartLine = Math.Min(nextFunctionStartLine, nextSectionStartLine);
             current.BodyStartLine = current.StartLine;
             current.BodyEndLine = Math.Max(current.StartLine, nextStartLine - 1);
@@ -284,5 +290,13 @@ public static partial class SymbolExtractor
             current.BodyEndLine = Math.Max(current.StartLine, nextStartLine - 1);
             current.EndLine = current.BodyEndLine.Value;
         }
+    }
+
+    private static int CompareAssemblyRangeSymbols(SymbolRecord left, SymbolRecord right)
+    {
+        var startLineComparison = left.StartLine.CompareTo(right.StartLine);
+        return startLineComparison != 0
+            ? startLineComparison
+            : (left.StartColumn ?? 0).CompareTo(right.StartColumn ?? 0);
     }
 }
