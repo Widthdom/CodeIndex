@@ -422,6 +422,57 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_StaleIssueMetadataLookupReusesCacheAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFile = new FileRecord
+        {
+            Path = "src/legacy-a.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        };
+        var secondFile = new FileRecord
+        {
+            Path = "src/legacy-b.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        };
+        var firstFileId = writer.UpsertFile(firstFile);
+        var secondFileId = writer.UpsertFile(secondFile);
+        writer.InsertIssues(firstFileId,
+        [
+            new FileIssue
+            {
+                Path = firstFile.Path,
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "legacy replacement_char row without metadata",
+            },
+        ]);
+        writer.InsertIssues(secondFileId,
+        [
+            new FileIssue
+            {
+                Path = secondFile.Path,
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "legacy non_utf8_likely row without metadata",
+            },
+        ]);
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.Null(writer.GetUnchangedFileIdByStat(firstFile.Path, modified, firstFile.Size, "python"));
+        Assert.Null(writer.GetUnchangedFileIdByStat(secondFile.Path, modified, secondFile.Size, "python"));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_HasReusableFileBlockingIssueForFileReusesCacheAcrossFiles()
     {
         var writer = new DbWriter(_db);

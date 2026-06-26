@@ -784,17 +784,25 @@ public class DbWriter
             return false;
         }
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT 1
             FROM file_issues i
             JOIN files f ON i.file_id = f.id
             WHERE f.path = @path
               AND i.kind IN ('replacement_char', 'non_utf8_likely')
               AND (i.origin IS NULL OR i.severity IS NULL)
-            LIMIT 1";
-        SqliteCommandPolicy.AddText(cmd, "@path", relativePath);
-        return cmd.ExecuteScalar() != null;
+            LIMIT 1",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     private bool HasIssueMetadataColumns() =>
