@@ -11241,6 +11241,7 @@ public sealed class Caller
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}.db");
         var resolvedCSharpMetadataTargets = false;
         var rebuiltTypeScriptAugmentation = false;
+        var loadedPaths = new List<string>();
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
@@ -11251,17 +11252,20 @@ public sealed class Caller
 
             Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
 
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
             McpServer.McpIndexCSharpMetadataResolveForTesting = () => resolvedCSharpMetadataTargets = true;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
 
             var secondResponse = CallIndex(server, fixtureDir);
 
             Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.Empty(loadedPaths);
             Assert.False(resolvedCSharpMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
         }
         finally
         {
+            McpServer.McpIndexFileContentLoadForTesting = null;
             McpServer.McpIndexCSharpMetadataResolveForTesting = null;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);

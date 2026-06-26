@@ -48,6 +48,7 @@ public partial class McpServer
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
+    internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
     internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
     internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }
@@ -3096,6 +3097,39 @@ public partial class McpServer
             && matchesCurrent;
     }
 
+    private static long? TryGetUnchangedFileIdFromStat(
+        DbWriter writer,
+        string absolutePath,
+        string relativePath,
+        string? language,
+        bool allowReuse)
+    {
+        if (!allowReuse || language == null)
+            return null;
+
+        try
+        {
+            var info = new FileInfo(absolutePath);
+            if (!info.Exists)
+                return null;
+
+            return writer.GetUnchangedFileId(
+                relativePath,
+                info.LastWriteTimeUtc,
+                checksum: null,
+                size: info.Length,
+                language: language);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
     {
         payload["hotspot_family_ready"] = signal.Ready;
@@ -5988,10 +6022,34 @@ public partial class McpServer
         var csharpPrepassTargets = fileTargets
             .Where(static target => target.Language == "csharp")
             .ToArray();
+        bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
+        {
+            if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
+                return false;
+            if (target.Language != "csharp")
+                return false;
+
+            var existingId = TryGetUnchangedFileIdFromStat(
+                writer,
+                target.FilePath,
+                target.IndexPath,
+                target.Language,
+                allowReuse: true);
+            if (existingId == null)
+                return false;
+
+            return !writer.HasReusableFileBlockingIssueForFile(
+                existingId.Value,
+                maxSymbolsPerFile,
+                maxReferencesPerFile,
+                indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null);
+        }
+
         var csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
             writer,
             indexer,
             csharpPrepassTargets,
+            canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
             cancellationToken: requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
@@ -6012,6 +6070,37 @@ public partial class McpServer
             try
             {
                 requestToken.ThrowIfCancellationRequested();
+                var allowStatReuse = symbolKindFilterMatchesPrior
+                    && (target.Language != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                    && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                    && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
+                    && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
+                var statMatchedId = TryGetUnchangedFileIdFromStat(
+                    writer,
+                    filePath,
+                    target.IndexPath,
+                    target.Language,
+                    allowStatReuse);
+                if (statMatchedId != null
+                    && writer.HasReusableFileBlockingIssueForFile(
+                        statMatchedId.Value,
+                        maxSymbolsPerFile,
+                        maxReferencesPerFile,
+                        indexer.BuildGeneratedCodeExtractionSkippedIssue(target.IndexPath) != null))
+                {
+                    statMatchedId = null;
+                }
+                if (statMatchedId != null)
+                {
+                    skipped++;
+                    processed++;
+                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(target.Language) && target.Language != null)
+                        reusedHotspotFamilyLanguages.Add(target.Language);
+                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
+                    continue;
+                }
+
+                McpIndexFileContentLoadForTesting?.Invoke(target.IndexPath);
                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
                     filePath,
                     target.RelativePath,
