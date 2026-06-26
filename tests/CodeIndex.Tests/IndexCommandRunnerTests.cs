@@ -7307,6 +7307,37 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_UpdateMode_DeleteTypeScriptFile_RebuildsAugmentationReferences()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "types.ts");
+            File.WriteAllText(sourcePath, "export interface Options { value: string }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(sourcePath);
+            var rebuiltTypeScriptAugmentation = false;
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "types.ts", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.True(rebuiltTypeScriptAugmentation);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_Rebuild_WhenIndexedFileBecomesBinary_PersistsNullByteIssue()
     {
         var projectRoot = CreateTempProject();

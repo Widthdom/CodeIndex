@@ -436,6 +436,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
@@ -482,6 +483,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
@@ -526,6 +528,7 @@ public static partial class IndexCommandRunner
                             if (writer.DeleteFileByPath(dbPath))
                             {
                                 WriteProjectRootOnce();
+                                RequireTypeScriptAugmentationRefresh();
                                 deleteTxn.Commit();
                                 removed++;
                                 ftsMutated = true;
@@ -568,6 +571,7 @@ public static partial class IndexCommandRunner
                             {
                                 DemoteReadinessOnce();
                                 WriteProjectRootOnce();
+                                RequireTypeScriptAugmentationRefresh();
                                 purgeTxn.Commit();
                                 removed += purged;
                                 ftsMutated = true;
@@ -596,6 +600,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
