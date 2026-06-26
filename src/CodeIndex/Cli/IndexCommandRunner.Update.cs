@@ -141,10 +141,11 @@ public static partial class IndexCommandRunner
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
-            options.MaxFileSizeBytes,
-            maxSymbolCount: options.MaxSymbolsPerFile + 1,
-            maxReferenceCount: options.MaxReferencesPerFile + 1);
+        using var postExtractionHooks = new LazyDisposable<PostExtractionHookRunner>(
+            () => PostExtractionHookRunner.DiscoverDefault(
+                options.MaxFileSizeBytes,
+                maxSymbolCount: options.MaxSymbolsPerFile + 1,
+                maxReferenceCount: options.MaxReferencesPerFile + 1));
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -402,7 +403,11 @@ public static partial class IndexCommandRunner
             () => currentUpdatePath == null
                 ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
                 : $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed, current {currentUpdatePath}");
-        using var symbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+        using var symbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(() =>
+        {
+            UpdateExtractionWorkStartedForTesting?.Invoke();
+            return new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+        });
         try
         {
             foreach (var targetPath in targetPaths)
@@ -804,7 +809,7 @@ public static partial class IndexCommandRunner
                         currentUpdatePath,
                         true,
                         loaded.HasOversizeLine,
-                        symbolExtractionWorker,
+                        symbolExtractionWorker.Value,
                         cancellationToken);
                     var symbols = symbolExtraction.Symbols;
                     var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
@@ -827,7 +832,7 @@ public static partial class IndexCommandRunner
                     }
                     SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                     var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
-                    postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
+                    postExtractionHooks.Value.OnSymbolsExtracted(fileContext, symbols);
                     symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
@@ -868,7 +873,7 @@ public static partial class IndexCommandRunner
                         references = referenceExtraction.References;
                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
-                    postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
                     FileIssue? referenceCapIssue = null;
                     if (references.Count > options.MaxReferencesPerFile)
                     {
@@ -1218,7 +1223,7 @@ public static partial class IndexCommandRunner
             warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
             warnings++;
         }
-        warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
+        warnings += AddPostExtractionHookWarnings(postExtractionHooks.ValueIfCreated, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);

@@ -48,6 +48,21 @@ public static partial class IndexCommandRunner
         IReadOnlySet<string> Directories,
         string? WarningMessage);
 
+    private sealed class LazyDisposable<T>(Func<T> factory) : IDisposable
+        where T : class, IDisposable
+    {
+        private T? value;
+
+        internal T Value => value ??= factory();
+        internal T? ValueIfCreated => value;
+
+        public void Dispose()
+        {
+            value?.Dispose();
+            value = null;
+        }
+    }
+
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Action? FullScanExtractionWorkStartedForTesting { get; set; }
@@ -59,6 +74,7 @@ public static partial class IndexCommandRunner
     internal static Action? UpdateCSharpPrepassForTesting { get; set; }
     internal static Action? UpdateCSharpMetadataResolveForTesting { get; set; }
     internal static Action? UpdateTypeScriptAugmentationRebuildForTesting { get; set; }
+    internal static Action? UpdateExtractionWorkStartedForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }

@@ -2402,6 +2402,36 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_NoOpUpdate_DoesNotStartExtractionWork()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_update_no_extraction_work");
+        var startedExtractionWork = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () => startedExtractionWork = true;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "tool.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.False(startedExtractionWork);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_NotifyFlag_ParsesCompletionNotificationMode()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--notify=osc9"]);
