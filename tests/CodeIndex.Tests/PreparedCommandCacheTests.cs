@@ -567,6 +567,48 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_InsertIssuesReusesDeleteAndInsertCommandsAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/issues-a.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        var secondFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/issues-b.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+        var issues = new[]
+        {
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "non UTF-8 bytes",
+                Origin = "validation",
+                Severity = "warning",
+            },
+        };
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.InsertIssues(firstFileId, issues);
+        writer.InsertIssues(secondFileId, issues);
+        writer.InsertIssues(secondFileId, []);
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one

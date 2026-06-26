@@ -2008,31 +2008,55 @@ public class DbWriter
     {
         // Always delete existing issues — if the file is now clean, old issues must be removed
         // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
-        using var delCmd = _conn.CreateCommand();
-        delCmd.CommandText = "DELETE FROM file_issues WHERE file_id = @fid";
-        SqliteCommandPolicy.Add(delCmd, "@fid", fileId);
-        delCmd.ExecuteNonQuery();
+        var delCmd = RentCommand(
+            "DELETE FROM file_issues WHERE file_id = @fid",
+            static c => c.Parameters.Add("@fid", SqliteType.Integer));
+        try
+        {
+            delCmd.Parameters["@fid"].Value = fileId;
+            delCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(delCmd);
+        }
 
         if (issues.Count == 0) return;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)";
-        var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-        var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
-        var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
-        var pMessage = cmd.Parameters.Add("@message", SqliteType.Text);
-        var pOrigin = cmd.Parameters.Add("@origin", SqliteType.Text);
-        var pSeverity = cmd.Parameters.Add("@severity", SqliteType.Text);
-
-        foreach (var issue in issues)
+        var cmd = RentCommand(
+            "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)",
+            static c =>
+            {
+                c.Parameters.Add("@fid", SqliteType.Integer);
+                c.Parameters.Add("@kind", SqliteType.Text);
+                c.Parameters.Add("@line", SqliteType.Integer);
+                c.Parameters.Add("@message", SqliteType.Text);
+                c.Parameters.Add("@origin", SqliteType.Text);
+                c.Parameters.Add("@severity", SqliteType.Text);
+            });
+        try
         {
-            pFid.Value = fileId;
-            pKind.Value = issue.Kind;
-            pLine.Value = issue.Line;
-            pMessage.Value = issue.Message;
-            pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
-            pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
-            cmd.ExecuteNonQuery();
+            var pFid = cmd.Parameters["@fid"];
+            var pKind = cmd.Parameters["@kind"];
+            var pLine = cmd.Parameters["@line"];
+            var pMessage = cmd.Parameters["@message"];
+            var pOrigin = cmd.Parameters["@origin"];
+            var pSeverity = cmd.Parameters["@severity"];
+
+            foreach (var issue in issues)
+            {
+                pFid.Value = fileId;
+                pKind.Value = issue.Kind;
+                pLine.Value = issue.Line;
+                pMessage.Value = issue.Message;
+                pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
+                pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
+                cmd.ExecuteNonQuery();
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
     }
 
