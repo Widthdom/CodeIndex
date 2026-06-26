@@ -1189,6 +1189,58 @@ public static partial class ReferenceExtractor
         return names;
     }
 
+    private static HashSet<string> BuildFileDefinitionNames(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            names.Add(symbol.Name);
+        return names;
+    }
+
+    private static List<SymbolRecord> BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var callableSymbols = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "function")
+                callableSymbols.Add(symbol);
+        }
+
+        callableSymbols.Sort(CompareCobolCallableSymbols);
+        return callableSymbols;
+    }
+
+    private static int CompareCobolCallableSymbols(SymbolRecord left, SymbolRecord right)
+    {
+        var lineComparison = left.Line.CompareTo(right.Line);
+        if (lineComparison != 0)
+            return lineComparison;
+
+        var startLineComparison = left.StartLine.CompareTo(right.StartLine);
+        return startLineComparison != 0
+            ? startLineComparison
+            : string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<SymbolRecord> BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var candidates = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                candidates.Add(symbol);
+        }
+
+        candidates.Sort(CompareRustEnumCandidates);
+        return candidates;
+    }
+
+    private static int CompareRustEnumCandidates(SymbolRecord left, SymbolRecord right)
+        => GetRustEnumCandidateSpan(left).CompareTo(GetRustEnumCandidateSpan(right));
+
+    private static int GetRustEnumCandidateSpan(SymbolRecord symbol)
+        => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
+
     private static StringComparer GetDefinitionNamesComparer(string language)
         => language == "sql"
             ? StringComparer.OrdinalIgnoreCase

@@ -85,7 +85,7 @@ public static partial class ReferenceExtractor
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
         var allDefinitionNames = BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic);
         var fileDefinitionNames = isRazorFile
-            ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
+            ? BuildFileDefinitionNames(symbols)
             : null;
         var sqlDefinitionLeafSpansByLine = language == "sql"
             ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(lines, symbols)
@@ -94,12 +94,7 @@ public static partial class ReferenceExtractor
             ? SqlReferenceExtractor.BuildWindowFunctionCallSiteSuppressions(structuralLines)
             : null;
         var cobolCallableSymbols = language == "cobol"
-            ? symbols
-                .Where(symbol => symbol.Kind == "function")
-                .OrderBy(symbol => symbol.Line)
-                .ThenBy(symbol => symbol.StartLine)
-                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList()
+            ? BuildCobolCallableSymbols(symbols)
             : null;
         // Include 'property' so expression-bodied and block-bodied property accessors
         // attribute their calls to the property rather than falling through to the
@@ -121,10 +116,7 @@ public static partial class ReferenceExtractor
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
         var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic);
         var rustEnumCandidates = language == "rust"
-            ? symbols
-                .Where(symbol => symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-                .ToList()
+            ? BuildRustEnumCandidates(symbols)
             : null;
         var pythonDefinitionContainersByLineAndKind = language == "python"
             ? BuildPythonDefinitionContainersByLineAndKind(symbols)
