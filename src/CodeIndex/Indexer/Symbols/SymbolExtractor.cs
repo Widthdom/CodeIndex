@@ -5156,7 +5156,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var headerEnd = FindSqlRoutineHeaderEndLine(structuralLines, i);
-            var header = string.Join('\n', structuralLines.Skip(i).Take(headerEnd - i + 1));
+            var header = LineRangeText.Join(structuralLines, i, headerEnd);
             var owner = symbols
                 .Where(symbol => symbol.Kind == "function" && symbol.Line >= i + 1 && symbol.Line <= headerEnd + 1)
                 .OrderBy(symbol => symbol.Line)

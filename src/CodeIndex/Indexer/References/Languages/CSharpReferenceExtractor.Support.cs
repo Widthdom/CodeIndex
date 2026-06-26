@@ -474,7 +474,7 @@ public static partial class ReferenceExtractor
                 var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
                 var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
                 var blockScopes = BuildCSharpBlockScopes(structuralLines, start, end);
-                var bodyText = string.Join("\n", structuralLines.Skip(start).Take(end - start + 1));
+                var bodyText = LineRangeText.Join(structuralLines, start, end);
                 if (symbol.Kind == "function")
                     AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
                 for (var i = start; i <= end; i++)

@@ -214,7 +214,7 @@ public static partial class ReferenceExtractor
             || bodyEndIndex < bodyStartIndex)
             return false;
 
-        var bodyText = string.Join("\n", structuralLines.Skip(bodyStartIndex).Take(bodyEndIndex - bodyStartIndex + 1));
+        var bodyText = LineRangeText.Join(structuralLines, bodyStartIndex, bodyEndIndex);
         if (string.IsNullOrEmpty(bodyText))
             return false;
 
