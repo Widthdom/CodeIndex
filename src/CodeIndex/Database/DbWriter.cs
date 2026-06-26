@@ -3880,26 +3880,36 @@ public class DbWriter
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT
                 (SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
-              + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
-        var raw = cmd.ExecuteScalar();
-        long missing = raw is long l ? l : (raw is int i ? i : 0);
-        if (missing != 0)
-            return false;
+              + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)",
+            static _ => { });
+        try
+        {
+            var raw = cmd.ExecuteScalar();
+            long missing = raw is long l ? l : (raw is int i ? i : 0);
+            if (missing != 0)
+                return false;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
 
         return !requireCurrentFoldKeys || AllFoldedColumnValuesMatchCurrentFold();
     }
 
     public bool AllFoldedColumnValuesMatchCurrentFold()
     {
-        using (var cmd = _conn.CreateCommand())
+        var symbols = RentCommand(
+            "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL",
+            static _ => { });
+        try
         {
-            cmd.CommandText = "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL";
-            using var reader = cmd.ExecuteTrackedReader();
+            using var reader = symbols.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 var expected = NameFold.Fold(reader.GetString(0));
@@ -3908,14 +3918,20 @@ public class DbWriter
                     return false;
             }
         }
-
-        using (var cmd = _conn.CreateCommand())
+        finally
         {
-            cmd.CommandText = @"
+            ReleaseCommand(symbols);
+        }
+
+        var references = RentCommand(
+            @"
                 SELECT symbol_name, symbol_name_folded, container_name, container_name_folded
                 FROM symbol_references
-                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL";
-            using var reader = cmd.ExecuteTrackedReader();
+                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL",
+            static _ => { });
+        try
+        {
+            using var reader = references.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 if (!reader.IsDBNull(0))
@@ -3934,6 +3950,10 @@ public class DbWriter
                         return false;
                 }
             }
+        }
+        finally
+        {
+            ReleaseCommand(references);
         }
 
         return true;
@@ -4053,16 +4073,19 @@ public class DbWriter
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
 
-        using var symbols = _conn.CreateCommand();
-        symbols.CommandText = rewriteAll && phase != "references"
+        var symbolsSql = rewriteAll && phase != "references"
             ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId"
             : rewriteAll
             ? "SELECT 0"
             : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-        SqliteCommandPolicy.Add(symbols, "@lastSymbolId", lastSymbolId);
+        var symbolsUsesCheckpoint = rewriteAll && phase != "references";
+        var symbols = RentCommand(
+            symbolsSql,
+            symbolsUsesCheckpoint
+                ? static c => c.Parameters.Add("@lastSymbolId", SqliteType.Integer)
+                : static _ => { });
 
-        using var references = _conn.CreateCommand();
-        references.CommandText = rewriteAll
+        var referencesSql = rewriteAll
             ? @"SELECT COUNT(*)
                 FROM symbol_references
                 WHERE id > @lastReferenceId
@@ -4071,9 +4094,26 @@ public class DbWriter
                 FROM symbol_references
                 WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                    OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-        SqliteCommandPolicy.Add(references, "@lastReferenceId", phase == "references" ? lastReferenceId : 0);
+        var references = RentCommand(
+            referencesSql,
+            rewriteAll
+                ? static c => c.Parameters.Add("@lastReferenceId", SqliteType.Integer)
+                : static _ => { });
 
-        return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
+        try
+        {
+            if (symbolsUsesCheckpoint)
+                symbols.Parameters["@lastSymbolId"].Value = lastSymbolId;
+            if (rewriteAll)
+                references.Parameters["@lastReferenceId"].Value = phase == "references" ? lastReferenceId : 0;
+
+            return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
+        }
+        finally
+        {
+            ReleaseCommand(references);
+            ReleaseCommand(symbols);
+        }
     }
 
     private static int ToInt32Count(object? value)
@@ -4090,38 +4130,58 @@ public class DbWriter
 
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var rows = new List<(long Id, string Name)>();
-        using (var cmd = _conn.CreateCommand())
+        var selectSql = rewriteAll
+            ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
+            : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+        var select = RentCommand(
+            selectSql,
+            rewriteAll
+                ? static c => c.Parameters.Add("@lastSymbolId", SqliteType.Integer)
+                : static _ => { });
+        try
         {
-            cmd.CommandText = rewriteAll
-                ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
-                : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-            SqliteCommandPolicy.Add(cmd, "@lastSymbolId", lastSymbolId);
-            using var reader = cmd.ExecuteTrackedReader();
+            if (rewriteAll)
+                select.Parameters["@lastSymbolId"].Value = lastSymbolId;
+            using var reader = select.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 rows.Add((reader.GetInt64(0), reader.GetString(1)));
             }
         }
+        finally
+        {
+            ReleaseCommand(select);
+        }
 
         if (rows.Count == 0)
             return 0;
 
-        using var update = _conn.CreateCommand();
-        update.CommandText = "UPDATE symbols SET name_folded = @folded WHERE id = @id";
-        var pFolded = update.Parameters.Add("@folded", SqliteType.Text);
-        var pId = update.Parameters.Add("@id", SqliteType.Integer);
-        update.Prepare();
-
-        foreach (var row in rows)
+        var update = RentCommand(
+            "UPDATE symbols SET name_folded = @folded WHERE id = @id",
+            static c =>
+            {
+                c.Parameters.Add("@folded", SqliteType.Text);
+                c.Parameters.Add("@id", SqliteType.Integer);
+            });
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
-            pId.Value = row.Id;
-            update.ExecuteNonQuery();
-            if (rewriteAll)
-                SetMeta(FoldBackfillLastSymbolIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            FoldBackfillRowUpdatedForTesting?.Invoke();
+            var pFolded = update.Parameters["@folded"];
+            var pId = update.Parameters["@id"];
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
+                pId.Value = row.Id;
+                update.ExecuteNonQuery();
+                if (rewriteAll)
+                    SetMeta(FoldBackfillLastSymbolIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FoldBackfillRowUpdatedForTesting?.Invoke();
+            }
+        }
+        finally
+        {
+            ReleaseCommand(update);
         }
 
         return rows.Count;
@@ -4131,20 +4191,26 @@ public class DbWriter
     {
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
         var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = rewriteAll
-                ? @"SELECT id, symbol_name, container_name
+        var selectSql = rewriteAll
+            ? @"SELECT id, symbol_name, container_name
                     FROM symbol_references
                     WHERE id > @lastReferenceId
                       AND (symbol_name IS NOT NULL OR container_name IS NOT NULL)
                     ORDER BY id"
-                : @"SELECT id, symbol_name, container_name
+            : @"SELECT id, symbol_name, container_name
                     FROM symbol_references
                     WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                        OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-            SqliteCommandPolicy.Add(cmd, "@lastReferenceId", lastReferenceId);
-            using var reader = cmd.ExecuteTrackedReader();
+        var select = RentCommand(
+            selectSql,
+            rewriteAll
+                ? static c => c.Parameters.Add("@lastReferenceId", SqliteType.Integer)
+                : static _ => { });
+        try
+        {
+            if (rewriteAll)
+                select.Parameters["@lastReferenceId"].Value = lastReferenceId;
+            using var reader = select.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -4154,30 +4220,45 @@ public class DbWriter
                     reader.IsDBNull(2) ? null : reader.GetString(2)));
             }
         }
+        finally
+        {
+            ReleaseCommand(select);
+        }
 
         if (rows.Count == 0)
             return 0;
 
-        using var update = _conn.CreateCommand();
-        update.CommandText = @"UPDATE symbol_references
+        var update = RentCommand(
+            @"UPDATE symbol_references
                                SET symbol_name_folded = @symbolNameFolded,
                                    container_name_folded = @containerNameFolded
-                               WHERE id = @id";
-        var pSymbolNameFolded = update.Parameters.Add("@symbolNameFolded", SqliteType.Text);
-        var pContainerNameFolded = update.Parameters.Add("@containerNameFolded", SqliteType.Text);
-        var pId = update.Parameters.Add("@id", SqliteType.Integer);
-        update.Prepare();
-
-        foreach (var row in rows)
+                               WHERE id = @id",
+            static c =>
+            {
+                c.Parameters.Add("@symbolNameFolded", SqliteType.Text);
+                c.Parameters.Add("@containerNameFolded", SqliteType.Text);
+                c.Parameters.Add("@id", SqliteType.Integer);
+            });
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
-            pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
-            pId.Value = row.Id;
-            update.ExecuteNonQuery();
-            if (rewriteAll)
-                SetMeta(FoldBackfillLastReferenceIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            FoldBackfillRowUpdatedForTesting?.Invoke();
+            var pSymbolNameFolded = update.Parameters["@symbolNameFolded"];
+            var pContainerNameFolded = update.Parameters["@containerNameFolded"];
+            var pId = update.Parameters["@id"];
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
+                pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
+                pId.Value = row.Id;
+                update.ExecuteNonQuery();
+                if (rewriteAll)
+                    SetMeta(FoldBackfillLastReferenceIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FoldBackfillRowUpdatedForTesting?.Invoke();
+            }
+        }
+        finally
+        {
+            ReleaseCommand(update);
         }
 
         return rows.Count;

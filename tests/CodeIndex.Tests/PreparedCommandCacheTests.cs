@@ -890,6 +890,58 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_FoldBackfillQueriesReuseCommands()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Checksum = "fold",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "FoldTarget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+            },
+        });
+        writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "FoldTarget",
+                ReferenceKind = "type_reference",
+                Line = 3,
+                Column = 12,
+                ContainerName = "FoldCaller",
+                Context = "var value = FoldTarget;",
+            },
+        });
+
+        Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+        Assert.Equal((1, 1), writer.CountBackfillFoldedColumns(rewriteAll: true));
+        Assert.Equal((1, 1), writer.BackfillFoldedColumns(rewriteAll: true));
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+        Assert.Equal((1, 1), writer.CountBackfillFoldedColumns(rewriteAll: true));
+        Assert.Equal((1, 1), writer.BackfillFoldedColumns(rewriteAll: true));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one
