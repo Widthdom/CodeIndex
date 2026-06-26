@@ -735,6 +735,86 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_FileCountIssueAndLanguageQueriesReuseCommands()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/count-a.cs",
+            Lang = "csharp",
+            Size = 40,
+            Lines = 2,
+            Modified = modified,
+        });
+        var secondFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/count-b.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 2,
+            Modified = modified,
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = firstFileId,
+                Kind = "class",
+                Name = "CountA",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+            },
+            new SymbolRecord
+            {
+                FileId = secondFileId,
+                Kind = "function",
+                Name = "count_b",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+            },
+        });
+        writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = firstFileId,
+                SymbolName = "CountA",
+                ReferenceKind = "type_reference",
+                Line = 2,
+                Column = 12,
+                Context = "var value = CountA;",
+            },
+        });
+        writer.InsertIssues(firstFileId, new[]
+        {
+            new FileIssue
+            {
+                Path = "src/count-a.cs",
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "test issue",
+            },
+        });
+
+        Assert.Equal(1, writer.CountSymbolsForFile(firstFileId));
+        Assert.Equal(1, writer.CountReferencesForFile(firstFileId));
+        Assert.True(writer.HasIssueForFile(firstFileId, "non_utf8_likely"));
+        Assert.Contains("csharp", writer.GetIndexedLanguages());
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.Equal(1, writer.CountSymbolsForFile(secondFileId));
+        Assert.Equal(0, writer.CountReferencesForFile(secondFileId));
+        Assert.False(writer.HasIssueForFile(secondFileId, "non_utf8_likely"));
+        Assert.Contains("python", writer.GetIndexedLanguages());
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 4);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_MetaHelpersReuseCommandsAcrossKeys()
     {
         var writer = new DbWriter(_db);

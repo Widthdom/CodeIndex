@@ -832,18 +832,34 @@ public class DbWriter
 
     public int CountSymbolsForFile(long fileId)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbols count for file");
+        var cmd = RentCommand(
+            "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id",
+            static c => c.Parameters.Add("@file_id", SqliteType.Integer));
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbols count for file");
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public int CountReferencesForFile(long fileId)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
+        var cmd = RentCommand(
+            "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id",
+            static c => c.Parameters.Add("@file_id", SqliteType.Integer));
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public bool HasExtractionCapViolationForFile(long fileId, int maxSymbolsPerFile, int maxReferencesPerFile)
@@ -911,11 +927,23 @@ public class DbWriter
 
     public bool HasIssueForFile(long fileId, string kind)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        SqliteCommandPolicy.AddText(cmd, "@kind", kind);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1",
+            static c =>
+            {
+                c.Parameters.Add("@file_id", SqliteType.Integer);
+                c.Parameters.Add("@kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            cmd.Parameters["@kind"].Value = kind;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public IReadOnlyList<string> GetIndexedLanguages()
@@ -924,17 +952,25 @@ public class DbWriter
         if (!TableExists("files"))
             return languages;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT DISTINCT f.lang
             FROM files f
             WHERE f.lang IS NOT NULL
               AND f.lang <> ''
               AND EXISTS (SELECT 1 FROM symbols s WHERE s.file_id = f.id)
-            ORDER BY f.lang";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            languages.Add(reader.GetString(0));
+            ORDER BY f.lang",
+            static _ => { });
+        try
+        {
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                languages.Add(reader.GetString(0));
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
         return languages;
     }
 
