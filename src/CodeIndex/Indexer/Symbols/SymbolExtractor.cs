@@ -5157,10 +5157,7 @@ public static partial class SymbolExtractor
 
             var headerEnd = FindSqlRoutineHeaderEndLine(structuralLines, i);
             var header = LineRangeText.Join(structuralLines, i, headerEnd);
-            var owner = symbols
-                .Where(symbol => symbol.Kind == "function" && symbol.Line >= i + 1 && symbol.Line <= headerEnd + 1)
-                .OrderBy(symbol => symbol.Line)
-                .FirstOrDefault();
+            var owner = FindSqlRoutineOwnerSymbol(symbols, i + 1, headerEnd + 1);
             var ownerName = owner?.Name;
             var ownerBodyStart = owner?.BodyStartLine;
             var ownerBodyEnd = owner?.BodyEndLine;
@@ -5184,6 +5181,21 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static SymbolRecord? FindSqlRoutineOwnerSymbol(List<SymbolRecord> symbols, int startLine, int endLine)
+    {
+        SymbolRecord? owner = null;
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || symbol.Line < startLine || symbol.Line > endLine)
+                continue;
+
+            if (owner == null || symbol.Line < owner.Line)
+                owner = symbol;
+        }
+
+        return owner;
     }
 
     private static int FindSqlRoutineHeaderEndLine(string[] lines, int startLineIndex)
