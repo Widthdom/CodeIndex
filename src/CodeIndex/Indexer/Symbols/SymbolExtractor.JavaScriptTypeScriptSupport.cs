@@ -6453,18 +6453,20 @@ public static partial class SymbolExtractor
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
     {
-        var classSymbols = new List<SymbolRecord>();
-        foreach (var symbol in symbols)
+        var classSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
         {
+            var symbol = symbols[index];
             if (symbol.Kind is "class" or "interface" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                classSymbols.Add(symbol);
+                classSymbols.Add((symbol, index));
         }
 
-        classSymbols.Sort(CompareJavaScriptTypeScriptClassSymbols);
+        classSymbols.Sort(CompareJavaScriptTypeScriptClassSymbolEntries);
 
         var targets = new List<JavaScriptClassScanTarget>(classSymbols.Count);
-        foreach (var symbol in classSymbols)
+        foreach (var entry in classSymbols)
         {
+            var symbol = entry.Symbol;
             targets.Add(CreateJavaScriptClassScanTarget(
                 lines,
                 lang,
@@ -6503,22 +6505,45 @@ public static partial class SymbolExtractor
     }
 
     private static void SortJavaScriptTypeScriptClassScanTargets(List<JavaScriptClassScanTarget> targets)
-        => targets.Sort(CompareJavaScriptTypeScriptClassScanTargets);
-
-    private static int CompareJavaScriptTypeScriptClassSymbols(SymbolRecord left, SymbolRecord right)
     {
-        var startLineComparison = left.StartLine.CompareTo(right.StartLine);
-        return startLineComparison != 0
-            ? startLineComparison
-            : right.EndLine.CompareTo(left.EndLine);
+        if (targets.Count < 2)
+            return;
+
+        var entries = new List<(JavaScriptClassScanTarget Target, int OriginalIndex)>(targets.Count);
+        for (var index = 0; index < targets.Count; index++)
+            entries.Add((targets[index], index));
+
+        entries.Sort(CompareJavaScriptTypeScriptClassScanTargetEntries);
+        for (var index = 0; index < entries.Count; index++)
+            targets[index] = entries[index].Target;
     }
 
-    private static int CompareJavaScriptTypeScriptClassScanTargets(JavaScriptClassScanTarget left, JavaScriptClassScanTarget right)
+    private static int CompareJavaScriptTypeScriptClassSymbolEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
     {
-        var startIndexComparison = left.StartIndex.CompareTo(right.StartIndex);
-        return startIndexComparison != 0
-            ? startIndexComparison
-            : right.ScanEndExclusive.CompareTo(left.ScanEndExclusive);
+        var startLineComparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (startLineComparison != 0)
+            return startLineComparison;
+
+        var endLineComparison = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+        return endLineComparison != 0
+            ? endLineComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
+
+    private static int CompareJavaScriptTypeScriptClassScanTargetEntries(
+        (JavaScriptClassScanTarget Target, int OriginalIndex) left,
+        (JavaScriptClassScanTarget Target, int OriginalIndex) right)
+    {
+        var startIndexComparison = left.Target.StartIndex.CompareTo(right.Target.StartIndex);
+        if (startIndexComparison != 0)
+            return startIndexComparison;
+
+        var scanEndComparison = right.Target.ScanEndExclusive.CompareTo(left.Target.ScanEndExclusive);
+        return scanEndComparison != 0
+            ? scanEndComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
     private static bool IsInsideJavaScriptTypeScriptPrivateScope(Stack<JavaScriptScopeKind> scopeStack)

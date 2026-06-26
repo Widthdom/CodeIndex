@@ -1199,44 +1199,67 @@ public static partial class ReferenceExtractor
 
     private static List<SymbolRecord> BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
-        var callableSymbols = new List<SymbolRecord>();
-        foreach (var symbol in symbols)
+        var callableSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
         {
+            var symbol = symbols[index];
             if (symbol.Kind == "function")
-                callableSymbols.Add(symbol);
+                callableSymbols.Add((symbol, index));
         }
 
-        callableSymbols.Sort(CompareCobolCallableSymbols);
-        return callableSymbols;
+        callableSymbols.Sort(CompareCobolCallableSymbolEntries);
+
+        var sorted = new List<SymbolRecord>(callableSymbols.Count);
+        foreach (var entry in callableSymbols)
+            sorted.Add(entry.Symbol);
+        return sorted;
     }
 
-    private static int CompareCobolCallableSymbols(SymbolRecord left, SymbolRecord right)
+    private static int CompareCobolCallableSymbolEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
     {
-        var lineComparison = left.Line.CompareTo(right.Line);
+        var lineComparison = left.Symbol.Line.CompareTo(right.Symbol.Line);
         if (lineComparison != 0)
             return lineComparison;
 
-        var startLineComparison = left.StartLine.CompareTo(right.StartLine);
-        return startLineComparison != 0
-            ? startLineComparison
-            : string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
+        var startLineComparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (startLineComparison != 0)
+            return startLineComparison;
+
+        var nameComparison = string.Compare(left.Symbol.Name, right.Symbol.Name, StringComparison.OrdinalIgnoreCase);
+        return nameComparison != 0
+            ? nameComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
     private static List<SymbolRecord> BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<SymbolRecord>();
-        foreach (var symbol in symbols)
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
         {
+            var symbol = symbols[index];
             if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add(symbol);
+                candidates.Add((symbol, index));
         }
 
-        candidates.Sort(CompareRustEnumCandidates);
-        return candidates;
+        candidates.Sort(CompareRustEnumCandidateEntries);
+
+        var sorted = new List<SymbolRecord>(candidates.Count);
+        foreach (var entry in candidates)
+            sorted.Add(entry.Symbol);
+        return sorted;
     }
 
-    private static int CompareRustEnumCandidates(SymbolRecord left, SymbolRecord right)
-        => GetRustEnumCandidateSpan(left).CompareTo(GetRustEnumCandidateSpan(right));
+    private static int CompareRustEnumCandidateEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var spanComparison = GetRustEnumCandidateSpan(left.Symbol).CompareTo(GetRustEnumCandidateSpan(right.Symbol));
+        return spanComparison != 0
+            ? spanComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
 
     private static int GetRustEnumCandidateSpan(SymbolRecord symbol)
         => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
@@ -1348,16 +1371,34 @@ public static partial class ReferenceExtractor
 
         var result = new Dictionary<int, SymbolRecord[]>(byLine.Count);
         foreach (var pair in byLine)
-        {
-            pair.Value.Sort(CompareSwiftPropertyDefinitionCandidates);
-            result.Add(pair.Key, pair.Value.ToArray());
-        }
+            result.Add(pair.Key, SortSwiftPropertyDefinitionCandidates(pair.Value));
 
         return result;
     }
 
-    private static int CompareSwiftPropertyDefinitionCandidates(SymbolRecord left, SymbolRecord right)
-        => (right.StartColumn ?? 0).CompareTo(left.StartColumn ?? 0);
+    private static SymbolRecord[] SortSwiftPropertyDefinitionCandidates(IReadOnlyList<SymbolRecord> candidates)
+    {
+        var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(candidates.Count);
+        for (var index = 0; index < candidates.Count; index++)
+            entries.Add((candidates[index], index));
+
+        entries.Sort(CompareSwiftPropertyDefinitionCandidateEntries);
+
+        var sorted = new SymbolRecord[entries.Count];
+        for (var index = 0; index < entries.Count; index++)
+            sorted[index] = entries[index].Symbol;
+        return sorted;
+    }
+
+    private static int CompareSwiftPropertyDefinitionCandidateEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var startColumnComparison = (right.Symbol.StartColumn ?? 0).CompareTo(left.Symbol.StartColumn ?? 0);
+        return startColumnComparison != 0
+            ? startColumnComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
 
     private static List<SymbolRecord> BuildBoundedContainerCandidates(
         IReadOnlyList<SymbolRecord> symbols,

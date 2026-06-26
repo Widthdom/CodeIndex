@@ -263,10 +263,8 @@ public static partial class SymbolExtractor
         List<SymbolRecord> sectionSymbols,
         int lineCount)
     {
-        var sections = new List<SymbolRecord>(sectionSymbols);
-        sections.Sort(CompareAssemblyRangeSymbols);
-        var functions = new List<SymbolRecord>(functionSymbols);
-        functions.Sort(CompareAssemblyRangeSymbols);
+        var sections = BuildSortedAssemblyRangeSymbols(sectionSymbols);
+        var functions = BuildSortedAssemblyRangeSymbols(functionSymbols);
 
         var sectionIndex = 0;
         for (var i = 0; i < functions.Count; i++)
@@ -292,11 +290,31 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static int CompareAssemblyRangeSymbols(SymbolRecord left, SymbolRecord right)
+    private static List<SymbolRecord> BuildSortedAssemblyRangeSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
-        var startLineComparison = left.StartLine.CompareTo(right.StartLine);
-        return startLineComparison != 0
-            ? startLineComparison
-            : (left.StartColumn ?? 0).CompareTo(right.StartColumn ?? 0);
+        var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(symbols.Count);
+        for (var index = 0; index < symbols.Count; index++)
+            entries.Add((symbols[index], index));
+
+        entries.Sort(CompareAssemblyRangeSymbolEntries);
+
+        var sorted = new List<SymbolRecord>(entries.Count);
+        foreach (var entry in entries)
+            sorted.Add(entry.Symbol);
+        return sorted;
+    }
+
+    private static int CompareAssemblyRangeSymbolEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var startLineComparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (startLineComparison != 0)
+            return startLineComparison;
+
+        var startColumnComparison = (left.Symbol.StartColumn ?? 0).CompareTo(right.Symbol.StartColumn ?? 0);
+        return startColumnComparison != 0
+            ? startColumnComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 }
