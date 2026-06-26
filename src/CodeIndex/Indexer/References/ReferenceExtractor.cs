@@ -1346,10 +1346,18 @@ public static partial class ReferenceExtractor
                 $"Swift property lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
         }
 
-        return byLine.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray());
+        var result = new Dictionary<int, SymbolRecord[]>(byLine.Count);
+        foreach (var pair in byLine)
+        {
+            pair.Value.Sort(CompareSwiftPropertyDefinitionCandidates);
+            result.Add(pair.Key, pair.Value.ToArray());
+        }
+
+        return result;
     }
+
+    private static int CompareSwiftPropertyDefinitionCandidates(SymbolRecord left, SymbolRecord right)
+        => (right.StartColumn ?? 0).CompareTo(left.StartColumn ?? 0);
 
     private static List<SymbolRecord> BuildBoundedContainerCandidates(
         IReadOnlyList<SymbolRecord> symbols,
