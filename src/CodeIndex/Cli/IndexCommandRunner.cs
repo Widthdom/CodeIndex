@@ -1240,8 +1240,6 @@ public static partial class IndexCommandRunner
         string RelativePath,
         FileRecord? Record,
         string? Content,
-        byte[]? RawBytes,
-        FileContentInspection? Inspection,
         bool? HasOversizeLine,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
@@ -1257,8 +1255,6 @@ public static partial class IndexCommandRunner
             string relativePath,
             FileRecord record,
             string? content,
-            byte[]? rawBytes,
-            FileContentInspection? inspection,
             bool hasOversizeLine,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
@@ -1273,8 +1269,6 @@ public static partial class IndexCommandRunner
                 relativePath,
                 record,
                 content,
-                rawBytes,
-                inspection,
                 hasOversizeLine,
                 warning,
                 chunks,
@@ -1304,8 +1298,6 @@ public static partial class IndexCommandRunner
                 record,
                 null,
                 null,
-                null,
-                null,
                 warning,
                 chunks,
                 symbols,
@@ -1317,10 +1309,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, null, false, exception);
+            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(filePath, relativePath, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

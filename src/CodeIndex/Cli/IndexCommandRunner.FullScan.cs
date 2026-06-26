@@ -1486,8 +1486,6 @@ public static partial class IndexCommandRunner
                                             displayRelativePath,
                                             record,
                                             content,
-                                            null,
-                                            null,
                                             hasOversizeLine,
                                             warning,
                                             chunks,
@@ -1727,7 +1725,7 @@ public static partial class IndexCommandRunner
                             writer.InsertSymbols([], cancellationToken);
                             writer.InsertReferences([], cancellationToken);
                             var generatedIssues = AppendIssueIfMissing(
-                                item.Issues ?? ValidateWorkItemContent(item, record),
+                                RequireWorkItemIssues(item),
                                 generatedSuppressionIssue);
                             writer.InsertIssues(fileId, generatedIssues);
                             if (options.Verbose)
@@ -1822,7 +1820,7 @@ public static partial class IndexCommandRunner
                         writer.InsertSymbols(symbols, cancellationToken);
                         if (symbolRegexTimeoutIssue != null)
                         {
-                            var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                            var baseIssues = RequireWorkItemIssues(item);
                             item = item with { Issues = AppendIssue(baseIssues, symbolRegexTimeoutIssue) };
                         }
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
@@ -1858,12 +1856,12 @@ public static partial class IndexCommandRunner
                             postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                             if (regexTimeoutIssue != null)
                             {
-                                var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                                var baseIssues = RequireWorkItemIssues(item);
                                 item = item with { Issues = AppendIssue(baseIssues, regexTimeoutIssue) };
                             }
                             if (referenceExtraction != null)
                             {
-                                var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                                var baseIssues = RequireWorkItemIssues(item);
                                 item = item with
                                 {
                                     Issues = AppendReferenceExtractionDiagnosticIssues(baseIssues, record.Path, referenceExtraction.Diagnostics),
@@ -1873,7 +1871,7 @@ public static partial class IndexCommandRunner
                             {
                                 var issue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
                                 references = [];
-                                var baseIssues = item.Issues ?? ValidateWorkItemContent(item, record);
+                                var baseIssues = RequireWorkItemIssues(item);
                                 item = item with { Issues = AppendIssue(baseIssues, issue) };
                             }
                         }
@@ -1881,7 +1879,7 @@ public static partial class IndexCommandRunner
                         if (references.Count > 0)
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
-                        var issues = item.Issues ?? ValidateWorkItemContent(item, record);
+                        var issues = RequireWorkItemIssues(item);
                         writer.InsertIssues(fileId, issues);
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
@@ -2327,14 +2325,9 @@ public static partial class IndexCommandRunner
         throw new InvalidOperationException("Post-extraction hooks require mutable extraction result lists.");
     }
 
-    private static List<FileIssue> ValidateWorkItemContent(FullScanFileWorkItem item, FileRecord record)
+    private static IReadOnlyList<FileIssue> RequireWorkItemIssues(FullScanFileWorkItem item)
     {
-        if (item.RawBytes is not { } rawBytes || item.Content is not { } content)
-            throw new InvalidOperationException("Full-scan work item does not carry deferred content for validation.");
-
-        return item.Inspection is { } inspection
-            ? FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, inspection, item.HasOversizeLine)
-            : FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+        return item.Issues ?? throw new InvalidOperationException("Full-scan work item does not carry precomputed validation issues.");
     }
 
     private static int AddPostExtractionHookWarnings(PostExtractionHookRunner? runner, List<CliJsonMessage> warningList)
