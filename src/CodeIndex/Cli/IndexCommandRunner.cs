@@ -1191,11 +1191,10 @@ public static partial class IndexCommandRunner
                 return null;
 
             size = info.Length;
-            return writer.GetUnchangedFileId(
+            return writer.GetUnchangedFileIdByStat(
                 relativePath,
                 info.LastWriteTimeUtc,
-                checksum: null,
-                size: info.Length,
+                info.Length,
                 language: language);
         }
         catch (IOException)

@@ -393,6 +393,35 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_GetUnchangedFileIdByStatReusesCacheAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/stat-x.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/stat-y.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        Assert.NotNull(writer.GetUnchangedFileIdByStat("src/stat-x.py", modified, 1, "python"));
+        Assert.NotNull(writer.GetUnchangedFileIdByStat("src/stat-y.py", modified, 2, "python"));
+        Assert.Null(writer.GetUnchangedFileIdByStat("src/missing-stat.py", modified, 3, "python"));
+        Assert.True(_db.PreparedCommands.HitCount > 0);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one

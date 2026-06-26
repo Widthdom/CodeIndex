@@ -1669,6 +1669,68 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileIdByStat_ReturnsIdOnlyWhenModifiedAndSizeMatch()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/stat.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+
+        var id = _writer.GetUnchangedFileIdByStat("src/stat.py", modified, 50, language: "python");
+
+        Assert.NotNull(id);
+        Assert.Null(_writer.GetUnchangedFileIdByStat("src/stat.py", modified.AddTicks(1), 50, language: "python"));
+        Assert.Null(_writer.GetUnchangedFileIdByStat("src/stat.py", modified, 51, language: "python"));
+        Assert.Null(_writer.GetUnchangedFileIdByStat("src/stat.py", modified, 50, language: "python", allowReuse: false));
+    }
+
+    [Fact]
+    public void GetUnchangedFileIdByStat_ReturnsNullWhenReuseGuardsFail()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var guardedFile = new FileRecord
+        {
+            Path = "src/legacy-issue.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        var guardedFileId = _writer.UpsertFile(guardedFile);
+        _writer.InsertIssues(guardedFileId,
+        [
+            new FileIssue
+            {
+                Path = guardedFile.Path,
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "legacy replacement_char row without metadata",
+            },
+        ]);
+
+        Assert.Null(_writer.GetUnchangedFileIdByStat(guardedFile.Path, modified, guardedFile.Size, language: "python"));
+
+        var staleLanguageFile = new FileRecord
+        {
+            Path = "src/stale-version.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(staleLanguageFile);
+        _writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
+
+        Assert.Null(_writer.GetUnchangedFileIdByStat(staleLanguageFile.Path, modified, staleLanguageFile.Size, language: "python"));
+    }
+
+    [Fact]
     public void GetUnchangedFileId_ReturnsNullWhenLanguageExtractorVersionIsStale()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);

@@ -732,6 +732,51 @@ public class DbWriter
         }
     }
 
+    /// <summary>
+    /// Read-only unchanged lookup for callers that have only filesystem stat data.
+    /// filesystem stat だけを持つ呼び出し元向けの read-only 変更なし判定。
+    /// </summary>
+    public long? GetUnchangedFileIdByStat(
+        string relativePath,
+        DateTime modified,
+        long size,
+        string? language,
+        bool allowReuse = true)
+    {
+        if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
+            return null;
+        if (HasStaleIssueMetadata(relativePath))
+            return null;
+
+        var cmd = RentCommand(
+            @"SELECT id
+              FROM files
+              WHERE path = @path
+                AND modified = @modified
+                AND size = @size
+              LIMIT 1",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@size"].Value = size;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     private bool HasStaleIssueMetadata(string relativePath)
     {
         if (!HasIssueMetadataColumns())
