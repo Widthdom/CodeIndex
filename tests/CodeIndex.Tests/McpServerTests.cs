@@ -11234,14 +11234,16 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ToolsCall_Index_NoOpDoesNotRebuildTypeScriptAugmentation()
+    public void ToolsCall_Index_NoOpSkipsUnchangedFinalizers()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}.db");
+        var resolvedCSharpMetadataTargets = false;
         var rebuiltTypeScriptAugmentation = false;
         try
         {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
             File.WriteAllText(Path.Combine(fixtureDir, "app.ts"), "interface AppApi { run(): void; }\n");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
@@ -11249,15 +11251,18 @@ public sealed class Caller
 
             Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
 
+            McpServer.McpIndexCSharpMetadataResolveForTesting = () => resolvedCSharpMetadataTargets = true;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
 
             var secondResponse = CallIndex(server, fixtureDir);
 
             Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(resolvedCSharpMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
         }
         finally
         {
+            McpServer.McpIndexCSharpMetadataResolveForTesting = null;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);

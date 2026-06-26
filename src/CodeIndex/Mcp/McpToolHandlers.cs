@@ -48,6 +48,7 @@ public partial class McpServer
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
+    internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
     internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }
     private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
@@ -5851,6 +5852,8 @@ public partial class McpServer
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var csharpMetadataTargetsNeedRefresh = priorMetadataTargetCsharp != currentMetadataTargetVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
@@ -5964,6 +5967,7 @@ public partial class McpServer
         var purged = writer.PurgeStaleFiles(projectPath);
         if (purged > 0)
         {
+            csharpMetadataTargetsNeedRefresh = true;
             typeScriptAugmentationNeedsRefresh = true;
             WriteProjectRootOnce();
         }
@@ -6051,6 +6055,8 @@ public partial class McpServer
                 writer.MarkBatchInProgress();
                 fileBatchMarked = true;
                 MarkSymbolKindFilterMetaIncompleteOnce();
+                if (record.Lang == "csharp")
+                    csharpMetadataTargetsNeedRefresh = true;
                 if (record.Lang == "typescript")
                     typeScriptAugmentationNeedsRefresh = true;
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
@@ -6150,6 +6156,8 @@ public partial class McpServer
                 try
                 {
                     var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
+                    if (skippedRecord.Lang == "csharp")
+                        csharpMetadataTargetsNeedRefresh = true;
                     if (skippedRecord.Lang == "typescript")
                         typeScriptAugmentationNeedsRefresh = true;
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
@@ -6179,6 +6187,7 @@ public partial class McpServer
                     {
                         using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");
                         writer.DeleteFileByPath(relativePath);
+                        csharpMetadataTargetsNeedRefresh = true;
                         typeScriptAugmentationNeedsRefresh = true;
                         WriteProjectRootOnce();
                         txn.Commit();
@@ -6218,7 +6227,6 @@ public partial class McpServer
         var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
-        _ = priorMetadataTargetCsharp;
         if (!scanResult.HadErrors && errors == 0)
         {
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
@@ -6231,7 +6239,11 @@ public partial class McpServer
             csharpSymbolNameReadyAfter = true;
             if (writer.HasAnyFilesWithLanguage("csharp"))
             {
-                writer.ResolveCSharpMetadataTargets();
+                if (csharpMetadataTargetsNeedRefresh)
+                {
+                    McpIndexCSharpMetadataResolveForTesting?.Invoke();
+                    writer.ResolveCSharpMetadataTargets();
+                }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;
             }
