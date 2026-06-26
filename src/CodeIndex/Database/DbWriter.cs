@@ -1740,13 +1740,15 @@ public class DbWriter
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var predicateCount = keyEnd - i;
-            var predicates = new List<string>(predicateCount);
+            var predicates = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 96);
             for (int j = i; j < keyEnd; j++)
             {
+                if (j > i)
+                    predicates.Append(" OR ");
+
                 var suffix = j - i;
                 var ((fileId, line, _), context) = rows[j];
-                predicates.Add($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
+                predicates.Append($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
                 cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
                 cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
@@ -1755,7 +1757,7 @@ public class DbWriter
             cmd.CommandText = $@"
                 SELECT id, file_id, line, context
                 FROM reference_lines
-                WHERE {string.Join(" OR ", predicates)}";
+                WHERE {predicates}";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
