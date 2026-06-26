@@ -4424,6 +4424,35 @@ public sealed class Caller
     }
 
     [Fact]
+    public void MeasureReadableFileBytes_AppliesSelectorBeforeKnownSizeLookup()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var readable = Path.Combine(projectRoot, "readable.txt");
+            var diagnostics = new List<string>();
+
+            var summary = IndexCommandRunner.MeasureReadableFileBytes(
+                ["readable.txt"],
+                path => Path.Combine(projectRoot, path),
+                projectRoot,
+                diagnostics,
+                new Dictionary<string, long>(StringComparer.Ordinal)
+                {
+                    [readable] = 11,
+                });
+
+            Assert.Equal(11, summary.BytesRead);
+            Assert.Equal(0, summary.SkippedFileCount);
+            Assert.Empty(diagnostics);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FormatIndexRunDiagnostic_CollapsesAndBoundsExceptionMessages()
     {
         var message = "first line\n" + new string('x', 700);

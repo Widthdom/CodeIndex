@@ -1194,7 +1194,8 @@ public static partial class IndexCommandRunner
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
             var bytesRead = MeasureReadableFileBytes(
-                targetPaths.Select(ToUpdateAbsolutePath),
+                targetPaths,
+                ToUpdateAbsolutePath,
                 projectRoot,
                 indexRunDiagnostics,
                 knownReadableFileSizes);

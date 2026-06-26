@@ -677,11 +677,20 @@ public static partial class IndexCommandRunner
         string? projectRoot = null,
         List<string>? diagnostics = null,
         IReadOnlyDictionary<string, long>? knownFileSizes = null)
+        => MeasureReadableFileBytes(paths, static path => path, projectRoot, diagnostics, knownFileSizes);
+
+    internal static FileByteReadSummary MeasureReadableFileBytes(
+        IEnumerable<string> paths,
+        Func<string, string> pathSelector,
+        string? projectRoot = null,
+        List<string>? diagnostics = null,
+        IReadOnlyDictionary<string, long>? knownFileSizes = null)
     {
         long total = 0;
         long skipped = 0;
-        foreach (var path in paths)
+        foreach (var sourcePath in paths)
         {
+            var path = pathSelector(sourcePath);
             if (knownFileSizes != null && knownFileSizes.TryGetValue(path, out var knownSize))
             {
                 total += knownSize;
