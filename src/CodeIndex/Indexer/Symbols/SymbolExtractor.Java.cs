@@ -307,16 +307,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaCompactConstructors(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
-        var recordDeclarations = symbols
-            .Where(symbol =>
-                symbol.FileId == fileId
-                && symbol.Kind == "class"
-                && symbol.BodyStartLine != null
-                && symbol.BodyEndLine != null
-                && IsJavaRecordSymbol(rawLines, symbol))
-            .OrderBy(symbol => symbol.StartLine)
-            .ThenByDescending(symbol => symbol.EndLine)
-            .ToList();
+        var recordDeclarations = BuildJavaRecordDeclarationSnapshot(fileId, rawLines, symbols);
 
         foreach (var recordSymbol in recordDeclarations)
         {
@@ -358,15 +349,7 @@ public static partial class SymbolExtractor
                             var sameLineEndColumn = bodyEndLine == i + 1
                                 ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
                                 : -1;
-                            var existingSymbols = symbols
-                                .Where(symbol =>
-                                    symbol.FileId == fileId
-                                    && symbol.Kind == "function"
-                                    && symbol.Name == recordSymbol.Name
-                                    && symbol.StartLine == i + 1
-                                    && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
-                                    && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
-                                .ToList();
+                            var existingSymbols = CollectJavaCompactConstructorExistingSymbols(fileId, symbols, recordSymbol, i + 1);
                             var hasCompactConstructorSymbol = false;
                             foreach (var existingSymbol in existingSymbols)
                             {
@@ -428,6 +411,64 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static List<SymbolRecord> BuildJavaRecordDeclarationSnapshot(long fileId, string[] rawLines, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.FileId == fileId
+                && symbol.Kind == "class"
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null
+                && IsJavaRecordSymbol(rawLines, symbol))
+            {
+                candidates.Add((symbol, index));
+            }
+        }
+
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+            if (comparison != 0)
+                return comparison;
+
+            comparison = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+            if (comparison != 0)
+                return comparison;
+
+            return left.OriginalIndex.CompareTo(right.OriginalIndex);
+        });
+
+        var snapshot = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            snapshot.Add(candidate.Symbol);
+        return snapshot;
+    }
+
+    private static List<SymbolRecord> CollectJavaCompactConstructorExistingSymbols(
+        long fileId,
+        IReadOnlyList<SymbolRecord> symbols,
+        SymbolRecord recordSymbol,
+        int lineNumber)
+    {
+        var existingSymbols = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.FileId == fileId
+                && symbol.Kind == "function"
+                && symbol.Name == recordSymbol.Name
+                && symbol.StartLine == lineNumber
+                && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
+                && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
+            {
+                existingSymbols.Add(symbol);
+            }
+        }
+
+        return existingSymbols;
     }
 
     private static bool LooksLikeJavaCompactConstructorSymbol(SymbolRecord symbol, string recordName)
