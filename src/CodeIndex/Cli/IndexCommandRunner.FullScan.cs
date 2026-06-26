@@ -791,7 +791,8 @@ public static partial class IndexCommandRunner
         string? initialCwd,
         List<string>? indexRunDiagnostics,
         bool showNextSteps,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forceJavaScriptTypeScriptRefresh = false)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
@@ -1237,7 +1238,10 @@ public static partial class IndexCommandRunner
 
             var target = fileTargets[fileIndex];
             var language = target.Language;
+            var languageRequiresRefresh = forceJavaScriptTypeScriptRefresh
+                && IsJavaScriptTypeScriptLanguage(language);
             var allowReuse = symbolKindFilterMatchesPrior
+                && !languageRequiresRefresh
                 && !priorSymbolsOnlyGraphOmitted
                 && (language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -1595,6 +1599,8 @@ public static partial class IndexCommandRunner
                     long? existingId = null;
                     if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                     {
+                        var languageRequiresRefresh = forceJavaScriptTypeScriptRefresh
+                            && IsJavaScriptTypeScriptLanguage(record.Lang);
                         existingId = writer.GetUnchangedFileId(
                             record.Path,
                             record.Modified,
@@ -1604,6 +1610,7 @@ public static partial class IndexCommandRunner
                             language: record.Lang,
                             generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
+                                && !languageRequiresRefresh
                                 && !priorSymbolsOnlyGraphOmitted
                                 && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)

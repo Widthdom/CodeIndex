@@ -113,7 +113,8 @@ public static partial class IndexCommandRunner
                 initialCwd,
                 indexRunDiagnostics,
                 showNextSteps: false,
-                cancellationToken);
+                cancellationToken,
+                forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged);
         }
 
         if (!options.Json && !options.Quiet)

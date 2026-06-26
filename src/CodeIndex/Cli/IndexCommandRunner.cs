@@ -851,6 +851,10 @@ public static partial class IndexCommandRunner
     private static bool ContainsJavaScriptTypeScriptConfigPath(IEnumerable<string> paths)
         => paths.Any(IsJavaScriptTypeScriptConfigPath);
 
+    private static bool IsJavaScriptTypeScriptLanguage(string? language)
+        => string.Equals(language, "javascript", StringComparison.Ordinal)
+            || string.Equals(language, "typescript", StringComparison.Ordinal);
+
     private static bool IsJavaScriptTypeScriptConfigPath(string path)
     {
         var fileName = Path.GetFileName(path);
