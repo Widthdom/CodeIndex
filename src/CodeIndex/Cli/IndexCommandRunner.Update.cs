@@ -113,7 +113,8 @@ public static partial class IndexCommandRunner
                 initialCwd,
                 indexRunDiagnostics,
                 showNextSteps: false,
-                cancellationToken);
+                cancellationToken,
+                forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged);
         }
 
         if (!options.Json && !options.Quiet)
@@ -123,6 +124,7 @@ public static partial class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
+        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         warnings += AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();
@@ -132,19 +134,25 @@ public static partial class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
+        var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
+            && (!projectRootWritten || !typeScriptAugmentationVersionMatchesCurrent);
+        var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
-            options.MaxFileSizeBytes,
-            maxSymbolCount: options.MaxSymbolsPerFile + 1,
-            maxReferenceCount: options.MaxReferencesPerFile + 1);
+        using var postExtractionHooks = new LazyDisposable<PostExtractionHookRunner>(
+            () => PostExtractionHookRunner.DiscoverDefault(
+                options.MaxFileSizeBytes,
+                maxSymbolCount: options.MaxSymbolsPerFile + 1,
+                maxReferenceCount: options.MaxReferencesPerFile + 1));
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
+        var csharpMetadataTargetsNeedRefresh = !priorMetadataTargetCsharpMatchesCurrent;
         var symbolsDroppedByKindFilter = 0;
 
         void DemoteReadinessOnce()
@@ -163,6 +171,18 @@ public static partial class IndexCommandRunner
             writer.ClearHotspotFamilyReady();
             writer.ClearMetadataTargetReady();
             readinessDemoted = true;
+        }
+
+        void RequireTypeScriptAugmentationRefresh()
+        {
+            if (!typeScriptAugmentationReadyCleared)
+            {
+                writer.ClearTypeScriptAugmentationReady();
+                typeScriptAugmentationReadyCleared = true;
+            }
+
+            if (!options.SymbolsOnly)
+                typeScriptAugmentationNeedsRefresh = true;
         }
 
         void WriteProjectRootOnce()
@@ -263,9 +283,10 @@ public static partial class IndexCommandRunner
                 ? Path.GetRelativePath(projectRoot, path)
                 : path;
 
-        IEnumerable<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
+        List<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
             IReadOnlyDictionary<string, string>? scannedLanguages)
         {
+            var targets = new List<CSharpStaticInterfacePrepass.FileTarget>();
             foreach (var targetPath in targetPaths)
             {
                 var absPath = ToUpdateAbsolutePath(targetPath);
@@ -277,23 +298,42 @@ public static partial class IndexCommandRunner
 
                     language = scannedLanguage;
                 }
+                else
+                {
+                    var detection = FileIndexer.TryDetectLanguage(absPath);
+                    if (detection.Status != FileIndexer.FileProbeStatus.Supported || detection.Language != "csharp")
+                        continue;
 
-                yield return CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+                    language = detection.Language;
+                }
+
+                targets.Add(CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language));
             }
+
+            return targets;
         }
 
         IReadOnlyDictionary<string, string>? scannedUpdateLanguages = null;
         ThrowIfUpdateCancelled();
         WriteIndexJsonLiveness(options, "checking C# workspace contracts...");
         var csharpWorkspaceHeartbeat = StartIndexJsonPhaseHeartbeat(options, "checking C# workspace contracts");
+        var csharpPrepassTargets = BuildCSharpPrepassTargets(scannedUpdateLanguages);
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
-            csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                writer,
-                indexer,
-                BuildCSharpPrepassTargets(scannedUpdateLanguages),
-                cancellationToken: cancellationToken);
+            if (csharpPrepassTargets.Count == 0)
+            {
+                csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+            }
+            else
+            {
+                UpdateCSharpPrepassForTesting?.Invoke();
+                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    csharpPrepassTargets,
+                    cancellationToken: cancellationToken);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -318,11 +358,20 @@ public static partial class IndexCommandRunner
                         targetPaths.Add(filePath);
                 }
 
-                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                    writer,
-                    indexer,
-                    BuildCSharpPrepassTargets(scannedUpdateLanguages),
-                    cancellationToken: cancellationToken);
+                csharpPrepassTargets = BuildCSharpPrepassTargets(scannedUpdateLanguages);
+                if (csharpPrepassTargets.Count == 0)
+                {
+                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+                }
+                else
+                {
+                    UpdateCSharpPrepassForTesting?.Invoke();
+                    csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                        writer,
+                        indexer,
+                        csharpPrepassTargets,
+                        cancellationToken: cancellationToken);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -354,7 +403,11 @@ public static partial class IndexCommandRunner
             () => currentUpdatePath == null
                 ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
                 : $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed, current {currentUpdatePath}");
-        using var symbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+        using var symbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(() =>
+        {
+            UpdateExtractionWorkStartedForTesting?.Invoke();
+            return new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+        });
         try
         {
             foreach (var targetPath in targetPaths)
@@ -383,6 +436,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
@@ -429,6 +483,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
@@ -473,6 +528,7 @@ public static partial class IndexCommandRunner
                             if (writer.DeleteFileByPath(dbPath))
                             {
                                 WriteProjectRootOnce();
+                                RequireTypeScriptAugmentationRefresh();
                                 deleteTxn.Commit();
                                 removed++;
                                 ftsMutated = true;
@@ -515,6 +571,7 @@ public static partial class IndexCommandRunner
                             {
                                 DemoteReadinessOnce();
                                 WriteProjectRootOnce();
+                                RequireTypeScriptAugmentationRefresh();
                                 purgeTxn.Commit();
                                 removed += purged;
                                 ftsMutated = true;
@@ -543,6 +600,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
@@ -589,6 +647,7 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
@@ -603,27 +662,29 @@ public static partial class IndexCommandRunner
                     var statReusableLanguage = GetStatReusableLanguage(absPath, detection);
                     var statMatchedId = TryGetUnchangedFileIdFromStat(
                         writer,
-                        projectRoot,
                         absPath,
+                        dbPath,
                         statReusableLanguage,
                         allowReuse: symbolKindFilterMatchesPrior
-                            && statReusableLanguage is not ("javascript" or "typescript")
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
+                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent),
+                        out var statSize);
                     if (statMatchedId != null
-                        && ExistingFileViolatesExtractionCaps(writer, statMatchedId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
-                    {
-                        statMatchedId = null;
-                    }
-                    if (statMatchedId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, statMatchedId.Value, indexer.BuildGeneratedCodeExtractionSkippedIssue(dbPath)))
+                        && ExistingFileBlocksReuse(
+                            writer,
+                            statMatchedId.Value,
+                            options.MaxSymbolsPerFile,
+                            options.MaxReferencesPerFile,
+                            indexer.IsGeneratedCodeExtractionSuppressed(dbPath)))
                     {
                         statMatchedId = null;
                     }
                     if (statMatchedId != null)
                     {
                         skipped++;
+                        if (statSize.HasValue)
+                            knownReadableFileSizes[absPath] = statSize.Value;
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
@@ -642,6 +703,7 @@ public static partial class IndexCommandRunner
                         knownLanguage,
                         cancellationToken);
                     var record = loaded.Record;
+                    knownReadableFileSizes[absPath] = record.Size;
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
@@ -663,17 +725,16 @@ public static partial class IndexCommandRunner
                         language: record.Lang,
                         generated: record.Generated,
                         allowReuse: symbolKindFilterMatchesPrior
-                            && record.Lang is not ("javascript" or "typescript")
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                     if (existingId != null
-                        && ExistingFileViolatesExtractionCaps(writer, existingId.Value, options.MaxSymbolsPerFile, options.MaxReferencesPerFile))
-                    {
-                        existingId = null;
-                    }
-                    if (existingId != null
-                        && ExistingFileGeneratedSuppressionMismatch(writer, existingId.Value, generatedSuppressionIssue))
+                        && ExistingFileBlocksReuse(
+                            writer,
+                            existingId.Value,
+                            options.MaxSymbolsPerFile,
+                            options.MaxReferencesPerFile,
+                            generatedSuppressionIssue))
                     {
                         existingId = null;
                     }
@@ -688,6 +749,7 @@ public static partial class IndexCommandRunner
                         {
                             DemoteReadinessOnce();
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             purgeTxn.Commit();
                             removed += purged;
                             ftsMutated = true;
@@ -707,14 +769,21 @@ public static partial class IndexCommandRunner
                     DemoteReadinessOnce();
                     writer.MarkBatchInProgress();
                     fileBatchMarked = true;
+                    if (record.Lang == "csharp")
+                        csharpMetadataTargetsNeedRefresh = true;
+                    var recordRequiresTypeScriptAugmentationRefresh = record.Lang == "typescript";
                     using var txn = writer.BeginTransaction(cancellationToken, "update file");
-                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    if (recordRequiresTypeScriptAugmentationRefresh)
+                        RequireTypeScriptAugmentationRefresh();
+                    var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     if (projectRootWritten)
-                        writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                        stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                    if (stalePurged > 0)
+                        RequireTypeScriptAugmentationRefresh();
                     WriteProjectRootOnce();
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
-                    var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine);
+                    var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                     if (generatedSuppressionIssue != null)
                     {
                         writer.InsertChunks(chunks, cancellationToken);
@@ -745,7 +814,7 @@ public static partial class IndexCommandRunner
                         currentUpdatePath,
                         true,
                         loaded.HasOversizeLine,
-                        symbolExtractionWorker,
+                        symbolExtractionWorker.Value,
                         cancellationToken);
                     var symbols = symbolExtraction.Symbols;
                     var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
@@ -768,7 +837,7 @@ public static partial class IndexCommandRunner
                     }
                     SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                     var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
-                    postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
+                    postExtractionHooks.Value.OnSymbolsExtracted(fileContext, symbols);
                     symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
@@ -809,7 +878,7 @@ public static partial class IndexCommandRunner
                         references = referenceExtraction.References;
                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
-                    postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
                     FileIssue? referenceCapIssue = null;
                     if (references.Count > options.MaxReferencesPerFile)
                     {
@@ -862,9 +931,12 @@ public static partial class IndexCommandRunner
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
-                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        knownReadableFileSizes[absPath] = skippedRecord.Size;
+                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
-                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                            stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        if (skippedRecord.Lang == "typescript" || stalePurged > 0)
+                            RequireTypeScriptAugmentationRefresh();
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
@@ -888,9 +960,12 @@ public static partial class IndexCommandRunner
                         writer.MarkBatchInProgress();
                         using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
                         var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
-                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        knownReadableFileSizes[absPath] = skippedRecord.Size;
+                        var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
-                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                            stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        if (skippedRecord.Lang == "typescript" || stalePurged > 0)
+                            RequireTypeScriptAugmentationRefresh();
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
@@ -936,6 +1011,7 @@ public static partial class IndexCommandRunner
                             if (writer.DeleteFileByPath(dbPath))
                             {
                                 WriteProjectRootOnce();
+                                RequireTypeScriptAugmentationRefresh();
                                 deleteTxn.Commit();
                                 removed++;
                                 ftsMutated = true;
@@ -988,15 +1064,17 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // readiness was demoted before the first committed mutation.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
+        var hasSqlFilesAfter = writer.HasAnyFilesWithLanguage("sql");
         var graphTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.GraphReadyFlag) != 0
             : false;
         var issuesTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
             : false;
-        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp")
+        var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter
             || (!readinessDemoted && csharpSymbolNameContractMatchesCurrent);
-        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp")
+        var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter
             || (!readinessDemoted && priorMetadataTargetCsharpMatchesCurrent);
         var foldReadyAfter = !readinessDemoted
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
@@ -1038,9 +1116,9 @@ public static partial class IndexCommandRunner
                 writer.MarkIssuesReady();
                 issuesTableAvailableAfter = true;
             }
-            if (sqlGraphContractMatchesCurrent || !writer.HasAnyFilesWithLanguage("sql"))
+            if (sqlGraphContractMatchesCurrent || !hasSqlFilesAfter)
                 writer.MarkSqlGraphContractReady();
-            if (csharpSymbolNameContractMatchesCurrent || !writer.HasAnyFilesWithLanguage("csharp"))
+            if (csharpSymbolNameContractMatchesCurrent || !hasCSharpFilesAfter)
             {
                 writer.MarkCSharpSymbolNameContractReady();
                 csharpSymbolNameReadyAfter = true;
@@ -1053,9 +1131,13 @@ public static partial class IndexCommandRunner
             // Issue #435: 成功 update の末尾で全 csharp class 行を resolver で再分類する。
             // resolver は全行を書き直すので pre-#435 DB の NULL 行と未更新行の両方が
             // authoritative になる。csharp ファイルがある場合のみ readiness も立てる。
-            if (writer.HasAnyFilesWithLanguage("csharp"))
+            if (hasCSharpFilesAfter)
             {
-                writer.ResolveCSharpMetadataTargets();
+                if (csharpMetadataTargetsNeedRefresh)
+                {
+                    UpdateCSharpMetadataResolveForTesting?.Invoke();
+                    writer.ResolveCSharpMetadataTargets();
+                }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;
             }
@@ -1069,7 +1151,11 @@ public static partial class IndexCommandRunner
             // family_key/container_qualified_name state as authoritative (#1488).
             using (var hotspotFamilyTxn = writer.BeginTransaction(cancellationToken, "update hotspot-family restamp"))
             {
-                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                if (typeScriptAugmentationNeedsRefresh)
+                {
+                    UpdateTypeScriptAugmentationRebuildForTesting?.Invoke();
+                    writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                }
                 RestampHotspotFamilyTrustForUpdate(
                     writer,
                     priorHotspotFamilyVersions,
@@ -1108,9 +1194,10 @@ public static partial class IndexCommandRunner
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
             var bytesRead = MeasureReadableFileBytes(
-                targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar))),
+                targetPaths.Select(ToUpdateAbsolutePath),
                 projectRoot,
-                indexRunDiagnostics);
+                indexRunDiagnostics,
+                knownReadableFileSizes);
             StampLastIndexRunMetadata(
                 writer,
                 "update",
@@ -1141,7 +1228,7 @@ public static partial class IndexCommandRunner
             warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
             warnings++;
         }
-        warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
+        warnings += AddPostExtractionHookWarnings(postExtractionHooks.ValueIfCreated, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);

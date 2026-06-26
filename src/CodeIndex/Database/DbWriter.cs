@@ -785,6 +785,52 @@ public class DbWriter
         return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
     }
 
+    public bool HasExtractionCapViolationForFile(long fileId, int maxSymbolsPerFile, int maxReferencesPerFile)
+        => HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile, maxReferencesPerFile, generatedExtractionSuppressed: null);
+
+    public bool HasReusableFileBlockingIssueForFile(
+        long fileId,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT CASE WHEN
+                (SELECT COUNT(*) FROM symbols WHERE file_id = @file_id) > @max_symbols
+                OR EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = @file_id
+                      AND kind = 'symbol_count_exceeded'
+                )
+                OR (SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id) > @max_references
+                OR EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = @file_id
+                      AND kind = 'reference_count_exceeded'
+                )
+                OR (
+                    @generated_suppressed IS NOT NULL
+                    AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM file_issues
+                            WHERE file_id = @file_id
+                              AND kind = @generated_issue_kind
+                        )
+                    ) <> @generated_suppressed
+                )
+            THEN 1 ELSE 0 END";
+        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
+        SqliteCommandPolicy.AddInt32(cmd, "@max_symbols", maxSymbolsPerFile);
+        SqliteCommandPolicy.AddInt32(cmd, "@max_references", maxReferencesPerFile);
+        SqliteCommandPolicy.AddNullableBoolean(cmd, "@generated_suppressed", generatedExtractionSuppressed);
+        SqliteCommandPolicy.AddText(cmd, "@generated_issue_kind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "reusable file blocking issue") != 0;
+    }
+
     public bool HasIssueForFile(long fileId, string kind)
     {
         using var cmd = _conn.CreateCommand();
@@ -1010,6 +1056,29 @@ public class DbWriter
         {
             ReleaseCommand(cmd);
         }
+    }
+
+    public IReadOnlyList<string> GetIndexedJavaScriptTypeScriptConfigPaths()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT path
+            FROM files
+            WHERE lower(path) = 'jsconfig.json'
+               OR lower(path) = 'tsconfig.json'
+               OR lower(path) LIKE '%/jsconfig.json'
+               OR lower(path) LIKE '%/tsconfig.json'
+               OR lower(path) LIKE 'jsconfig.%.json'
+               OR lower(path) LIKE 'tsconfig.%.json'
+               OR lower(path) LIKE '%/jsconfig.%.json'
+               OR lower(path) LIKE '%/tsconfig.%.json'
+            ORDER BY path
+            """;
+        var paths = new List<string>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            paths.Add(reader.GetString(0));
+        return paths;
     }
 
     /// <summary>
@@ -1731,6 +1800,9 @@ public class DbWriter
         }
 
         InsertReferences(references);
+        SetMeta(
+            DbContext.TypeScriptAugmentationVersionMetaKey,
+            DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
         transaction.Commit();
         return references.Count;
     }
@@ -1906,7 +1978,7 @@ public class DbWriter
     /// </summary>
     /// <param name="projectRoot">Absolute path to project root / プロジェクトルートの絶対パス</param>
     /// <returns>Number of stale files removed / 削除された古いファイル数</returns>
-    public int PurgeStaleFiles(string projectRoot)
+    public int PurgeStaleFiles(string projectRoot, Action? beforeCommit = null)
     {
         // Collect all paths currently in DB / DB内の全パスを収集
         var dbPaths = new List<(long id, string path)>();
@@ -1948,6 +2020,7 @@ public class DbWriter
             pId.Value = id;
             deleteCmd.ExecuteNonQuery();
         }
+        beforeCommit?.Invoke();
         txn.Commit();
 
         return staleIds.Count;
@@ -2397,6 +2470,19 @@ public class DbWriter
         SetMeta(
             DbContext.GetMetadataTargetVersionMetaKey(lang),
             DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public bool TypeScriptAugmentationVersionMatchesCurrent()
+    {
+        return string.Equals(
+            GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey),
+            DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+    }
+
+    public void ClearTypeScriptAugmentationReady()
+    {
+        SetMeta(DbContext.TypeScriptAugmentationVersionMetaKey, null);
     }
 
     /// <summary>

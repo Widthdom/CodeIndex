@@ -48,8 +48,34 @@ public static partial class IndexCommandRunner
         IReadOnlySet<string> Directories,
         string? WarningMessage);
 
+    internal sealed class LazyDisposable<T>(Func<T> factory) : IDisposable
+        where T : class, IDisposable
+    {
+        private T? value;
+
+        internal T Value => value ??= factory();
+        internal T? ValueIfCreated => value;
+
+        public void Dispose()
+        {
+            value?.Dispose();
+            value = null;
+        }
+    }
+
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
+    internal static Action? FullScanExtractionWorkStartedForTesting { get; set; }
+    internal static Action<string>? FullScanFileContentLoadForTesting { get; set; }
+    internal static Action<int>? FullScanExtractionQueueCapacityForTesting { get; set; }
+    internal static Action? FullScanFtsOptimizeForTesting { get; set; }
+    internal static Action? FullScanCSharpPrepassForTesting { get; set; }
+    internal static Action? FullScanCSharpMetadataResolveForTesting { get; set; }
+    internal static Action? FullScanTypeScriptAugmentationRebuildForTesting { get; set; }
+    internal static Action? UpdateCSharpPrepassForTesting { get; set; }
+    internal static Action? UpdateCSharpMetadataResolveForTesting { get; set; }
+    internal static Action? UpdateTypeScriptAugmentationRebuildForTesting { get; set; }
+    internal static Action? UpdateExtractionWorkStartedForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
@@ -646,12 +672,22 @@ public static partial class IndexCommandRunner
         }
     }
 
-    internal static FileByteReadSummary MeasureReadableFileBytes(IEnumerable<string> paths, string? projectRoot = null, List<string>? diagnostics = null)
+    internal static FileByteReadSummary MeasureReadableFileBytes(
+        IEnumerable<string> paths,
+        string? projectRoot = null,
+        List<string>? diagnostics = null,
+        IReadOnlyDictionary<string, long>? knownFileSizes = null)
     {
         long total = 0;
         long skipped = 0;
         foreach (var path in paths)
         {
+            if (knownFileSizes != null && knownFileSizes.TryGetValue(path, out var knownSize))
+            {
+                total += knownSize;
+                continue;
+            }
+
             try
             {
                 var info = new FileInfo(path);
@@ -832,6 +868,10 @@ public static partial class IndexCommandRunner
 
     private static bool ContainsJavaScriptTypeScriptConfigPath(IEnumerable<string> paths)
         => paths.Any(IsJavaScriptTypeScriptConfigPath);
+
+    private static bool IsJavaScriptTypeScriptLanguage(string? language)
+        => string.Equals(language, "javascript", StringComparison.Ordinal)
+            || string.Equals(language, "typescript", StringComparison.Ordinal);
 
     private static bool IsJavaScriptTypeScriptConfigPath(string path)
     {
@@ -1134,11 +1174,13 @@ public static partial class IndexCommandRunner
 
     private static long? TryGetUnchangedFileIdFromStat(
         DbWriter writer,
-        string projectRoot,
         string absolutePath,
+        string relativePath,
         string? language,
-        bool allowReuse)
+        bool allowReuse,
+        out long? size)
     {
+        size = null;
         if (!allowReuse || language == null)
             return null;
 
@@ -1148,7 +1190,7 @@ public static partial class IndexCommandRunner
             if (!info.Exists)
                 return null;
 
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            size = info.Length;
             return writer.GetUnchangedFileId(
                 relativePath,
                 info.LastWriteTimeUtc,
@@ -1198,8 +1240,6 @@ public static partial class IndexCommandRunner
         string RelativePath,
         FileRecord? Record,
         string? Content,
-        byte[]? RawBytes,
-        FileContentInspection? Inspection,
         bool? HasOversizeLine,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
@@ -1215,8 +1255,6 @@ public static partial class IndexCommandRunner
             string relativePath,
             FileRecord record,
             string? content,
-            byte[]? rawBytes,
-            FileContentInspection? inspection,
             bool hasOversizeLine,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
@@ -1231,8 +1269,6 @@ public static partial class IndexCommandRunner
                 relativePath,
                 record,
                 content,
-                rawBytes,
-                inspection,
                 hasOversizeLine,
                 warning,
                 chunks,
@@ -1262,8 +1298,6 @@ public static partial class IndexCommandRunner
                 record,
                 null,
                 null,
-                null,
-                null,
                 warning,
                 chunks,
                 symbols,
@@ -1275,10 +1309,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, null, false, exception);
+            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(filePath, relativePath, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

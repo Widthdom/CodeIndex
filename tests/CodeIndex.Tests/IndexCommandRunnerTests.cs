@@ -2238,11 +2238,13 @@ public sealed class Caller
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_skip_before_extract");
         bool? parallelized = null;
         string? reason = null;
+        var loadedPaths = new List<string>();
         try
         {
             RunGit(projectRoot, "init");
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
-            RunGit(projectRoot, "add", "app.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            RunGit(projectRoot, "add", "app.cs", "app.ts");
             RunGit(projectRoot, "commit", "-m", "initial");
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
@@ -2257,6 +2259,7 @@ public sealed class Caller
                 parallelized = enabled;
                 reason = why;
             };
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
 
             var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -2265,11 +2268,262 @@ public sealed class Caller
             Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
             Assert.False(parallelized);
             Assert.Null(reason);
-            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.DoesNotContain("app.cs", loadedPaths);
+            Assert.DoesNotContain("app.ts", loadedPaths);
+            Assert.Contains("feature.cs", loadedPaths);
         }
         finally
         {
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanAfterTypeScriptConfigChange_ReprocessesUnchangedTypeScriptFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_refresh");
+        var loadedPaths = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\" } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\", \"paths\": {} } }\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tsconfig.json"), DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Contains("app.ts", loadedPaths);
+            Assert.Contains("tsconfig.json", loadedPaths);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanAfterDerivedTypeScriptConfigDelete_ReprocessesUnchangedTypeScriptFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_base_delete");
+        var loadedPaths = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tsconfig.base.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\" } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(Path.Combine(projectRoot, "tsconfig.base.json"));
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Contains("app.ts", loadedPaths);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanWithSequentialExtraction_PersistsValidationIssues()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_sequential_validation");
+        bool? parallelized = null;
+        int? queueCapacity = null;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App\rpublic class Other\n");
+
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, _) => parallelized = enabled;
+            IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = capacity => queueCapacity = capacity;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "test.method", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(parallelized);
+            Assert.Equal(1, queueCapacity);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var issue = Assert.Single(ReadFileIssues(dbPath, "mixed_line_endings"));
+            Assert.Equal("app.cs", issue.Path);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanWithoutCSharp_DoesNotRunCSharpPrepass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_no_csharp_prepass");
+        var ranCSharpPrepass = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = () => ranCSharpPrepass = true;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(ranCSharpPrepass);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_NoOpFullScan_DoesNotOptimizeFts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");
+        var optimized = false;
+        var resolvedMetadataTargets = false;
+        var rebuiltTypeScriptAugmentation = false;
+        var startedExtractionWork = false;
+        bool? parallelized = null;
+        string? parallelizeReason = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "interface AppApi { run(): void; }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () => optimized = true;
+            IndexCommandRunner.FullScanCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            IndexCommandRunner.FullScanExtractionWorkStartedForTesting = () => startedExtractionWork = true;
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, reason) =>
+            {
+                parallelized = enabled;
+                parallelizeReason = reason;
+            };
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.False(parallelized);
+            Assert.Null(parallelizeReason);
+            Assert.False(startedExtractionWork);
+            Assert.False(optimized);
+            Assert.False(resolvedMetadataTargets);
+            Assert.False(rebuiltTypeScriptAugmentation);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
+            IndexCommandRunner.FullScanCSharpMetadataResolveForTesting = null;
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
+            IndexCommandRunner.FullScanExtractionWorkStartedForTesting = null;
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateNonCSharpFile_DoesNotResolveCSharpMetadataTargets()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_update_non_csharp_no_csharp_metadata");
+        var ranCSharpPrepass = false;
+        var resolvedMetadataTargets = false;
+        var rebuiltTypeScriptAugmentation = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "interface AppApi { run(): void; }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tool.py"), DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () => ranCSharpPrepass = true;
+            IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "tool.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.False(ranCSharpPrepass);
+            Assert.False(resolvedMetadataTargets);
+            Assert.False(rebuiltTypeScriptAugmentation);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = null;
+            IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = null;
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_NoOpUpdate_DoesNotStartExtractionWork()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_update_no_extraction_work");
+        var startedExtractionWork = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () => startedExtractionWork = true;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "tool.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.False(startedExtractionWork);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -4149,6 +4403,24 @@ public sealed class Caller
         {
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void MeasureReadableFileBytes_UsesKnownSizeWithoutProbingPath()
+    {
+        var diagnostics = new List<string>();
+
+        var summary = IndexCommandRunner.MeasureReadableFileBytes(
+            ["bad\0path.txt"],
+            diagnostics: diagnostics,
+            knownFileSizes: new Dictionary<string, long>(StringComparer.Ordinal)
+            {
+                ["bad\0path.txt"] = 7,
+            });
+
+        Assert.Equal(7, summary.BytesRead);
+        Assert.Equal(0, summary.SkippedFileCount);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]
@@ -7065,6 +7337,99 @@ public sealed class Caller
         finally
         {
             IndexCommandRunner.UpdateFileCommittedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_CancelledAfterTypeScriptCommit_ClearsAugmentationVersion()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "types.ts");
+            File.WriteAllText(sourcePath, "export interface Options { value: string }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(
+                    DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                    db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+            }
+
+            File.WriteAllText(sourcePath, "export interface Options { value: string; enabled: boolean }\n");
+
+            var hookInvoked = false;
+            IndexCommandRunner.UpdateFileCommittedForTesting = (filesProcessed, filesTotal) =>
+            {
+                Assert.Equal(1, filesProcessed);
+                Assert.Equal(1, filesTotal);
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+
+            int interruptedExitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--files", "types.ts", "--json"], _jsonOptions, cancellation);
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    IndexCommandRunner.UpdateFileCommittedForTesting = null;
+                }
+            }
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            using (var db = new DbContext(dbPath))
+                Assert.Null(db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateFileCommittedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DeleteTypeScriptFile_RebuildsAugmentationReferences()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "types.ts");
+            File.WriteAllText(sourcePath, "export interface Options { value: string }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(sourcePath);
+            var rebuiltTypeScriptAugmentation = false;
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "types.ts", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.True(rebuiltTypeScriptAugmentation);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

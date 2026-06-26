@@ -1761,6 +1761,75 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void HasExtractionCapViolationForFile_CombinesCountsAndIssues()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/caps.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+        });
+
+        Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
+        Assert.False(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: false));
+        Assert.True(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: true));
+
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = fileId, Name = "One", Kind = "class", Line = 1 },
+            new SymbolRecord { FileId = fileId, Name = "Two", Kind = "class", Line = 2 },
+        ]);
+        Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
+        Assert.True(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 1, maxReferencesPerFile: 2));
+
+        var issueFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/cap-issue.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+        });
+        _writer.InsertIssues(issueFileId,
+        [
+            new FileIssue
+            {
+                Path = "src/cap-issue.cs",
+                Kind = "reference_count_exceeded",
+                Line = 0,
+                Message = "too many references",
+            },
+        ]);
+
+        Assert.True(_writer.HasExtractionCapViolationForFile(issueFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10));
+
+        var generatedFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generated.g.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+        });
+        _writer.InsertIssues(generatedFileId,
+        [
+            new FileIssue
+            {
+                Path = "src/generated.g.cs",
+                Kind = FileIndexer.GeneratedCodeExtractionSkippedIssueKind,
+                Line = 0,
+                Message = "generated extraction skipped",
+            },
+        ]);
+
+        Assert.False(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: true));
+        Assert.True(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: false));
+    }
+
+    [Fact]
     public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
     {
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_checksum_purge_{Guid.NewGuid():N}");

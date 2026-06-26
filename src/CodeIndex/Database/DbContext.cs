@@ -1648,6 +1648,8 @@ public class DbContext : IDisposable
     // source-aware storage で再 index されるまで縮退させる。
     public const int MetadataTargetVersion = 7;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
+    public const int TypeScriptAugmentationVersion = 1;
+    public const string TypeScriptAugmentationVersionMetaKey = "typescript_augmentation_version";
     // Audit trail: cdidx version string (e.g. "1.22.0") that produced the most recent
     // successful end-of-index pass on this DB. Readers use it to surface "DB written by
     // a newer cdidx" warnings when any persisted contract version exceeds this binary's

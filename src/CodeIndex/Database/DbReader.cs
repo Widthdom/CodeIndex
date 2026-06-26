@@ -664,6 +664,7 @@ public partial class DbReader : IDisposable
         // the contract a newer cdidx wrote.
         // 数値で stamp される contract version は「stored > current」のときだけ未来 DB と判断する。
         AppendIfStoredGreater(conn, DbContext.GetMetadataTargetVersionMetaKey("csharp"), DbContext.MetadataTargetVersion, "metadata_target_version_csharp", newerContracts);
+        AppendIfStoredGreater(conn, DbContext.TypeScriptAugmentationVersionMetaKey, DbContext.TypeScriptAugmentationVersion, "typescript_augmentation_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.CSharpSymbolNameContractVersionMetaKey, DbContext.CSharpSymbolNameContractVersion, "csharp_symbol_name_contract_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.SqlGraphContractVersionMetaKey, DbContext.SqlGraphContractVersion, "sql_graph_contract_version", newerContracts);
         AppendIfStoredGreater(conn, "fold_key_version", NameFold.Version, "fold_key_version", newerContracts);
