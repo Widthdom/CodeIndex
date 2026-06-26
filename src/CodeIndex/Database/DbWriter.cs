@@ -1431,7 +1431,7 @@ public class DbWriter
     private void InsertChunkBatch(IReadOnlyList<ChunkRecord> chunks, int start, int end)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = new StringBuilder();
+        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 64);
         sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
         for (int j = start; j < end; j++)
         {
@@ -1454,7 +1454,7 @@ public class DbWriter
     private void InsertSymbolBatch(IReadOnlyList<SymbolRecord> symbols, int start, int end, Dictionary<string, string?> foldedNameCache)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = new StringBuilder();
+        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 320);
         sql.Append(@"
                 INSERT INTO symbols (
                     file_id, kind, sub_kind, name, line, start_line, start_column, end_line,
@@ -1625,7 +1625,7 @@ public class DbWriter
             var referenceLineIds = UpsertReferenceLines(references, i, end, cancellationToken);
 
             using var cmd = _conn.CreateCommand();
-            var sql = new StringBuilder();
+            var sql = CreateBatchSqlBuilder(end - i, estimatedCharsPerRow: 256);
             sql.Append(@"
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
@@ -1714,7 +1714,7 @@ public class DbWriter
             CheckBatchCancellationAndReportProgress("upsert_reference_lines", i, rows.Length, cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var sql = new StringBuilder();
+            var sql = CreateBatchSqlBuilder(batchEnd - i, estimatedCharsPerRow: 64);
             sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
             for (int j = i; j < batchEnd; j++)
             {
@@ -4105,6 +4105,18 @@ public class DbWriter
             ? int.MaxValue
             : rowCount * namesPerRow;
         return new Dictionary<string, string?>(capacity, StringComparer.Ordinal);
+    }
+
+    private static StringBuilder CreateBatchSqlBuilder(int rowCount, int estimatedCharsPerRow)
+    {
+        const int BaseCapacity = 256;
+        if (rowCount <= 0 || estimatedCharsPerRow <= 0)
+            return new StringBuilder(BaseCapacity);
+
+        var rowCapacity = rowCount > (int.MaxValue - BaseCapacity) / estimatedCharsPerRow
+            ? int.MaxValue - BaseCapacity
+            : rowCount * estimatedCharsPerRow;
+        return new StringBuilder(BaseCapacity + rowCapacity);
     }
 
     private static int GetRowsPerInsertStatement(int columnCount)
