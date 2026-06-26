@@ -8837,26 +8837,16 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents)
     {
+        if (pendingRecordPrimaryComponents.Count == 0)
+            return;
+
         foreach (var pending in pendingRecordPrimaryComponents)
         {
-            var parentSymbol = symbols.LastOrDefault(symbol =>
-                symbol.FileId == pending.FileId
-                && symbol.Kind == pending.Kind
-                && symbol.Name == pending.RecordName
-                && symbol.StartLine == pending.RecordStartLine);
+            var parentSymbol = FindRecordPrimaryComponentParent(symbols, pending);
             if (parentSymbol == null)
                 continue;
 
-            var existingComponentNames = symbols
-                .Where(symbol =>
-                    symbol.FileId == pending.FileId
-                    && symbol.Kind == "property"
-                    && symbol.ContainerKind == pending.Kind
-                    && symbol.ContainerName == pending.RecordName
-                    && symbol.StartLine >= parentSymbol.StartLine
-                    && symbol.EndLine <= parentSymbol.EndLine)
-                .Select(symbol => symbol.Name)
-                .ToHashSet(StringComparer.Ordinal);
+            var existingComponentNames = BuildExistingRecordPrimaryComponentNameSet(symbols, pending, parentSymbol);
 
             foreach (var component in pending.Components)
             {
@@ -8879,6 +8869,47 @@ public static partial class SymbolExtractor
                 });
             }
         }
+    }
+
+    private static SymbolRecord? FindRecordPrimaryComponentParent(
+        IReadOnlyList<SymbolRecord> symbols,
+        PendingRecordPrimaryComponents pending)
+    {
+        for (var i = symbols.Count - 1; i >= 0; i--)
+        {
+            var symbol = symbols[i];
+            if (symbol.FileId == pending.FileId
+                && symbol.Kind == pending.Kind
+                && symbol.Name == pending.RecordName
+                && symbol.StartLine == pending.RecordStartLine)
+            {
+                return symbol;
+            }
+        }
+
+        return null;
+    }
+
+    private static HashSet<string> BuildExistingRecordPrimaryComponentNameSet(
+        IReadOnlyList<SymbolRecord> symbols,
+        PendingRecordPrimaryComponents pending,
+        SymbolRecord parentSymbol)
+    {
+        var existingComponentNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.FileId == pending.FileId
+                && symbol.Kind == "property"
+                && symbol.ContainerKind == pending.Kind
+                && symbol.ContainerName == pending.RecordName
+                && symbol.StartLine >= parentSymbol.StartLine
+                && symbol.EndLine <= parentSymbol.EndLine)
+            {
+                existingComponentNames.Add(symbol.Name);
+            }
+        }
+
+        return existingComponentNames;
     }
 
     private static bool TryGetRecordPrimaryComponents(
