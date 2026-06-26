@@ -791,7 +791,7 @@ public static partial class IndexCommandRunner
                         writer.InsertReferences([], cancellationToken);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         var generatedIssues = AppendIssueIfMissing(
-                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
+                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                             generatedSuppressionIssue);
                         writer.InsertIssues(fileId, generatedIssues);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
@@ -814,6 +814,7 @@ public static partial class IndexCommandRunner
                         currentUpdatePath,
                         true,
                         loaded.HasOversizeLine,
+                        loaded.ConflictMarkerLine,
                         symbolExtractionWorker.Value,
                         cancellationToken);
                     var symbols = symbolExtraction.Symbols;
@@ -874,7 +875,8 @@ public static partial class IndexCommandRunner
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             cancellationToken,
-                            maxReferenceCount: options.MaxReferencesPerFile + 1);
+                            maxReferenceCount: options.MaxReferencesPerFile + 1,
+                            conflictMarkerLine: loaded.ConflictMarkerLine);
                         references = referenceExtraction.References;
                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
@@ -888,7 +890,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references, cancellationToken);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (referenceRegexTimeoutIssue != null)

@@ -3526,6 +3526,7 @@ public partial class FileIndexer
             loaded.Content,
             loaded.RawBytes,
             loaded.HasOversizeLine,
+            loaded.ConflictMarkerLine,
             loaded.Warning,
             loaded.Inspection);
     }
@@ -3805,7 +3806,8 @@ public partial class FileIndexer
         string content,
         string? language,
         FileContentInspection inspection,
-        bool? hasOversizeLine = null)
+        bool? hasOversizeLine = null,
+        int? conflictMarkerLine = null)
     {
         var issues = new List<FileIssue>();
 
@@ -3843,13 +3845,14 @@ public partial class FileIndexer
                 AddUtf16HeuristicIssue(issues, relativePath, utf16BigEndian);
         }
 
-        if (TryGetConflictMarkerLine(content, out var conflictMarkerLine))
+        var effectiveConflictMarkerLine = conflictMarkerLine ?? GetConflictMarkerLine(content);
+        if (effectiveConflictMarkerLine > 0)
         {
             issues.Add(new FileIssue
             {
                 Path = relativePath,
                 Kind = "conflict_markers",
-                Line = conflictMarkerLine,
+                Line = effectiveConflictMarkerLine,
                 Message = "Git conflict markers detected; resolve the conflict before indexing symbols or references",
             });
         }
@@ -4385,8 +4388,10 @@ public partial class FileIndexer
         public long LimitBytes { get; } = limitBytes;
     }
 
-    public static bool HasConflictMarkers(string content) =>
-        TryGetConflictMarkerLine(content, out _);
+    public static bool HasConflictMarkers(string content) => GetConflictMarkerLine(content) > 0;
+
+    internal static int GetConflictMarkerLine(string content)
+        => TryGetConflictMarkerLine(content, out var line) ? line : 0;
 
     private static bool TryGetConflictMarkerLine(string content, out int line)
     {

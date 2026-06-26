@@ -925,7 +925,8 @@ public static partial class ReferenceExtractor
         string? path = null,
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
-        int? maxReferenceCount = null)
+        int? maxReferenceCount = null,
+        int? conflictMarkerLine = null)
         => ExtractDetailedNormalized(
             fileId,
             lang,
@@ -935,7 +936,8 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             cancellationToken,
-            maxReferenceCount).References;
+            maxReferenceCount,
+            conflictMarkerLine).References;
 
     public static ReferenceExtractionResult ExtractDetailed(
         long fileId,
@@ -952,6 +954,7 @@ public static partial class ReferenceExtractor
             content,
             contentIsNormalized: false,
             hasOversizeLine: null,
+            conflictMarkerLine: null,
             symbols,
             path,
             workspaceSymbols,
@@ -967,13 +970,15 @@ public static partial class ReferenceExtractor
         string? path = null,
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
-        int? maxReferenceCount = null)
+        int? maxReferenceCount = null,
+        int? conflictMarkerLine = null)
         => ExtractDetailedCore(
             fileId,
             lang,
             content,
             contentIsNormalized: true,
             hasOversizeLine,
+            conflictMarkerLine,
             symbols,
             path,
             workspaceSymbols,
@@ -986,6 +991,7 @@ public static partial class ReferenceExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         IReadOnlyList<SymbolRecord> symbols,
         string? path,
         IReadOnlyList<SymbolRecord>? workspaceSymbols,
@@ -1041,7 +1047,8 @@ public static partial class ReferenceExtractor
             maxReferenceCount,
             builtInDiagnostics.Add,
             contentIsNormalized,
-            hasOversizeLine)),
+            hasOversizeLine,
+            conflictMarkerLine)),
             builtInDiagnostics);
     }
 

@@ -7,5 +7,6 @@ internal readonly record struct LoadedFileRecord(
     string Content,
     byte[] RawBytes,
     bool HasOversizeLine,
+    int ConflictMarkerLine,
     string? Warning,
     FileContentInspection Inspection);

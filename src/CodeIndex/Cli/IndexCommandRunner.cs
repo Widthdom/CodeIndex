@@ -1249,6 +1249,7 @@ public static partial class IndexCommandRunner
         FileRecord? Record,
         string? Content,
         bool? HasOversizeLine,
+        int? ConflictMarkerLine,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
         IReadOnlyList<SymbolRecord>? Symbols,
@@ -1264,6 +1265,7 @@ public static partial class IndexCommandRunner
             FileRecord record,
             string? content,
             bool hasOversizeLine,
+            int conflictMarkerLine,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
             IReadOnlyList<SymbolRecord>? symbols,
@@ -1278,6 +1280,7 @@ public static partial class IndexCommandRunner
                 record,
                 content,
                 hasOversizeLine,
+                conflictMarkerLine,
                 warning,
                 chunks,
                 symbols,
@@ -1306,6 +1309,7 @@ public static partial class IndexCommandRunner
                 record,
                 null,
                 null,
+                null,
                 warning,
                 chunks,
                 symbols,
@@ -1317,10 +1321,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, false, exception);
+            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

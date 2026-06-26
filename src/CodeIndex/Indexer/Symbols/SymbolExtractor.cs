@@ -2349,6 +2349,7 @@ public static partial class SymbolExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         string? filePath,
         string? projectRoot,
         CancellationToken cancellationToken,
@@ -2387,7 +2388,7 @@ public static partial class SymbolExtractor
         if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
             return true;
 
-        if (FileIndexer.HasConflictMarkers(content))
+        if ((conflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(content)) > 0)
             return true;
 
         if (!contentIsNormalized)
@@ -2429,17 +2430,27 @@ public static partial class SymbolExtractor
             content,
             contentIsNormalized: false,
             hasOversizeLine: null,
+            conflictMarkerLine: null,
             filePath,
             projectRoot,
             cancellationToken);
 
-    internal static List<SymbolRecord> ExtractNormalized(long fileId, string? lang, string content, bool hasOversizeLine, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
+    internal static List<SymbolRecord> ExtractNormalized(
+        long fileId,
+        string? lang,
+        string content,
+        bool hasOversizeLine,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default,
+        int? conflictMarkerLine = null)
         => ExtractCore(
             fileId,
             lang,
             content,
             contentIsNormalized: true,
             hasOversizeLine,
+            conflictMarkerLine,
             filePath,
             projectRoot,
             cancellationToken);
@@ -2450,6 +2461,7 @@ public static partial class SymbolExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         string? filePath = null,
         string? projectRoot = null,
         CancellationToken cancellationToken = default)
@@ -2461,6 +2473,7 @@ public static partial class SymbolExtractor
             content,
             contentIsNormalized,
             hasOversizeLine,
+            conflictMarkerLine,
             filePath,
             projectRoot,
             cancellationToken,

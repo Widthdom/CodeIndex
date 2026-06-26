@@ -11,6 +11,7 @@ public static partial class ReferenceExtractor
         string? path,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         CancellationToken cancellationToken,
         out List<ReferenceRecord> references)
     {
@@ -22,6 +23,7 @@ public static partial class ReferenceExtractor
             content,
             contentIsNormalized,
             hasOversizeLine,
+            conflictMarkerLine,
             out var normalizedContent,
             out var lines))
             return true;
@@ -37,6 +39,7 @@ public static partial class ReferenceExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         out string normalizedContent,
         out string[] lines)
     {
@@ -49,7 +52,7 @@ public static partial class ReferenceExtractor
         if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
             return false;
 
-        if (FileIndexer.HasConflictMarkers(content))
+        if ((conflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(content)) > 0)
             return false;
 
         if (!contentIsNormalized)

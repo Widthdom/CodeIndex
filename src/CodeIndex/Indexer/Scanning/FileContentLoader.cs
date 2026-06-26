@@ -13,7 +13,8 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
     internal readonly record struct NormalizedIndexableContent(
         string Content,
         int LineCount,
-        bool HasOversizeLine);
+        bool HasOversizeLine,
+        int ConflictMarkerLine);
 
     internal LoadedFileContent Load(
         string absolutePath,
@@ -35,6 +36,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
                 modifiedUtc,
                 0,
                 false,
+                0,
                 ComputeChecksum(bytes),
                 null,
                 lfsInspection);
@@ -53,6 +55,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             modifiedUtc,
             normalized.LineCount,
             normalized.HasOversizeLine,
+            normalized.ConflictMarkerLine,
             checksum,
             warning,
             inspection);
@@ -159,7 +162,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
     internal static NormalizedIndexableContent NormalizeForIndexing(string content)
     {
         if (content.Length == 0)
-            return new NormalizedIndexableContent(content, 0, false);
+            return new NormalizedIndexableContent(content, 0, false, 0);
 
         StringBuilder? builder = null;
         var outputLength = 0;
@@ -218,7 +221,12 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             CountOutputChar(c);
         }
 
-        return new NormalizedIndexableContent(builder?.ToString() ?? content, lineCount, hasOversizeLine);
+        var normalized = builder?.ToString() ?? content;
+        return new NormalizedIndexableContent(
+            normalized,
+            lineCount,
+            hasOversizeLine,
+            FileIndexer.GetConflictMarkerLine(normalized));
     }
 
     internal static string NormalizeContentForPrepass(string content)
@@ -370,6 +378,7 @@ internal readonly record struct LoadedFileContent(
     DateTime ModifiedUtc,
     int LineCount,
     bool HasOversizeLine,
+    int ConflictMarkerLine,
     string Checksum,
     string? Warning,
     FileContentInspection Inspection);

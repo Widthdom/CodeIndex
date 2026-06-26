@@ -50,6 +50,15 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Load_CarriesConflictMarkerLine()
+    {
+        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes("a\r\n<<<<<<< HEAD\r\nb\r\n"));
+
+        Assert.Equal("a\n<<<<<<< HEAD\nb\n", loaded.Content);
+        Assert.Equal(2, loaded.ConflictMarkerLine);
+    }
+
+    [Fact]
     public void FileContentLoader_IsGitLfsPointer_AcceptsAsciiPointerWithMixedLineEndings()
     {
         var pointer = GitLfsPointerText(new string('a', 64));

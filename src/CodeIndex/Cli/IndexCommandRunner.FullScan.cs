@@ -233,6 +233,7 @@ public static partial class IndexCommandRunner
         string phasePath,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
@@ -241,7 +242,7 @@ public static partial class IndexCommandRunner
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
             var symbols = contentIsNormalized && hasOversizeLine is { } knownHasOversizeLine
-                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken)
+                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine)
                 : SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
             return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
         }
@@ -255,6 +256,7 @@ public static partial class IndexCommandRunner
             projectRoot,
             contentIsNormalized,
             hasOversizeLine,
+            conflictMarkerLine,
             timeout,
             cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1433,7 +1435,7 @@ public static partial class IndexCommandRunner
                                         references = [];
                                         activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                         issues = AppendIssueIfMissing(
-                                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
+                                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine),
                                             generatedSuppressionIssue);
                                         extractionResults.Add(
                                             FullScanFileWorkItem.Precomputed(
@@ -1461,6 +1463,7 @@ public static partial class IndexCommandRunner
                                         activeJsonExtractionPhases[workerIndex],
                                         true,
                                         hasOversizeLine,
+                                        loaded.ConflictMarkerLine,
                                         workerSymbolExtractionWorker,
                                         extractionCancellationToken);
                                     symbols = symbolExtraction.Symbols;
@@ -1496,12 +1499,13 @@ public static partial class IndexCommandRunner
                                             record.Path,
                                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                             extractionCancellationToken,
-                                            maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                            maxReferenceCount: options.MaxReferencesPerFile + 1,
+                                            conflictMarkerLine: loaded.ConflictMarkerLine);
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
+                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                     if (symbolRegexTimeoutIssue != null)
                                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                                     if (referenceRegexTimeoutIssue != null)
@@ -1518,7 +1522,7 @@ public static partial class IndexCommandRunner
                                 else
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
+                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                 }
                                 extractionResults.Add(
                                     parallelizeExtraction
@@ -1539,6 +1543,7 @@ public static partial class IndexCommandRunner
                                             record,
                                             content,
                                             hasOversizeLine,
+                                            loaded.ConflictMarkerLine,
                                             warning,
                                             chunks,
                                             symbols,
@@ -1810,6 +1815,7 @@ public static partial class IndexCommandRunner
                                 currentJsonIndexFile,
                                 true,
                                 item.HasOversizeLine,
+                                item.ConflictMarkerLine,
                                 mainSymbolExtractionWorker,
                                 cancellationToken)).Symbols
                             : ReassignSymbolFileIds(item.Symbols, fileId);
@@ -1897,7 +1903,8 @@ public static partial class IndexCommandRunner
                                     record.Path,
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                     cancellationToken,
-                                    maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                    maxReferenceCount: options.MaxReferencesPerFile + 1,
+                                    conflictMarkerLine: item.ConflictMarkerLine);
                                 references = referenceExtraction.References;
                                 regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                             }

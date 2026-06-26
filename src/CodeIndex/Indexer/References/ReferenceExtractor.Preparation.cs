@@ -27,6 +27,7 @@ public static partial class ReferenceExtractor
         bool isRazorFile,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         out ReferenceLinePreparation preparedInput)
     {
         preparedInput = null!;
@@ -53,7 +54,7 @@ public static partial class ReferenceExtractor
         if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
             return false;
 
-        if (FileIndexer.HasConflictMarkers(content))
+        if ((conflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(content)) > 0)
             return false;
 
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer

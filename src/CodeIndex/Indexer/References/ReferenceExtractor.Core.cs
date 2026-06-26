@@ -27,6 +27,7 @@ public static partial class ReferenceExtractor
             path,
             request.ContentIsNormalized,
             request.HasOversizeLine,
+            request.ConflictMarkerLine,
             request.CancellationToken,
             out var structuralMetadataReferences))
             return structuralMetadataReferences;
@@ -37,6 +38,7 @@ public static partial class ReferenceExtractor
             isRazorFile,
             request.ContentIsNormalized,
             request.HasOversizeLine,
+            request.ConflictMarkerLine,
             out var preparedInput))
             return [];
         request.CancellationToken.ThrowIfCancellationRequested();

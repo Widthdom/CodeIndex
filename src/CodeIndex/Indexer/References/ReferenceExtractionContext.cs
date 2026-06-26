@@ -18,4 +18,5 @@ public sealed record ReferenceExtractionContext(
     int? MaxReferenceCount = null,
     Action<ReferenceExtractionDiagnostic>? ReportDiagnostic = null,
     bool ContentIsNormalized = false,
-    bool? HasOversizeLine = null);
+    bool? HasOversizeLine = null,
+    int? ConflictMarkerLine = null);

@@ -6207,7 +6207,7 @@ public partial class McpServer
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
-                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                         generatedSuppressionIssue);
                     writer.InsertIssues(fileId, issues);
                     WriteProjectRootOnce();
@@ -6230,7 +6230,8 @@ public partial class McpServer
                         loaded.HasOversizeLine,
                         filePath,
                         projectPath,
-                        requestToken);
+                        requestToken,
+                        loaded.ConflictMarkerLine);
                     symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                 }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
@@ -6264,7 +6265,8 @@ public partial class McpServer
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             requestToken,
-                            maxReferenceCount: maxReferencesPerFile + 1);
+                            maxReferenceCount: maxReferencesPerFile + 1,
+                            conflictMarkerLine: loaded.ConflictMarkerLine);
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
@@ -6277,7 +6279,7 @@ public partial class McpServer
                     writer.InsertReferences(references, requestToken);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)

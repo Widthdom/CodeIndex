@@ -46,6 +46,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             projectRoot,
             contentIsNormalized: false,
             hasOversizeLine: null,
+            conflictMarkerLine: null,
             callbackBudget,
             cancellationToken);
 
@@ -57,6 +58,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         string projectRoot,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         TimeSpan callbackBudget,
         CancellationToken cancellationToken = default)
     {
@@ -77,7 +79,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 filePath,
                 projectRoot,
                 contentIsNormalized,
-                hasOversizeLine);
+                hasOversizeLine,
+                conflictMarkerLine);
             var requestJson = JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
@@ -603,7 +606,8 @@ internal static class SymbolExtractionWorker
                     hasOversizeLine,
                     request.FilePath,
                     request.ProjectRoot,
-                    cancellationToken)
+                    cancellationToken,
+                    request.ConflictMarkerLine)
                 : SymbolExtractor.Extract(
                     request.FileId,
                     request.Lang,
@@ -741,7 +745,8 @@ internal static class SymbolExtractionWorker
         string FilePath,
         string ProjectRoot,
         bool ContentIsNormalized = false,
-        bool? HasOversizeLine = null);
+        bool? HasOversizeLine = null,
+        int? ConflictMarkerLine = null);
 
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,
