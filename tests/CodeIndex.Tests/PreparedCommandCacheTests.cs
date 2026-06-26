@@ -1078,6 +1078,47 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_UnsupportedReferenceCleanupReusesCommands()
+    {
+        var writer = new DbWriter(_db);
+        var unsupportedFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "legacy/old.lang",
+            Lang = "legacy",
+            Size = 80,
+            Lines = 3,
+            Checksum = "unsupported",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = unsupportedFileId,
+                    SymbolName = "LegacyCall",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 8,
+                    ContainerName = "LegacyCaller",
+                    Context = "LegacyCall();",
+                },
+            ],
+            refreshMutualRecursionFlags: false);
+
+        var supportedLanguages = new[] { "csharp", "typescript" };
+
+        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
+        var hitsBeforeCount = _db.PreparedCommands.HitCount;
+        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeCount);
+
+        Assert.Equal(1, writer.PurgeUnsupportedReferences(supportedLanguages));
+        var hitsBeforePurge = _db.PreparedCommands.HitCount;
+        Assert.Equal(0, writer.PurgeUnsupportedReferences(supportedLanguages));
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforePurge);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one

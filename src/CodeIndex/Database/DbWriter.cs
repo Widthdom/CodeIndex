@@ -2345,18 +2345,28 @@ public class DbWriter
         if (supportedLanguages.Count == 0)
             return 0;
 
-        using var cmd = _conn.CreateCommand();
-        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
-        cmd.CommandText = $@"
+        var values = SnapshotSupportedLanguages(supportedLanguages);
+        var inParams = BuildSupportedLanguageParameterNames(values.Count);
+        var cmd = RentCommand(
+            $@"
             SELECT COUNT(*)
             FROM symbol_references
             WHERE file_id IN (
                 SELECT f.id FROM files f
                 WHERE f.lang IS NOT NULL
                   AND f.lang NOT IN ({string.Join(", ", inParams)})
-            )";
-        var raw = cmd.ExecuteScalar();
-        return raw is long l ? (int)l : (raw is int i ? i : 0);
+            )",
+            c => AddSupportedLanguageParameters(c, values.Count));
+        try
+        {
+            BindSupportedLanguageParameterValues(cmd, values);
+            var raw = cmd.ExecuteScalar();
+            return raw is long l ? (int)l : (raw is int i ? i : 0);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -2372,17 +2382,26 @@ public class DbWriter
         if (supportedLanguages.Count == 0)
             return 0;
 
-        using var cmd = _conn.CreateCommand();
-        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
-
-        cmd.CommandText = $@"
+        var values = SnapshotSupportedLanguages(supportedLanguages);
+        var inParams = BuildSupportedLanguageParameterNames(values.Count);
+        var cmd = RentCommand(
+            $@"
             DELETE FROM symbol_references
             WHERE file_id IN (
                 SELECT f.id FROM files f
                 WHERE f.lang IS NOT NULL
                   AND f.lang NOT IN ({string.Join(", ", inParams)})
-            )";
-        return cmd.ExecuteNonQuery();
+            )",
+            c => AddSupportedLanguageParameters(c, values.Count));
+        try
+        {
+            BindSupportedLanguageParameterValues(cmd, values);
+            return cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -4403,10 +4422,29 @@ public class DbWriter
             Execute($"PRAGMA user_version = {next}", transaction);
     }
 
-    private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
+    private static IReadOnlyList<string> SnapshotSupportedLanguages(IReadOnlyCollection<string> supportedLanguages)
+        => supportedLanguages as IReadOnlyList<string> ?? supportedLanguages.ToList();
+
+    private static List<string> BuildSupportedLanguageParameterNames(int count)
     {
-        var values = supportedLanguages as IReadOnlyList<string> ?? supportedLanguages.ToList();
-        return SqliteDynamicSql.AddParameters(cmd, "lang", values, SqliteType.Text, "supported language filters");
+        SqliteDynamicSql.EnsureParameterBudget(count, "supported language filters");
+        var names = new List<string>(count);
+        for (var i = 0; i < count; i++)
+            names.Add(SqliteDynamicSql.BuildParameterName("lang", i));
+        return names;
+    }
+
+    private static void AddSupportedLanguageParameters(SqliteCommand cmd, int count)
+    {
+        SqliteDynamicSql.EnsureParameterBudget(count, "supported language filters");
+        for (var i = 0; i < count; i++)
+            cmd.Parameters.Add(SqliteDynamicSql.BuildParameterName("lang", i), SqliteType.Text);
+    }
+
+    private static void BindSupportedLanguageParameterValues(SqliteCommand cmd, IReadOnlyList<string> supportedLanguages)
+    {
+        for (var i = 0; i < supportedLanguages.Count; i++)
+            cmd.Parameters[SqliteDynamicSql.BuildParameterName("lang", i)].Value = supportedLanguages[i];
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;
