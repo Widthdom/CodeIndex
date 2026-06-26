@@ -10931,12 +10931,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
-        var traits = symbols
-            .Where(symbol => symbol.Kind is "interface" or "protocol"
-                && symbol.BodyStartLine is > 0
-                && symbol.BodyEndLine is > 0)
-            .OrderBy(symbol => symbol.StartLine)
-            .ToList();
+        var traits = BuildRustAssociatedTypeContainerSnapshot(symbols);
 
         foreach (var trait in traits)
         {
@@ -10976,6 +10971,34 @@ public static partial class SymbolExtractor
                 depth = Math.Max(1, depth + CountBraceDelta(structuralLines[lineIndex]));
             }
         }
+    }
+
+    private static List<SymbolRecord> BuildRustAssociatedTypeContainerSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Kind is ("interface" or "protocol")
+                && symbol.BodyStartLine is > 0
+                && symbol.BodyEndLine is > 0)
+            {
+                candidates.Add((symbol, index));
+            }
+        }
+
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+            return comparison != 0
+                ? comparison
+                : left.OriginalIndex.CompareTo(right.OriginalIndex);
+        });
+
+        var snapshot = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            snapshot.Add(candidate.Symbol);
+        return snapshot;
     }
 
     private static bool TryFindRustBraceBodyBounds(string[] structuralLines, int startLineIndex, out int bodyStartLineIndex, out int bodyEndLineIndex)

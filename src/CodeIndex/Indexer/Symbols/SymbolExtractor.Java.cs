@@ -10,11 +10,7 @@ public static partial class SymbolExtractor
 {
     private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
     {
-        var moduleDeclarations = symbols
-            .Where(symbol => symbol.Kind == "namespace" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-            .OrderBy(symbol => symbol.StartLine)
-            .ThenByDescending(symbol => symbol.EndLine)
-            .ToList();
+        var moduleDeclarations = BuildJavaModuleDeclarationSnapshot(symbols);
 
         foreach (var moduleDeclaration in moduleDeclarations)
         {
@@ -41,6 +37,35 @@ public static partial class SymbolExtractor
                     rawLines[statement.StartLine - 1]);
             }
         }
+    }
+
+    private static List<SymbolRecord> BuildJavaModuleDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Kind == "namespace" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                candidates.Add((symbol, index));
+        }
+
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+            if (comparison != 0)
+                return comparison;
+
+            comparison = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+            if (comparison != 0)
+                return comparison;
+
+            return left.OriginalIndex.CompareTo(right.OriginalIndex);
+        });
+
+        var snapshot = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            snapshot.Add(candidate.Symbol);
+        return snapshot;
     }
 
     private static IEnumerable<JavaModuleDirectiveStatement> EnumerateJavaModuleDirectiveStatements(
