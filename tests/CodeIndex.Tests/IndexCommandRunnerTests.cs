@@ -2324,6 +2324,7 @@ public sealed class Caller
     public void Run_UpdateNonCSharpFile_DoesNotResolveCSharpMetadataTargets()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_update_non_csharp_no_csharp_metadata");
+        var ranCSharpPrepass = false;
         var resolvedMetadataTargets = false;
         var rebuiltTypeScriptAugmentation = false;
         try
@@ -2338,6 +2339,7 @@ public sealed class Caller
             File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 2\n");
             File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tool.py"), DateTime.UtcNow.AddSeconds(2));
 
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () => ranCSharpPrepass = true;
             IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
 
@@ -2345,11 +2347,13 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.False(ranCSharpPrepass);
             Assert.False(resolvedMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
         }
         finally
         {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = null;
             IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = null;
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
             SqliteConnection.ClearAllPools();

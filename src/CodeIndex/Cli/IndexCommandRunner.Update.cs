@@ -267,9 +267,10 @@ public static partial class IndexCommandRunner
                 ? Path.GetRelativePath(projectRoot, path)
                 : path;
 
-        IEnumerable<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
+        List<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
             IReadOnlyDictionary<string, string>? scannedLanguages)
         {
+            var targets = new List<CSharpStaticInterfacePrepass.FileTarget>();
             foreach (var targetPath in targetPaths)
             {
                 var absPath = ToUpdateAbsolutePath(targetPath);
@@ -281,23 +282,42 @@ public static partial class IndexCommandRunner
 
                     language = scannedLanguage;
                 }
+                else
+                {
+                    var detection = FileIndexer.TryDetectLanguage(absPath);
+                    if (detection.Status != FileIndexer.FileProbeStatus.Supported || detection.Language != "csharp")
+                        continue;
 
-                yield return CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+                    language = detection.Language;
+                }
+
+                targets.Add(CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language));
             }
+
+            return targets;
         }
 
         IReadOnlyDictionary<string, string>? scannedUpdateLanguages = null;
         ThrowIfUpdateCancelled();
         WriteIndexJsonLiveness(options, "checking C# workspace contracts...");
         var csharpWorkspaceHeartbeat = StartIndexJsonPhaseHeartbeat(options, "checking C# workspace contracts");
+        var csharpPrepassTargets = BuildCSharpPrepassTargets(scannedUpdateLanguages);
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
-            csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                writer,
-                indexer,
-                BuildCSharpPrepassTargets(scannedUpdateLanguages),
-                cancellationToken: cancellationToken);
+            if (csharpPrepassTargets.Count == 0)
+            {
+                csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+            }
+            else
+            {
+                UpdateCSharpPrepassForTesting?.Invoke();
+                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    csharpPrepassTargets,
+                    cancellationToken: cancellationToken);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -322,11 +342,20 @@ public static partial class IndexCommandRunner
                         targetPaths.Add(filePath);
                 }
 
-                csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                    writer,
-                    indexer,
-                    BuildCSharpPrepassTargets(scannedUpdateLanguages),
-                    cancellationToken: cancellationToken);
+                csharpPrepassTargets = BuildCSharpPrepassTargets(scannedUpdateLanguages);
+                if (csharpPrepassTargets.Count == 0)
+                {
+                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+                }
+                else
+                {
+                    UpdateCSharpPrepassForTesting?.Invoke();
+                    csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                        writer,
+                        indexer,
+                        csharpPrepassTargets,
+                        cancellationToken: cancellationToken);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
