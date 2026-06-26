@@ -2316,6 +2316,38 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_UpdateNonCSharpFile_DoesNotResolveCSharpMetadataTargets()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_update_non_csharp_no_csharp_metadata");
+        var resolvedMetadataTargets = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tool.py"), DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = () => resolvedMetadataTargets = true;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "tool.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.False(resolvedMetadataTargets);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_NotifyFlag_ParsesCompletionNotificationMode()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--notify=osc9"]);

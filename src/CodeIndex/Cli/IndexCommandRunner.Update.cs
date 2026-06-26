@@ -145,6 +145,7 @@ public static partial class IndexCommandRunner
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
+        var csharpMetadataTargetsNeedRefresh = !priorMetadataTargetCsharpMatchesCurrent;
         var symbolsDroppedByKindFilter = 0;
 
         void DemoteReadinessOnce()
@@ -705,6 +706,8 @@ public static partial class IndexCommandRunner
                     DemoteReadinessOnce();
                     writer.MarkBatchInProgress();
                     fileBatchMarked = true;
+                    if (record.Lang == "csharp")
+                        csharpMetadataTargetsNeedRefresh = true;
                     using var txn = writer.BeginTransaction(cancellationToken, "update file");
                     writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     if (projectRootWritten)
@@ -1053,7 +1056,11 @@ public static partial class IndexCommandRunner
             // authoritative になる。csharp ファイルがある場合のみ readiness も立てる。
             if (writer.HasAnyFilesWithLanguage("csharp"))
             {
-                writer.ResolveCSharpMetadataTargets();
+                if (csharpMetadataTargetsNeedRefresh)
+                {
+                    UpdateCSharpMetadataResolveForTesting?.Invoke();
+                    writer.ResolveCSharpMetadataTargets();
+                }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;
             }
