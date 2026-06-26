@@ -11234,6 +11234,37 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ToolsCall_Index_NoOpDoesNotRebuildTypeScriptAugmentation()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}.db");
+        var rebuiltTypeScriptAugmentation = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.ts"), "interface AppApi { run(): void; }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+
+            var secondResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(rebuiltTypeScriptAugmentation);
+        }
+        finally
+        {
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_ReprocessesAfterPartialSymbolKindFilterChange_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_filter_partial_{Guid.NewGuid():N}");

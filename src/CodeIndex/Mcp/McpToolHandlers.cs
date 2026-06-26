@@ -48,6 +48,7 @@ public partial class McpServer
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
+    internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }
     private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
 
@@ -5866,6 +5867,8 @@ public partial class McpServer
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
+        var typeScriptAugmentationNeedsRefresh = !projectRootWritten
+            || !writer.TypeScriptAugmentationVersionMatchesCurrent();
 
         static bool PathsEqual(string? left, string? right)
         {
@@ -5960,7 +5963,10 @@ public partial class McpServer
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
         if (purged > 0)
+        {
+            typeScriptAugmentationNeedsRefresh = true;
             WriteProjectRootOnce();
+        }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -6045,6 +6051,8 @@ public partial class McpServer
                 writer.MarkBatchInProgress();
                 fileBatchMarked = true;
                 MarkSymbolKindFilterMetaIncompleteOnce();
+                if (record.Lang == "typescript")
+                    typeScriptAugmentationNeedsRefresh = true;
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
@@ -6142,6 +6150,8 @@ public partial class McpServer
                 try
                 {
                     var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
+                    if (skippedRecord.Lang == "typescript")
+                        typeScriptAugmentationNeedsRefresh = true;
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     var fileId = writer.UpsertFile(skippedRecord);
                     writer.InsertChunks([], requestToken);
@@ -6169,6 +6179,7 @@ public partial class McpServer
                     {
                         using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");
                         writer.DeleteFileByPath(relativePath);
+                        typeScriptAugmentationNeedsRefresh = true;
                         WriteProjectRootOnce();
                         txn.Commit();
                     }
@@ -6229,7 +6240,11 @@ public partial class McpServer
                 csharpMetadataTargetReadyAfter = true;
             }
             sqlGraphContractReadyAfter = true;
-            writer.RebuildTypeScriptAugmentationReferences(projectPath);
+            if (typeScriptAugmentationNeedsRefresh)
+            {
+                McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
+                writer.RebuildTypeScriptAugmentationReferences(projectPath);
+            }
             RestampHotspotFamilyTrust(
                 writer,
                 reusedHotspotFamilyLanguages,
