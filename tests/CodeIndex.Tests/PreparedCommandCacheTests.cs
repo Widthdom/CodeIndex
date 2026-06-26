@@ -609,6 +609,132 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_CSharpStaticInterfaceContractQueriesReuseCacheAcrossCalls()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/IShape.cs",
+            Lang = "csharp",
+            Size = 120,
+            Lines = 6,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = "IShape",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 6,
+                Signature = "public interface IShape",
+                ContainerQualifiedName = "Demo.IShape",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Create",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public static abstract IShape Create();",
+                ContainerKind = "interface",
+                ContainerName = "IShape",
+                ContainerQualifiedName = "Demo.IShape",
+            },
+        });
+
+        var first = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.Contains(first, s => s.Kind == "interface" && s.Name == "IShape");
+        Assert.Contains(first, s => s.Kind == "function" && s.Name == "Create");
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+            new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        var second = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+            new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
+
+        Assert.Equal(first.Count, second.Count);
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 2);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_CSharpMetadataResolverReusesReadAndUpdateCommandsAcrossRuns()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var baseFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/A/BaseAttribute.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Modified = modified,
+        });
+        var childFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/A/ChildAttribute.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = modified,
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = baseFileId,
+                Kind = "class",
+                Name = "BaseAttribute",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public class BaseAttribute : System.Attribute",
+                ContainerQualifiedName = "A.BaseAttribute",
+                IsMetadataTarget = true,
+                MetadataTargetSource = SymbolRecord.MetadataTargetSourceExtractor,
+            },
+            new SymbolRecord
+            {
+                FileId = childFileId,
+                Kind = "class",
+                Name = "ChildAttribute",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public class ChildAttribute : BaseAttribute",
+                ContainerQualifiedName = "A.ChildAttribute",
+            },
+        });
+
+        writer.ResolveCSharpMetadataTargets();
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT s.is_metadata_target, s.metadata_target_source
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'src/A/ChildAttribute.cs' AND s.name = 'ChildAttribute'";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal(SymbolRecord.MetadataTargetSourceResolver, reader.GetString(1));
+        }
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.ResolveCSharpMetadataTargets();
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one

@@ -1514,8 +1514,7 @@ public class DbWriter
     public List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(IReadOnlySet<string>? excludedPaths = null)
     {
         var symbols = new List<SymbolRecord>();
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        const string sql = @"
             SELECT
                 f.path,
                 s.file_id, s.kind, s.name, s.line,
@@ -1540,33 +1539,41 @@ public class DbWriter
                     )
               )";
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            var path = reader.GetString(0);
-            if (excludedPaths?.Contains(path) == true)
-                continue;
-
-            symbols.Add(new SymbolRecord
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                FileId = reader.GetInt64(1),
-                Kind = reader.GetString(2),
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = reader.GetInt32(5),
-                StartColumn = reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                EndLine = reader.GetInt32(7),
-                BodyStartLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                BodyEndLine = reader.IsDBNull(9) ? null : reader.GetInt32(9),
-                Signature = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerKind = reader.IsDBNull(11) ? null : reader.GetString(11),
-                ContainerName = reader.IsDBNull(12) ? null : reader.GetString(12),
-                ContainerQualifiedName = reader.IsDBNull(13) ? null : reader.GetString(13),
-                FamilyKey = reader.IsDBNull(14) ? null : reader.GetString(14),
-                Visibility = reader.IsDBNull(15) ? null : reader.GetString(15),
-                ReturnType = reader.IsDBNull(16) ? null : reader.GetString(16),
-                IsMetadataTarget = reader.IsDBNull(17) ? null : reader.GetInt32(17) != 0,
-            });
+                var path = reader.GetString(0);
+                if (excludedPaths?.Contains(path) == true)
+                    continue;
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = reader.GetInt64(1),
+                    Kind = reader.GetString(2),
+                    Name = reader.GetString(3),
+                    Line = reader.GetInt32(4),
+                    StartLine = reader.GetInt32(5),
+                    StartColumn = reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                    EndLine = reader.GetInt32(7),
+                    BodyStartLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    BodyEndLine = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                    Signature = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    ContainerKind = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    ContainerName = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    ContainerQualifiedName = reader.IsDBNull(13) ? null : reader.GetString(13),
+                    FamilyKey = reader.IsDBNull(14) ? null : reader.GetString(14),
+                    Visibility = reader.IsDBNull(15) ? null : reader.GetString(15),
+                    ReturnType = reader.IsDBNull(16) ? null : reader.GetString(16),
+                    IsMetadataTarget = reader.IsDBNull(17) ? null : reader.GetInt32(17) != 0,
+                });
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         return symbols;
@@ -1577,8 +1584,7 @@ public class DbWriter
         if (paths.Count == 0)
             return false;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        const string sql = @"
             SELECT f.path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
@@ -1588,11 +1594,19 @@ public class DbWriter
               AND s.signature LIKE '%static%'
               AND (s.signature LIKE '%abstract%' OR s.signature LIKE '%virtual%')";
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            if (paths.Contains(reader.GetString(0)))
-                return true;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (paths.Contains(reader.GetString(0)))
+                    return true;
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         return false;
@@ -2782,29 +2796,46 @@ public class DbWriter
         }
 
         using var txn = !IsInTransaction() ? BeginTransaction() : null;
-        using var update = _conn.CreateCommand();
         bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
-        update.CommandText = hasMetadataTargetSource
+        string updateSql = hasMetadataTargetSource
             ? "UPDATE symbols SET is_metadata_target = @flag, metadata_target_source = @source WHERE id = @id"
             : "UPDATE symbols SET is_metadata_target = @flag WHERE id = @id";
-        var pFlag = update.Parameters.Add("@flag", SqliteType.Integer);
-        var pSource = hasMetadataTargetSource ? update.Parameters.Add("@source", SqliteType.Text) : null;
-        var pId = update.Parameters.Add("@id", SqliteType.Integer);
-        update.Prepare();
-        foreach (var row in rows)
-        {
-            bool target = targets.Contains(row.Id);
-            pFlag.Value = target ? 1 : 0;
-            if (pSource != null)
+        var update = RentCommand(
+            updateSql,
+            c =>
             {
-                pSource.Value = extractorTargets.Contains(row.Id)
-                    ? SymbolRecord.MetadataTargetSourceExtractor
-                    : target
-                        ? SymbolRecord.MetadataTargetSourceResolver
-                        : DBNull.Value;
+                c.Parameters.Add("@flag", SqliteType.Integer);
+                if (hasMetadataTargetSource)
+                    c.Parameters.Add("@source", SqliteType.Text);
+                c.Parameters.Add("@id", SqliteType.Integer);
+            });
+        try
+        {
+            if (_commandCache == null)
+                update.Prepare();
+
+            var pFlag = update.Parameters["@flag"];
+            var pSource = hasMetadataTargetSource ? update.Parameters["@source"] : null;
+            var pId = update.Parameters["@id"];
+            foreach (var row in rows)
+            {
+                bool target = targets.Contains(row.Id);
+                pFlag.Value = target ? 1 : 0;
+                if (pSource != null)
+                {
+                    pSource.Value = extractorTargets.Contains(row.Id)
+                        ? SymbolRecord.MetadataTargetSourceExtractor
+                        : target
+                            ? SymbolRecord.MetadataTargetSourceResolver
+                            : DBNull.Value;
+                }
+                pId.Value = row.Id;
+                update.ExecuteNonQuery();
             }
-            pId.Value = row.Id;
-            update.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(update);
         }
         txn?.Commit();
     }
@@ -2817,8 +2848,7 @@ public class DbWriter
         bool hasQualified = ColumnExists("symbols", "container_qualified_name");
         bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = hasQualified
+        string sql = hasQualified
             ? $@"SELECT s.id, s.file_id, s.name, s.signature, s.container_qualified_name,
                     s.is_metadata_target, {(hasMetadataTargetSource ? "s.metadata_target_source" : "NULL")}
                 FROM symbols s
@@ -2829,20 +2859,28 @@ public class DbWriter
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            bool extractorMetadataTarget = !reader.IsDBNull(5)
-                && reader.GetInt64(5) == 1
-                && !reader.IsDBNull(6)
-                && string.Equals(reader.GetString(6), SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
-            rows.Add(new CSharpClassRow(
-                reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                extractorMetadataTarget));
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                bool extractorMetadataTarget = !reader.IsDBNull(5)
+                    && reader.GetInt64(5) == 1
+                    && !reader.IsDBNull(6)
+                    && string.Equals(reader.GetString(6), SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
+                rows.Add(new CSharpClassRow(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    extractorMetadataTarget));
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
         return rows;
     }
@@ -2886,23 +2924,30 @@ public class DbWriter
         if (!TableExists("symbols"))
             return (perFile, global);
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"SELECT s.file_id, s.name, s.signature
+        const string sql = @"SELECT s.file_id, s.name, s.signature
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE f.lang = 'csharp' AND s.kind = 'import' AND s.name IS NOT NULL";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            long fileId = reader.GetInt64(0);
-            string rawName = reader.GetString(1);
-            string? signature = reader.IsDBNull(2) ? null : reader.GetString(2);
-            if (!perFile.TryGetValue(fileId, out var bag))
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                bag = new FileImportSet();
-                perFile[fileId] = bag;
+                long fileId = reader.GetInt64(0);
+                string rawName = reader.GetString(1);
+                string? signature = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (!perFile.TryGetValue(fileId, out var bag))
+                {
+                    bag = new FileImportSet();
+                    perFile[fileId] = bag;
+                }
+                RegisterCSharpImport(bag, global, rawName, signature);
             }
-            RegisterCSharpImport(bag, global, rawName, signature);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
         return (perFile, global);
     }
