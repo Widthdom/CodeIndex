@@ -839,8 +839,8 @@ public class DbWriter
         int maxReferencesPerFile,
         bool? generatedExtractionSuppressed)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT CASE WHEN
                 (SELECT COUNT(*) FROM symbols WHERE file_id = @file_id) > @max_symbols
                 OR EXISTS (
@@ -867,13 +867,30 @@ public class DbWriter
                         )
                     ) <> @generated_suppressed
                 )
-            THEN 1 ELSE 0 END";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        SqliteCommandPolicy.AddInt32(cmd, "@max_symbols", maxSymbolsPerFile);
-        SqliteCommandPolicy.AddInt32(cmd, "@max_references", maxReferencesPerFile);
-        SqliteCommandPolicy.AddNullableBoolean(cmd, "@generated_suppressed", generatedExtractionSuppressed);
-        SqliteCommandPolicy.AddText(cmd, "@generated_issue_kind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "reusable file blocking issue") != 0;
+            THEN 1 ELSE 0 END",
+            static c =>
+            {
+                c.Parameters.Add("@file_id", SqliteType.Integer);
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                c.Parameters.Add("@generated_suppressed", SqliteType.Integer);
+                c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@generated_suppressed"].Value = generatedExtractionSuppressed.HasValue
+                ? (generatedExtractionSuppressed.Value ? 1 : 0)
+                : DBNull.Value;
+            cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            return SqliteCommandPolicy.ReadInt32Scalar(cmd, "reusable file blocking issue") != 0;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public bool HasIssueForFile(long fileId, string kind)

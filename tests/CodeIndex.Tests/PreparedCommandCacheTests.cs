@@ -422,6 +422,36 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_HasReusableFileBlockingIssueForFileReusesCacheAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reuse-a.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        var secondFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reuse-b.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.False(writer.HasReusableFileBlockingIssueForFile(firstFileId, 10, 10, generatedExtractionSuppressed: false));
+        Assert.False(writer.HasReusableFileBlockingIssueForFile(secondFileId, 10, 10, generatedExtractionSuppressed: false));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one
