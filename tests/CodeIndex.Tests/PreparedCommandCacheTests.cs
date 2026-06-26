@@ -999,6 +999,85 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_ReferenceGraphMaintenanceReusesCommands()
+    {
+        var writer = new DbWriter(_db);
+        var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var csharpFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/calls.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Checksum = "calls",
+            Modified = now,
+        });
+        writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = csharpFileId,
+                    SymbolName = "Target",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 12,
+                    ContainerName = "Source",
+                    Context = "Target();",
+                },
+                new ReferenceRecord
+                {
+                    FileId = csharpFileId,
+                    SymbolName = "Source",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 12,
+                    ContainerName = "Target",
+                    Context = "Source();",
+                },
+            ],
+            refreshMutualRecursionFlags: false);
+
+        writer.RefreshMutualRecursionFlags();
+        var hitsBeforeRefresh = _db.PreparedCommands.HitCount;
+        writer.RefreshMutualRecursionFlags();
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeRefresh);
+
+        var firstTsFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/first.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 2,
+            Checksum = "ts-first",
+            Modified = now,
+        });
+        var secondTsFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/second.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 2,
+            Checksum = "ts-second",
+            Modified = now,
+        });
+        writer.InsertSymbols(
+            [
+                new SymbolRecord { FileId = firstTsFileId, Kind = "interface", Name = "Merged", Line = 1, StartLine = 1, EndLine = 2, Signature = "interface Merged { a: number }" },
+                new SymbolRecord { FileId = secondTsFileId, Kind = "interface", Name = "Merged", Line = 1, StartLine = 1, EndLine = 2, Signature = "interface Merged { b: string }" },
+            ]);
+
+        Assert.Equal(2, writer.RebuildTypeScriptAugmentationReferences());
+        var hitsBeforeRebuild = _db.PreparedCommands.HitCount;
+        Assert.Equal(2, writer.RebuildTypeScriptAugmentationReferences());
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeRebuild);
+
+        writer.PurgeAllReferences();
+        var hitsBeforePurge = _db.PreparedCommands.HitCount;
+        Assert.Equal(0, writer.PurgeAllReferences());
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforePurge);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one

@@ -1832,8 +1832,8 @@ public class DbWriter
 
     internal void RefreshMutualRecursionFlags()
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             UPDATE symbol_references AS r
             SET is_mutual_recursion = CASE
                 WHEN r.is_self_reference = 0
@@ -1871,24 +1871,37 @@ public class DbWriter
                  )
                 THEN 1
                 ELSE 0
-            END";
-        cmd.ExecuteNonQuery();
+            END",
+            static _ => { });
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
     {
         using var transaction = BeginTransaction();
 
-        using (var deleteCmd = _conn.CreateCommand())
+        var deleteCmd = RentCommand(
+            "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'",
+            static _ => { });
+        try
         {
-            deleteCmd.CommandText = "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'";
             deleteCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(deleteCmd);
         }
 
         var references = new List<ReferenceRecord>();
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
                 SELECT s.file_id,
                        f.path,
                        s.name,
@@ -1904,8 +1917,10 @@ public class DbWriter
                   AND s.name IS NOT NULL
                   AND s.name <> ''
                   AND s.kind = 'interface'
-                ORDER BY s.name, s.file_id, s.line";
-
+                ORDER BY s.name, s.file_id, s.line",
+            static _ => { });
+        try
+        {
             using var reader = cmd.ExecuteReader();
             var declarations = new List<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)>();
             while (reader.Read())
@@ -1943,6 +1958,10 @@ public class DbWriter
                     });
                 }
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         InsertReferences(references);
@@ -2372,13 +2391,26 @@ public class DbWriter
     /// </summary>
     public int PurgeAllReferences()
     {
-        using var referenceCmd = _conn.CreateCommand();
-        referenceCmd.CommandText = "DELETE FROM symbol_references";
-        var deletedReferences = referenceCmd.ExecuteNonQuery();
+        var referenceCmd = RentCommand("DELETE FROM symbol_references", static _ => { });
+        int deletedReferences;
+        try
+        {
+            deletedReferences = referenceCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(referenceCmd);
+        }
 
-        using var lineCmd = _conn.CreateCommand();
-        lineCmd.CommandText = "DELETE FROM reference_lines";
-        lineCmd.ExecuteNonQuery();
+        var lineCmd = RentCommand("DELETE FROM reference_lines", static _ => { });
+        try
+        {
+            lineCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(lineCmd);
+        }
 
         return deletedReferences;
     }
