@@ -10380,16 +10380,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var container = symbols
-                .Where(candidate =>
-                candidate.FileId == symbol.FileId
-                && candidate.Kind == symbol.ContainerKind
-                && candidate.Name == symbol.ContainerName
-                && candidate.StartLine <= symbol.StartLine
-                && candidate.EndLine >= symbol.EndLine)
-                .OrderByDescending(candidate => candidate.StartLine)
-                .ThenBy(candidate => candidate.EndLine)
-                .FirstOrDefault();
+            var container = FindDeclaredContainerSymbol(symbols, symbol);
             if (container == null)
                 continue;
 
@@ -10397,6 +10388,31 @@ public static partial class SymbolExtractor
                 ? $"{container.ContainerQualifiedName}.{container.Name}"
                 : container.Name;
         }
+    }
+
+    private static SymbolRecord? FindDeclaredContainerSymbol(IReadOnlyList<SymbolRecord> symbols, SymbolRecord symbol)
+    {
+        SymbolRecord? best = null;
+        foreach (var candidate in symbols)
+        {
+            if (candidate.FileId != symbol.FileId
+                || candidate.Kind != symbol.ContainerKind
+                || candidate.Name != symbol.ContainerName
+                || candidate.StartLine > symbol.StartLine
+                || candidate.EndLine < symbol.EndLine)
+            {
+                continue;
+            }
+
+            if (best == null
+                || candidate.StartLine > best.StartLine
+                || (candidate.StartLine == best.StartLine && candidate.EndLine < best.EndLine))
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
     }
 
     private static void AssignContainers(
