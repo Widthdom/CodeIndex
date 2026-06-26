@@ -2151,14 +2151,7 @@ public class DbWriter
     public int PurgeStaleFiles(string projectRoot, Action? beforeCommit = null)
     {
         // Collect all paths currently in DB / DB内の全パスを収集
-        var dbPaths = new List<(long id, string path)>();
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-                dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
-        }
+        var dbPaths = LoadCurrentFilePaths();
 
         // Identify stale files (no longer on disk) / ディスク上に存在しないファイルを特定
         var staleIds = new List<long>();
@@ -2176,24 +2169,7 @@ public class DbWriter
         if (staleIds.Count == 0)
             return 0;
 
-        // Delete all stale files in a single transaction for atomicity and performance
-        // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
-        // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically
-        // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する
-        using var txn = BeginTransaction();
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        beforeCommit?.Invoke();
-        txn.Commit();
-
-        return staleIds.Count;
+        return DeleteFilesById(staleIds, beforeCommit);
     }
 
     /// <summary>
@@ -2205,35 +2181,13 @@ public class DbWriter
     public int PurgeFilesOutsideRetainedSet(IReadOnlySet<string> retainedRelativePaths)
     {
         var staleIds = new List<long>();
-        using (var cmd = _conn.CreateCommand())
+        foreach (var (id, path) in LoadCurrentFilePaths())
         {
-            cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                var id = reader.GetInt64(0);
-                var path = reader.GetString(1);
-                if (!retainedRelativePaths.Contains(path))
-                    staleIds.Add(id);
-            }
+            if (!retainedRelativePaths.Contains(path))
+                staleIds.Add(id);
         }
 
-        if (staleIds.Count == 0)
-            return 0;
-
-        using var txn = BeginTransaction();
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        txn.Commit();
-
-        return staleIds.Count;
+        return DeleteFilesById(staleIds);
     }
 
     /// <summary>
@@ -2258,39 +2212,70 @@ public class DbWriter
         IReadOnlySet<string> attributePrunedDirectories)
     {
         var staleIds = new List<long>();
-        using (var cmd = _conn.CreateCommand())
+        foreach (var (id, path) in LoadCurrentFilePaths())
         {
-            cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                var id = reader.GetInt64(0);
-                var path = reader.GetString(1);
-                if (retainedRelativePaths.Contains(path))
-                    continue;
+            if (retainedRelativePaths.Contains(path))
+                continue;
 
-                if (HasListedParentDirectory(path, listedDirectories)
-                    || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories))
-                    staleIds.Add(id);
-            }
+            if (HasListedParentDirectory(path, listedDirectories)
+                || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories))
+                staleIds.Add(id);
         }
 
         if (staleIds.Count == 0)
             return 0;
 
-        using var txn = BeginTransaction();
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        txn.Commit();
+        return DeleteFilesById(staleIds);
+    }
 
-        return staleIds.Count;
+    private List<(long id, string path)> LoadCurrentFilePaths()
+    {
+        var cmd = RentCommand("SELECT id, path FROM files", static _ => { });
+        try
+        {
+            var dbPaths = new List<(long id, string path)>();
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
+            return dbPaths;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    private int DeleteFilesById(IReadOnlyList<long> fileIds, Action? beforeCommit = null)
+    {
+        if (fileIds.Count == 0)
+            return 0;
+
+        // Delete all stale files in a single transaction for atomicity and performance.
+        // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除。
+        // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
+        // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
+        using var txn = BeginTransaction();
+        var deleteCmd = RentCommand(
+            "DELETE FROM files WHERE id = @id",
+            static c => c.Parameters.Add("@id", SqliteType.Integer));
+        try
+        {
+            var pId = deleteCmd.Parameters["@id"];
+            if (_commandCache is null)
+                deleteCmd.Prepare();
+            foreach (var id in fileIds)
+            {
+                pId.Value = id;
+                deleteCmd.ExecuteNonQuery();
+            }
+            beforeCommit?.Invoke();
+            txn.Commit();
+            return fileIds.Count;
+        }
+        finally
+        {
+            ReleaseCommand(deleteCmd);
+        }
     }
 
     private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)

@@ -942,6 +942,63 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_PurgeFileScansAndDeletesReuseCommands()
+    {
+        var writer = new DbWriter(_db);
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"prepcache_purge_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "deleted/a.cs",
+                Lang = "csharp",
+                Size = 10,
+                Lines = 1,
+                Checksum = "purge-a",
+                Modified = now,
+            });
+            Assert.Equal(1, writer.PurgeStaleFiles(projectRoot));
+
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "dropped/b.py",
+                Lang = "python",
+                Size = 10,
+                Lines = 1,
+                Checksum = "purge-b",
+                Modified = now,
+            });
+            var hitsBefore = _db.PreparedCommands.HitCount;
+
+            Assert.Equal(1, writer.PurgeFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal)));
+
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "listed/c.ts",
+                Lang = "typescript",
+                Size = 10,
+                Lines = 1,
+                Checksum = "purge-c",
+                Modified = now,
+            });
+            Assert.Equal(
+                1,
+                writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(
+                    new HashSet<string>(StringComparer.Ordinal),
+                    new HashSet<string>(StringComparer.Ordinal) { "listed" },
+                    new HashSet<string>(StringComparer.Ordinal)));
+
+            Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, recursive: true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one
