@@ -607,7 +607,6 @@ public static partial class IndexCommandRunner
                         absPath,
                         statReusableLanguage,
                         allowReuse: symbolKindFilterMatchesPrior
-                            && statReusableLanguage is not ("javascript" or "typescript")
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
@@ -663,7 +662,6 @@ public static partial class IndexCommandRunner
                         language: record.Lang,
                         generated: record.Generated,
                         allowReuse: symbolKindFilterMatchesPrior
-                            && record.Lang is not ("javascript" or "typescript")
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));

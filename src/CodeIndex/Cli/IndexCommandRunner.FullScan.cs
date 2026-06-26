@@ -1206,7 +1206,6 @@ public static partial class IndexCommandRunner
             var language = target.Language;
             var allowReuse = symbolKindFilterMatchesPrior
                 && !priorSymbolsOnlyGraphOmitted
-                && language is not ("javascript" or "typescript")
                 && (language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                 && (language != "sql" || sqlGraphContractMatchesCurrent)
@@ -1563,7 +1562,6 @@ public static partial class IndexCommandRunner
                             generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
                                 && !priorSymbolsOnlyGraphOmitted
-                                && record.Lang is not ("javascript" or "typescript")
                                 && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                 && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)

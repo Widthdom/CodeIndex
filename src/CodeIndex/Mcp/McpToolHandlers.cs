@@ -6020,7 +6020,6 @@ public partial class McpServer
                     language: record.Lang,
                     generated: record.Generated,
                     allowReuse: symbolKindFilterMatchesPrior
-                        && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)

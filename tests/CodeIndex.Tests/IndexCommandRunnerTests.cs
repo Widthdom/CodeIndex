@@ -2243,7 +2243,8 @@ public sealed class Caller
         {
             RunGit(projectRoot, "init");
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
-            RunGit(projectRoot, "add", "app.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            RunGit(projectRoot, "add", "app.cs", "app.ts");
             RunGit(projectRoot, "commit", "-m", "initial");
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
@@ -2267,8 +2268,9 @@ public sealed class Caller
             Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
             Assert.False(parallelized);
             Assert.Null(reason);
-            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
             Assert.DoesNotContain("app.cs", loadedPaths);
+            Assert.DoesNotContain("app.ts", loadedPaths);
             Assert.Contains("feature.cs", loadedPaths);
         }
         finally
