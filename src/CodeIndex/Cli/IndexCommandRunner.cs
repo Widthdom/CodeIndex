@@ -48,7 +48,7 @@ public static partial class IndexCommandRunner
         IReadOnlySet<string> Directories,
         string? WarningMessage);
 
-    private sealed class LazyDisposable<T>(Func<T> factory) : IDisposable
+    internal sealed class LazyDisposable<T>(Func<T> factory) : IDisposable
         where T : class, IDisposable
     {
         private T? value;

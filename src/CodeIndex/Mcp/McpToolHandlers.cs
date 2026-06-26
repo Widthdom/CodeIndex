@@ -49,6 +49,7 @@ public partial class McpServer
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
+    internal static Action? McpIndexPostExtractionHookDiscoveryForTesting { get; set; }
     internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
     internal static Action? McpIndexCSharpPrepassForTesting { get; set; }
     internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
@@ -5887,7 +5888,11 @@ public partial class McpServer
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: symlinkPolicy,
             generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
+        using var postExtractionHooks = new IndexCommandRunner.LazyDisposable<PostExtractionHookRunner>(() =>
+        {
+            McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();
+            return PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
+        });
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -6227,7 +6232,7 @@ public partial class McpServer
                 }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
-                postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
+                postExtractionHooks.Value.OnSymbolsExtracted(fileContext, symbols);
                 symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
                 if (symbols.Count > maxSymbolsPerFile)
                 {
@@ -6259,7 +6264,7 @@ public partial class McpServer
                             maxReferenceCount: maxReferencesPerFile + 1);
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
-                    postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
                     FileIssue? referenceCapIssue = null;
                     if (references.Count > maxReferencesPerFile)
                     {
