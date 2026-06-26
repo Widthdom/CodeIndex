@@ -757,10 +757,15 @@ public static partial class SymbolExtractor
 
     private static void AssignGoMethodReceiverContainers(List<SymbolRecord> symbols)
     {
-        var typeKinds = symbols
-            .Where(symbol => symbol.Kind is "struct" or "interface" or "class")
-            .GroupBy(symbol => GetGoReceiverTypeLookupName(symbol.Name), StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First().Kind, StringComparer.Ordinal);
+        var typeKinds = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("struct" or "interface" or "class"))
+                continue;
+
+            var lookupName = GetGoReceiverTypeLookupName(symbol.Name);
+            typeKinds.TryAdd(lookupName, symbol.Kind);
+        }
 
         foreach (var symbol in symbols)
         {
