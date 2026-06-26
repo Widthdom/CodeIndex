@@ -5444,6 +5444,14 @@ public static partial class SymbolExtractor
         return existing;
     }
 
+    private static HashSet<string> BuildSymbolKindNameKeySet(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            existing.Add($"{symbol.Kind}:{symbol.Name}");
+        return existing;
+    }
+
     private static List<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
     {
         var properties = new List<SymbolRecord>();
@@ -5731,9 +5739,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var declared = new HashSet<string>(
-            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}"),
-            StringComparer.Ordinal);
+        var declared = BuildSymbolKindNameKeySet(symbols);
         var inBlockComment = false;
 
         for (var i = 0; i < lines.Length; i++)
