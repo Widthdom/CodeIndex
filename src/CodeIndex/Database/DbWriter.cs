@@ -1048,10 +1048,12 @@ public class DbWriter
             return 0;
 
         var staleIds = new List<long>();
-        using (var cmd = _conn.CreateCommand())
+        var cmd = RentCommand(
+            "SELECT id, path FROM files WHERE path <> @path",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        try
         {
-            cmd.CommandText = "SELECT id, path FROM files WHERE path <> @path";
-            SqliteCommandPolicy.Add(cmd, "@path", retainedRelativePath);
+            cmd.Parameters["@path"].Value = retainedRelativePath;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -1067,6 +1069,10 @@ public class DbWriter
                 if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
                     staleIds.Add(id);
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         return DeleteStaleFileIds(staleIds);

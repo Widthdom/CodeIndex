@@ -567,6 +567,60 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_PurgeDirectoryStemScanReusesCacheAcrossCalls()
+    {
+        var writer = new DbWriter(_db);
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"prepcache_purge_stem_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.cs"), "// existing rename source\n");
+
+            var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/target.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
+                Checksum = "current",
+                Modified = modified,
+            });
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/target.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Checksum = "old",
+                Modified = modified,
+            });
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/other.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Checksum = "other",
+                Modified = modified,
+            });
+
+            Assert.Equal(0, writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target.py"));
+            var hitsBefore = _db.PreparedCommands.HitCount;
+
+            Assert.Equal(0, writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target.py"));
+
+            Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+        }
+        finally
+        {
+            if (Directory.Exists(projectRoot))
+                TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void DbWriter_WithCache_InsertIssuesReusesDeleteAndInsertCommandsAcrossFiles()
     {
         var writer = new DbWriter(_db);
