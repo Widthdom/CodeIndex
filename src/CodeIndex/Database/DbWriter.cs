@@ -1955,7 +1955,7 @@ public class DbWriter
     /// </summary>
     /// <param name="projectRoot">Absolute path to project root / プロジェクトルートの絶対パス</param>
     /// <returns>Number of stale files removed / 削除された古いファイル数</returns>
-    public int PurgeStaleFiles(string projectRoot)
+    public int PurgeStaleFiles(string projectRoot, Action? beforeCommit = null)
     {
         // Collect all paths currently in DB / DB内の全パスを収集
         var dbPaths = new List<(long id, string path)>();
@@ -1997,6 +1997,7 @@ public class DbWriter
             pId.Value = id;
             deleteCmd.ExecuteNonQuery();
         }
+        beforeCommit?.Invoke();
         txn.Commit();
 
         return staleIds.Count;
@@ -2454,6 +2455,11 @@ public class DbWriter
             GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey),
             DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
+    }
+
+    public void ClearTypeScriptAugmentationReady()
+    {
+        SetMeta(DbContext.TypeScriptAugmentationVersionMetaKey, null);
     }
 
     /// <summary>

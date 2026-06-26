@@ -1006,12 +1006,14 @@ public static partial class IndexCommandRunner
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var existingFileCount = writer.GetCounts().files;
         var startedWithNoIndexedFiles = existingFileCount == 0;
+        var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (options.Rebuild
                 || startedWithNoIndexedFiles
                 || purged > 0
                 || !projectRootWritten
-                || !writer.TypeScriptAugmentationVersionMatchesCurrent());
+                || !typeScriptAugmentationVersionMatchesCurrent);
+        var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var csharpMetadataTargetsNeedRefresh = options.Rebuild
             || startedWithNoIndexedFiles
             || purged > 0
@@ -1025,6 +1027,21 @@ public static partial class IndexCommandRunner
         FullScanExtractionSchedulingForTesting?.Invoke(
             parallelizeExtraction,
             parallelizeExtractionReason);
+
+        void RequireTypeScriptAugmentationRefresh()
+        {
+            if (!typeScriptAugmentationReadyCleared)
+            {
+                writer.ClearTypeScriptAugmentationReady();
+                typeScriptAugmentationReadyCleared = true;
+            }
+
+            if (!options.SymbolsOnly)
+                typeScriptAugmentationNeedsRefresh = true;
+        }
+
+        if (purged > 0 || (options.SymbolsOnly && purgedRefs > 0))
+            RequireTypeScriptAugmentationRefresh();
 
         void StartIndexSpinnerIfNeeded()
         {
@@ -1562,7 +1579,7 @@ public static partial class IndexCommandRunner
                             {
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
-                                typeScriptAugmentationNeedsRefresh = true;
+                                RequireTypeScriptAugmentationRefresh();
                                 WriteProjectRootOnce();
                                 deleteTxn.Commit();
                             }
@@ -1634,7 +1651,7 @@ public static partial class IndexCommandRunner
                         {
                             ftsMutated = true;
                             csharpMetadataTargetsNeedRefresh = true;
-                            typeScriptAugmentationNeedsRefresh = true;
+                            RequireTypeScriptAugmentationRefresh();
                         }
                         skipped++;
                         processed++;
@@ -1663,7 +1680,7 @@ public static partial class IndexCommandRunner
                     if (record.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
                     if (record.Lang == "typescript")
-                        typeScriptAugmentationNeedsRefresh = true;
+                        RequireTypeScriptAugmentationRefresh();
 
                     using var txn = writer.BeginTransaction(cancellationToken, "full scan file");
                     if (!startedWithNoIndexedFiles)

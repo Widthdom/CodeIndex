@@ -134,8 +134,10 @@ public static partial class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
-            && (!projectRootWritten || !writer.TypeScriptAugmentationVersionMatchesCurrent());
+            && (!projectRootWritten || !typeScriptAugmentationVersionMatchesCurrent);
+        var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
@@ -168,6 +170,18 @@ public static partial class IndexCommandRunner
             writer.ClearHotspotFamilyReady();
             writer.ClearMetadataTargetReady();
             readinessDemoted = true;
+        }
+
+        void RequireTypeScriptAugmentationRefresh()
+        {
+            if (!typeScriptAugmentationReadyCleared)
+            {
+                writer.ClearTypeScriptAugmentationReady();
+                typeScriptAugmentationReadyCleared = true;
+            }
+
+            if (!options.SymbolsOnly)
+                typeScriptAugmentationNeedsRefresh = true;
         }
 
         void WriteProjectRootOnce()
@@ -623,10 +637,10 @@ public static partial class IndexCommandRunner
                         if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
-                            typeScriptAugmentationNeedsRefresh = true;
                         }
                         else
                         {
@@ -725,10 +739,10 @@ public static partial class IndexCommandRunner
                         {
                             DemoteReadinessOnce();
                             WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
                             purgeTxn.Commit();
                             removed += purged;
                             ftsMutated = true;
-                            typeScriptAugmentationNeedsRefresh = true;
                         }
                         skipped++;
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -747,14 +761,15 @@ public static partial class IndexCommandRunner
                     fileBatchMarked = true;
                     if (record.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
-                    if (record.Lang == "typescript")
-                        typeScriptAugmentationNeedsRefresh = true;
+                    var recordRequiresTypeScriptAugmentationRefresh = record.Lang == "typescript";
                     using var txn = writer.BeginTransaction(cancellationToken, "update file");
+                    if (recordRequiresTypeScriptAugmentationRefresh)
+                        RequireTypeScriptAugmentationRefresh();
                     var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     if (projectRootWritten)
                         stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                     if (stalePurged > 0)
-                        typeScriptAugmentationNeedsRefresh = true;
+                        RequireTypeScriptAugmentationRefresh();
                     WriteProjectRootOnce();
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
@@ -910,8 +925,8 @@ public static partial class IndexCommandRunner
                         var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
-                        if (stalePurged > 0)
-                            typeScriptAugmentationNeedsRefresh = true;
+                        if (skippedRecord.Lang == "typescript" || stalePurged > 0)
+                            RequireTypeScriptAugmentationRefresh();
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
@@ -939,8 +954,8 @@ public static partial class IndexCommandRunner
                         var stalePurged = writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
                         if (projectRootWritten)
                             stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
-                        if (stalePurged > 0)
-                            typeScriptAugmentationNeedsRefresh = true;
+                        if (skippedRecord.Lang == "typescript" || stalePurged > 0)
+                            RequireTypeScriptAugmentationRefresh();
                         WriteProjectRootOnce();
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
@@ -986,10 +1001,10 @@ public static partial class IndexCommandRunner
                             if (writer.DeleteFileByPath(dbPath))
                             {
                                 WriteProjectRootOnce();
+                                RequireTypeScriptAugmentationRefresh();
                                 deleteTxn.Commit();
                                 removed++;
                                 ftsMutated = true;
-                                typeScriptAugmentationNeedsRefresh = true;
                             }
                         }
                         else

@@ -5909,8 +5909,10 @@ public partial class McpServer
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
+        var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
         var typeScriptAugmentationNeedsRefresh = !projectRootWritten
-            || !writer.TypeScriptAugmentationVersionMatchesCurrent();
+            || !typeScriptAugmentationVersionMatchesCurrent;
+        var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
 
         static bool PathsEqual(string? left, string? right)
@@ -5936,6 +5938,17 @@ public partial class McpServer
                 return;
             writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, null);
             symbolKindFilterMetaMarkedIncomplete = true;
+        }
+
+        void RequireTypeScriptAugmentationRefresh()
+        {
+            if (!typeScriptAugmentationReadyCleared)
+            {
+                writer.ClearTypeScriptAugmentationReady();
+                typeScriptAugmentationReadyCleared = true;
+            }
+
+            typeScriptAugmentationNeedsRefresh = true;
         }
 
         static (long BytesRead, long SkippedFileCount) SumReadableFileBytes(
@@ -6011,11 +6024,10 @@ public partial class McpServer
             writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
 
         // Purge stale files / 古いファイルをパージ
-        var purged = writer.PurgeStaleFiles(projectPath);
+        var purged = writer.PurgeStaleFiles(projectPath, beforeCommit: RequireTypeScriptAugmentationRefresh);
         if (purged > 0)
         {
             csharpMetadataTargetsNeedRefresh = true;
-            typeScriptAugmentationNeedsRefresh = true;
             ftsMutated = true;
             WriteProjectRootOnce();
         }
@@ -6175,9 +6187,10 @@ public partial class McpServer
                 MarkSymbolKindFilterMetaIncompleteOnce();
                 if (record.Lang == "csharp")
                     csharpMetadataTargetsNeedRefresh = true;
-                if (record.Lang == "typescript")
-                    typeScriptAugmentationNeedsRefresh = true;
+                var recordRequiresTypeScriptAugmentationRefresh = record.Lang == "typescript";
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
+                if (recordRequiresTypeScriptAugmentationRefresh)
+                    RequireTypeScriptAugmentationRefresh();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                 if (generatedSuppressionIssue != null)
@@ -6279,9 +6292,10 @@ public partial class McpServer
                     knownReadableFileSizes[filePath] = skippedRecord.Size;
                     if (skippedRecord.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
-                    if (skippedRecord.Lang == "typescript")
-                        typeScriptAugmentationNeedsRefresh = true;
+                    var skippedRecordRequiresTypeScriptAugmentationRefresh = skippedRecord.Lang == "typescript";
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
+                    if (skippedRecordRequiresTypeScriptAugmentationRefresh)
+                        RequireTypeScriptAugmentationRefresh();
                     var fileId = writer.UpsertFile(skippedRecord);
                     writer.InsertChunks([], requestToken);
                     writer.InsertSymbols([], requestToken);
@@ -6310,7 +6324,7 @@ public partial class McpServer
                         using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");
                         writer.DeleteFileByPath(relativePath);
                         csharpMetadataTargetsNeedRefresh = true;
-                        typeScriptAugmentationNeedsRefresh = true;
+                        RequireTypeScriptAugmentationRefresh();
                         WriteProjectRootOnce();
                         txn.Commit();
                         ftsMutated = true;

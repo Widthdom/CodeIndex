@@ -7201,6 +7201,68 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_UpdateMode_CancelledAfterTypeScriptCommit_ClearsAugmentationVersion()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "types.ts");
+            File.WriteAllText(sourcePath, "export interface Options { value: string }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(
+                    DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                    db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+            }
+
+            File.WriteAllText(sourcePath, "export interface Options { value: string; enabled: boolean }\n");
+
+            var hookInvoked = false;
+            IndexCommandRunner.UpdateFileCommittedForTesting = (filesProcessed, filesTotal) =>
+            {
+                Assert.Equal(1, filesProcessed);
+                Assert.Equal(1, filesTotal);
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+
+            int interruptedExitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--files", "types.ts", "--json"], _jsonOptions, cancellation);
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    IndexCommandRunner.UpdateFileCommittedForTesting = null;
+                }
+            }
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            using (var db = new DbContext(dbPath))
+                Assert.Null(db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateFileCommittedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_Rebuild_WhenIndexedFileBecomesBinary_PersistsNullByteIssue()
     {
         var projectRoot = CreateTempProject();
