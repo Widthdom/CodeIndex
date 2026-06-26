@@ -66,6 +66,38 @@ public static partial class SymbolExtractor
         };
     }
 
+    private static List<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (fileId is { } requestedFileId && symbol.FileId != requestedFileId)
+                continue;
+
+            if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                candidates.Add((symbol, index));
+        }
+
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+            if (comparison != 0)
+                return comparison;
+
+            comparison = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+            if (comparison != 0)
+                return comparison;
+
+            return left.OriginalIndex.CompareTo(right.OriginalIndex);
+        });
+
+        var snapshot = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            snapshot.Add(candidate.Symbol);
+        return snapshot;
+    }
+
     // THREAD-SAFETY: Symbol extraction is intentionally stateless per call. Shared Regex
     // instances and lookup tables are initialized once by the CLR and must be treated as
     // immutable after type initialization; per-file extraction state belongs in local

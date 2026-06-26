@@ -261,11 +261,7 @@ public static partial class SymbolExtractor
     {
         // Snapshot enum declarations first — we mutate the list during iteration.
         // 反復中に list を書き換えるため、先に enum 宣言を snapshot しておく。
-        var enumDeclarations = symbols
-            .Where(s => s.Kind == "enum" && s.BodyStartLine != null && s.BodyEndLine != null)
-            .OrderBy(s => s.StartLine)
-            .ThenByDescending(s => s.EndLine)
-            .ToList();
+        var enumDeclarations = BuildEnumDeclarationSnapshot(symbols);
 
         foreach (var enumSymbol in enumDeclarations)
         {
