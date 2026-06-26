@@ -1327,7 +1327,11 @@ public static partial class IndexCommandRunner
                 }
 
                 FullScanExtractionWorkStartedForTesting?.Invoke();
-                using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
+                var extractionQueueCapacity = parallelizeExtraction
+                    ? Math.Max(1, extractionParallelism * 4)
+                    : 1;
+                FullScanExtractionQueueCapacityForTesting?.Invoke(extractionQueueCapacity);
+                using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(extractionQueueCapacity);
                 using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
                 var extractionCancellationToken = extractionStallCts.Token;
@@ -1459,6 +1463,11 @@ public static partial class IndexCommandRunner
                                         issues = AppendIssue(issues, issue);
                                     }
                                 }
+                                else
+                                {
+                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
+                                }
                                 extractionResults.Add(
                                     parallelizeExtraction
                                         ? FullScanFileWorkItem.Precomputed(
@@ -1477,8 +1486,8 @@ public static partial class IndexCommandRunner
                                             displayRelativePath,
                                             record,
                                             content,
-                                            rawBytes,
-                                            loaded.Inspection,
+                                            null,
+                                            null,
                                             hasOversizeLine,
                                             warning,
                                             chunks,

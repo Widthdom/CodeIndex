@@ -2283,6 +2283,40 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_FullScanWithSequentialExtraction_PersistsValidationIssues()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_sequential_validation");
+        bool? parallelized = null;
+        int? queueCapacity = null;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App\rpublic class Other\n");
+
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, _) => parallelized = enabled;
+            IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = capacity => queueCapacity = capacity;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "test.method", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(parallelized);
+            Assert.Equal(1, queueCapacity);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var issue = Assert.Single(ReadFileIssues(dbPath, "mixed_line_endings"));
+            Assert.Equal("app.cs", issue.Path);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScanWithoutCSharp_DoesNotRunCSharpPrepass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_no_csharp_prepass");

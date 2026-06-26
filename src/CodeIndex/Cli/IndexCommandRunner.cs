@@ -67,6 +67,7 @@ public static partial class IndexCommandRunner
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Action? FullScanExtractionWorkStartedForTesting { get; set; }
     internal static Action<string>? FullScanFileContentLoadForTesting { get; set; }
+    internal static Action<int>? FullScanExtractionQueueCapacityForTesting { get; set; }
     internal static Action? FullScanFtsOptimizeForTesting { get; set; }
     internal static Action? FullScanCSharpPrepassForTesting { get; set; }
     internal static Action? FullScanCSharpMetadataResolveForTesting { get; set; }
