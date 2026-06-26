@@ -191,12 +191,12 @@ public static partial class ReferenceExtractor
         // JS/TS のタグ付きテンプレート呼び出し位置を行番号でグループ化し、ループ中の参照追加で即座に拾えるようにする。
         // `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` は末尾 `(` がなく CallRegex で取れないが、
         // 構造マスカーがテンプレート opener 検出時に先行する tag 識別子を併せて記録する。
-        var hitsByLine = new Dictionary<int, List<JsTaggedTemplateHit>>();
+        var hitsByLine = new Dictionary<int, List<JsTaggedTemplateHit>>(jsTaggedTemplateHits.Count);
         foreach (var hit in jsTaggedTemplateHits)
         {
             if (!hitsByLine.TryGetValue(hit.Line, out var bucket))
             {
-                bucket = new List<JsTaggedTemplateHit>();
+                bucket = new List<JsTaggedTemplateHit>(1);
                 hitsByLine[hit.Line] = bucket;
             }
             bucket.Add(hit);
