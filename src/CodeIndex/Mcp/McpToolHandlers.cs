@@ -49,6 +49,7 @@ public partial class McpServer
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
+    internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
     internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
     internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }
@@ -5906,6 +5907,7 @@ public partial class McpServer
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
         var typeScriptAugmentationNeedsRefresh = !projectRootWritten
             || !writer.TypeScriptAugmentationVersionMatchesCurrent();
+        var ftsMutated = false;
 
         static bool PathsEqual(string? left, string? right)
         {
@@ -6003,6 +6005,7 @@ public partial class McpServer
         {
             csharpMetadataTargetsNeedRefresh = true;
             typeScriptAugmentationNeedsRefresh = true;
+            ftsMutated = true;
             WriteProjectRootOnce();
         }
 
@@ -6163,6 +6166,7 @@ public partial class McpServer
                     WriteProjectRootOnce();
                     writer.ClearBatchInProgress();
                     txn.Commit();
+                    ftsMutated = true;
                     processed++;
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
                     McpIndexFileCommittedForTesting?.Invoke(record.Path);
@@ -6238,6 +6242,7 @@ public partial class McpServer
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
+                ftsMutated = true;
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
             catch (FileIndexer.BinaryFileSkippedException ex)
@@ -6257,6 +6262,7 @@ public partial class McpServer
                     writer.InsertIssues(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();
+                    ftsMutated = true;
                 }
                 catch (Exception cleanupEx)
                 {
@@ -6280,6 +6286,7 @@ public partial class McpServer
                         typeScriptAugmentationNeedsRefresh = true;
                         WriteProjectRootOnce();
                         txn.Commit();
+                        ftsMutated = true;
                     }
                 }
                 catch (Exception cleanupEx)
@@ -6305,7 +6312,11 @@ public partial class McpServer
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
-        writer.OptimizeFts();
+        if (ftsMutated)
+        {
+            McpIndexFtsOptimizeForTesting?.Invoke();
+            writer.OptimizeFts();
+        }
         // MCP index now runs ValidateContent + InsertIssues per file (bdbb2bd) on par with CLI
         // index, so stamp both graph-ready and issues-ready on clean runs — the old "graph only"
         // path is no longer accurate. Bits are only stamped when every file committed without
