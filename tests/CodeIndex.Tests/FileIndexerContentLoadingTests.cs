@@ -50,6 +50,35 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Load_AllowsConcurrentWriterShare_Issue4078()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_loader_share");
+        try
+        {
+            var path = Path.Combine(tempDir, "sample.cs");
+            var bytes = Encoding.UTF8.GetBytes("class Sample {}\n");
+            File.WriteAllBytes(path, bytes);
+
+            using var writer = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            var loader = new FileContentLoader(FileIndexer.DefaultMaxFileSizeBytes);
+
+            var loaded = loader.Load(path, "sample.cs", "sample.cs", CancellationToken.None);
+
+            Assert.Equal("class Sample {}\n", loaded.Content);
+            Assert.Equal(bytes.Length, loaded.SizeBytes);
+            Assert.Equal(FileIndexer.ComputeChecksum(bytes), loaded.Checksum);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void FileContentLoader_Load_CarriesConflictMarkerLine()
     {
         var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes("a\r\n<<<<<<< HEAD\r\nb\r\n"));

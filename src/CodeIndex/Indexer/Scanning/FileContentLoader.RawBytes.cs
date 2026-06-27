@@ -32,13 +32,7 @@ internal sealed partial class FileContentLoader
         for (var attempt = 0; ; attempt++)
         {
             var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-            using (var stream = new FileStream(
-                ioPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: StreamBufferSize,
-                options: FileOptions.SequentialScan))
+            using (var stream = BoundedFile.OpenReadForIndexContent(absolutePath))
             {
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
@@ -73,13 +67,7 @@ internal sealed partial class FileContentLoader
         {
             var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
             bool matched;
-            using (var stream = new FileStream(
-                ioPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: StreamBufferSize,
-                options: FileOptions.SequentialScan))
+            using (var stream = BoundedFile.OpenReadForIndexContent(absolutePath))
             {
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
