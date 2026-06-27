@@ -619,6 +619,9 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void StampWorkspacePathCaseSensitive(bool pathCaseSensitive)
+        => _writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, pathCaseSensitive.ToString());
+
     private string ExplainQueryPlan(string sql)
     {
         using var cmd = _db.Connection.CreateCommand();
@@ -12667,6 +12670,58 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_CaseSensitiveWorkspaceTreatsCaseVariantDefinitionFilesAsDistinct()
+    {
+        StampWorkspacePathCaseSensitive(true);
+        InsertIndexedFile("src/CaseVariantTarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/casevarianttarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("CaseVariantTarget", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.True(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CaseInsensitiveWorkspaceCollapsesCaseVariantDefinitionFiles()
+    {
+        StampWorkspacePathCaseSensitive(false);
+        InsertIndexedFile("src/CaseVariantTarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/casevarianttarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("CaseVariantTarget", maxDepth: 3, limit: 10);
+
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+    }
+
+    [Fact]
     public void AnalyzeImpact_FoldEquivalentClassDefinitions_ReportAmbiguity()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
@@ -13670,6 +13725,44 @@ public class DbReaderTests : IDisposable
         Assert.Equal("path", entrypoint.MatchType);
         Assert.True(entrypoint.Confidence >= 0.4);
         Assert.Equal(1, entrypoint.HintRank);
+    }
+
+    [Fact]
+    public void GetRepoMap_CaseSensitiveWorkspaceKeepsCaseVariantEntrypointFallbackPath()
+    {
+        StampWorkspacePathCaseSensitive(true);
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            public class Program
+            {
+                public static void Main() { }
+            }
+            """);
+        InsertIndexedFile("src/program.cs", "csharp", "Console.WriteLine(\"fallback\");\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "csharp", pathPatterns: new[] { "src/" });
+
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "program.cs" && item.Path == "src/program.cs");
+    }
+
+    [Fact]
+    public void GetRepoMap_CaseInsensitiveWorkspaceCollapsesCaseVariantEntrypointFallbackPath()
+    {
+        StampWorkspacePathCaseSensitive(false);
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            public class Program
+            {
+                public static void Main() { }
+            }
+            """);
+        InsertIndexedFile("src/program.cs", "csharp", "Console.WriteLine(\"fallback\");\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "csharp", pathPatterns: new[] { "src/" });
+
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.DoesNotContain(map.Entrypoints, item => item.Kind == "file" && item.Path == "src/program.cs");
     }
 
     [Fact]
