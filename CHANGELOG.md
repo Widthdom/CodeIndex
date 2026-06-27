@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.34.2] - 2026-06-27
+
+#### Fixed
+
+- **C# reference extraction no longer rescans every container for same-line calls** — large files with many ordinary `Target()` call lines now resolve call containers through a per-line candidate index, avoiding a release-build CI timeout regression.
+
 ### [1.34.1] - 2026-06-27
 
 #### Changed
@@ -4682,6 +4688,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.34.2] - 2026-06-27
+
+#### 修正
+
+- **C# reference extraction が same-line call ごとに全 container を再走査しないようになりました** — 通常の `Target()` 呼び出し行が大量にあるファイルでは、行単位の候補 index で call container を解決し、release build CI の timeout 回帰を避けます。
+
 ### [1.34.1] - 2026-06-27
 
 #### 変更
@@ -9335,7 +9347,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.2...HEAD
+[1.34.2]: https://github.com/Widthdom/CodeIndex/compare/v1.34.1...v1.34.2
 [1.34.1]: https://github.com/Widthdom/CodeIndex/compare/v1.34.0...v1.34.1
 [1.34.0]: https://github.com/Widthdom/CodeIndex/compare/v1.33.2...v1.34.0
 [1.33.2]: https://github.com/Widthdom/CodeIndex/compare/v1.33.1...v1.33.2
