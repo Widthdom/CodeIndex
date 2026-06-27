@@ -9,6 +9,14 @@ namespace CodeIndex.Cli;
 
 internal static class EnvironmentVariableInventory
 {
+    internal const string DomainDisplay = "display";
+    internal const string DomainConfig = "config";
+    internal const string DomainAuthSecret = "auth_secret";
+    internal const string DomainTrustBoundary = "trust_boundary";
+    internal const string DomainSubprocess = "subprocess";
+    internal const string DomainUpdateLogging = "update_logging";
+    internal const string DomainIndexingQuery = "indexing_query";
+
     internal const string SensitivityPublic = "public_config";
     internal const string SensitivitySecret = "secret";
 
@@ -43,8 +51,11 @@ internal static class EnvironmentVariableInventory
         Item(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, "logging", SensitivityPublic, "io", "50", "yes", "Persistent stderr log rotation size cap in MiB.", Location("src/CodeIndex/Cli/GlobalToolLog.cs", 19, "GlobalToolLog")),
         Item(GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable, "logging", SensitivityPublic, "io", "internal cap", "no", "Maximum persistent stderr log bytes.", Location("src/CodeIndex/Cli/GlobalToolLog.cs", 20, "GlobalToolLog")),
         Item("CDIDX_GLOBAL_TOOL_LOG_DIR", "logging", SensitivityPublic, "io", "platform log directory", "yes", "Persistent stderr log directory.", Location("src/CodeIndex/Cli/GlobalToolLog.cs", 736, "GlobalToolLog")),
+        Item(UpdateChecker.DisableEnvVar, "update", SensitivityPublic, "diagnostic", "automatic update checks enabled", "no", "Disable automatic release update checks.", Location("src/CodeIndex/Cli/UpdateChecker.cs", 9, "UpdateChecker")),
+        Item(UpdateChecker.DiagnosticsEnvVar, "update", SensitivityPublic, "diagnostic", "cache diagnostics disabled", "no", "Emit bounded update-check cache diagnostics.", Location("src/CodeIndex/Cli/UpdateChecker.cs", 10, "UpdateChecker")),
 
         Item(SearchAuditRecipes.RecipePathsEnvironmentVariable, "search", SensitivityPublic, "io", "built-in recipes only", "no", "Additional search recipe files.", Location("src/CodeIndex/Cli/SearchAuditRecipes.cs", 13, "SearchAuditRecipes")),
+        Item(global::CodeIndex.SubprocessEnvironmentPolicy.TestEnvironmentPrefix + "*", "subprocess", SensitivityPublic, "test_only", "not forwarded outside isolated workers", "no", "Test-only environment prefix forwarded only to isolated worker subprocesses.", Location("src/CodeIndex/SubprocessEnvironmentPolicy.cs", 10, "SubprocessEnvironmentPolicy")),
 
         Item(McpToolFilter.AllowEnvVarName, "mcp", SensitivityPublic, "security", "all known tools enabled", "yes", "Allowlist visible/callable MCP tools.", Location("src/CodeIndex/Mcp/McpToolFilter.cs", 23, "McpToolFilter")),
         Item(McpToolFilter.DenyEnvVarName, "mcp", SensitivityPublic, "security", "no denied tools", "yes", "Denylist MCP tools from the default enabled set.", Location("src/CodeIndex/Mcp/McpToolFilter.cs", 24, "McpToolFilter")),
@@ -98,19 +109,97 @@ internal static class EnvironmentVariableInventory
         string configFileSupported,
         string description,
         params EnvironmentVariableInventoryLocation[] locations) =>
-        new(name, category, sensitivity, policy, defaultBehavior, configFileSupported, description, locations);
+        new(
+            name,
+            ResolveDomain(name, category, sensitivity, policy),
+            category,
+            sensitivity,
+            policy,
+            defaultBehavior,
+            configFileSupported,
+            ResolveInvalidValueBehavior(name, category, sensitivity, policy),
+            description,
+            locations);
 
     private static EnvironmentVariableInventoryLocation Location(string path, int line, string member)
         => new(path, line, member);
+
+    private static string ResolveDomain(string name, string category, string sensitivity, string policy)
+    {
+        if (sensitivity == SensitivitySecret)
+            return DomainAuthSecret;
+
+        if (name == global::CodeIndex.SubprocessEnvironmentPolicy.TestEnvironmentPrefix + "*")
+            return DomainSubprocess;
+
+        return category switch
+        {
+            "terminal" or "locale" or "output" => DomainDisplay,
+            _ when policy == "display" => DomainDisplay,
+            "config" or "workspace" or "path" => DomainConfig,
+            "plugins" => DomainTrustBoundary,
+            "mcp" when policy == "security" => DomainTrustBoundary,
+            "github" when policy == "security" => DomainTrustBoundary,
+            "logging" or "telemetry" or "debug" or "status" or "update" => DomainUpdateLogging,
+            "indexing" or "query" or "search" or "sqlite" => DomainIndexingQuery,
+            _ => DomainConfig,
+        };
+    }
+
+    private static string ResolveInvalidValueBehavior(string name, string category, string sensitivity, string policy)
+    {
+        if (name == "CDIDX_GITHUB_TOKEN")
+            return "empty or whitespace values disable GitHub submission; non-empty values are sent as bearer tokens and authentication failures are reported by GitHub";
+
+        if (sensitivity == SensitivitySecret)
+            return "empty values disable the feature; whitespace/control-token values are rejected before use";
+
+        if (name == McpToolFilter.AllowEnvVarName || name == McpToolFilter.DenyEnvVarName)
+            return "invalid CSV bounds fail closed; unknown names warn and are ignored";
+
+        if (name == CdidxConfigFile.DisableEnvVar)
+            return "only value 1 disables config discovery; other values leave discovery enabled";
+
+        if (name == UpdateChecker.DisableEnvVar)
+            return "only values 1 or true disable update checks; other values leave checks enabled";
+
+        if (name == UpdateChecker.DiagnosticsEnvVar)
+            return "only values 1, true, or yes enable diagnostics; other values leave diagnostics disabled";
+
+        if (name == global::CodeIndex.SubprocessEnvironmentPolicy.TestEnvironmentPrefix + "*")
+            return "only non-empty variables with the exact prefix are copied into isolated worker subprocesses";
+
+        return category switch
+        {
+            "terminal" or "locale" or "output" =>
+                "unsupported values fall back to automatic display behavior unless the owning option documents a warning",
+            "plugins" =>
+                "unsafe or invalid paths/options are rejected or ignored with bounded diagnostics",
+            "mcp" when policy == "security" =>
+                "invalid security gates fail closed or keep the feature disabled with a warning",
+            "github" when policy == "security" =>
+                "non-opt-in values keep the trust boundary disabled",
+            "logging" or "telemetry" or "update" =>
+                "invalid paths or values disable the auxiliary output/check and keep the main command running",
+            "indexing" or "query" or "search" or "sqlite" =>
+                "non-numeric, out-of-range, or overflowing values fall back, clamp, warn, or reject as documented by the owning command",
+            "config" or "workspace" or "path" =>
+                "missing values use the default; invalid paths are rejected by the owning resolver",
+            _ =>
+                "missing values use the default; invalid values follow the owning command contract",
+        };
+    }
 }
 
 internal sealed record EnvironmentVariableInventoryItem(
     [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("domain")] string Domain,
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("sensitivity")] string Sensitivity,
     [property: JsonPropertyName("policy")] string Policy,
     [property: JsonPropertyName("default_behavior")] string DefaultBehavior,
     [property: JsonPropertyName("config_file_supported")] string ConfigFileSupported,
+    [property: JsonPropertyName("invalid_value_behavior")] string InvalidValueBehavior,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("locations")] IReadOnlyList<EnvironmentVariableInventoryLocation> Locations);
 

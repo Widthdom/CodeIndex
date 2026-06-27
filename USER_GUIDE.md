@@ -1791,6 +1791,8 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
+Run `cdidx doctor --env-inventory` (or `cdidx doctor --json`) to audit the full environment-variable contract. Each inventory row reports a stable `domain` (`display`, `config`, `auth_secret`, `trust_boundary`, `subprocess`, `update_logging`, or `indexing_query`), sensitivity, config-file support, and `invalid_value_behavior`. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
+
 Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
 ```jsonc
@@ -4429,6 +4431,8 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと検出できた該当フィールドすべてを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
+
+`cdidx doctor --env-inventory`（または `cdidx doctor --json`）で環境変数契約全体を監査できます。各 inventory 行は安定した `domain`（`display`、`config`、`auth_secret`、`trust_boundary`、`subprocess`、`update_logging`、`indexing_query`）、sensitivity、設定ファイル対応、`invalid_value_behavior` を出力します。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
 
 対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 
