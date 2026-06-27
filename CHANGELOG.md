@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.34.5] - 2026-06-28
+
+#### Fixed
+
+- **Release changelog preparation now requires at least one fragment** — `prepare` and `render` fail before writing files when `changelog.d/unreleased/` contains no release-note fragments, preventing empty release sections from being generated.
+
 ### [1.34.4] - 2026-06-27
 
 #### Fixed
@@ -4700,6 +4706,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.34.5] - 2026-06-28
+
+#### 修正
+
+- **release changelog preparation が少なくとも 1 件の fragment を要求するようになりました** — `changelog.d/unreleased/` に release note fragment がない場合、`prepare` と `render` はファイルを書き換える前に失敗し、空の release section 生成を防ぎます。
+
 ### [1.34.4] - 2026-06-27
 
 #### 修正
@@ -9371,7 +9383,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.4...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.5...HEAD
+[1.34.5]: https://github.com/Widthdom/CodeIndex/compare/v1.34.4...v1.34.5
 [1.34.4]: https://github.com/Widthdom/CodeIndex/compare/v1.34.3...v1.34.4
 [1.34.3]: https://github.com/Widthdom/CodeIndex/compare/v1.34.2...v1.34.3
 [1.34.2]: https://github.com/Widthdom/CodeIndex/compare/v1.34.1...v1.34.2
