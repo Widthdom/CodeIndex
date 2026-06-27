@@ -1048,6 +1048,31 @@ public static partial class IndexCommandRunner
             StopIndexJsonPhaseHeartbeat(updateHeartbeat);
         }
 
+        if (options.ChangedBetweenSpecified)
+        {
+            ThrowIfUpdateCancelled();
+
+            var skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken);
+            if (skipWorktreePaths != null)
+            {
+                var purgedMissing = writer.PurgeStaleFiles(
+                    projectRoot,
+                    beforeCommit: () =>
+                    {
+                        DemoteReadinessOnce();
+                        WriteProjectRootOnce();
+                        RequireTypeScriptAugmentationRefresh();
+                    },
+                    preservedMissingPaths: skipWorktreePaths);
+                if (purgedMissing > 0)
+                {
+                    removed += purgedMissing;
+                    ftsMutated = true;
+                    WriteUpdateVerboseStatus($"  [DEL ] purged {purgedMissing:N0} missing indexed path(s) after --changed-between");
+                }
+            }
+        }
+
         ThrowIfUpdateCancelled();
         PauseUpdateSpinnerForConsoleWrite();
 
