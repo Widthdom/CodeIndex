@@ -3,11 +3,20 @@ using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    private static readonly AsyncLocal<TimeSpan?> FindRegexMatchTimeoutOverride = new();
+
+    internal static TimeSpan? FindRegexMatchTimeoutForTesting
+    {
+        get => FindRegexMatchTimeoutOverride.Value;
+        set => FindRegexMatchTimeoutOverride.Value = value;
+    }
+
     public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
@@ -356,8 +365,13 @@ public partial class DbReader
         var options = RegexOptions.CultureInvariant;
         if (!exact)
             options |= RegexOptions.IgnoreCase;
-        return new Regex(query, options, BoundedRegex.DefaultMatchTimeout);
+        return new Regex(query, options, ResolveFindRegexMatchTimeout());
     }
+
+    private static TimeSpan ResolveFindRegexMatchTimeout()
+        => FindRegexMatchTimeoutForTesting is { } timeout && timeout > TimeSpan.Zero
+            ? timeout
+            : BoundedRegex.DefaultMatchTimeout;
 
     private static void AddLineToFindWindow(IndexedLine indexedLine, Queue<IndexedLine> snippetWindow, Dictionary<int, string> snippetLinesByNumber)
     {

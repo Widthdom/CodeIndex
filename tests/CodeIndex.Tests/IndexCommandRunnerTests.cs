@@ -603,6 +603,17 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void WorkerProtocol_RejectsPayloadOverUtf8FrameLimitBeforeDomParse_Issue4058()
+    {
+        var json = "{\"x\":\"あ\"}";
+
+        var valid = WorkerProtocolJsonValidator.TryValidate(json, json.Length, out var error);
+
+        Assert.False(valid);
+        Assert.Equal("worker_protocol_error: json_payload_length_exceeded", error);
+    }
+
+    [Fact]
     public void WorkerProtocol_RejectsOversizedJsonStrings_Issue3759()
     {
         lock (TestConsoleLock.Gate)
@@ -852,6 +863,15 @@ public class IndexCommandRunnerTests
                 protocolLimit.ToString(CultureInfo.InvariantCulture),
             ],
             startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void WorkerProtocolLineLimits_ClampHugeFileCapToExtendedProtocolLimit_Issue4058()
+    {
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(long.MaxValue);
+
+        Assert.Equal(WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes, protocolLimit);
+        Assert.True(protocolLimit < int.MaxValue);
     }
 
     [Fact]
