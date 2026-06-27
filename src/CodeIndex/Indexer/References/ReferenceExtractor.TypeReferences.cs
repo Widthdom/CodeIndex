@@ -452,10 +452,21 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name)
-                .Select(ExtractCSharpGenericParameterName)
-                .Where(static name => !string.IsNullOrWhiteSpace(name))
-                .ToList()!;
+            var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name);
+            var parameterCount = 0;
+            for (var index = 0; index < parameters.Count; index++)
+            {
+                var name = ExtractCSharpGenericParameterName(parameters[index]);
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                parameters[parameterCount] = name;
+                parameterCount++;
+            }
+
+            if (parameterCount < parameters.Count)
+                parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
+
             if (parameters.Count > 0)
                 lookup[symbol.Name] = parameters;
         }
@@ -507,12 +518,10 @@ public static partial class ReferenceExtractor
         if (!interfaceGenericParameters.TryGetValue(interfaceName, out var parameters) || parameters.Count == 0)
             return map;
 
-        var arguments = ExtractCSharpGenericArgumentList(rawSegment, interfaceName)
-            .Select(NormalizeCSharpTypeArgumentShape)
-            .ToList();
+        var arguments = ExtractCSharpGenericArgumentList(rawSegment, interfaceName);
         var count = Math.Min(parameters.Count, arguments.Count);
         for (var i = 0; i < count; i++)
-            map[parameters[i]] = arguments[i];
+            map[parameters[i]] = NormalizeCSharpTypeArgumentShape(arguments[i]);
 
         return map;
     }
@@ -532,10 +541,15 @@ public static partial class ReferenceExtractor
             return [];
 
         var list = text.Substring(genericStart + 1, genericEnd - genericStart - 1);
-        return SplitTopLevelCommaSpans(list)
-            .Select(span => list.Substring(span.Start, span.Length).Trim())
-            .Where(static item => item.Length > 0)
-            .ToList();
+        var arguments = new List<string>();
+        foreach (var span in SplitTopLevelCommaSpans(list))
+        {
+            var item = list.Substring(span.Start, span.Length).Trim();
+            if (item.Length > 0)
+                arguments.Add(item);
+        }
+
+        return arguments;
     }
 
     private static string ExtractCSharpGenericParameterName(string parameter)
