@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.Versioning;
 using System.Text;
 using CodeIndex.Indexer;
 
@@ -9,14 +10,14 @@ internal static class ReferenceExtractorWarmup
     [ModuleInitializer]
     internal static void WarmUp()
     {
-        if (!IsContinuousIntegration())
+        if (!IsContinuousIntegration() || !IsNet8TestAssembly())
             return;
 
         // Practical budget tests measure steady-state extractor work; keep C# regex/JIT/tiered startup outside the guard.
         var builder = new StringBuilder();
         builder.AppendLine("class Warmup {");
         builder.AppendLine("    void Target() { }");
-        for (var index = 0; index < 5_000; index++)
+        for (var index = 0; index < 1_024; index++)
             builder.Append("    void Caller").Append(index).AppendLine("() { Target(); }");
         builder.AppendLine("}");
 
@@ -34,4 +35,12 @@ internal static class ReferenceExtractorWarmup
 
     private static bool IsContinuousIntegration()
         => string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNet8TestAssembly()
+    {
+        var targetFramework = (TargetFrameworkAttribute?)Attribute.GetCustomAttribute(
+            typeof(ReferenceExtractorWarmup).Assembly,
+            typeof(TargetFrameworkAttribute));
+        return targetFramework?.FrameworkName.Contains("Version=v8.0", StringComparison.OrdinalIgnoreCase) == true;
+    }
 }
