@@ -37,7 +37,7 @@ public class ExportImportCommandRunnerIssue3818Tests
                 throw new OperationCanceledException();
 
             Assert.Throws<OperationCanceledException>(() =>
-                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath));
+                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath, CancellationToken.None));
 
             Assert.Equal("existing db", File.ReadAllText(dbPath));
             Assert.False(File.Exists(tempPath));

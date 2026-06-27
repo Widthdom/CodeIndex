@@ -677,9 +677,6 @@ internal static class ExportImportCommandRunner
         writer.Write(content);
     }
 
-    internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions)
-        => WriteExportArchiveFile(outputPath, snapshotPath, manifest, jsonOptions, CancellationToken.None);
-
     internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var fullOutputPath = Path.GetFullPath(outputPath);
@@ -1103,9 +1100,6 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static long ReadTableCount(SqliteConnection connection, string tableName)
-        => ReadTableCount(connection, tableName, CancellationToken.None);
-
     private static long ReadTableCount(SqliteConnection connection, string tableName, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1398,9 +1392,6 @@ internal static class ExportImportCommandRunner
             ? $"{prefix}; pruned paths to project root {importTargetProjectRoot}"
             : prefix;
 
-    internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
-        => CreateDatabaseSnapshot(sourceDbPath, snapshotPath, CancellationToken.None);
-
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1420,9 +1411,6 @@ internal static class ExportImportCommandRunner
 
     private static string CreateReadOnlyUnpooledConnectionString(string dbPath)
         => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnlyUnpooled);
-
-    internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
-        => ReplaceImportedDatabase(tempPath, fullDbPath, CancellationToken.None);
 
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath, CancellationToken cancellationToken)
     {
