@@ -284,13 +284,13 @@ public sealed class ChangelogTool
 
     public string CheckFragments()
     {
-        var fragments = LoadFragments(validate: true);
+        var fragments = LoadFragments(requireAny: false);
         return $"Validated {fragments.Count} changelog fragment(s).";
     }
 
     public PrepareResult Prepare(Version targetVersion, DateOnly releaseDate, bool writeChanges)
     {
-        var fragments = LoadFragments(validate: true);
+        var fragments = LoadFragments(requireAny: true);
         var versionPath = Path.Combine(_repositoryRoot, "version.json");
         var originalVersionJson = ReadAllTextBounded(versionPath, _repositoryRoot, MaxVersionJsonBytes);
         var currentVersion = ParseCurrentVersion(originalVersionJson);
@@ -399,11 +399,15 @@ public sealed class ChangelogTool
         return string.Join('\n', output).TrimEnd() + Environment.NewLine;
     }
 
-    private List<Fragment> LoadFragments(bool validate)
+    private List<Fragment> LoadFragments(bool requireAny)
     {
         var fragmentDirectory = Path.Combine(_repositoryRoot, "changelog.d", "unreleased");
         if (!Directory.Exists(fragmentDirectory))
+        {
+            if (requireAny)
+                throw new ChangelogException("changelog.d/unreleased: no changelog fragments found.");
             return [];
+        }
 
         var fragments = new List<Fragment>();
         var errors = new List<string>();
@@ -437,8 +441,8 @@ public sealed class ChangelogTool
         if (errors.Count > 0)
             throw new ChangelogException(string.Join(Environment.NewLine, errors));
 
-        if (validate && fragments.Count == 0)
-            return [];
+        if (requireAny && fragments.Count == 0)
+            throw new ChangelogException("changelog.d/unreleased: no changelog fragments found.");
 
         return fragments;
     }

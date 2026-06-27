@@ -103,6 +103,47 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void ProgramMainPrepareWithoutFragmentsReturnsFriendlyError()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CodeIndex.sln", string.Empty);
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/.gitkeep", string.Empty);
+
+        var (exitCode, stdout, stderr) = CaptureChangelogMain(
+            ["prepare", "--version", "1.17.0", "--date", "2026-05-01"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("changelog.d/unreleased: no changelog fragments found.", stderr);
+        Assert.DoesNotContain("### [1.17.0] - 2026-05-01", scope.ReadFile("CHANGELOG.md"));
+        Assert.Contains("\"version\": \"1.16.0\"", scope.ReadFile("version.json"));
+    }
+
+    [Fact]
+    public void CheckFragmentsAllowsEmptyFragmentSet()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/.gitkeep", string.Empty);
+
+        var tool = new ChangelogTool(scope.Root);
+        var summary = tool.CheckFragments();
+
+        Assert.Equal("Validated 0 changelog fragment(s).", summary);
+    }
+
+    [Fact]
     public void PrepareMovesFragmentsIntoReleaseAndUpdatesFooter()
     {
         using var scope = new TestRepositoryScope();
@@ -677,6 +718,7 @@ public sealed class ChangelogToolTests
               "version": "1.16.0"
             }
             """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
 
         var tool = new ChangelogTool(scope.Root);
         var ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
@@ -701,6 +743,7 @@ public sealed class ChangelogToolTests
         using var scope = new TestRepositoryScope();
         scope.WriteFile("CHANGELOG.md", SampleChangelog);
         scope.WriteFile("version.json", OversizedContent(ChangelogTool.MaxVersionJsonBytes));
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
 
         var tool = new ChangelogTool(scope.Root);
         var ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));

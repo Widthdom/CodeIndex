@@ -24,6 +24,7 @@ dotnet run --project tools/CodeIndex.Changelog -- prepare --version 1.17.0 --dat
 This command must:
 
 - validate `changelog.d/unreleased/*.md`;
+- fail before writing files when there are no unreleased fragments to aggregate;
 - aggregate fragments into both the English and 日本語 sections of
   `CHANGELOG.md`;
 - preserve and carry forward any legacy direct content already present under
