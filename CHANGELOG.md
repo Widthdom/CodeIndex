@@ -11,6 +11,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.34.1] - 2026-06-27
+
+#### Changed
+
+- **Trim assembly range assignment scans** — assembly symbol range assignment now sorts copied candidates in place and finds following sections with a linear cursor instead of LINQ sorting and repeated scans.
+- **Batch insert SQL builders are pre-sized** — chunk, symbol, reference, and reference-line inserts now initialize SQL builders from the known batch size, reducing string-buffer growth while indexing files with large extracted outputs.
+- **Trim body-range declaration snapshot allocation** — Java module directive extraction and Rust associated-type default extraction now collect body-range declaration snapshots with direct loops before sorting, avoiding LINQ iterator chains on large symbol lists.
+- **Chunking reuses known line counts during indexing** — CLI and MCP indexing now pass the loader's normalized line count into chunk splitting so large files avoid repeated line-offset list growth while preserving the same chunk output.
+- **Conflict-marker validation uses one candidate scan** — validation now checks for `<<<<<<<` and `>>>>>>>` candidates in a single span pass before running the line-aware conflict-marker scan, reducing normal-file validation work during large indexing runs.
+- **Conflict-marker detection is reused across extraction** — loaded normalized content now carries the detected conflict-marker line into validation, symbol extraction, and reference extraction, avoiding repeated marker scans for each file in CLI, MCP, and isolated symbol-worker indexing paths.
+- **Reduce container-assignment sort overhead** — symbol container assignment now builds and sorts compact entries directly instead of allocating LINQ projection objects for every extracted symbol.
+- **C# container path assignment now avoids repeated LINQ materialization** — symbol extraction now builds effective container paths, container-qualified names, and partial-type family keys with direct stack/list traversal, reducing per-symbol allocation work when indexing very large C# files.
+- **Trim C++ friend declaration key-set allocation** — C++ friend declaration extraction now builds existing kind/name keys with a pre-sized direct loop instead of a LINQ selector pipeline.
+- **Trim C++ same-line class member snapshot allocation** — C++ symbol extraction now collects same-line class bodies and existing member names with direct loops instead of LINQ iterator pipelines.
+- **C# callable parameter shape normalization now builds output directly** — Static interface member matching now joins normalized parameter shapes with a single `StringBuilder` pass, reducing iterator overhead while preserving the existing top-level comma splitting semantics.
+- **C# generic interface argument extraction now builds lists directly** — type-reference extraction now avoids chained LINQ materialization when reading generic interface parameters and implemented interface arguments, and only normalizes mapped arguments that are actually used.
+- **Reduce C# member conflict-set allocations** — C# reference extraction now builds enum and constant-pattern conflict sets with a shared direct loop instead of repeated LINQ iterator chains while indexing large files.
+- **C# metadata finalization reuses prepared commands** — repeated static-interface contract scans and C# metadata-target resolver passes now reuse fixed read/update SQL instead of rebuilding commands during large indexes.
+- **Reuse C# namespace scopes across using extraction** — C# reference extraction now builds namespace-scope metadata once and shares it across using alias, namespace, and static import passes for large files.
+- **C# reference extractor practical budget tests now run after a targeted warm-up** — The test assembly primes the representative C# plain-call extraction path before stopwatch-based budget guards run, keeping CI coverage and JIT startup variance out of the measured steady-state extractor budget.
+- **Trim C# static interface contract grouping allocation** — C# static interface member implementation reference extraction now builds contract and implementation lookups with direct loops and checks contract matches without LINQ.
+- **Trim C# using-scope materialization allocations** — C# reference extraction now builds namespace scopes and duplicate alias checks with direct loops instead of LINQ iterator chains while indexing large C# files.
+- **Trim declared-container lookup allocation** — container qualified-name population now finds the best declared container with a direct scan instead of filtering and sorting candidates for every symbol.
+- **Dependency package extraction now projects records directly** — Package symbol and dependency reference materialization now pre-sizes result lists and fills them with direct loops, reducing iterator overhead for large manifest and lock files with many package entries.
+- **Full index runs skip the C# static-interface prepass when the scan has no C# files** - CLI and MCP index paths now avoid the empty-candidate prepass query and use an empty C# workspace directly.
+- **Reuse a direct enum declaration snapshot across symbol extractors** — C#, Java, and Visual Basic enum member extraction now collect declaration snapshots with one shared loop before sorting, avoiding repeated LINQ iterator pipelines while preserving declaration order ties.
+- **File query helpers reuse prepared commands** — per-file symbol/reference counts, issue lookups, and indexed-language scans now reuse fixed SQLite commands across files.
+- **Index finalizers reuse language-existence checks** — CLI full-scan, CLI scoped update, and MCP index finalizers now query indexed C# / SQL language presence once per run instead of repeating the same SQLite existence checks while stamping readiness.
+- **Index finalizer queries reuse prepared SQLite commands** — lightweight language-existence checks and JavaScript/TypeScript config discovery now reuse prepared commands across indexing runs instead of allocating fresh SQLite commands for each finalization query.
+- **Fold readiness and backfill SQL reuse prepared commands** — folded-name verification, counts, reads, and row updates now reuse fixed SQLite commands during large index maintenance.
+- **Symbol and reference folded-name caches are pre-sized** — indexing now sizes per-batch folded-name caches from the number of symbols or references being written, reducing rehashing while storing large extracted graphs.
+- **No-op full scans reuse current C# metadata-target trust** — full-repository `cdidx index` runs now skip the C# metadata-target resolver when no C# rows changed and the existing metadata-target contract is already current.
+- **No-op full scans skip extraction setup** — full-repository `cdidx index` runs now avoid starting extraction workers and post-extraction hook discovery when every file can be reused from stat metadata.
+- **No-op full scans skip unnecessary FTS optimization** — full-repository `cdidx index` runs now avoid the expensive FTS5 optimize step when no indexed chunks were inserted, deleted, or purged.
+- **Full scans skip unchanged files before content loading** — `cdidx index <path>` now reuses stat-matched existing rows before queueing extraction work, and the C# static-interface prepass reuses existing workspace symbols for unchanged C# files instead of reading them again.
+- **Full-scan target setup avoids repeated LINQ passes** — CLI full scans and MCP indexing now build target arrays, retained path sets, language counts, and C# prepass inputs with sized loops, reducing setup allocation for very large file lists.
+- **No-op full scans skip TypeScript augmentation rebuilds** — `cdidx index <path>` now avoids the all-TypeScript augmentation reference rebuild when the scan reused every TypeScript row, no stale rows were purged, and the existing hotspot-family trust is current.
+- **Full scans retain less read-ahead memory during sequential extraction** — non-precomputed full-scan workers now validate file content before handing work to the writer, and their read-ahead queue is bounded to one item, so queued work no longer keeps raw bytes alongside decoded content while preserving file issue reporting.
+- **Unchanged generated-code reuse checks avoid constructing issue payloads** - CLI and MCP no-op reuse paths now compare generated-code suppression state as a boolean and only build the `generated_code_extraction_skipped` issue when a file is actually reindexed.
+- **Trim Go receiver container assignment allocation** — Go method receiver container assignment now records type kinds with a direct dictionary pass instead of grouping all type symbols during indexing.
+- **HTML attribute symbol emission now avoids temporary lists for multi-value attributes** — markup symbol extraction now streams `srcset` URLs and class names directly while keeping single-value attributes as plain strings, reducing per-attribute allocation work in large HTML, Razor, and component templates.
+- **Index-run byte accounting reuses sizes already observed while indexing** - CLI and MCP index runs now feed stat-skip and loaded-record sizes into `last_index_run.bytes_read`, avoiding a second file-size probe for unchanged files during final metadata stamping.
+- **Validation issue writes reuse prepared commands** — indexing now reuses prepared SQLite commands when replacing `file_issues` rows for each file, reducing per-file command allocation across CLI and MCP indexing.
+- **Trim Java record compact-constructor snapshot allocation** — Java symbol extraction now collects record declarations and same-line constructor candidates with direct loops instead of LINQ iterator pipelines while indexing large Java files.
+- **Trim JavaScript/TypeScript export name-set allocation** — exported variable and exported object-literal property extraction now builds symbol-name sets with direct loops instead of LINQ iterator pipelines.
+- **Trim JavaScript/TypeScript scan target sorting allocation** — class, synthetic class, and object-literal scan targets now use direct collection and in-place sorting instead of LINQ sorting pipelines.
+- **Avoid iterator allocation when joining indexed line ranges** — C# reference extraction and SQL routine symbol extraction now join contiguous line ranges with an indexed helper instead of `Skip`/`Take` iterator chains.
+- **MCP no-op indexing skips unchanged C# metadata resolution** — the MCP `index` tool now avoids the all-workspace C# metadata-target resolver when no C# rows were rewritten or purged and the existing metadata-target contract stamp is current.
+- **MCP no-op indexing skips FTS optimization** — the MCP `index` tool now avoids `OptimizeFts()` when an index pass reuses existing rows and performs no FTS-affecting purge, delete, or upsert.
+- **No-op MCP indexes skip hook discovery** — MCP `index_project` now delays post-extraction hook discovery until a file actually needs symbol/reference extraction, reducing overhead for unchanged large workspaces.
+- **MCP indexing skips unchanged files before content loading** — the MCP `index` tool now reuses stat-matched rows before reading file contents, and its C# static-interface prepass can reuse unchanged C# symbols directly from the existing index.
+- **MCP no-op indexing skips TypeScript augmentation rebuilds** — the MCP `index` tool now avoids rebuilding all TypeScript augmentation references when an index run reuses existing rows, keeps the same project root, and already has a current augmentation contract stamp.
+- **Metadata helper SQL reuses prepared commands** — repeated index metadata stamps, reads, and table-existence checks now reuse fixed commands instead of recreating SQLite commands during large index runs.
+- **Plugin extractor results now copy without LINQ materialization** — Symbol and reference plugin outputs are now copied from `IReadOnlyList` results with direct indexed loops, preserving the independent list contract while reducing allocation overhead for plugins that emit large result sets.
+- **Reuse direct property supplemental snapshots** — PHP property-hook and Swift property supplemental extraction now build symbol key sets and property snapshots with shared direct loops instead of LINQ iterator pipelines.
+- **Public chunk splitting shares indexed normalization** — `ChunkSplitter.Split` now uses the same normalization result as indexing, carrying oversize-line and line-count metadata into chunking instead of rescanning normalized content.
+- **File purge scans and deletes reuse prepared commands** — stale-file and retained-set cleanup now share cached SQLite commands for the full files scan and per-id delete loop during large index refreshes.
+- **Python symbol enrichment now avoids snapshot LINQ passes** — Python class-attribute and walrus-symbol enrichment now scans the initial symbol list directly, avoiding temporary LINQ projections while preserving the existing snapshot behavior during symbol insertion.
+- **Indexing reuses raw-byte inspection** — normal file loading now carries BOM, NULL-byte, and line-ending classification into validation, avoiding a second full raw-byte pass for each decoded non-UTF-16 file while keeping C# prepass reads lightweight.
+- **Trim record primary-component materialization scans** — record primary-component symbol materialization now skips empty work and uses direct loops for parent lookup and existing component-name collection.
+- **Reference container candidate sorting now avoids LINQ sort pipelines** — reference extraction now precomputes container span keys and sorts bounded container candidates directly while preserving stable tie ordering, reducing allocation overhead in files with many nested symbols.
+- **Reference graph maintenance reuses prepared commands** — mutual-recursion refresh, TypeScript augmentation rebuild, and reference graph purge now reuse fixed SQLite commands during large index finalization.
+- **Reference-line batching pre-sizes lookup collections** — reference insertion now sizes per-batch dictionaries and predicate lists from the known batch length, reducing reallocation while indexing files with many references.
+- **Reference-line lookup SQL avoids predicate lists** — reference insertion now builds batched lookup predicates directly into a SQL builder instead of allocating one string per predicate and joining them.
+- **Trim reference prepass snapshot allocation** — Razor file definitions, COBOL callable symbols, and Rust enum container candidates now use direct snapshot builders instead of LINQ materialization pipelines.
+- **JavaScript/TypeScript config refreshes re-extract JS/TS references** — scoped updates that fall back to a full scan after `jsconfig*.json` or `tsconfig*.json` changes, and ordinary full scans that observe changed or removed JS/TS config files including derived names such as `tsconfig.base.json`, now force JavaScript and TypeScript files through extraction instead of reusing unchanged rows, so path-alias reference targets are recalculated while unrelated no-op full scans still keep the new stat-skip fast path.
+- **Reusable-row blocking checks now reuse prepared SQLite commands** — unchanged-file indexing avoids rebuilding the cap/generated-code validation command for each file, reducing per-file overhead in large mostly unchanged runs.
+- **Reusable-row validation combines cap and generated-code checks** — CLI and MCP indexing now validate extraction caps and generated-code suppression state for unchanged rows with one SQLite query.
+- **Unchanged-file reuse checks use fewer SQLite round trips** — indexing now checks symbol/reference cap violations for reusable existing rows with one query instead of separate count and issue lookups.
+- **Trim Scala companion classification allocation** — Scala companion object classification now builds top-level class groups with direct loops instead of LINQ grouping during indexing.
+- **Seed scan error list capacity from known submodule warnings** — file scanning now sizes the warning list before adding preloaded `.gitmodules` diagnostics, avoiding a small reallocation during large repository discovery.
+- **File scanning ignore-rule setup now avoids LINQ list materialization** — ignore-rule token folding and ancestor ignore-directory discovery now build their lists directly while preserving traversal order, reducing setup allocations before large workspace walks.
+- **Scan result materialization avoids iterator chains** — full-scan directory results now build path lists and checkpointed directory sets with sized collections and ordinal `Sort`, reducing end-of-scan allocations in large repositories.
+- **Small-file chunking uses the known line count** — normalized chunking now returns a single chunk directly when indexing already knows the file has at most one chunk of lines, avoiding an extra line-start offset scan for small files across CLI and MCP indexing.
+- **SQL name resolution now avoids transient LINQ lists** — SQL reference resolution now builds distinct qualified-name candidates and column prefix segment lists directly, reducing allocation overhead in large SQL contexts with many qualified identifiers.
+- **Avoid per-routine SQL owner sorting** — SQL routine result-column extraction now finds the owning routine symbol with a single scan instead of allocating and sorting a LINQ query for each routine header.
+- **Preserve stable direct-sort ordering** — direct snapshot sorts for JS/TS class scans, assembly ranges, and reference prepasses now keep original discovery order as the final tie-breaker, matching the old LINQ ordering on equal keys.
+- **Stale directory/stem purge scans reuse prepared commands** — rename-cleanup scans now reuse their fixed SQLite command across large indexing runs.
+- **Unchanged-file legacy issue checks now reuse prepared SQLite commands** — indexing avoids rebuilding the stale issue metadata lookup for each reusable file, reducing per-file overhead while preserving legacy metadata safety checks.
+- **Stat-only unchanged indexing checks now avoid SQLite writes** — CLI and MCP indexing reuse unchanged files with a read-only lookup when filesystem metadata is sufficient, reducing writer work during large no-op or mostly unchanged index runs.
+- **Stat-based unchanged checks reuse normalized paths** — full-scan, update, and C# prepass skip checks now pass the already-normalized index path into the reuse helper instead of recomputing a relative path per file.
+- **Keep supported-language SQL helper coverage current** — the dynamic SQL regression test now checks the split name-building, parameter-adding, and value-binding helpers used by cached unsupported-reference cleanup commands.
+- **Trim Swift property reference snapshot allocation** — Swift property definition lookup now sorts per-line candidates in place and builds the result dictionary directly instead of using LINQ materialization.
+- **Symbol extraction now builds small filtered and bounded lists directly** — Fortran procedure-name expansion now filters comma-separated procedure names in one pass, and structured-data trimming copies the retained symbol budget directly instead of routing through LINQ.
+- **Pre-size JS/TS tagged-template grouping** — reference extraction now sizes the per-line tagged-template lookup from the known hit count to reduce reallocations in large JavaScript and TypeScript files.
+- **Type alias reference expansion now avoids per-line LINQ distinct pipelines** — TypeScript and Swift alias reference extraction now walks alias bindings directly while preserving first-seen alias order, reducing iterator and set-enumerator overhead when large files have many alias declarations.
+- **TypeScript augmentation freshness is cleared with the mutation that needs a rebuild** — CLI and MCP indexing now clear the `typescript_augmentation_version` stamp when a committed file or purge invalidates augmentation references, so interrupted or partial runs force the next successful index to rebuild them instead of trusting an older success stamp.
+- **Trim TypeScript path alias rule sorting allocation** — TypeScript path alias rules now preserve stable priority order with direct indexed sorting and compute literal lengths with a simple loop instead of LINQ helpers.
+- **Unchanged JavaScript and TypeScript files reuse existing index rows** — CLI and MCP indexing now let unchanged JS/TS files take the same row-reuse path as other languages while final TypeScript augmentation rebuilding still runs when an index pass actually mutates the graph.
+- **Unsupported-language reference cleanup reuses prepared commands** — update and full-scan cleanup now cache the fixed-width SQLite statements used to count and purge graph rows for languages that are no longer supported.
+- **Scoped updates avoid an extra byte-count iterator** — update-mode index run metadata now measures readable bytes with a direct path selector instead of allocating a LINQ `Select` iterator over every target path.
+- **Scoped updates skip unnecessary C# metadata resolution** — `cdidx index --files ...` no longer runs the all-workspace C# metadata-target resolver when only non-C# files were rewritten and the existing C# metadata contract is already current.
+- **Scoped updates skip the C# static-interface prepass when no target can be C#** - `cdidx index --files` now filters prepass candidates up front, avoiding duplicate language probes for large non-C# update sets.
+- **No-op scoped updates skip extraction setup** — `cdidx index --files` / commit-scoped update runs now avoid creating symbol extraction workers and discovering post-extraction hooks until a file actually needs re-indexing.
+- **Scoped updates skip unchanged TypeScript augmentation rebuilds** — `cdidx index --files ...` now avoids rebuilding all TypeScript augmentation references when the update only rewrote non-TypeScript files, no stale rows were purged, the project root stayed the same, and the augmentation contract stamp is current.
+- **Scoped updates refresh TypeScript augmentation after deletes** — `cdidx index --files` now clears and rebuilds TypeScript augmentation metadata when an update deletes or purges indexed rows, preventing stale augmentation readiness after TypeScript files disappear.
+
+#### Fixed
+
+- **Index file failures now include sanitized stack traces in the persistent log** — per-file index exceptions now use the global tool log's stack-preserving exception formatter, making `.sql`, `.js`, and other extraction failures diagnosable without changing stderr or JSON error output.
+
 ### [1.34.0] - 2026-06-26
 
 #### Added
@@ -4581,6 +4682,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.34.1] - 2026-06-27
+
+#### 変更
+
+- **assembly range assignment の scan を削減します** — assembly symbol range 割り当てで、candidate copy を in-place に sort し、後続 section を LINQ sort と繰り返し scan ではなく線形 cursor で探します。
+- **batch insert SQL builder を事前サイズ指定します** — chunk、symbol、reference、reference-line の insert は既知の batch size から SQL builder を初期化し、大きな抽出結果を持つファイルの indexing 中の string buffer 拡張を減らします。
+- **body-range declaration snapshot の allocation を削減します** — Java module directive 抽出と Rust associated-type default 抽出で、大きな symbol list に対する LINQ iterator chain を避け、直接ループで宣言 snapshot を収集してから sort します。
+- **chunking が indexing 済みの行数情報を再利用するようになりました** — CLI と MCP の indexing は loader が持つ正規化後 line count を chunk 分割に渡し、大きなファイルで line offset list の再確保を避けつつ従来と同じ chunk 出力を保ちます。
+- **conflict-marker validation の候補走査を1回にします** — validation は line-aware な conflict marker scan の前に、`<<<<<<<` と `>>>>>>>` の候補を1回の span pass で確認し、巨大 index 実行時の通常ファイル検証コストを減らします。
+- **conflict-marker 検出を extraction 全体で再利用します** — 読み取り済み normalized content が conflict marker 行を validation、symbol extraction、reference extraction へ渡し、CLI/MCP/isolated symbol worker の各 index 経路でファイルごとの marker 再走査を避けます。
+- **container assignment の sort overhead を削減します** — symbol container assignment で、抽出symbolごとの LINQ projection object を作らず、compact entry を直接作ってsortします。
+- **C# の container path 割り当てで繰り返しの LINQ materialization を避けるようになりました** — シンボル抽出は effective container path、container-qualified name、partial type family key を stack/list の直接走査で構築するようになり、巨大な C# ファイルをインデックスするときのシンボルごとの割り当て処理を削減します。
+- **C++ friend declaration key set の allocation を削減します** — C++ friend declaration 抽出で、既存の kind/name key を LINQ selector pipeline ではなく、事前容量確保した直接ループで構築します。
+- **C++ same-line class member snapshot の allocation を削減します** — C++ symbol 抽出で、同一行 class body と既存 member 名を LINQ iterator pipeline ではなく直接ループで収集します。
+- **C# callable parameter shape normalization が出力を直接構築するようになりました** — static interface member matching は normalized parameter shape を単一の `StringBuilder` pass で結合し、既存の top-level comma split semantics を保ったまま iterator overhead を削減します。
+- **C# generic interface 引数抽出がリストを直接構築するようになりました** — 型参照抽出は generic interface parameter と implemented interface argument を読む際の連鎖した LINQ materialization を避け、実際に対応付けに使う引数だけを正規化するようになりました。
+- **C# member conflict set の allocation を削減します** — 大きなファイルのインデックス化時、C# 参照抽出が enum と constant pattern の衝突セットを重複した LINQ iterator chain ではなく共通の直接ループで構築します。
+- **C# metadata finalization の prepared command を再利用します** — static interface contract scan と C# metadata-target resolver の反復で、巨大リポジトリ indexing 中に固定 read/update SQL の command 再生成を避けます。
+- **C# namespace scope を using 抽出間で再利用します** — 大きな C# ファイルの参照抽出で、namespace scope metadata を一度だけ構築し、using alias / namespace / static import の各パスで共有します。
+- **C# reference extractor practical budget tests が targeted warm-up 後に実行されるようになりました** — test assembly は stopwatch-based budget guard の前に代表的な C# plain-call extraction path を事前実行し、CI coverage と JIT startup のばらつきを測定対象の steady-state extractor budget から外します。
+- **C# static interface contract grouping の allocation を削減します** — C# static interface member implementation reference 抽出で、contract と implementation lookup を直接ループで構築し、contract match も LINQ なしで確認します。
+- **C# using scope materialization の allocation を削減します** — 大きな C# ファイルの参照抽出で、namespace scope と alias 重複判定を LINQ iterator chain ではなく直接ループで構築します。
+- **declared container lookup の allocation を削減します** — container qualified-name 補完で、各symbolごとに候補をfilter/sortせず、直接scanで最適なdeclared containerを探します。
+- **dependency package extraction が record を直接投影するようになりました** — package symbol と dependency reference の materialization は result list を事前サイズ指定して direct loop で埋めるようになり、多数の package entry を含む大きな manifest や lock file での iterator overhead を削減します。
+- **scan に C# file がない full index では C# static-interface prepass を省略します** - CLI / MCP index は候補 0 件の prepass query を避け、空の C# workspace を直接使うようになりました。
+- **enum declaration snapshot を symbol extractor 間で共通化します** — C# / Java / Visual Basic の enum member 抽出で、declaration snapshot を共通の直接ループで収集してから sort し、同順位の宣言順を保ちながら LINQ iterator pipeline を避けます。
+- **file query helper の prepared command を再利用します** — file単位の symbol/reference count、issue lookup、indexed language scan が、ファイルを跨いで固定SQLite commandを再利用します。
+- **index finalizer が言語存在チェックを再利用します** — CLI full-scan、CLI scoped update、MCP index の finalizer は、readiness stamp 中に同じ SQLite 言語存在チェックを繰り返さず、C# / SQL の indexed file 有無を run ごとに一度だけ読むようになりました。
+- **index finalizer の問い合わせが prepared SQLite command を再利用します** — 軽量な言語存在チェックと JavaScript/TypeScript 設定検出は、finalize 時の問い合わせごとに新しい SQLite command を作らず、indexing run 内で prepared command を再利用するようになりました。
+- **fold readiness と backfill SQL の prepared command を再利用します** — folded-name の検証、count、read、row update が、巨大 index のメンテナンス中に固定SQLite commandを再利用します。
+- **symbol/reference の folded-name cache を事前サイズ指定します** — indexing は書き込み対象の symbol / reference 数から batch 単位の folded-name cache をサイズ指定し、大きな抽出 graph の保存中の rehash を減らします。
+- **変更なし full scan が最新の C# metadata-target trust を再利用するようになりました** — full-repository の `cdidx index` は、C# 行に変更がなく既存の metadata-target 契約が最新の場合、C# metadata-target resolver をスキップします。
+- **変更なし full scan で抽出基盤の起動を省くようになりました** — full-repository の `cdidx index` は、全ファイルを stat metadata から再利用できる場合に extraction worker と post-extraction hook discovery を起動しないようになりました。
+- **変更なし full scan で不要な FTS optimize を省くようになりました** — full-repository の `cdidx index` は、indexed chunk の追加・削除・purge がない場合に高コストな FTS5 optimize を実行しないようになりました。
+- **full scan が content load 前に未変更ファイルを skip するようになりました** — `cdidx index <path>` は抽出キュー投入前に stat が一致する既存行を再利用し、C# static-interface prepass も未変更の C# ファイルを再読込せず既存 workspace symbols を使うようになりました。
+- **full scan の対象準備で LINQ の反復を減らしました** — CLI full scan と MCP indexing は target 配列、retained path set、言語カウント、C# prepass 入力をサイズ既知のループで構築し、巨大なファイル一覧での準備段階の allocation を減らします。
+- **no-op full scan が TypeScript augmentation rebuild を skip します** — `cdidx index <path>` は、すべての TypeScript row を再利用し、stale row purge がなく、既存の hotspot-family trust が現行の場合に、全 TypeScript augmentation reference の再構築を避けるようになりました。
+- **逐次抽出の full scan で先読みメモリ保持を削減しました** — precompute しない full scan worker は writer へ処理を渡す前にファイル内容を検証し、先読み queue を 1 item に制限するようになりました。これにより、file issue の記録を維持しながら queued work が decoded content と raw bytes を同時に保持しないようになりました。
+- **unchanged generated code の再利用判定で issue payload を構築しないようになりました** - CLI / MCP の no-op reuse path は generated-code suppression 状態を boolean として比較し、`generated_code_extraction_skipped` issue は実際に再 index する file でのみ構築します。
+- **Go receiver container 割り当ての allocation を削減します** — Go method receiver の container 割り当てで、indexing 中にすべての type symbol を group 化せず、直接 dictionary pass で type kind を記録します。
+- **HTML attribute symbol emission が multi-value attribute 用の一時リストを避けるようになりました** — markup symbol extraction は `srcset` URL と class name を直接流し、単一値 attribute は文字列のまま保持することで、大きな HTML / Razor / component template での attribute ごとの割り当てを削減します。
+- **index run の byte 集計が index 中に観測済みの size を再利用するようになりました** - CLI / MCP index は stat skip や読み込み済み record の size を `last_index_run.bytes_read` に渡し、最終 metadata stamp 時に unchanged file を再度 size probe しないようになりました。
+- **validation issue 書き込みが prepared command を再利用します** — indexing は各ファイルの `file_issues` 行を置き換える際に prepared SQLite command を再利用し、CLI / MCP indexing のファイル単位 command allocation を減らします。
+- **Java record compact constructor snapshot の allocation を削減します** — 大きな Java ファイルのインデックス化時、record 宣言と同一行 constructor candidate を LINQ iterator pipeline ではなく直接ループで収集します。
+- **JavaScript/TypeScript export name set の allocation を削減します** — exported variable と exported object-literal property の抽出で、symbol-name set を LINQ iterator pipeline ではなく直接ループで構築します。
+- **JavaScript/TypeScript scan target sort の allocation を削減します** — class、synthetic class、object-literal の scan target を LINQ sorting pipeline ではなく、直接収集と in-place sort で構築します。
+- **行範囲の結合時の iterator allocation を避けます** — C# 参照抽出と SQL routine symbol 抽出で、連続した行範囲を `Skip` / `Take` iterator chain ではなくインデックス指定のヘルパーで結合します。
+- **MCP の no-op index が未変更 C# metadata 解決を skip します** — MCP `index` ツールは、C# row の書き換えや purge がなく、既存の metadata-target contract stamp が現行の場合に、全ワークスペースの C# metadata-target resolver を避けるようになりました。
+- **MCP の no-op index が FTS optimize を skip します** — MCP `index` ツールは、既存 row を再利用し、FTS に影響する purge / delete / upsert がない場合に `OptimizeFts()` を避けるようになりました。
+- **変更なし MCP index で hook discovery を省くようになりました** — MCP `index_project` は、実際に symbol/reference extraction が必要なファイルが出るまで post-extraction hook discovery を遅らせ、変更なしの巨大 workspace での余分な overhead を減らします。
+- **MCP index が content load 前に未変更ファイルを skip します** — MCP `index` ツールは、ファイル内容を読む前に stat が一致する row を再利用し、C# static-interface prepass も未変更 C# symbols を既存 index から直接再利用できるようになりました。
+- **MCP の no-op index が TypeScript augmentation rebuild を skip します** — MCP `index` ツールは、既存 row を再利用し、project root が同じで、augmentation contract stamp が現行の場合に、全 TypeScript augmentation reference の再構築を避けるようになりました。
+- **metadata helper SQL の prepared command を再利用します** — index metadata の stamp、read、table existence check の反復で、巨大 index 実行中の SQLite command 再生成を減らします。
+- **plugin extractor result が LINQ materialization なしで copy されるようになりました** — symbol と reference の plugin output は `IReadOnlyList` result から direct indexed loop でコピーされ、独立した list contract を保ったまま、大量 result を返す plugin の割り当てオーバーヘッドを削減します。
+- **property supplemental snapshot を直接ループで共通化します** — PHP property-hook と Swift property supplemental 抽出で、symbol key set と property snapshot を LINQ iterator pipeline ではなく共通の直接ループで構築します。
+- **public chunk splitting が index 用 normalization を共有します** — `ChunkSplitter.Split` は indexing と同じ normalization 結果を使い、oversize-line と line-count metadata を chunking へ渡して、正規化済み content の再走査を避けます。
+- **file purge の scan/delete で prepared command を再利用します** — 巨大 index の更新中に走る stale-file と retained-set cleanup が、files 全件 scan と id 単位 delete の SQLite command を共有して再利用します。
+- **Python symbol enrichment が snapshot 用の LINQ pass を避けるようになりました** — Python の class attribute / walrus symbol 補完は初期 symbol list を直接走査し、symbol 追加中の既存 snapshot 挙動を保ちながら一時的な LINQ projection を避けます。
+- **indexing で raw-byte inspection を再利用します** — 通常の file loading は BOM、NULL byte、line ending 分類を validation へ渡し、UTF-16 以外のデコード済みファイルごとの生バイト再走査を避けます。C# prepass の読み取りは軽いままです。
+- **record primary component materialization の scan を削減します** — record primary-component symbol 補完で、空の処理を即座に抜け、親探索と既存 component name 収集を直接ループで行います。
+- **reference container 候補の並べ替えで LINQ sort pipeline を避けるようになりました** — 参照抽出は container span key を事前計算し、同値時の安定順序を保ったまま bounded container 候補を直接ソートすることで、入れ子シンボルが多いファイルでの割り当てオーバーヘッドを削減します。
+- **reference graph maintenance で prepared command を再利用します** — 巨大 index の finalization 中に走る相互再帰更新、TypeScript augmentation rebuild、reference graph purge が固定 SQLite command を再利用します。
+- **reference-line batch の lookup collection を事前サイズ指定します** — reference insertion は既知の batch 長から batch 単位の dictionary と predicate list をサイズ指定し、多数の参照を持つファイルの indexing 中の再 allocation を減らします。
+- **reference-line lookup SQL で predicate list を避けます** — reference insertion は batch lookup の predicate を1件ごとの string と `Join` で作らず、SQL builder へ直接構築するようになりました。
+- **reference prepass snapshot の allocation を削減します** — Razor file definition、COBOL callable symbol、Rust enum container candidate を LINQ materialization pipeline ではなく直接 snapshot builder で構築します。
+- **JavaScript/TypeScript 設定変更時に JS/TS 参照を再抽出するようになりました** — `jsconfig*.json` または `tsconfig*.json` の変更で scoped update が full scan にフォールバックした場合に加え、通常の full scan が `tsconfig.base.json` のような派生名を含む JS/TS 設定ファイルの変更または削除を検出した場合も、JavaScript/TypeScript ファイルは未変更行の再利用ではなく抽出を通すようにし、無関係な no-op full scan では新しい stat skip 高速化を維持したまま path alias の参照先を再計算します。
+- **再利用 row の blocking 判定が prepared SQLite command を再利用するようになりました** — unchanged-file indexing は file ごとの cap / generated-code 検証 command 再構築を避け、大規模でほぼ unchanged な実行時の per-file overhead を削減します。
+- **再利用 row の cap / generated-code 判定をまとめました** — CLI と MCP の indexing は、未変更 row の extraction cap と generated-code 抑止状態を単一の SQLite クエリで検証するようになりました。
+- **未変更ファイル再利用時の SQLite 往復を削減しました** — indexing は再利用可能な既存行の symbol/reference cap 違反を、個別の count / issue lookup ではなく単一クエリで確認するようになりました。
+- **Scala companion 分類の allocation を削減します** — Scala companion object 分類で、indexing 中に LINQ grouping を使わず、直接ループで top-level class group を構築します。
+- **scan error list を既知の submodule warning 数で初期化します** — ファイル走査時に `.gitmodules` 診断を追加する前に warning list の容量を確保し、大規模リポジトリ探索中の小さな再確保を避けます。
+- **file scanning の ignore-rule 初期化が LINQ list materialization を避けるようになりました** — ignore-rule token folding と ancestor ignore-directory 検出は走査順を保ったままリストを直接構築し、大規模 workspace walk 前の初期化割り当てを削減します。
+- **scan result の materialization で iterator chain を避けます** — full scan の directory result は path list と checkpointed directory set をサイズ既知の collection と ordinal `Sort` で構築し、巨大リポジトリの scan 終了時 allocation を減らします。
+- **小さなファイルの chunking で既知の line count を使います** — normalized chunking は、indexing 側で1チャンク以内の行数だと分かっている場合に直接1チャンクを返し、CLI/MCP indexing 全体で小さなファイルの line-start offset 再走査を避けます。
+- **SQL name resolution が一時的な LINQ list を避けるようになりました** — SQL reference resolution は distinct な qualified-name 候補と column prefix segment list を直接構築し、qualified identifier が多い大きな SQL context での割り当てオーバーヘッドを削減します。
+- **SQL routine ごとの owner sort を避けます** — SQL routine result-column 抽出で、routine header ごとに LINQ query を割り当てて sort せず、単一走査で所有 routine symbol を見つけます。
+- **direct sort の安定順序を保ちます** — JS/TS class scan、assembly range、reference prepass の direct snapshot sort で、同一key時に元の検出順を最後の tie-breaker として使い、従来の LINQ ordering と揃えます。
+- **directory/stem の stale purge scan で prepared command を再利用します** — rename cleanup の scan が、巨大 index 実行中に固定SQLite commandを再利用します。
+- **unchanged file の legacy issue 判定が prepared SQLite command を再利用するようになりました** — indexing は reusable file ごとの stale issue metadata lookup 再構築を避け、legacy metadata safety check を保ったまま per-file overhead を削減します。
+- **stat だけで判断できる unchanged indexing 判定で SQLite 書き込みを避けるようになりました** — CLI / MCP の indexing は filesystem metadata だけで十分な unchanged file を read-only lookup で再利用し、大規模な no-op またはほぼ unchanged な index 実行時の writer work を削減します。
+- **stat ベースの未変更判定が正規化済み path を再利用するようになりました** — full scan、update、C# prepass の skip 判定は、ファイルごとに relative path を再計算せず、既に正規化済みの index path を reuse helper に渡します。
+- **supported-language SQL helper coverage を現行化します** — dynamic SQL regression test が、cached unsupported-reference cleanup command で使う name生成、parameter追加、value bind に分割された helper を検証するようになりました。
+- **Swift property reference snapshot の allocation を削減します** — Swift property definition lookup で、行ごとの候補を in-place にソートし、LINQ materialization ではなく結果 dictionary を直接構築します。
+- **symbol extraction が小さな filtered / bounded list を直接構築するようになりました** — Fortran procedure name 展開は comma 区切り名を1パスでフィルタし、structured data の trimming は LINQ を経由せず保持対象の symbol budget を直接コピーします。
+- **JS/TS tagged-template grouping を pre-size します** — 参照抽出時の行別 tagged-template lookup を既知の hit 数で初期化し、大きな JavaScript/TypeScript ファイルでの再確保を減らします。
+- **type alias reference 展開が行ごとの LINQ distinct pipeline を避けるようになりました** — TypeScript と Swift の alias reference extraction は first-seen alias order を保ったまま alias binding を直接走査し、alias 宣言が多い大きなファイルでの iterator と set-enumerator のオーバーヘッドを削減します。
+- **TypeScript augmentation の freshness stamp を再構築が必要な mutation と同時に clear するようにしました** — CLI と MCP の index は、commit 済みファイル更新や purge が augmentation 参照を無効化した時点で `typescript_augmentation_version` を clear し、中断・部分失敗後の次回成功 index が古い成功 stamp を信頼せず必ず再構築するようにしました。
+- **TypeScript path alias rule sort の allocation を削減します** — TypeScript path alias rule で、直接indexed sortにより安定した優先順を保ち、literal length も LINQ helper ではなく単純ループで計算します。
+- **未変更の JavaScript / TypeScript ファイルが既存 index 行を再利用するようになりました** — CLI と MCP の indexing で、未変更の JS/TS ファイルも他言語と同じ row reuse 経路を使えるようにしつつ、index 実行が graph を変更した場合の TypeScript augmentation 再構築は維持します。
+- **unsupported language reference cleanup で prepared command を再利用します** — update/full-scan cleanup が、対応外になった言語の graph 行を count/purge する固定幅 SQLite statement を cache します。
+- **scoped update の byte count で追加 iterator を避けます** — update mode の index run metadata は、全 target path に対する LINQ `Select` iterator を作らず、直接 path selector で readable bytes を測定するようになりました。
+- **scoped update が不要な C# metadata 解決を skip します** — `cdidx index --files ...` は、C# 以外のファイルだけを書き換え、既存の C# metadata contract が現行の場合に、全ワークスペースの C# metadata-target resolver を走らせないようになりました。
+- **C# になり得る target がない scoped update では C# static-interface prepass を省略します** - `cdidx index --files` は prepass 候補を先に絞り込み、大規模な非 C# update set で重複する言語 probe を避けます。
+- **変更なし scoped update で抽出基盤の起動を省くようになりました** — `cdidx index --files` や commit scoped update は、実際に再インデックスが必要なファイルが出るまで symbol extraction worker と post-extraction hook discovery を作らないようになりました。
+- **scoped update が未変更 TypeScript augmentation rebuild を skip します** — `cdidx index --files ...` は、TypeScript 以外のファイルだけを書き換え、stale row purge がなく、project root が同じで、augmentation contract stamp が現行の場合に、全 TypeScript augmentation reference の再構築を避けるようになりました。
+- **scoped update の削除時に TypeScript augmentation を更新するようになりました** — `cdidx index --files` は update 中に indexed row を delete/purge した場合、TypeScript augmentation metadata を clear/rebuild し、TypeScript ファイル削除後に古い augmentation readiness が残らないようにします。
+
+#### 修正
+
+- **インデックス対象ファイル単位の失敗で、永続ログに sanitization 済み stack trace を残すようにしました** — `.sql` や `.js` などの抽出例外を原因調査できるよう、stderr / JSON のエラー出力は変えずに global tool log の stack 付き例外フォーマッタを使います。
+
 ### [1.34.0] - 2026-06-26
 
 #### 追加
@@ -9133,7 +9335,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.1...HEAD
+[1.34.1]: https://github.com/Widthdom/CodeIndex/compare/v1.34.0...v1.34.1
 [1.34.0]: https://github.com/Widthdom/CodeIndex/compare/v1.33.2...v1.34.0
 [1.33.2]: https://github.com/Widthdom/CodeIndex/compare/v1.33.1...v1.33.2
 [1.33.1]: https://github.com/Widthdom/CodeIndex/compare/v1.33.0...v1.33.1
