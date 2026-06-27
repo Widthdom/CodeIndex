@@ -28,7 +28,8 @@ public sealed class OperationTimeoutScopeTests
             TimeSpan.FromSeconds(30),
             cts.Token);
 
-        await cts.CancelAsync();
+        cts.Cancel();
+        Assert.True(scope.Token.IsCancellationRequested);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             async () => await Task.Delay(TimeSpan.FromSeconds(5), scope.Token));
 
