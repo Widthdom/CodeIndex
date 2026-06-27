@@ -9,6 +9,9 @@ internal static class ReferenceExtractorWarmup
     [ModuleInitializer]
     internal static void WarmUp()
     {
+        if (!IsContinuousIntegration())
+            return;
+
         // Practical budget tests measure steady-state extractor work; keep C# regex/JIT/tiered startup outside the guard.
         var builder = new StringBuilder();
         builder.AppendLine("class Warmup {");
@@ -28,4 +31,7 @@ internal static class ReferenceExtractorWarmup
         GC.WaitForPendingFinalizers();
         GC.Collect();
     }
+
+    private static bool IsContinuousIntegration()
+        => string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase);
 }
