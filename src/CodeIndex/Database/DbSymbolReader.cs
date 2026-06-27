@@ -20,6 +20,8 @@ public partial class DbReader
     private const double GenericHotspotNamePenalty = 0.35;
     private const string GenericHotspotNamePenaltySqlLiteral = "0.35";
     private const string GenericHotspotNamesSql = "('add','append','build','call','combine','convert','create','execute','get','getstring','getvalue','getvalues','handle','invoke','load','parse','process','read','resolve','run','set','start','stop','tolist','tostring','tryparse','update','write')";
+    private const string GenericSymbolRankNamePenaltySqlLiteral = "0.01";
+    private const string GenericSymbolRankNamesSql = "('add','append','build','call','combine','contains','convert','count','create','equal','equals','execute','file','files','get','getstring','getvalue','getvalues','handle','id','invoke','key','kind','length','line','load','name','parse','path','process','read','resolve','run','set','start','stop','text','tolist','tostring','tryparse','type','update','value','values','write')";
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
@@ -823,14 +825,31 @@ public partial class DbReader
                 GROUP BY rf.lang, sr.symbol_name
             ) symbol_rank
               ON symbol_rank.lang = f.lang
-             AND symbol_rank.symbol_name = s.name COLLATE NOCASE"
+             AND symbol_rank.symbol_name = s.name COLLATE NOCASE
+            LEFT JOIN (
+                SELECT df.lang AS lang,
+                       ds.name AS symbol_name,
+                       COUNT(*) AS definition_sites
+                FROM symbols ds
+                JOIN files df ON df.id = ds.file_id
+                WHERE ds.name IS NOT NULL
+                  AND ds.name <> ''
+                GROUP BY df.lang, ds.name
+            ) symbol_defs
+              ON symbol_defs.lang = f.lang
+             AND symbol_defs.symbol_name = s.name COLLATE NOCASE"
             : string.Empty;
         var referenceCountSql = includeRankSignals ? "COALESCE(symbol_rank.reference_count, 0)" : "CAST(0 AS INTEGER)";
         var hotspotScoreSql = includeRankSignals ? "COALESCE(symbol_rank.hotspot_score, 0.0)" : "CAST(0.0 AS REAL)";
-        var genericNamePenaltySql = includeRankSignals ? GetGenericHotspotNamePenaltySql("s.name") : "1.0";
-        var rankingReferenceCountSql = includeRankSignals ? $"(({referenceCountSql}) * ({genericNamePenaltySql}))" : referenceCountSql;
-        var rankingHotspotScoreSql = includeRankSignals ? $"(({hotspotScoreSql}) * ({genericNamePenaltySql}))" : hotspotScoreSql;
-        var complexityScoreSql = $@"(({sizeLinesSql}) + ({rankingReferenceCountSql} * 4.0) + ({rankingHotspotScoreSql} * 2.0) + CASE
+        var genericNamePenaltySql = includeRankSignals ? GetGenericSymbolRankNamePenaltySql("s.name") : "1.0";
+        var definitionSitesSql = includeRankSignals ? "COALESCE(symbol_defs.definition_sites, 1)" : "CAST(1 AS INTEGER)";
+        var definitionDilutionSql = $"CASE WHEN ({definitionSitesSql}) > 1 THEN CAST(({definitionSitesSql}) * ({definitionSitesSql}) AS REAL) ELSE 1.0 END";
+        var structuralRankPenaltySql = includeRankSignals ? $"CASE WHEN s.kind IN ('property', 'enum') AND ({sizeLinesSql}) <= 1 THEN 0.1 ELSE 1.0 END" : "1.0";
+        var rankingReferenceScoreSql = includeRankSignals ? $"(({referenceCountSql}) * ({genericNamePenaltySql}) * ({structuralRankPenaltySql}) / ({definitionDilutionSql}))" : referenceCountSql;
+        var rankingHotspotScoreSql = includeRankSignals ? $"(({hotspotScoreSql}) * ({genericNamePenaltySql}) * ({structuralRankPenaltySql}) / ({definitionDilutionSql}))" : hotspotScoreSql;
+        var cappedRankingReferenceScoreSql = $"CASE WHEN ({rankingReferenceScoreSql}) > 100.0 THEN 100.0 ELSE ({rankingReferenceScoreSql}) END";
+        var cappedRankingHotspotScoreSql = $"CASE WHEN ({rankingHotspotScoreSql}) > 150.0 THEN 150.0 ELSE ({rankingHotspotScoreSql}) END";
+        var complexityScoreSql = $@"(({sizeLinesSql} * 16.0) + ({cappedRankingReferenceScoreSql} * 0.75) + ({cappedRankingHotspotScoreSql} * 0.35) + CASE
                        WHEN {visibilitySql} IN ('public', 'pub', 'open', 'export') THEN 8.0
                        WHEN {visibilitySql} IN ('protected', 'internal', 'protected internal') THEN 4.0
                        ELSE 0.0
@@ -849,6 +868,11 @@ public partial class DbReader
                    {returnTypeSql} AS return_type,
                    {referenceCountSql} AS reference_count,
                    {hotspotScoreSql} AS hotspot_score,
+                   {rankingReferenceScoreSql} AS ranking_reference_score,
+                   {rankingHotspotScoreSql} AS ranking_hotspot_score,
+                   {genericNamePenaltySql} AS generic_name_penalty,
+                   {structuralRankPenaltySql} AS structural_rank_penalty,
+                   {definitionSitesSql} AS definition_sites,
                    {sizeLinesSql} AS size_lines,
                    {complexityScoreSql} AS complexity_score
             FROM symbols s
@@ -916,7 +940,7 @@ public partial class DbReader
             "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
             "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
             "ELSE 5 END";
-        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
+        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, rankingReferenceScoreSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
         sql += " LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -1007,8 +1031,13 @@ public partial class DbReader
                 SortMode = includeRankingMetadata ? sortModeName : null,
                 ReferenceCount = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(15)) : null,
                 HotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(16), 3) : null,
-                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(17)) : null,
-                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
+                RankingReferenceScore = includeRankingMetadata ? Math.Round(reader.GetDouble(17), 3) : null,
+                RankingHotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
+                GenericNamePenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(19), 3) : null,
+                StructuralRankPenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(20), 3) : null,
+                DefinitionSites = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(21)) : null,
+                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(22)) : null,
+                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(23), 3) : null,
             });
         }
         return results;
@@ -1017,11 +1046,16 @@ public partial class DbReader
     private static string GetGenericHotspotNamePenaltySql(string nameSql)
         => $"CASE WHEN lower({nameSql}) IN {GenericHotspotNamesSql} THEN {GenericHotspotNamePenaltySqlLiteral} ELSE 1.0 END";
 
+    private static string GetGenericSymbolRankNamePenaltySql(string nameSql)
+        => $"CASE WHEN lower({nameSql}) IN {GenericSymbolRankNamesSql} THEN {GenericSymbolRankNamePenaltySqlLiteral} ELSE 1.0 END";
+
     private string BuildSymbolSortOrderBy(
         SymbolSortMode sortMode,
         string exactNameOrderSql,
         string referenceCountSql,
-        string hotspotScoreSql,
+        string rawHotspotScoreSql,
+        string rankingReferenceScoreSql,
+        string rankingHotspotScoreSql,
         string sizeLinesSql,
         string complexityScoreSql,
         string startColumnSql)
@@ -1029,10 +1063,10 @@ public partial class DbReader
         var stableTieBreakers = $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line, {startColumnSql} ASC, s.id ASC";
         return sortMode switch
         {
-            SymbolSortMode.Hotspot => $" ORDER BY {hotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
-            SymbolSortMode.References => $" ORDER BY {referenceCountSql} DESC, {hotspotScoreSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
-            SymbolSortMode.Size => $" ORDER BY {sizeLinesSql} DESC, {referenceCountSql} DESC, {hotspotScoreSql} DESC, {stableTieBreakers}",
-            SymbolSortMode.Complexity => $" ORDER BY {complexityScoreSql} DESC, {hotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Hotspot => $" ORDER BY {rankingHotspotScoreSql} DESC, {rankingReferenceScoreSql} DESC, {rawHotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.References => $" ORDER BY {rankingReferenceScoreSql} DESC, {rankingHotspotScoreSql} DESC, {referenceCountSql} DESC, {rawHotspotScoreSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Size => $" ORDER BY {sizeLinesSql} DESC, {rankingReferenceScoreSql} DESC, {rankingHotspotScoreSql} DESC, {referenceCountSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Complexity => $" ORDER BY {complexityScoreSql} DESC, {rankingHotspotScoreSql} DESC, {rankingReferenceScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
             SymbolSortMode.Path => $" ORDER BY f.path, s.line, {startColumnSql} ASC, s.name, s.id ASC",
             _ => $" ORDER BY {exactNameOrderSql}, {stableTieBreakers}",
         };
