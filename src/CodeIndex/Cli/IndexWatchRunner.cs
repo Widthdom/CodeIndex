@@ -612,7 +612,7 @@ internal static class IndexWatchRunner
         }
         catch (JsonException ex)
         {
-            return new WatchSubRunSummary(null, null, null, "invalid_json", ex.Message);
+            return new WatchSubRunSummary(null, null, null, "invalid_json", CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
         }
     }
 

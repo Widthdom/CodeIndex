@@ -921,11 +921,12 @@ public static partial class IndexCommandRunner
                             writer.ClearBatchInProgress();
 
                         warnings++;
-                        warningList.Add(new CliJsonMessage(relPath, ex.Message));
+                        var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
+                        warningList.Add(new CliJsonMessage(relPath, sanitizedMessage));
                         if (!options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
-                            ConsoleUi.PrintWarning(ex.Message);
+                            ConsoleUi.PrintWarning(sanitizedMessage);
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
 

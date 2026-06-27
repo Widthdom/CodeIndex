@@ -1,5 +1,6 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex;
 
@@ -167,7 +168,7 @@ internal static class BoundedLineReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            var reason = $"it could not be read ({ex.GetType().Name}: {CollapseLineBreaks(ex.Message)})";
+            var reason = $"it could not be read ({ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message)})";
             failure = new(
                 BoundedTextFileReadFailureKind.ReadFailed,
                 reason,
@@ -354,7 +355,4 @@ internal static class BoundedLineReader
                 throw new BoundedLineLengthException(_charactersRead, _utf8BytesRead, _maxCharacters, _maxUtf8Bytes);
         }
     }
-
-    private static string CollapseLineBreaks(string value)
-        => value.Replace('\r', ' ').Replace('\n', ' ');
 }

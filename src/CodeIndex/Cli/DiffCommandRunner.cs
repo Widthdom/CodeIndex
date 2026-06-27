@@ -84,7 +84,7 @@ public static class DiffCommandRunner
             return WriteCommandError(
                 options.Json || options.SummaryOnly,
                 jsonOptions,
-                $"failed to compare databases: {ex.Message}",
+                $"failed to compare databases: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 UnreadableExitCode,
                 "Pass two readable CodeIndex SQLite database paths.",
                 CommandErrorCodes.DbError);

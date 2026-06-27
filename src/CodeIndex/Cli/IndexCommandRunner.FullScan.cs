@@ -85,7 +85,7 @@ public static partial class IndexCommandRunner
             Path = ex.RelativePath,
             Kind = "null_byte",
             Line = 0,
-            Message = ex.Message,
+            Message = CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
         };
 
     internal static FileIssue? BuildRegexTimeoutIssue(string path, BoundedRegex.RegexTimeoutCaptureScope capture) =>
@@ -425,7 +425,7 @@ public static partial class IndexCommandRunner
         return WriteCommandError(
             json,
             jsonOptions,
-            $"database write failed for {dbPath}: {CollapseLineBreaks(ex.Message)}",
+            $"database write failed for {dbPath}: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
             transient ? CommandExitCodes.TransientDatabaseError : CommandExitCodes.DatabaseError,
             transient
                 ? "Another process may be holding the database. Wait for it to finish, or retry with backoff."
@@ -1563,22 +1563,24 @@ public static partial class IndexCommandRunner
                             {
                                 var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
                                 var issue = BuildNullByteIssue(ex);
+                                var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
                                 extractionResults.Add(
-                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
+                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
                                     extractionCancellationToken);
                             }
                             catch (FileIndexer.FileTooLargeSkippedException ex)
                             {
+                                var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
                                 var record = indexer.BuildSkippedFileRecord(filePath, relativeFilePath, target.Language);
                                 var issue = new FileIssue
                                 {
                                     Path = ex.RelativePath,
                                     Kind = "file_too_large",
                                     Line = 0,
-                                    Message = ex.Message,
+                                    Message = sanitizedMessage,
                                 };
                                 extractionResults.Add(
-                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, ex.Message, [], [], [], [issue]),
+                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
                                     extractionCancellationToken);
                             }
                             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)

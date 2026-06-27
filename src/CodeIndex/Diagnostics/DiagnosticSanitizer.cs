@@ -30,10 +30,18 @@ internal static class DiagnosticSanitizer
         => string.IsNullOrWhiteSpace(value) ? value : ForMessage(value);
 
     public static string ForMessage(string? message)
-        => ForMessage(message, RedactAbsolutePaths);
+        => ForMessage(message, MaxDiagnosticFieldLength);
+
+    public static string ForMessage(string? message, int maxLength)
+        => ForMessage(message, RedactAbsolutePaths, maxLength);
 
     internal static string ForMessage(string? message, Func<string, string> redactPaths)
+        => ForMessage(message, redactPaths, MaxDiagnosticFieldLength);
+
+    internal static string ForMessage(string? message, Func<string, string> redactPaths, int maxLength)
     {
+        if (maxLength <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxLength), maxLength, "Maximum diagnostic length must be positive.");
         if (string.IsNullOrWhiteSpace(message))
             return string.Empty;
 
@@ -47,7 +55,8 @@ internal static class DiagnosticSanitizer
         try
         {
             var withoutPaths = redactPaths(singleLine);
-            return Truncate(CollapseWhitespace(withoutPaths).Trim());
+            var withoutSensitiveValues = DiagnosticRedactor.RedactSensitiveText(withoutPaths);
+            return Truncate(CollapseWhitespace(withoutSensitiveValues).Trim(), maxLength);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -150,7 +159,10 @@ internal static class DiagnosticSanitizer
         => char.IsWhiteSpace(value) || value is '\'' or '"' or ';' or ':' or ',' or ')';
 
     private static string Truncate(string value)
-        => value.Length <= MaxDiagnosticFieldLength
+        => Truncate(value, MaxDiagnosticFieldLength);
+
+    private static string Truncate(string value, int maxLength)
+        => value.Length <= maxLength
             ? value
-            : value[..MaxDiagnosticFieldLength] + "...";
+            : value[..maxLength] + "...";
 }

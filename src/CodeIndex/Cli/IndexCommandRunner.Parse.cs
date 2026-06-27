@@ -300,7 +300,7 @@ public static partial class IndexCommandRunner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                projectFilterError = ex.Message;
+                projectFilterError = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
             }
         }
 

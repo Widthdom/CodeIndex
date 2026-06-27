@@ -17,6 +17,26 @@ public class BoundedLineReaderTests
     }
 
     [Fact]
+    public void TryReadUtf8File_ReadFailureSanitizesExceptionMessage_Issue4069()
+    {
+        var ok = BoundedLineReader.TryReadUtf8File(
+            "/tmp/codeindex/private/input.txt",
+            maxBytes: 1024,
+            maxLines: 10,
+            maxLineCharacters: 120,
+            out _,
+            out var failure,
+            _ => throw new IOException("open failed at /tmp/codeindex/private/input.txt --token=abc123"));
+
+        Assert.False(ok);
+        Assert.Equal(BoundedTextFileReadFailureKind.ReadFailed, failure.Kind);
+        Assert.Contains("<path>", failure.Reason, StringComparison.Ordinal);
+        Assert.Contains("--token=<redacted>", failure.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tmp/codeindex/private", failure.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123", failure.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkerOutputBuffer_KeepsBoundedTail_Issue3836()
     {
         var buffer = new WorkerOutputBuffer(maxCharacters: 24, maxLines: 2, maxLineCharacters: 12);
