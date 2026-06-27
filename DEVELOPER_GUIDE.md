@@ -242,9 +242,10 @@ CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 wit
 
 JSON serialization sites are split by contract domain. Public CLI JSON uses
 `ProgramRunner.CreateDefaultJsonOptions()` and `CliJsonSerializerContext`: field
-names are snake_case, nulls are omitted, top-level event/result DTOs carry
-`api_version`, and DOM-built `JsonObject` payloads may add only sanitized,
-bounded fields. MCP JSON-RPC uses `McpServer`'s camelCase options for the
+names are snake_case, nulls are omitted, audited public top-level event/result
+DTOs carry `api_version`, and DOM-built `JsonObject` payloads may add only
+sanitized, bounded fields. Add `api_version` when introducing or auditing a
+public top-level CLI JSON DTO. MCP JSON-RPC uses `McpServer`'s camelCase options for the
 protocol envelope while tool structured content keeps its documented
 machine-readable keys; sanitize/redact values before mutating `JsonObject` /
 `JsonNode` instances. LSP, quickfix, and SARIF outputs follow their external
@@ -2566,8 +2567,9 @@ invariant を継承できるようにしてください。
 
 JSON serialization site は contract domain ごとに分けます。公開 CLI JSON は
 `ProgramRunner.CreateDefaultJsonOptions()` と `CliJsonSerializerContext` を使います。field name は
-snake_case、null は省略、top-level event/result DTO は `api_version` を持ち、DOM で組み立てる
-`JsonObject` payload は sanitized / bounded 済み field だけを追加します。MCP JSON-RPC は
+snake_case、null は省略、audit 済みの公開 top-level event/result DTO は `api_version` を持ち、
+DOM で組み立てる `JsonObject` payload は sanitized / bounded 済み field だけを追加します。
+公開 top-level CLI JSON DTO を追加または audit するときは `api_version` を追加してください。MCP JSON-RPC は
 protocol envelope に `McpServer` の camelCase option を使い、tool structured content は文書化済みの
 machine-readable key を保ちます。`JsonObject` / `JsonNode` を mutate する前に値を sanitize /
 redact してください。LSP、quickfix、SARIF 出力は CLI snake_case contract ではなく外部 schema に
